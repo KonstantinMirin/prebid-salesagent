@@ -2,14 +2,11 @@ import logging
 from typing import Any
 
 from fastmcp import FastMCP
-from fastmcp.server.context import Context
 from fastmcp.tools.tool import Tool, ToolResult
 from rich.console import Console
 from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
-from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
-from src.core.transport_helpers import resolve_identity_from_context
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +16,6 @@ logger = logging.getLogger(__name__)
 from src.core.config_loader import (
     get_current_tenant,
     load_config,
-    set_current_tenant,
 )
 from src.core.database.database import init_db
 from src.core.database.database_session import get_db_session
@@ -166,12 +162,10 @@ mcp = FastMCP(
     lifespan=lifespan_context,
 )
 
-# Centralized identity resolution — runs before every tool call.
-# Tools read identity via ctx.get_state('identity') instead of calling
-# resolve_identity_from_context() directly.
-from src.core.mcp_auth_middleware import MCPAuthMiddleware
-
-mcp.add_middleware(MCPAuthMiddleware())
+# (Deleted) MCPAuthMiddleware resolved an identity before every tool call and stashed it on
+# FastMCP context state for RegistryTool.run to read. The boundary resolves now, from the
+# credential the tool hands it, so this was pure double resolution -- measured at 2x
+# resolve_identity per MCP request while it stood.
 
 # Initialize creative engine with minimal config (will be tenant-specific later)
 creative_engine_config: dict[str, Any] = {}
@@ -285,36 +279,6 @@ if __name__ == "__main__":
 # Always add health check endpoint
 
 # --- Strategy and Simulation Control ---
-from src.core.strategy import StrategyManager
-
-
-def get_strategy_manager(context: Context | None) -> StrategyManager:
-    """Get strategy manager for current context."""
-    identity = resolve_identity_from_context(context, require_valid_token=True, protocol="mcp")
-
-    # AUTH_MISSING/AUTH_INVALID split, completed for the
-    # tenant-resolution axis. The signal is whether a
-    # credential was PRESENTED (``identity.auth_token``), matching
-    # require_tenant() in src/core/auth.py: no token at all -> AUTH_MISSING
-    # (correctable); a token was presented but tenant still didn't resolve ->
-    # AUTH_INVALID (terminal). Full tenant-axis semantics beyond this
-    # credential-presence split remain tracked under TENANT_REQUIRED
-    # .
-    if not identity or not identity.tenant_id:
-        if not identity or not identity.auth_token:
-            raise AdCPAuthRequiredError()
-        raise AdCPAuthenticationError()
-
-    if identity.tenant and isinstance(identity.tenant, dict):
-        set_current_tenant(identity.tenant)
-    else:
-        tenant_config = get_current_tenant()
-        if not tenant_config:
-            if not identity.auth_token:
-                raise AdCPAuthRequiredError()
-            raise AdCPAuthenticationError()
-
-    return StrategyManager(tenant_id=identity.tenant_id, principal_id=identity.principal_id)
 
 
 # Health/debug routes moved to src/routes/health.py (FastAPI migration).
@@ -464,18 +428,25 @@ class RegistryTool(Tool):
     """
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
-        from fastmcp.server.dependencies import get_context
+        from types import MappingProxyType
 
+        from fastmcp.server.dependencies import get_context, get_http_headers
+
+        from src.core.auth_context import AuthContext
         from src.core.tool_error_logging import _handle_tool_exception
-        from src.core.tools._boundary import invoke
+        from src.core.tools._boundary import invoke_tool
         from src.core.tools._mcp import mcp_result
 
         spec = TOOLS[self.name]
         ctx = get_context()
         try:
             req = spec.dto.model_validate(arguments)
-            identity = await ctx.get_state("identity")
-            return mcp_result(await invoke(self.name, spec.impl, req, identity))
+            # The credential, not an identity. MCPAuthMiddleware used to resolve one and
+            # stash it on ctx state for this line to read; the boundary resolves now, so the
+            # middleware is gone and MCP enters through invoke_tool like A2A and REST rather
+            # than through the lower-level invoke() with spec.impl already selected.
+            credential = AuthContext(headers=MappingProxyType(get_http_headers(include_all=True) or {}))
+            return mcp_result(await invoke_tool(self.name, req, credential, "mcp"))
         except Exception as exc:
             # Records to the activity feed and audit log, then raises AdCPToolError carrying
             # the two-layer envelope. Validation raises inside the try because the buyer's

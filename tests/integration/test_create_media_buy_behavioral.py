@@ -59,7 +59,6 @@ from src.core.exceptions import (
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CreateMediaBuyError,
     CreateMediaBuyRequest,
@@ -70,6 +69,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.principal import PrincipalFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -873,7 +873,7 @@ class TestMainFlowObligations:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,  # No principal -> should fail
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False},
@@ -905,7 +905,7 @@ class TestMainFlowObligations:
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
         # Use a non-test identity (no test_session_id) so setup validation runs
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False},
@@ -1702,7 +1702,7 @@ class TestExtensionObligations:
 
         # Identity with no principal_id -> requires authentication
 
-        identity_no_principal = ResolvedIdentity(
+        identity_no_principal = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},

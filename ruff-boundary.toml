@@ -46,6 +46,17 @@ select = ["TID251"]
 # The registry must import all fourteen to build TOOLS. It is the ONLY exemption:
 # every other importer is the disease this table exists to prevent.
 "src/core/tools/registry.py" = ["TID251"]
+# The boundary owns the resolver and the stamped entry; the resolver's module defines it.
+"src/core/tools/_boundary.py" = ["TID251"]
+"src/core/resolved_identity.py" = ["TID251"]
+# Defines get_principal_from_token, so it cannot be banned from naming it.
+"src/core/auth_utils.py" = ["TID251"]
+# The two places a ToolError legitimately exists. ``tool_error_logging`` MINTS one, on the
+# way out to MCP, from an already-typed AdCPSalesAgentError; ``app.py`` registers the handler
+# that renders one. Both are the transport edge. Everything between them raises
+# AdCPSalesAgentError.
+"src/core/tool_error_logging.py" = ["TID251"]
+"src/app.py" = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
@@ -64,3 +75,46 @@ select = ["TID251"]
 "src.core.tools.task_management._complete_task_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
 "src.core.tools.task_management._get_task_status_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
 "src.core.tools.task_management._list_tasks_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
+
+# Identity resolution and implementation selection. Same rule as the _impl bans above, one
+# layer up: invoke_tool is the only door, and what it does behind that door is private.
+#
+# Four transports used to resolve their own identity and read ToolSpec.auth themselves. They
+# disagreed twice -- A2A refusing a credential on a public task that MCP and REST served, and
+# REST's discovery dependency hardcoding require_valid_token=False so a rejected credential
+# was answered 200 there and 401 everywhere else. Neither was caught by a test; both were
+# found by driving the wire.
+#
+# The primary defence is that there is nothing to call: invoke_tool takes an AuthContext and
+# no identity, so a transport has nowhere to put one it resolved. These bans are the backstop
+# for the NAMES, so the property survives someone reaching for them again.
+"src.core.resolved_identity._resolve_identity".msg = "Identity is resolved once, in src/core/tools/_boundary.invoke_tool. A transport hands over an AuthContext; it does not resolve (salesagent-02rgd)."
+"src.core.tools._boundary._resolve_identity".msg = "Identity is resolved once, in invoke_tool. Do not re-export or re-import the resolver (salesagent-02rgd)."
+"src.core.tools._boundary._invoke_stamped".msg = "invoke_tool is the only door: it reads the registry row for both the implementation and the auth declaration. _invoke_stamped takes an already-chosen impl and an already-resolved identity -- which is how a transport used to select both (salesagent-02rgd)."
+
+# fastmcp's ToolError is MCP's WIRE type, produced on the way out. Business logic raises
+# AdCPSalesAgentError and the boundary types whatever escapes; a ToolError travelling INWARDS
+# is a transport error smuggled into transport-agnostic code, and the boundary would have to
+# grow a carve-out to let it past -- which is exactly the accommodation this ban removes the
+# need for.
+#
+# This replaces tests/unit/test_no_toolerror_in_impl.py, which walked the AST of a
+# HAND-WRITTEN list of fourteen files. A fifteenth tool module was a silent hole in it. A
+# TID251 ban is global over src/ and scripts/ by construction, has no list to keep current,
+# and fails at lint time rather than at test time.
+"fastmcp.exceptions.ToolError".msg = "ToolError is MCP's wire type, minted on the way OUT by src/core/tool_error_logging.py. Business logic raises an AdCPSalesAgentError subclass; the boundary (src/core/tools/_boundary.invoke_tool) types anything untyped that escapes. Nothing in between may import it (salesagent-02rgd)."
+
+# The two primitives identity resolution is MADE OF. Banning the resolver itself (above) stops
+# a caller reaching for the finished answer; these stop one assembling its own from the parts,
+# which is how the second resolver got there in the first place.
+#
+# src/core/auth.py carried get_principal_from_context until this change: a FastMCP-Context
+# resolver with its OWN x-adcp-tenant handling running alongside _detect_tenant. Zero
+# production callers -- seven test modules kept it breathing, and one of them said so, holding
+# it "in auth.py for test compat". Nothing detected it because nothing was looking: a second
+# resolver is invisible to a rule that only bans the first.
+#
+# Exempt: src/core/resolved_identity.py, which is where the assembling is SUPPOSED to happen,
+# and src/core/auth_utils.py, which defines one of them.
+"src.core.auth_utils.get_principal_from_token".msg = "Resolving a principal from a token is identity resolution, and it happens once, in src/core/resolved_identity._resolve_identity, called only from the tool boundary. A second caller is a second resolver -- which this codebase had, unnoticed, until it was deleted (salesagent-02rgd)."
+"src.core.resolved_identity._detect_tenant".msg = "Detecting the tenant from request headers happens once, inside _resolve_identity. A caller that detects its own tenant is a second tenant resolver, and the two WILL disagree -- the deleted get_principal_from_context disagreed by reading x-adcp-tenant with different fallbacks (salesagent-02rgd)."

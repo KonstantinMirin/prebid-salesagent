@@ -10,7 +10,6 @@ import uuid
 from collections.abc import AsyncGenerator
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
-from datetime import UTC, datetime
 from typing import Any
 
 from a2a.server.context import ServerCallContext
@@ -52,14 +51,12 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from adcp.types import ProtocolEnvelope
 from google.protobuf import json_format, struct_pb2
 
-from src.core.audit_logger import get_audit_logger
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY
+from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPAuthenticationError,
-    AdCPAuthRequiredError,
     AdCPCapabilityNotSupportedError,
     AdCPSalesAgentError,
     AdCPUrlNotAllowedError,
@@ -67,9 +64,7 @@ from src.core.exceptions import (
     adcp_error_for,
     build_two_layer_error_envelope,
 )
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
-from src.core.tool_context import ToolContext
 from src.core.tool_error_logging import record_boundary_error
 
 # Signals tools removed - should come from dedicated signals agents, not sales agent
@@ -308,147 +303,20 @@ class AdCPRequestHandler(RequestHandler):
         auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
         return auth_ctx.auth_token if auth_ctx else None
 
-    def _resolve_a2a_identity(
-        self,
-        auth_token: str | None,
-        require_valid_token: bool = True,
-        context: ServerCallContext | None = None,
-    ) -> ResolvedIdentity:
-        """Resolve identity at the A2A transport boundary — called ONCE per request.
+    def _credential_of(self, context: ServerCallContext | None = None) -> AuthContext:
+        """The AuthContext UnifiedAuthMiddleware parked on the call context.
 
-        This is the A2A equivalent of REST's _resolve_auth(). It calls
-        resolve_identity() once and returns the result. All downstream handlers
-        receive the pre-resolved identity instead of re-resolving from auth_token.
-
-        Args:
-            auth_token: Bearer token from Authorization header (None for unauthenticated)
-            require_valid_token: If True, auth failures raise A2AError
-            context: ServerCallContext from SDK (None when called directly in tests).
-
-        Returns:
-            ResolvedIdentity with tenant and (optionally) principal info
-
-        Raises:
-            A2AError: If require_valid_token=True and authentication fails
+        Empty when there is no context -- the SDK calls a handler directly that way in tests,
+        and "no context" means "no credential presented", which is the correct reading.
         """
-        from src.core.resolved_identity import resolve_identity
-        from src.core.testing_hooks import AdCPTestContext
+        if context is None:
+            return AuthContext()
+        return context.state.get(AUTH_CONTEXT_STATE_KEY) or AuthContext()
 
-        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY) if context is not None else None
-        headers = auth_ctx.headers if auth_ctx else {}
-
-        if require_valid_token and not auth_token:
-            raise InvalidRequestError(
-                message="Missing authentication token",
-                data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-            )
-
-        # Extract testing context from A2A request headers (same as MCP does)
-        testing_context = AdCPTestContext.from_headers(headers)
-
-        try:
-            identity = resolve_identity(
-                headers=headers,
-                auth_token=auth_token,
-                require_valid_token=require_valid_token,
-                protocol="a2a",
-                testing_context=testing_context,
-            )
-        except AdCPAuthenticationError as e:
-            # resolve_identity raises AdCPAuthenticationError (AUTH_INVALID)
-            # for a presented-but-invalid token. Route through the same
-            # two-layer envelope builder used elsewhere in this file instead
-            # of dropping the wire code entirely (a recorded gap — this
-            # branch previously re-wrapped as a bare InvalidRequestError with
-            # no error_code/wire-code field at all).
-            raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
-
-        if require_valid_token:
-            if not identity.principal_id:
-                # No principal_id at all -> AUTH_MISSING per v3.1.1
-                # error-code.json.
-                raise InvalidRequestError(
-                    message="Authentication token is invalid or expired.",
-                    data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-                )
-
-            if not identity.tenant:
-                # DEFER: tenant-axis, out of scope for the AUTH_MISSING/
-                # AUTH_INVALID split — left unchanged.
-                raise InvalidRequestError(
-                    message=f"Unable to determine tenant from authentication. Principal: {identity.principal_id}"
-                )
-
-            tenant_id = identity.tenant_id or identity.tenant.get("tenant_id", "unknown")
-            logger.info(
-                f"[A2A AUTH] ✅ Authentication successful: tenant={tenant_id}, principal={identity.principal_id}"
-            )
-
-        # Set tenant ContextVar at the A2A transport boundary
-        if identity.tenant:
-            from src.core.config_loader import set_current_tenant
-
-            set_current_tenant(identity.tenant)
-
-        return identity
-
-    def _make_tool_context(
-        self, identity: ResolvedIdentity, tool_name: str, context_id: str | None = None
-    ) -> ToolContext:
-        """Build ToolContext from a pre-resolved identity — NO database calls.
-
-        Args:
-            identity: Pre-resolved identity from _resolve_a2a_identity
-            tool_name: Name of the tool being called
-            context_id: Optional context ID for conversation tracking
-
-        Returns:
-            ToolContext for calling core functions
-        """
-        if not context_id:
-            context_id = f"a2a_{datetime.now(UTC).timestamp()}"
-
-        tenant_id = identity.tenant_id or (
-            identity.tenant.get("tenant_id", "unknown") if identity.tenant else "unknown"
-        )
-
-        return ToolContext(
-            context_id=context_id,
-            tenant_id=tenant_id,
-            principal_id=identity.principal_id,
-            tool_name=tool_name,
-            request_timestamp=datetime.now(UTC),
-            metadata={"source": "a2a_server", "protocol": "a2a_jsonrpc"},
-            testing_context=identity.testing_context,
-        )
-
-    def _log_a2a_operation(
-        self,
-        operation: str,
-        tenant_id: str,
-        principal_id: str,
-        success: bool = True,
-        details: dict[str, Any] | None = None,
-        error: str | None = None,
-    ):
-        """Log A2A operations to audit system for visibility in activity feed."""
-        try:
-            if not tenant_id:
-                return
-
-            audit_logger = get_audit_logger("A2A", tenant_id)
-            audit_logger.log_operation(
-                operation=operation,
-                principal_name=f"A2A_Client_{principal_id}",
-                principal_id=principal_id,
-                adapter_id="a2a_client",
-                success=success,
-                details=details,
-                error=error,
-                tenant_id=tenant_id,
-            )
-        except Exception as e:
-            logger.warning("Failed to log A2A operation: %s", e)
+    # (Deleted) _resolve_a2a_identity resolved A2A's own identity, including the
+    # set_current_tenant push that forced the lazy tenant to hydrate on every request. The
+    # boundary resolves once from the credential; A2A supplies the credential and nothing
+    # else.
 
     async def on_message_send(
         self,
@@ -518,57 +386,26 @@ class AdCPRequestHandler(RequestHandler):
         )
         self.tasks[task_id] = task
 
-        # Bound BEFORE the try because the handler below reads it: identity is
-        # resolved partway through, so any earlier failure — the push-config gate
-        # among them — used to raise UnboundLocalError from the error handler and
-        # replace the real error with a confusing one.
-        identity: ResolvedIdentity | None = None
-
         try:
             # Get authentication token
             auth_token = self._get_auth_token(context)
 
-            # Check if any requested skills require authentication
-            # Default to not requiring auth - only require if we have non-discovery skills
-            requires_auth = False
-            if skill_invocations:
-                # If ANY skill requires auth (not in discovery set), then require auth
-                requested_skills = {inv["skill"] for inv in skill_invocations}
-                requires_auth = any(s not in TOOLS or TOOLS[s].auth == "required" for s in requested_skills)
-
-            # Require authentication for non-public skills. Stay a JSON-RPC
-            # InvalidRequestError (protocol-level rejection, top-level error), but
-            # carry the two-layer envelope in ``data`` so the buyer-facing
-            # AUTH_MISSING code + suggestion reach the A2A wire — matching
-            # REST's no-identity envelope (auth_context.py), which the bare
-            # A2AError previously dropped. (#1417; split to AUTH_MISSING per
-            # v3.1.1 error-code.json — )
-            if requires_auth and not auth_token:
-                raise InvalidRequestError(
-                    message="Missing authentication token - Bearer token required in Authorization header",
-                    data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-                )
-
-            # ── Transport boundary: resolve identity ONCE ──
-            # Like REST's _resolve_auth(), identity is resolved here and passed
-            # to all downstream handlers. No handler should call resolve_identity().
-            # Its `= None` initialisation used to live HERE, which is why a failure
-            # in the push-config gate above reached the error handler with the name
-            # unbound; it now sits before the `try` so every branch can read it.
-            if auth_token:
-                # A PRESENTED token must always be validated, regardless of
-                # whether the requested skill itself requires auth — absent
-                # token -> proceed anonymous (fine); presented-but-invalid
-                # token -> must reject with AUTH_INVALID (terminal), even on
-                # a public/discovery-only skill request. Previously this
-                # reused `requires_auth` (skill-based) here, so an invalid
-                # token on a discovery-only request was silently swallowed as
-                # anonymous by resolve_identity()'s require_valid_token=False
-                # path instead of being rejected.
-                identity = self._resolve_a2a_identity(auth_token, require_valid_token=True, context=context)
-            elif not requires_auth:
-                # Unauthenticated discovery request — resolve tenant from headers only
-                identity = self._resolve_a2a_identity(None, require_valid_token=False, context=context)
+            # NO decision and NO resolution here. Both belong to the boundary, which reads
+            # ``ToolSpec.requires_credential()`` per tool and resolves once from this
+            # credential. A2A used to compute ``requires_auth`` for the whole BATCH --
+            # `any(... requires_credential() ...)` over every requested skill -- so a mixed
+            # public/protected batch forced auth on the public one too, and a second check
+            # downstream re-asked the same question. Per-tool resolution replaces both; the
+            # pinned 3.1.1 spec says nothing about multi-skill batching, and auth is a
+            # property of the tool.
+            #
+            # A2A therefore holds NO identity of its own, and must not: the one the tool runs
+            # under is minted inside ``invoke_tool`` from this credential. A local ``identity``
+            # survived here after the resolution moved, permanently None, and every log line
+            # that read it recorded tenant "unknown" against a real request. Those lines are
+            # gone; scoping an observability record is the boundary's job, where the resolved
+            # identity actually is.
+            credential = self._credential_of(context)
 
             # Route: Handle explicit skill invocations first, then natural language fallback
             if skill_invocations:
@@ -580,11 +417,7 @@ class AdCPRequestHandler(RequestHandler):
                     logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
 
                     try:
-                        result = await self._handle_explicit_skill(
-                            skill_name,
-                            parameters,
-                            identity,
-                        )
+                        result = await self._handle_explicit_skill(skill_name, parameters, credential)
                         results.append({"skill": skill_name, "result": result, "success": True})
                     except A2AError:
                         # A2AError should bubble up immediately (JSON-RPC error).
@@ -593,6 +426,21 @@ class AdCPRequestHandler(RequestHandler):
                         # are now caught below and surfaced as failed Tasks with a
                         # two-layer envelope in the artifact DataPart.
                         raise
+                    except AdCPAuthenticationError as e:
+                        # A REFUSED CREDENTIAL IS NOT AN ASYNC-TASK FAILURE. It is a
+                        # transport-level refusal: the caller has no identity and needs the
+                        # 401 handshake to learn how to authenticate, which
+                        # AuthChallengeResponder derives from a JSON-RPC error envelope --
+                        # not from a 200 carrying a failed Task.
+                        #
+                        # This branch must precede the AdCPSalesAgentError one below, which
+                        # would otherwise swallow it (AdCPAuthenticationError is a subclass).
+                        # The translation used to live in _resolve_a2a_identity, before the
+                        # boundary owned resolution; it belongs wherever the raise now lands.
+                        # AdCPAuthRequiredError subclasses AdCPAuthenticationError, so one
+                        # branch covers AUTH_MISSING and AUTH_INVALID and each keeps its own
+                        # code.
+                        raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
                     except AdCPSalesAgentError as e:
                         # AdCP-level errors are async-task failures, not JSON-RPC
                         # errors. Mirrors the SDK's _send_adcp_error reference for
@@ -607,20 +455,13 @@ class AdCPRequestHandler(RequestHandler):
                         # Untyped fallthrough — same envelope shape as the AdCPSalesAgentError
                         # branch so storyboard runners can `JSON.parse` the DataPart
                         # uniformly regardless of which branch caught the failure.
-                        # Route through the canonical boundary hook (ERROR + exc_info
-                        # for untyped failures, plus activity-feed + audit) so untyped
-                        # A2A skill failures land on the same observability surface as
-                        # MCP/REST and the typed path. The typed
-                        # (AdCPSalesAgentError/ValueError/PermissionError) failures were already
-                        # recorded inside _handle_explicit_skill, so this only fires for
-                        # genuinely-unexpected exceptions that escaped it.
-                        record_boundary_error(
-                            "a2a",
-                            skill_name,
-                            e,
-                            tenant_id=getattr(identity, "tenant_id", None),
-                            principal_id=getattr(identity, "principal_id", None) or "anonymous",
-                        )
+                        #
+                        # No recording here. Anything reaching this point was raised inside
+                        # ``invoke_tool``, which records it against the identity it resolved
+                        # (``_boundary``, guarded so a re-raise up the stack cannot record it
+                        # twice). This copy re-recorded the same failure a second time and
+                        # scoped it to tenant "unknown", because the ``identity`` it read was
+                        # never bound.
                         results.append(self._build_failed_skill_result(skill_name, e))
 
                 # Check for submitted status (manual approval required) - return early without artifacts
@@ -697,49 +538,6 @@ class AdCPRequestHandler(RequestHandler):
                     # All skills failed - mark task as failed
                     task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
                     return task
-                elif successful_skills:
-                    # Log successful skill invocations with rich context
-                    try:
-                        tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                        principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-                        # Extract meaningful details from results
-                        log_details = {"skills": successful_skills, "count": len(successful_skills)}
-
-                        # Add context from the first successful skill
-                        first_result = next((r for r in results if r["success"]), None)
-                        if first_result and "result" in first_result:
-                            result_data = first_result["result"]
-
-                            # Extract budget and package info for create_media_buy
-                            if "create_media_buy" in first_result["skill"]:
-                                if isinstance(result_data, dict):
-                                    if "total_budget" in result_data:
-                                        log_details["total_budget"] = result_data["total_budget"]
-                                    if "packages" in result_data:
-                                        log_details["package_count"] = len(result_data["packages"])
-                                    if "media_buy_id" in result_data:
-                                        log_details["media_buy_id"] = result_data["media_buy_id"]
-
-                            # Extract product count for get_products
-                            elif "get_products" in first_result["skill"]:
-                                if isinstance(result_data, dict) and "products" in result_data:
-                                    log_details["product_count"] = len(result_data["products"])
-
-                            # Extract creative count for sync_creatives
-                            elif "sync_creatives" in first_result["skill"]:
-                                if isinstance(result_data, dict) and "creatives" in result_data:
-                                    log_details["creative_count"] = len(result_data["creatives"])
-
-                        self._log_a2a_operation(
-                            "explicit_skill_invocation",
-                            tenant_id,
-                            principal_id,
-                            True,
-                            log_details,
-                        )
-                    except Exception as e:
-                        logger.warning("Could not log skill invocations: %s", e)
 
             # Natural language fallback (existing keyword-based routing)
             elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
@@ -749,20 +547,7 @@ class AdCPRequestHandler(RequestHandler):
                 # -- a second declaration of one tool on one transport, which is how it kept
                 # a lazy import of a deleted builder alive after every other caller was
                 # rewired: nothing enumerating the registry could see it.
-                result = await self._dispatch_skill("get_products", {"brief": combined_text}, identity)
-                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-                self._log_a2a_operation(
-                    "get_products",
-                    tenant_id,
-                    principal_id,
-                    True,
-                    {
-                        "query": combined_text[:100],
-                        "product_count": len(result.get("products", [])) if isinstance(result, dict) else 0,
-                    },
-                )
+                result = await self._dispatch_skill("get_products", {"brief": combined_text}, credential)
                 del task.artifacts[:]
                 task.artifacts.append(
                     Artifact(
@@ -773,21 +558,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             elif any(word in combined_text for word in ["price", "pricing", "cost", "cpm", "budget"]):
                 # Redirect pricing queries to get_products which has real price_guidance
-                result = await self._dispatch_skill("get_products", {"brief": combined_text}, identity)
-                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-                self._log_a2a_operation(
-                    "get_products",
-                    tenant_id,
-                    principal_id,
-                    True,
-                    {
-                        "query": combined_text[:100],
-                        "query_type": "pricing",
-                        "products_count": len(result.get("products", [])) if isinstance(result, dict) else 0,
-                    },
-                )
+                result = await self._dispatch_skill("get_products", {"brief": combined_text}, credential)
                 del task.artifacts[:]
                 task.artifacts.append(
                     Artifact(
@@ -798,20 +569,7 @@ class AdCPRequestHandler(RequestHandler):
                 )
             elif any(word in combined_text for word in ["target", "audience"]):
                 # Redirect targeting queries to get_adcp_capabilities which has real targeting info
-                result = await self._dispatch_skill("get_adcp_capabilities", {}, identity)
-                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-                self._log_a2a_operation(
-                    "get_adcp_capabilities",
-                    tenant_id,
-                    principal_id,
-                    True,
-                    {
-                        "query": combined_text[:100],
-                        "query_type": "targeting",
-                    },
-                )
+                result = await self._dispatch_skill("get_adcp_capabilities", {}, credential)
                 del task.artifacts[:]
                 task.artifacts.append(
                     Artifact(
@@ -827,7 +585,7 @@ class AdCPRequestHandler(RequestHandler):
                 # outer error handler at on_message_send catches the raise
                 # and attaches a spec-compliant two-layer envelope to the
                 # failed Task artifact.
-                await self._create_media_buy(combined_text, identity)
+                await self._create_media_buy(combined_text)
             else:
                 # General help response
                 capabilities = {
@@ -844,16 +602,6 @@ class AdCPRequestHandler(RequestHandler):
                         "How do I create a media buy?",
                     ],
                 }
-                tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-                principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-                self._log_a2a_operation(
-                    "get_capabilities",
-                    tenant_id,
-                    principal_id,
-                    True,
-                    {"query": combined_text[:100], "response_type": "capabilities"},
-                )
                 del task.artifacts[:]
                 task.artifacts.append(
                     Artifact(
@@ -898,21 +646,16 @@ class AdCPRequestHandler(RequestHandler):
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            # Use identity resolved at transport boundary (if available).
-            # identity is initialised to None before the try (below), because it is
-            # bound partway through it: ANY failure before that point — the
-            # push-config gate among them — otherwise raised UnboundLocalError from
-            # the error handler itself and replaced the real error.
-            err_tenant_id = (identity.tenant_id or "unknown") if identity else "unknown"
-            err_principal_id = (identity.principal_id or "unknown") if identity else "unknown"
-
-            record_boundary_error(
-                "a2a",
-                "message_processing",
-                e,
-                tenant_id=err_tenant_id,
-                principal_id=err_principal_id,
-            )
+            # Reached for a failure BEFORE any tool ran -- a malformed message, a refused
+            # push-notification config -- which never passes through ``invoke_tool`` and so is
+            # recorded nowhere else. Anything raised inside a tool is already recorded there,
+            # against the identity that ran it, and the guard in ``record_boundary_error``
+            # keeps this from recording it a second time on the way out.
+            #
+            # No tenant and no principal are passed, because at this point A2A genuinely knows
+            # neither. It used to pass the string "unknown" for both, which is not the absence
+            # of a tenant -- it is a fabricated one, written into a tenant-scoped table.
+            record_boundary_error("a2a", "message_processing", e)
 
             # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
@@ -1112,7 +855,7 @@ class AdCPRequestHandler(RequestHandler):
         self,
         skill_name: str,
         parameters: dict,
-        identity: ResolvedIdentity | None,
+        credential: AuthContext,
     ) -> dict[str, Any]:
         """Validate a parameter bag into the row's DTO, run the tool, serialize the answer.
 
@@ -1142,14 +885,27 @@ class AdCPRequestHandler(RequestHandler):
         artifact is that it has no integer type, and pydantic's non-strict mode already coerces
         ``2.0`` to an ``int`` field.
         """
-        response = await invoke_tool(skill_name, TOOLS[skill_name].dto.model_validate(parameters), identity)
+        # PARSING is the transport's job, so a parse failure is typed here -- this is the one
+        # step that happens BEFORE the boundary and can therefore never be typed by it. Once
+        # the DTO exists, ``invoke_tool`` owns every failure and types it there
+        # (``named_adcp_error``), so nothing downstream re-decides what an error is.
+        try:
+            req = TOOLS[skill_name].dto.model_validate(parameters)
+        except ValueError as exc:
+            # ``ValueError`` alone: pydantic's ``ValidationError`` IS one, and
+            # ``adcp_error_for`` tells them apart itself -- a schema violation earns
+            # INVALID_REQUEST with the offending field, a plain ValueError VALIDATION_ERROR.
+            # Naming both here would state that distinction a second time.
+            raise adcp_error_for(exc) from exc
+
+        response = await invoke_tool(skill_name, req, credential, "a2a")
         return self._serialize_for_a2a(response)
 
     async def _handle_explicit_skill(
         self,
         skill_name: str,
         parameters: dict,
-        identity: ResolvedIdentity | None,
+        credential: AuthContext,
     ) -> dict:
         """Handle explicit AdCP skill invocations.
 
@@ -1159,7 +915,6 @@ class AdCPRequestHandler(RequestHandler):
         Args:
             skill_name: The AdCP skill name (e.g., "get_products")
             parameters: Dictionary of skill-specific parameters
-            identity: Pre-resolved identity from transport boundary
 
         Returns:
             Dictionary containing the skill result
@@ -1171,23 +926,6 @@ class AdCPRequestHandler(RequestHandler):
         # place every A2A request passes through -- the NL entry points reach it too.
         logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
 
-        # Validate identity for non-discovery skills. Stay a JSON-RPC
-        # InvalidRequestError (the skill never dispatches, so this is a
-        # transport-channel rejection) but carry the two-layer envelope in
-        # ``data``, which AdCP 3.1.1 names as the binding for a request rejected
-        # before dispatch — docs/building/operating/transport-errors.mdx,
-        # "Transport-Level Errors", and position 4 of its client detection order
-        # (``error.data.adcp_error``). Without it the A2A wire carried a bare
-        # JSON-RPC error and the buyer-facing code and suggestion that REST
-        # returns were simply absent, which the test harness was papering over by
-        # synthesizing an envelope production never sent (salesagent-pldmk.26).
-        #
-        # No identity / no principal_id resolved at all -> AUTH_MISSING per
-        # v3.1.1 error-code.json. The code and its suggestion come from the
-        # CODE_TABLE entry for ``AdCPAuthRequiredError``, never from a per-class
-        # message/suggestion override (ADR-010) — which is why nothing is passed
-        # to the constructor here. Same layering fix as the :282-283/:286-287
-        # sites above, which were bare InvalidRequestErrors with no wire code at all.
         # A row with ``a2a=True`` IS dispatchable. There is no second list and no per-tool
         # method: the registry says which tools this transport serves, and the card is derived
         # from the same rows, so the two cannot disagree. They used to -- a ``hasattr`` filter
@@ -1198,39 +936,23 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
 
-        if TOOLS[skill_name].auth == "required" and (identity is None or not identity.principal_id):
-            raise InvalidRequestError(
-                message="Authentication required for skill invocation",
-                data=build_two_layer_error_envelope(AdCPAuthRequiredError()),
-            )
+        # (Deleted) A second auth check stood here, re-asking what the boundary already
+        # answered. It was load-bearing only because the batch decision above could resolve
+        # leniently and then dispatch a protected skill; with the decision per tool, the
+        # boundary refuses before dispatch and this could never fire.
 
-        try:
-            return await self._dispatch_skill(skill_name, parameters, identity)
-        except A2AError:
-            # Re-raise A2AError as-is (already properly formatted)
-            raise
-        except (AdCPSalesAgentError, ValueError, PermissionError) as e:
-            # Normalize ValueError/PermissionError to typed AdCPSalesAgentError via the
-            # shared adcp_error_for() helper — same mapping the MCP
-            # and REST boundaries apply. The outer dispatcher's `except
-            # AdCPSalesAgentError` branch wraps the result into a failed Task with the
-            # two-layer envelope.
-            normalized = adcp_error_for(e)
-
-            # Defensive about identity shape — test fixtures sometimes pass a
-            # string or partially-built identity instead of ResolvedIdentity.
-            # record_boundary_error handles None tenant_id internally.
-            record_boundary_error(
-                "a2a",
-                skill_name,
-                normalized,
-                tenant_id=getattr(identity, "tenant_id", None),
-                principal_id=getattr(identity, "principal_id", None) or "anonymous",
-            )
-
-            if normalized is not e:
-                raise normalized from e
-            raise
+        # No normalization here any more. It read ``adcp_error_for`` on every failure coming
+        # out of dispatch, which was a fourth site deciding a question that does not depend on
+        # the transport asking it -- MCP answered it in ``_handle_tool_exception``, REST in its
+        # exception handlers, and A2A twice (here and in ``_build_failed_skill_result``).
+        #
+        # Both sources of failure are now typed at the point that owns them: a parse failure by
+        # ``_dispatch_skill``, because parsing is the transport's job and happens before the
+        # boundary exists; everything else by ``invoke_tool``, which holds the tool, the
+        # identity and the exception together. What arrives here is already an
+        # ``AdCPSalesAgentError``, and the outer dispatcher's ``except AdCPSalesAgentError``
+        # branch renders it -- rendering being the part that IS per-transport.
+        return await self._dispatch_skill(skill_name, parameters, credential)
         # Untyped exceptions fall through to the dispatcher's `except Exception`
         # at the call site, which routes them through `_build_failed_skill_result`
         # for uniform envelope shape. No catch-all here.
@@ -1268,7 +990,7 @@ class AdCPRequestHandler(RequestHandler):
             # Generic fallback that should pass AdCP validation
             return "Business advertising products and services"
 
-    async def _create_media_buy(self, request: str, identity: ResolvedIdentity | None) -> dict:
+    async def _create_media_buy(self, request: str) -> dict:
         """Natural-language create_media_buy is not supported; explicit skill is the spec contract.
 
         Always raises ``AdCPCapabilityNotSupportedError``. Buyer agents reach

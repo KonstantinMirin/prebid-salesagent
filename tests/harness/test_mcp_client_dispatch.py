@@ -29,14 +29,12 @@ class TestMcpClientDispatch:
         from fastmcp import Client
 
         from src.core.main import mcp
+        from tests.helpers.boundary_identity import resolved_as
 
         identity = _make_identity()
 
         async def _call():
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
-            ):
+            with resolved_as(identity):
                 async with Client(mcp) as client:
                     result = await client.call_tool("get_adcp_capabilities", {})
                     assert not result.is_error, f"MCP call failed: {result.content}"
@@ -54,14 +52,12 @@ class TestMcpClientDispatch:
         from fastmcp import Client
 
         from src.core.main import mcp
+        from tests.helpers.boundary_identity import resolved_as
 
         identity = _make_identity()
 
         async def _call():
-            with patch(
-                "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                return_value=identity,
-            ):
+            with resolved_as(identity):
                 async with Client(mcp) as client:
                     result = await client.call_tool(
                         "get_adcp_capabilities",
@@ -81,15 +77,13 @@ class TestMcpClientDispatch:
         from fastmcp import Client
 
         from src.core.main import mcp
+        from tests.helpers.boundary_identity import resolved_as
 
         identity = _make_identity()
 
         async def _call():
             with (
-                patch(
-                    "src.core.mcp_auth_middleware.resolve_identity_from_context",
-                    return_value=identity,
-                ),
+                resolved_as(identity),
                 patch.dict(os.environ, {"ENVIRONMENT": "production"}),
             ):
                 async with Client(mcp) as client:

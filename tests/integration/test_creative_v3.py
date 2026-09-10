@@ -37,6 +37,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.principal import PrincipalFactory
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -58,7 +59,7 @@ def _make_identity(
     principal_id: str,
     approval_mode: str = "auto-approve",
 ) -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "approval_mode": approval_mode},
@@ -393,7 +394,7 @@ class TestApprovalWorkflow:
         """
 
         # Identity with tenant dict that lacks approval_mode key
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=self.PRINCIPAL_ID,
             tenant_id=self.TENANT_ID,
             tenant={"tenant_id": self.TENANT_ID},  # No approval_mode key

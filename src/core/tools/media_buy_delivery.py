@@ -104,6 +104,7 @@ from src.core.schemas import (
 from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
 )
+from src.core.tenant_context import LazyTenantContext
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
@@ -206,7 +207,7 @@ def delivery_for_media_buy(
         ),
         principal=resolve_principal_or_raise(media_buy.principal_id, tenant_id=media_buy.tenant_id),
         principal_id=media_buy.principal_id,
-        tenant={"tenant_id": media_buy.tenant_id},
+        tenant=LazyTenantContext(media_buy.tenant_id),
         testing_ctx=AdCPTestContext(),
     )
 
@@ -216,7 +217,7 @@ def get_media_buy_delivery(
     *,
     principal: "Principal",
     principal_id: str,
-    tenant: dict[str, Any],
+    tenant: LazyTenantContext,
     testing_ctx: AdCPTestContext,
 ) -> GetMediaBuyDeliveryResponse:
     """Gather delivery for the buys *req* names, for an already-resolved caller.

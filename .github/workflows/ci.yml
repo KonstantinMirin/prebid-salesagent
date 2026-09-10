@@ -468,8 +468,12 @@ jobs:
         uses: ./.github/actions/_adcp-bundle
       # No host Postgres / host ports: run_all_tests.sh builds the pinned
       # creative agent, brings the stack up, waits for health, and executes tox
-      # inside the compose network — the runner reaches the agent at proxy:8000
-      # by service name, which is tests/storyboard's own default. (_setup-env IS
+      # inside the compose network — the runner reaches the agent at
+      # adcp-server-storyboard:8080 by service name, which is tests/storyboard's own
+      # default. That is a SECOND server running the same anchored configuration with
+      # ENVIRONMENT=production, because a conformance storyboard grades a deployed
+      # seller; the shared adcp-server behind proxy:8000 stays on development
+      # strictness for the BDD In-Network job above. (_setup-env IS
       # present above, but only so the report-publishing step below has a venv;
       # the conformance run itself uses none of it.)
       # Identical shape to the BDD In-Network job above; hand-rolling a compose

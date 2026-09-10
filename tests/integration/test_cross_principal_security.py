@@ -18,9 +18,9 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import MediaBuy, Principal
 from src.core.exceptions import AdCPAuthorizationError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
+from tests.factories.principal import PrincipalFactory
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -129,7 +129,7 @@ class TestCrossPrincipalSecurity:
         """
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity_b = ResolvedIdentity(
+        identity_b = PrincipalFactory.make_identity(
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
@@ -153,7 +153,7 @@ class TestCrossPrincipalSecurity:
 
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
-        identity_b = ResolvedIdentity(
+        identity_b = PrincipalFactory.make_identity(
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
@@ -188,7 +188,7 @@ class TestCrossPrincipalSecurity:
         from src.core.schemas import GetMediaBuyDeliveryRequest
         from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 
-        identity_b = ResolvedIdentity(
+        identity_b = PrincipalFactory.make_identity(
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
@@ -258,7 +258,7 @@ class TestCrossPrincipalSecurity:
         # Principal A (from first tenant) tries to access creative from second tenant
         from src.core.tools.creatives.listing import _list_creatives_impl
 
-        identity_a = ResolvedIdentity(
+        identity_a = PrincipalFactory.make_identity(
             principal_id="advertiser_a",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},

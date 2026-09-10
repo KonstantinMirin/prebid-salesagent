@@ -127,18 +127,43 @@ class TestResolveIdentity:
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
     def test_resolve_anonymous_discovery(self, mock_get_subdomain, mock_get_vhost):
-        """resolve_identity() supports anonymous (no token) for discovery endpoints."""
+        """resolve_identity() supports anonymous (no token) for discovery endpoints.
+
+        ``require_valid_token=False`` is now passed EXPLICITLY, because that is what a
+        discovery caller does: the flag carries the TOOL's ``ToolSpec.auth`` declaration
+        down from the boundary, and the three ``auth="optional"`` tools reach here with
+        False. The test used to rely on the default and on the flag meaning "raise only for
+        a token that is present and bad" — under which an auth-REQUIRED surface with no
+        credential returned an anonymous identity and the refusal fell to whichever tool
+        noticed. It means presence too now, so the default would raise here.
+        """
         mock_get_subdomain.return_value = {"tenant_id": "default"}
 
         identity = resolve_identity(
             headers={"x-adcp-tenant": "default"},
             auth_token=None,
             protocol="mcp",
+            require_valid_token=False,
         )
 
         assert identity.principal_id is None
         assert identity.tenant_id == "default"
         assert identity.is_authenticated is False
+
+    def test_anonymous_call_to_a_required_surface_is_refused(self):
+        """The other half of the flag: no credential where one is required -> AUTH_MISSING.
+
+        The postcondition every transport now relies on, so none of them needs its own
+        "no token" guard — REST, A2A and MCP each had one, and they did not agree.
+        """
+        import pytest
+
+        from src.core.exceptions import AdCPAuthRequiredError
+
+        with pytest.raises(AdCPAuthRequiredError) as exc_info:
+            resolve_identity(headers={}, auth_token=None, protocol="mcp", require_valid_token=True)
+
+        assert exc_info.value.error_code == "AUTH_MISSING"
 
     @patch("src.core.resolved_identity.get_tenant_by_virtual_host", return_value=None)
     @patch("src.core.resolved_identity.get_tenant_by_subdomain")
@@ -146,10 +171,14 @@ class TestResolveIdentity:
         """resolve_identity() uses 'default' tenant for localhost requests."""
         mock_get_subdomain.return_value = {"tenant_id": "default"}
 
+        # require_valid_token=False: this grades TENANT DETECTION, not auth. Passing no
+        # credential to an auth-required surface is a separate question, answered by
+        # test_anonymous_call_to_a_required_surface_is_refused above.
         identity = resolve_identity(
             headers={"host": "localhost:8080"},
             auth_token=None,
             protocol="rest",
+            require_valid_token=False,
         )
 
         assert identity.tenant_id == "default"

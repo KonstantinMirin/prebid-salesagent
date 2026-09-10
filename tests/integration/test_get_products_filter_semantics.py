@@ -17,6 +17,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creative_formats import _list_creative_formats_impl
+from tests.factories.principal import PrincipalFactory
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -29,7 +30,7 @@ def identity(integration_db):
     for adapter config (AdapterConfig table lookup). The tenant is a plain dict
     since formats and signals don't require a Tenant row.
     """
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id="test_principal",
         tenant_id="filter-sem-test",
         tenant={"tenant_id": "filter-sem-test", "name": "Filter Semantics Test"},

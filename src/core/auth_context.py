@@ -8,6 +8,22 @@ Available via:
 
 Identity resolution (principal, tenant) happens at handler level via
 resolve_identity() — this is intentional to avoid DB calls on every request.
+
+NEITHER dependency sets the tenant ContextVar, and the removal is deliberate twice over.
+
+It never worked. FastAPI runs a SYNC dependency in an anyio worker thread, the worker gets
+a COPY of the context, and a ContextVar written there is discarded on return — measured,
+the write lands on "AnyIO worker thread" while the tool's read on "MainThread" raises. MCP
+and A2A set the same ContextVar from async handlers on the event loop, where it sticks, so
+REST alone was silently anonymous and nobody noticed.
+
+It is deleted rather than repaired because the ambient channel is the wrong carrier. The
+tenant already travels explicitly on ``identity.tenant`` — a typed, immutable context that
+defers its DB row until a field beyond ``tenant_id`` is read, then caches it once. A
+parallel copy of that same value, flattened into a mutable dict and pushed into task-local
+state, is a second source of truth for data the callee was already handed, and it is why
+this bug was invisible: nothing links such a write to its read. ``require_tenant(identity)``
+inside each _impl is the explicit path, and is what has been doing the real work all along.
 """
 
 from dataclasses import dataclass, field
@@ -66,93 +82,13 @@ get_auth_context: Any = Depends(_get_auth_context)
 # ---------------------------------------------------------------------------
 
 
-def _resolve_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity | None":
-    """FastAPI dependency: resolve identity (auth-optional, for discovery endpoints).
-
-    Always resolves tenant context from headers (Host / x-adcp-tenant /
-    Apx-Incoming-Host), regardless of whether a credential was presented or
-    resolved to a principal — matching resolve_identity_from_context()'s
-    MCP/A2A contract (transport_helpers.py). Discovery responses describe the
-    SELLER, not the caller (AdCP INV-4, v3.1.1), so an anonymous or
-    presented-but-unresolvable-token caller must still receive the same
-    tenant-scoped data an authenticated caller would (salesagent-zna9).
-    Never raises on missing or invalid tokens — identity.principal_id being
-    None is how downstream code distinguishes "no credentials" from a
-    resolved principal (require_principal_id, brand_manifest_policy checks).
-    """
-    from src.core.resolved_identity import resolve_identity
-
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=False,
-        protocol="rest",
-    )
-
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
-
-    return identity
-
-
-def _require_auth_dep(auth_ctx: AuthContext = get_auth_context) -> "ResolvedIdentity":
-    """FastAPI dependency: resolve identity (auth-required, raises 401 if missing).
-
-    Returns ResolvedIdentity on success. Raises AdCPAuthRequiredError if
-    no token is present or the token is invalid. The error carries the shared
-    AUTH_MISSING suggestion so the REST 401 envelope tells the buyer how to
-    recover (parity with require_identity on the _impl path; AdCP POST-F3).
-    """
-    from src.core.exceptions import AdCPAuthRequiredError
-
-    if not auth_ctx.auth_token:
-        raise AdCPAuthRequiredError()
-
-    from src.core.resolved_identity import resolve_identity
-
-    identity = resolve_identity(
-        headers=dict(auth_ctx.headers),
-        auth_token=auth_ctx.auth_token,
-        require_valid_token=True,
-        protocol="rest",
-    )
-
-    if not identity.principal_id:
-        # AUTH_INVALID, not AUTH_MISSING: the spec keys these on HEADER PRESENCE, and by this
-        # line a credential WAS presented -- the `not auth_ctx.auth_token` guard above is the
-        # one that owns the absent case. This raised AdCPAuthRequiredError (AUTH_MISSING),
-        # justified as "defensive/unreachable ... kept AUTH_MISSING-shaped for parity with the
-        # guard above". Parity with the wrong guard: the two branches answer different
-        # questions, so shaping the second like the first is what makes it wrong. A branch
-        # believed unreachable is exactly the one to shape correctly, because if it ever fires
-        # it will be telling a buyer who DID send a credential that they sent none, and they
-        # will retry the same way.
-        from src.core.exceptions import AdCPAuthenticationError
-
-        raise AdCPAuthenticationError()
-
-    # Set tenant ContextVar at the REST transport boundary
-    if identity.tenant:
-        from src.core.config_loader import set_current_tenant
-
-        set_current_tenant(identity.tenant)
-
-    return identity
-
-
-# Annotated type aliases for route signatures (modern FastAPI pattern):
-#   def my_route(identity: ResolveAuth):
-#   def my_route(identity: RequireAuth):
-# Import at module level for Annotated (cannot be deferred — Annotated
-# needs the real type at alias definition time).
-from src.core.resolved_identity import ResolvedIdentity  # noqa: E402
-
-ResolveAuth = Annotated[ResolvedIdentity | None, Depends(_resolve_auth_dep)]
-RequireAuth = Annotated[ResolvedIdentity, Depends(_require_auth_dep)]
-
-# Backward-compatible Depends instances (for dependency chaining):
-resolve_auth: Any = Depends(_resolve_auth_dep)
-require_auth: Any = Depends(_require_auth_dep)
+# (Deleted) _resolve_auth_dep / _require_auth_dep / resolve_auth / require_auth / _publishing.
+#
+# REST resolved identity in a dependency, choosing between two of them by reading
+# ToolSpec.auth at the route builder. That was one of the four places the decision lived,
+# and the one that hardcoded require_valid_token=False -- so REST alone served a rejected
+# credential on a public tool. The boundary resolves now, from the AuthContext the route
+# hands it, and a route that cannot resolve cannot disagree.
+#
+# _publishing went with them: it existed so the REST error path could read the resolved
+# identity off request.state, which the boundary now holds directly.

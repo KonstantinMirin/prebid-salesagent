@@ -31,7 +31,7 @@ class TestRESTCreativeFormatsFilterForwarding:
         ],
         ids=["name_search", "max_width", "is_responsive", "min_width"],
     )
-    @patch("src.core.resolved_identity.resolve_identity")
+    @patch("src.core.resolved_identity._resolve_identity")
     @stub_impl("list_creative_formats")
     def test_filter_forwarded_to_impl(self, mock_impl, mock_resolve, body, field, expected):
         """Filter params in POST body must reach _impl via req."""

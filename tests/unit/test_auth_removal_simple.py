@@ -4,64 +4,17 @@ Simple, focused tests for authentication removal.
 Tests the actual behavior change: discovery endpoints work without auth.
 """
 
-from unittest.mock import Mock, patch
-
 
 class TestAuthRemovalChanges:
     """Simple tests for the core changes made."""
 
-    def test_get_principal_from_context_returns_none_without_auth(self):
-        """Test that get_principal_from_context returns None when no auth provided."""
-        # Lazy import to avoid triggering load_config() at module import time
-        from src.core.auth import get_principal_from_context
-
-        context = Mock(spec=["meta"])  # Limit to only meta attribute
-        context.meta = {}  # Empty meta, no headers
-
-        with patch("src.core.auth.get_http_headers", return_value={}):  # No x-adcp-auth header
-            principal_id, tenant = get_principal_from_context(context)
-            assert principal_id is None
-            assert tenant is None
-
-    def test_get_principal_from_context_works_with_auth(self):
-        """Test that get_principal_from_context still works with auth."""
-        # Lazy import to avoid triggering load_config() at module import time
-        from src.core.auth import get_principal_from_context
-
-        context = Mock(spec=["meta"])  # Limit to only meta attribute
-        # Must include Host header for tenant detection (security fix)
-        context.meta = {
-            "headers": {
-                "x-adcp-auth": "test-token",
-                "host": "test-tenant.sales-agent.example.com",  # Required for tenant detection
-            }
-        }
-
-        with patch(
-            "src.core.auth.get_http_headers",
-            return_value={
-                "x-adcp-auth": "test-token",
-                "host": "test-tenant.sales-agent.example.com",
-            },
-        ):
-            # Mock virtual host lookup to fail (not a virtual host)
-            with patch("src.core.auth.get_tenant_by_virtual_host", return_value=None):
-                # Mock subdomain lookup to succeed
-                with patch("src.core.auth.get_tenant_by_subdomain") as mock_tenant_lookup:
-                    mock_tenant_lookup.return_value = {
-                        "tenant_id": "tenant_test",
-                        "subdomain": "test-tenant",
-                        "name": "Test Tenant",
-                    }
-                    with patch("src.core.auth.set_current_tenant"):
-                        with patch("src.core.auth.get_principal_from_token", return_value=("test_principal", None)):
-                            principal_id, tenant = get_principal_from_context(context)
-                            assert principal_id == "test_principal"
-                            assert tenant == {
-                                "tenant_id": "tenant_test",
-                                "subdomain": "test-tenant",
-                                "name": "Test Tenant",
-                            }
+    # (Retired) The tests here that drove get_principal_from_context went with it. That
+    # function was the pre-boundary resolver, deleted for having zero production callers.
+    # What they GRADED -- a credential minted for one tenant must not act on another, and a
+    # buyer must not see another tenant's rows -- is graded on the wire now, across all three
+    # transports, by tests/bdd/features/BR-SECURITY-002-tenant-isolation.feature. That is a
+    # stronger grader than these were: they called one internal function directly, so they
+    # could not have caught a transport that skipped it.
 
     def test_audit_logging_handles_none_principal(self):
         """Test that audit logging works with None principal_id."""

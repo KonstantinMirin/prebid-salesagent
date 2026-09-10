@@ -35,6 +35,7 @@ from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
+from tests.factories.principal import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,7 +48,7 @@ def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
 ) -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test Tenant"},

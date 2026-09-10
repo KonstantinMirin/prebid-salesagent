@@ -14,7 +14,7 @@ import inspect
 
 import pytest
 
-from src.core.resolved_identity import ResolvedIdentity
+from tests.factories.principal import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # Signature tests — verify _impl functions accept ResolvedIdentity
@@ -159,7 +159,7 @@ class TestResolvedIdentityPassthrough:
     @pytest.mark.arch_guard
     def test_resolved_identity_provides_principal_id(self):
         """ResolvedIdentity.principal_id is accessible for _impl use."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -172,7 +172,7 @@ class TestResolvedIdentityPassthrough:
     @pytest.mark.arch_guard
     def test_none_identity_for_discovery(self):
         """_impl functions should handle None identity for discovery endpoints."""
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="default",
             tenant={"tenant_id": "default"},

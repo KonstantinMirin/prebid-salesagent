@@ -17,9 +17,10 @@ import uuid
 import pytest
 from starlette.testclient import TestClient
 
-from src.app import app
+from src.app import _AGENT_CARD_PATHS, app
 from src.core.tools.registry import TOOLS
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.agent_card import host_routes_to_no_tenant
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
@@ -116,10 +117,18 @@ def _extract_artifact_data(result: dict) -> dict:
 
 @pytest.fixture
 def client():
-    """TestClient for the unified FastAPI app."""
-    c = TestClient(app, raise_server_exceptions=False)
-    yield c
-    c.close()
+    """TestClient for the unified FastAPI app, on a host that routes to no tenant.
+
+    Since #1291 the agent card reads the Host's tenant from the database to
+    advertise that tenant's canonical URL. This is a unit test with no database,
+    so it pins the branch it can actually exercise — an unclaimed host, where the
+    card still derives its URL from headers. ``host_routes_to_no_tenant`` supplies
+    only that routing answer; every other call in this file is untouched by it.
+    """
+    with host_routes_to_no_tenant():
+        c = TestClient(app, raise_server_exceptions=False)
+        yield c
+        c.close()
 
 
 @pytest.fixture
@@ -170,45 +179,11 @@ class TestA2ARouteExistence:
 # ---------------------------------------------------------------------------
 
 
-class TestA2AAuthContract:
-    """Verify auth boundary: discovery vs auth-required skills."""
-
-    @pytest.mark.parametrize("skill", DISCOVERY_SKILLS)
-    def test_discovery_skills_accept_no_auth(self, client, no_auth_headers, skill):
-        """Discovery skills should NOT return auth error without token."""
-        payload = _build_jsonrpc(skill, {})
-        response = client.post("/a2a", json=payload, headers=no_auth_headers)
-        body = response.json()
-        # Should not get an auth error
-        if "error" in body:
-            error_msg = body["error"].get("message", "").lower()
-            # Check for explicit auth rejection (not just "authorized" in property names)
-            auth_rejection_phrases = [
-                "authentication token required",
-                "missing authentication token",
-                "bearer token required",
-            ]
-            for phrase in auth_rejection_phrases:
-                assert phrase not in error_msg, (
-                    f"Discovery skill '{skill}' rejected unauthenticated request: {body['error']}"
-                )
-
-    @pytest.mark.parametrize("skill", AUTH_REQUIRED_SKILLS)
-    def test_auth_required_skills_reject_no_auth(self, client, no_auth_headers, skill):
-        """Auth-required skills MUST reject requests without token."""
-        payload = _build_jsonrpc(skill, {})
-        response = client.post("/a2a", json=payload, headers=no_auth_headers)
-        body = response.json()
-        assert "error" in body, f"Auth-required skill '{skill}' should return error without token"
-        error_msg = body["error"].get("message", "").lower()
-        assert "auth" in error_msg or "token" in error_msg, (
-            f"Error for '{skill}' should mention auth/token: {body['error']['message']}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# JSON-RPC Protocol
-# ---------------------------------------------------------------------------
+# (Deleted) TestA2AAuthContract asserted "discovery skills accept no auth, auth-required
+# skills reject no auth" over A2A alone, from a unit test. BDD grades that same contract on
+# the wire across mcp/a2a/rest -- AUTH_MISSING appears in 18 feature files -- so this was one
+# transport's copy of a three-transport obligation, and the copy is what lets a transport
+# drift. Credential handling is not a unit test's subject.
 
 
 class TestA2AJsonRpcProtocol:
@@ -341,3 +316,95 @@ class TestAgentCardContract:
         extensions = card.get("capabilities", {}).get("extensions", [])
         adcp_uris = [e.get("uri", "") for e in extensions]
         assert any("adcp-extension" in uri for uri in adcp_uris), "Agent card must have AdCP extension in capabilities"
+
+
+# ---------------------------------------------------------------------------
+# Agent Card Discovery Paths (#1440 — every declared path must be routed)
+# ---------------------------------------------------------------------------
+
+# Read the declared set from production rather than retyping the literals: a
+# path added to (or dropped from) `_AGENT_CARD_PATHS` must change what these
+# tests grade. Sorted for a deterministic parametrization order.
+AGENT_CARD_PATHS = sorted(_AGENT_CARD_PATHS)
+
+# The path the a2a-sdk factory mounts (src/app.py: create_agent_card_routes
+# card_url=...). It is served today, so it is the regression guard: it must stay
+# green both before and after the routing fix.
+CANONICAL_AGENT_CARD_PATH = "/.well-known/agent-card.json"
+
+
+class TestAgentCardDiscoveryPaths:
+    """Every path the app declares as agent-card discovery must serve the same card.
+
+    Uses the module's `client` fixture, i.e. TestClient WITHOUT lifespan, on
+    purpose. Under lifespan `_install_admin_mounts()` re-appends the Flask
+    catch-all `Mount("/")`, and an unrouted path is then answered by Flask's own
+    HTML 404 — so a 404 would no longer prove anything about the FastAPI route
+    table. Without lifespan there is no catch-all, so a 404 is Starlette's "no
+    route matched" and a 200 is necessarily a FastAPI route. The live-server
+    behaviour under lifespan is graded by
+    tests/e2e/test_a2a_endpoints_working.py.
+    """
+
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_declared_card_path_is_routed(self, client, path):
+        """GET on every path in _AGENT_CARD_PATHS returns 200."""
+        response = client.get(path)
+        assert response.status_code == 200, (
+            f"{path} is declared in _AGENT_CARD_PATHS but returned "
+            f"{response.status_code}; every declared discovery path must be routed"
+        )
+
+    def test_all_declared_card_paths_return_byte_identical_bodies(self, client):
+        """All declared paths serve the same card BYTE for byte.
+
+        Compares `response.content`, not the parsed dict: a caching fetcher keyed
+        on bytes treats a re-serialization difference (key order, separators) as
+        a different document, so an equal-dict/different-bytes result is a real
+        defect.
+        """
+        headers = {"Host": "tenant.example.com"}
+        responses = {path: client.get(path, headers=headers) for path in AGENT_CARD_PATHS}
+
+        # Guard against a vacuous pass: three identical 404 bodies are byte-identical
+        # too. Sibling cases would redden, but this one must not report success on a
+        # tree where no card route exists at all.
+        for path, response in responses.items():
+            assert response.status_code == 200, f"{path} returned {response.status_code}, not a card"
+
+        bodies = {path: response.content for path, response in responses.items()}
+        canonical = bodies[CANONICAL_AGENT_CARD_PATH]
+
+        for path in AGENT_CARD_PATHS:
+            assert bodies[path] == canonical, (
+                f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
+                f"all declared paths must serve one byte-identical card"
+            )
+
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_apx_incoming_host_derivation_applies_on_every_card_path(self, client, path):
+        """Apx-Incoming-Host + X-Forwarded-Proto drive supportedInterfaces[0].url on every path.
+
+        A path that returns 200 carrying the STATIC fallback host is still
+        broken — it would advertise the wrong A2A endpoint to every tenant — so
+        the derivation, not just the status code, is the obligation.
+        """
+        response = client.get(
+            path,
+            headers={"Apx-Incoming-Host": "tenant.example.com", "X-Forwarded-Proto": "https"},
+        )
+        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
+        card = response.json()
+        assert card["supportedInterfaces"][0]["url"] == "https://tenant.example.com/a2a", (
+            f"{path} did not derive its URL from Apx-Incoming-Host/X-Forwarded-Proto"
+        )
+
+    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
+    def test_host_header_derivation_applies_on_every_card_path(self, client, path):
+        """The Host header (no Apx-Incoming-Host) drives the URL on every path too."""
+        response = client.get(path, headers={"Host": "publisher.example.com", "X-Forwarded-Proto": "http"})
+        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
+        card = response.json()
+        assert card["supportedInterfaces"][0]["url"] == "http://publisher.example.com/a2a", (
+            f"{path} did not derive its URL from the Host header"
+        )

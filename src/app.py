@@ -34,7 +34,11 @@ from src.a2a_server.adcp_a2a_server import (
 )
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
-from src.core.auth_middleware import UnifiedAuthMiddleware
+from src.core.agent_identity import agent_identity_for_tenant_id
+from src.core.auth_middleware import (
+    AuthChallengeResponder,
+    UnifiedAuthMiddleware,
+)
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
@@ -47,7 +51,6 @@ from src.core.exceptions import (
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
-from src.core.resolved_identity import resolve_identity
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page
@@ -109,7 +112,19 @@ async def app_lifespan(app: FastAPI):
 
 # Build the MCP sub-application.
 # path="/" because we mount it at /mcp — routes inside are relative.
-mcp_app = mcp.http_app(path="/")
+#
+# json_response=True makes every response a BUFFERED application/json body instead of an
+# SSE stream, and that is what lets a refused credential be answered the same way it is on
+# A2A: read the AdCP code off the outgoing body, lift the status to 401. Under SSE it could
+# not be, because streamable-HTTP sends http.response.start -- 200, text/event-stream --
+# before the tool is dispatched, so the status was already on the wire before the error
+# existed. That asymmetry was a property of the RESPONSE MODE, not of MCP.
+#
+# Costs nothing this seller uses: nothing in src/ streams MCP output (no report_progress,
+# no partial results), the tools are request/response, and MCP's streamable-HTTP transport
+# specifies JSON responses as a first-class alternative. The SSE handling that does exist
+# here is in the creative-agent CLIENT, consuming another agent's stream, and is untouched.
+mcp_app = mcp.http_app(path="/", json_response=True, stateless_http=True)
 
 # Create the root FastAPI app with combined lifespans so that both
 # the MCP schedulers (delivery webhooks, media-buy status) and any
@@ -121,7 +136,20 @@ app = FastAPI(
     lifespan=combine_lifespans(app_lifespan, mcp_app.lifespan),
 )
 
-# Mount MCP at /mcp
+# Mount MCP at /mcp behind NOTHING.
+#
+# There is deliberately no auth gate in front of this. A middleware here cannot know which
+# tool is being called: the name is inside the JSON-RPC body, and a middleware that parsed
+# it would be re-implementing a fragment of the transport's own parsing and reading
+# ToolSpec.auth a second time -- exactly the drift building-tools.md says the single
+# registry exists to prevent ("auth is a property of the tool, not of a transport ... what
+# makes 'MCP soft-returns where A2A hard-refuses' unrepresentable").
+#
+# So auth is decided where the tool IS known -- MCPAuthMiddleware.on_call_tool, which reads
+# context.message.name and passes ToolSpec.auth to resolve_identity, exactly as the A2A
+# dispatch and the REST dependency do. The RENDERING is app-wide: AuthChallengeResponder is
+# registered as middleware over the whole app (see the middleware stack below), so MCP, A2A
+# and REST are all answered by the same code and no transport can grow its own 401.
 app.mount("/mcp", mcp_app)
 
 
@@ -140,13 +168,14 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
 
     Symmetric with the MCP and A2A boundaries: all three transports delegate
     to ``record_boundary_error`` so log severity, activity-feed publishing,
-    and audit logging stay in lockstep. Identity is not resolved on
-    ``request.state`` at the exception-handler boundary, so we resolve it
-    best-effort here (auth token + tenant headers) to populate the
-    tenant-scoped sinks (activity feed, audit log) for REST errors the same
-    way MCP and A2A do. Identity resolution never raises into the error path —
-    a lookup miss degrades to anonymous and ``record_boundary_error`` falls
-    back to the WARNING log line carrying the error code, message, and path.
+    and audit logging stay in lockstep — and all three now scope that record
+    with the identity their boundary ALREADY resolved, never by resolving
+    again. The REST route stashes it on ``request.state`` (src/routes/api_v1.py).
+    This used to call ``resolve_identity`` a second time, which meant a failed
+    REST auth cost two full resolutions and roughly eight DB session
+    acquisitions, the second set re-validating a credential that had just been
+    rejected. When auth failed the route never ran, so there is no identity and
+    the record is unscoped — exactly A2A's "unknown" on the same path.
 
     ``log_as``: the object handed to ``record_boundary_error`` for logging,
     defaulting to ``exc`` (existing behavior, unchanged for typed handlers).
@@ -159,32 +188,27 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
     and the original message from server-side logs, unlike the MCP/A2A
     boundaries which always log the original exception.
     """
-    tenant_id, principal_id = _best_effort_rest_identity(request)
+    # No identity to read. It was published on request.state by a dependency wrapper that
+    # is gone: the boundary resolves and holds it, so scoping this record belongs with
+    # the recording move into _invoke (manifest A3). Until then the record is unscoped --
+    # the same "unknown" A2A already reports on its own error path.
+    identity = None
     record_boundary_error(
-        "rest", request.url.path, log_as if log_as is not None else exc, tenant_id=tenant_id, principal_id=principal_id
+        "rest",
+        request.url.path,
+        log_as if log_as is not None else exc,
+        tenant_id=getattr(identity, "tenant_id", None) or "unknown",
+        principal_id=getattr(identity, "principal_id", None) or "unknown",
     )
+    # No WWW-Authenticate here. A 401 MUST name a scheme the caller can authenticate with
+    # (RFC 7235; graded by the storyboard's security_baseline), and AuthChallengeResponder
+    # attaches it app-wide by reading the code off this very envelope. Setting it here too
+    # was the third copy of one rule -- REST's status happened to agree with MCP's and A2A's,
+    # which is not the same as being decided once.
     return JSONResponse(
         status_code=exc.status_code,
         content=build_two_layer_error_envelope(exc),
     )
-
-
-def _best_effort_rest_identity(request: Request) -> tuple[str | None, str | None]:
-    """Resolve ``(tenant_id, principal_id)`` for boundary observability only.
-
-    Used solely to scope the activity-feed and audit-log sinks in
-    ``record_boundary_error`` — never to make an authorization decision.
-    ``require_valid_token=False`` so an invalid/expired token (which may be
-    the very error being handled) still yields a tenant from the host headers
-    instead of raising. Any failure degrades to ``(None, None)``; observability
-    must not shadow the buyer's original error.
-    """
-    try:
-        identity = resolve_identity(dict(request.headers), protocol="rest", require_valid_token=False)
-        return identity.tenant_id, identity.principal_id
-    except Exception:
-        logger.debug("REST boundary: best-effort identity resolution failed", exc_info=True)
-        return None, None
 
 
 @app.exception_handler(AdCPSalesAgentError)
@@ -387,11 +411,24 @@ def _restore_a2a_wire_integers(
     integer-typed AdCP fields before it reaches the client -- see
     ``restore_a2a_integer_types`` for the shared coercion logic and the
     field list's spec citations.
+
+    Being that one point, it is also where a REFUSED CREDENTIAL becomes a 401. A2A frames
+    every failure as a JSON-RPC error inside an HTTP 200, which is right for an application
+    answer and wrong for this one: a caller with no identity cannot read an AdCP envelope to
+    learn how to authenticate, and the storyboard's security_baseline grades the HTTP
+    handshake. The body is fully buffered here -- it is already being parsed and re-emitted
+    -- so the status is simply set on the response being built, with no side channel and no
+    ordering hazard. AUTH_INVALID reaches this point too, because A2A validates the token
+    before answering; MCP cannot say the same (see the pre-dispatch gate).
     """
 
     async def _wrapped(request: Request) -> Response:
         response = await endpoint(request)
         if isinstance(response, JSONResponse) and response.body:
+            # Integer restoration ONLY. This used to also lift an auth refusal to 401 and
+            # attach the challenge -- a second copy of AuthChallengeResponder, living in a
+            # function whose job is protobuf number coercion. The responder is app-wide
+            # middleware now and answers this route like every other.
             fixed = restore_a2a_integer_types(json.loads(bytes(response.body)))
             headers = {k: v for k, v in response.headers.items() if k.lower() != "content-length"}
             return JSONResponse(fixed, status_code=response.status_code, headers=headers)
@@ -461,8 +498,44 @@ def _is_valid_hostname(value: str) -> bool:
     return bool(value) and len(value) <= 253 and _VALID_HOSTNAME_RE.match(value) is not None
 
 
+def _card_with_url(server_url: str):
+    """A copy of the static agent card advertising *server_url* as its interface."""
+    dynamic_card = A2AAgentCard()
+    dynamic_card.CopyFrom(_agent_card)
+    if dynamic_card.supported_interfaces:
+        dynamic_card.supported_interfaces[0].url = server_url
+    return dynamic_card
+
+
+def _canonical_a2a_url(headers) -> str | None:
+    """The tenant's canonical A2A endpoint URL for this Host, or None.
+
+    Resolves the Host to a tenant and reads that tenant's STORED host, so the
+    card advertises the same string brand.json's A2A ``agents[].url`` carries —
+    the byte-equal match at security.mdx step 5 compares the URL a counterparty
+    invoked against what we published, and two derivations means two chances to
+    disagree on a scheme, a port or a trailing slash.
+
+    Returns None when the Host routes to no tenant, which is the only case where
+    the caller still has to derive something from headers.
+    """
+    routing = route_landing_page(dict(headers))
+    if not routing.tenant:
+        return None
+    identity = agent_identity_for_tenant_id(routing.tenant["tenant_id"])
+    return identity.endpoints["a2a"] if identity else None
+
+
 def _create_dynamic_agent_card(request: Request):
-    """Create agent card with tenant-specific URL from request headers."""
+    """Create agent card with the tenant's canonical A2A URL.
+
+    When the Host routes to a tenant, the URL comes from that tenant's stored
+    host (:func:`canonical_agent_url`) — NOT from ``Apx-Incoming-Host`` /
+    ``Host`` / ``X-Forwarded-Proto``, which is the reverse-proxy routing state
+    security.mdx step 10 forbids deriving identity from. The header ladder below
+    survives only as the no-tenant fallback, where there is nothing stored to
+    read.
+    """
 
     def get_protocol(hostname: str) -> str:
         # Prefer the scheme the edge proxy terminated and forwarded
@@ -478,6 +551,10 @@ def _create_dynamic_agent_card(request: Request):
             if proto in ("http", "https"):
                 return proto
         return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
+
+    server_url = _canonical_a2a_url(request.headers)
+    if server_url is not None:
+        return _card_with_url(server_url)
 
     apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
     if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
@@ -498,12 +575,7 @@ def _create_dynamic_agent_card(request: Request):
         else:
             server_url = get_a2a_server_url() or "http://localhost:8080/a2a"
 
-    dynamic_card = A2AAgentCard()
-    dynamic_card.CopyFrom(_agent_card)
-    # Update the URL in supported_interfaces
-    if dynamic_card.supported_interfaces:
-        dynamic_card.supported_interfaces[0].url = server_url
-    return dynamic_card
+    return _card_with_url(server_url)
 
 
 # Override the SDK's static agent card endpoints with dynamic ones.
@@ -516,7 +588,9 @@ def _replace_routes():
     """Replace SDK agent card routes with dynamic versions that read request headers."""
 
     async def dynamic_agent_card(request: Request):
-        card = _create_dynamic_agent_card(request)
+        # to_thread: the card now reads the tenant's stored host from the
+        # database, and this endpoint is unauthenticated.
+        card = await asyncio.to_thread(_create_dynamic_agent_card, request)
         return JSONResponse(agent_card_to_dict(card))
 
     replaced_paths: set[str] = set()
@@ -528,6 +602,21 @@ def _replace_routes():
             replaced_paths.add(path)
         else:
             new_routes.append(route)
+
+    # The SDK's route factory mounts exactly ONE path (a2a-sdk's
+    # AGENT_CARD_WELL_KNOWN_PATH), so a pass that only REPLACES leaves every other
+    # declared path unrouted -- /.well-known/agent.json (the path AdCP's own guide
+    # names, and the one the tenant landing page publishes a link to) and
+    # /agent.json both 404'd. Create what there was nothing to replace, reusing the
+    # SAME handler and methods: one closure serves every path, so their bodies are
+    # byte-identical by construction rather than by convention. Sorted for a
+    # deterministic route table. Appending at import time is safe because
+    # _install_admin_mounts() re-appends the Flask "" catch-all during lifespan
+    # startup, after this runs.
+    for path in sorted(_AGENT_CARD_PATHS - replaced_paths):
+        new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
+        replaced_paths.add(path)
+
     app.router.routes = new_routes
 
     missing = _AGENT_CARD_PATHS - replaced_paths
@@ -591,8 +680,9 @@ app.include_router(health_debug_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):
-#   1. CORSMiddleware (outermost — adds CORS headers to all responses)
-#   2. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
+#   1. AuthChallengeResponder (outermost — renders EVERY transport's 401)
+#   2. CORSMiddleware (adds CORS headers to all responses)
+#   3. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
 # ---------------------------------------------------------------------------
 
 app.add_middleware(UnifiedAuthMiddleware)
@@ -606,6 +696,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Outermost, so it sees the FINAL response of every transport -- the MCP mount, the A2A
+# routes and the REST routers alike. This is the only place a 401 challenge is written.
+app.add_middleware(AuthChallengeResponder)
 
 # ---------------------------------------------------------------------------
 # Admin UI — mount Flask admin via WSGIMiddleware

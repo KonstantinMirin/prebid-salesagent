@@ -121,16 +121,3 @@ class TestHandlerReadsFromContext:
 
         token = handler._get_auth_token(context=context)
         assert token == "context-token", f"Expected 'context-token' from context.state, got {token!r}"
-
-    def test_resolve_identity_accepts_context_parameter(self):
-        """_resolve_a2a_identity must accept an optional context parameter."""
-        import inspect
-
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-        handler = AdCPRequestHandler()
-        sig = inspect.signature(handler._resolve_a2a_identity)
-        params = list(sig.parameters.keys())
-        assert "context" in params, (
-            "_resolve_a2a_identity must accept a 'context' parameter to read from ServerCallContext"
-        )

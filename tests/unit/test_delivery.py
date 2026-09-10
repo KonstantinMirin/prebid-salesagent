@@ -53,6 +53,7 @@ from tests.factories.media_buy import (
     pricing_options_named,
     request_package,
 )
+from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
 from tests.harness.delivery_poll_unit import DeliveryPollEnv
 
@@ -1160,7 +1161,7 @@ class TestDeliveryAuthErrors:
         Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
         Covers: UC-004-EXT-A-01
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
@@ -1197,7 +1198,7 @@ class TestDeliveryAuthErrors:
         or adapter calls. Verifies that get_adapter and _get_target_media_buys are never called.
         Covers: UC-004-EXT-A-02
         """
-        identity = ResolvedIdentity(
+        identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},

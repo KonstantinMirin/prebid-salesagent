@@ -38,8 +38,10 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
         The push_notification_config value received by _impl, or None if _impl
         was not called.
     """
+    from src.core.auth_context import AuthContext
     from src.core.schemas import CreateMediaBuyResult
     from src.core.tools._boundary import invoke_tool
+    from tests.helpers.boundary_identity import resolved_as
 
     req_dict = create_test_media_buy_request_dict()
     mock_result = MagicMock(spec=CreateMediaBuyResult)
@@ -57,7 +59,9 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
         captured.update(kwargs)
         return mock_result
 
-    with registry_impl("create_media_buy", _capture):
+    # The boundary RESOLVES the identity from the credential; it is not handed one, so a test
+    # that needs a particular caller substitutes the resolver rather than passing an identity.
+    with registry_impl("create_media_buy", _capture), resolved_as(mock_identity):
         # Everything, push_notification_config included, travels ON the request -- it is a
         # request FIELD (1f13cca0a), not a kwarg forwarded beside the request.
         await invoke_tool(
@@ -71,7 +75,8 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
                 account=req_dict.get("account"),
                 push_notification_config=pnc,
             ),
-            mock_identity,
+            AuthContext(),
+            "a2a",
         )
 
     # READ OFF THE REQUEST. push_notification_config is a request field, not a kwarg

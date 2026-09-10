@@ -1,206 +1,79 @@
-"""Test tenant isolation fix for get_products.
+"""Tenant resolution branches that only the resolver can show, driven through the resolver.
 
-This test verifies that when accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.example.com),
-the products returned belong to that tenant, not the tenant associated with the auth token.
+These tests used to call ``src.core.auth.get_principal_from_context`` and present an
+``x-adcp-auth`` header. Both are gone: that function was the pre-boundary resolver, deleted
+for having zero production callers, and the alias was removed from the credential seam (pinned
+3.1.1 L2/authentication.mdx says the credential MUST travel in ``Authorization``). A test that
+drives a deleted function with a rejected header grades nothing, however green it reads.
 
-Bug: Previously, get_principal_from_token() would overwrite the tenant context set from the subdomain
-with the tenant associated with the principal's token, causing products from the wrong tenant to be returned.
+What they CLAIMED is still true and still worth grading, so the claims move to
+``_resolve_identity`` -- the one resolver, reached the way production reaches it, with the
+credential in the header production actually reads.
 
-Fix: get_principal_from_token() now only sets tenant context when doing global token lookup (no tenant_id specified).
-When tenant_id is provided (from subdomain), it preserves the existing tenant context.
+Two branches live here and nowhere else. The cross-tenant claims this module also carried are
+NOT here: they are graded on the wire, across all three transports, by
+tests/bdd/features/BR-SECURITY-002-tenant-isolation.feature, which is strictly stronger than
+calling one function directly -- a transport that skipped the resolver entirely would satisfy
+a direct call and fail the wire.
 """
-
-from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.auth import get_principal_from_context
-from src.core.config_loader import get_current_tenant, set_current_tenant
+from src.core.resolved_identity import _resolve_identity
+from tests.factories import PrincipalFactory, TenantFactory
+from tests.harness._base import BareIntegrationEnv
+
+pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
-@pytest.mark.requires_db
-def test_tenant_isolation_with_subdomain_and_cross_tenant_token(integration_db):
-    """Test that cross-tenant tokens are rejected for security.
+def test_a_token_alone_discovers_its_own_tenant(integration_db):
+    """No header names a tenant, so the TOKEN does — the global-lookup branch.
 
-    When accessing a tenant via subdomain (e.g., wonderstruck.sales-agent.example.com),
-    tokens from a different tenant should be rejected, not accepted with overridden context.
-    This prevents principals from one tenant accessing another tenant's resources.
+    ``get_principal_from_token`` searches globally when ``_detect_tenant`` matched nothing,
+    and adopts the tenant the principal belongs to. That is the one path where the tenant is
+    learned AFTER the credential check rather than before it, which is why the resolver builds
+    the lazy context at the end rather than the start.
     """
-
-    from fastmcp.exceptions import ToolError
-
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Principal as ModelPrincipal
-    from src.core.database.models import Tenant
-    from src.core.exceptions import AdCPAuthenticationError
-
-    # Create two tenants
-    with get_db_session() as session:
-        # Tenant 1: Wonderstruck (accessed via subdomain)
-        wonderstruck = Tenant(
-            tenant_id="tenant_wonderstruck",
-            name="Wonderstruck",
-            subdomain="wonderstruck",
-            ad_server="mock",
-            admin_token="wonderstruck_admin_token",
-            is_active=True,
-        )
-        session.add(wonderstruck)
-
-        # Tenant 2: Test Agent (principal's token belongs to this tenant)
-        test_agent = Tenant(
-            tenant_id="tenant_test_agent",
-            name="Test Agent",
-            subdomain="test-agent",
-            ad_server="mock",
-            admin_token="test_agent_admin_token",
-            is_active=True,
-        )
-        session.add(test_agent)
-
-        # Create a principal in test-agent tenant
-        principal = ModelPrincipal(
-            principal_id="principal_test_agent",
-            tenant_id="tenant_test_agent",
-            name="Test Agent Principal",
-            access_token="test_agent_principal_token",
-            platform_mappings={"mock": {"id": "principal_test_agent"}},
-        )
-        session.add(principal)
-        session.commit()
-
-    # Simulate request to wonderstruck.sales-agent.example.com with test-agent token
-    # This should be REJECTED for security reasons
-    mock_context = MagicMock()
-    mock_context.meta = {
-        "headers": {
-            "host": "wonderstruck.sales-agent.example.com",
-            "x-adcp-auth": "test_agent_principal_token",
-        }
-    }
-
-    # Mock get_http_headers to return the headers
-    with patch("src.core.auth.get_http_headers") as mock_get_headers:
-        mock_get_headers.return_value = mock_context.meta["headers"]
-
-        # Verify cross-tenant token is REJECTED
-        with pytest.raises((ToolError, AdCPAuthenticationError)) as exc_info:
-            get_principal_from_context(mock_context)
-
-        # The rejection is graded on its CODE. Asserting a tenant id appears in the
-        # buyer-facing sentence would both pin prose and assert that a tenant identifier
-        # from another tenancy is echoed back to the caller.
-        # Pinned to the ONE code this path raises: a cross-tenant token reaches
-        # `raise AdCPAuthenticationError()` at src/core/auth.py:266, whose error_code is
-        # AUTH_INVALID. A disjunction over several codes would grade nothing — every
-        # production auth path satisfies it — which is the "never weaken to either form"
-        # rule this epic is built on.
-        assert isinstance(exc_info.value, AdCPAuthenticationError), (
-            f"expected AdCPAuthenticationError, got {type(exc_info.value).__name__}: {exc_info.value!r}"
-        )
-        assert exc_info.value.error_code == "AUTH_INVALID"
-
-
-@pytest.mark.requires_db
-def test_global_token_lookup_sets_tenant_from_principal(integration_db):
-    """Test that global token lookup (no subdomain) correctly sets tenant context from principal."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Principal as ModelPrincipal
-    from src.core.database.models import Tenant
-
-    # Create tenant and principal
-    with get_db_session() as session:
-        tenant = Tenant(
-            tenant_id="tenant_global",
-            name="Global Tenant",
-            subdomain="global",
-            ad_server="mock",
-            admin_token="global_admin_token",
-            is_active=True,
-        )
-        session.add(tenant)
-
-        principal = ModelPrincipal(
+    with BareIntegrationEnv(tenant_id="tenant_global") as env:
+        tenant = TenantFactory(tenant_id="tenant_global", subdomain="global", ad_server="mock")
+        PrincipalFactory(
+            tenant=tenant,
             principal_id="principal_global",
-            tenant_id="tenant_global",
-            name="Global Principal",
             access_token="global_principal_token",
-            platform_mappings={"mock": {"id": "principal_global"}},
         )
-        session.add(principal)
-        session.commit()
+        env.get_session()  # commit factory data so the resolver's own session sees it
 
-    # Simulate request without subdomain (e.g., direct API call)
-    mock_context = MagicMock()
-    mock_context.meta = {
-        "headers": {
-            "x-adcp-auth": "global_principal_token",
-        }
-    }
+        # No Host, no x-adcp-tenant: nothing in the request names a seller.
+        identity = _resolve_identity(headers={"Authorization": "Bearer global_principal_token"}, protocol="mcp")
 
-    # Clear any existing tenant context
-    set_current_tenant(None)
-
-    with patch("src.core.auth.get_http_headers") as mock_get_headers:
-        mock_get_headers.return_value = mock_context.meta["headers"]
-
-        # Call get_principal_from_context
-        principal_id, tenant_ctx = get_principal_from_context(mock_context)
-
-        # Verify principal was found
-        assert principal_id == "principal_global"
-
-        # Verify tenant context was returned (caller sets it at transport boundary)
-        assert tenant_ctx is not None
-        assert tenant_ctx["tenant_id"] == "tenant_global"
-        assert tenant_ctx["subdomain"] == "global"
-
-        # Simulate transport boundary: caller sets ContextVar
-        set_current_tenant(tenant_ctx)
-        current_tenant = get_current_tenant()
-        assert current_tenant is not None
-        assert current_tenant["tenant_id"] == "tenant_global"
+    assert identity.principal_id == "principal_global"
+    assert identity.tenant_id == "tenant_global", (
+        "a token that belongs to exactly one tenant must resolve that tenant when no header names one"
+    )
+    assert identity.tenant is not None and identity.tenant.tenant_id == "tenant_global"
 
 
-@pytest.mark.requires_db
-def test_admin_token_with_subdomain_preserves_tenant_context(integration_db):
-    """Test that admin token with subdomain preserves the subdomain tenant context."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Tenant
+def test_an_admin_token_resolves_the_tenant_its_subdomain_names(integration_db):
+    """The admin-token branch: a tenant's own admin credential, scoped by the addressed tenant.
 
-    # Create tenant
-    with get_db_session() as session:
-        tenant = Tenant(
+    Distinct from the principal branch above -- the token matches ``Tenant.admin_token`` rather
+    than any ``Principal.access_token``, and the principal it yields is synthesised as
+    ``{tenant_id}_admin``. It is still tenant-SCOPED: the lookup compares the admin token only
+    against the tenant the request addressed.
+    """
+    with BareIntegrationEnv(tenant_id="tenant_admin_test") as env:
+        TenantFactory(
             tenant_id="tenant_admin_test",
-            name="Admin Test Tenant",
             subdomain="admin-test",
             ad_server="mock",
             admin_token="admin_test_admin_token",
-            is_active=True,
         )
-        session.add(tenant)
-        session.commit()
+        env.get_session()
 
-    # Simulate request to admin-test.sales-agent.example.com with admin token
-    mock_context = MagicMock()
-    mock_context.meta = {
-        "headers": {
-            "host": "admin-test.sales-agent.example.com",
-            "x-adcp-auth": "admin_test_admin_token",
-        }
-    }
+        identity = _resolve_identity(
+            headers={"Authorization": "Bearer admin_test_admin_token", "x-adcp-tenant": "admin-test"},
+            protocol="mcp",
+        )
 
-    with patch("src.core.auth.get_http_headers") as mock_get_headers:
-        mock_get_headers.return_value = mock_context.meta["headers"]
-
-        # Call get_principal_from_context
-        principal_id, tenant_ctx = get_principal_from_context(mock_context)
-
-        # Verify admin token was recognized
-        assert principal_id == "tenant_admin_test_admin"
-
-        # Verify tenant context is correct
-        current_tenant = get_current_tenant()
-        assert current_tenant is not None
-        assert current_tenant["tenant_id"] == "tenant_admin_test"
-        assert current_tenant["subdomain"] == "admin-test"
+    assert identity.tenant_id == "tenant_admin_test", "the addressed subdomain must survive an admin-token login"
+    assert identity.principal_id == "tenant_admin_test_admin"

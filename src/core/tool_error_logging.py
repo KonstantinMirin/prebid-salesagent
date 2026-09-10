@@ -89,14 +89,11 @@ def _extract_tenant_and_principal(context: Any) -> tuple[str | None, str | None]
     # Try to extract from FastMCP Context
     if isinstance(context, FastMCPContext):
         try:
-            from src.core.transport_helpers import resolve_identity_from_context
-
-            identity = resolve_identity_from_context(context, require_valid_token=False, protocol="mcp")
-            if identity:
-                if identity.tenant_id:
-                    tenant_id = identity.tenant_id
-                if identity.principal_id:
-                    principal_id = identity.principal_id
+            # (Deleted) A re-resolution stood here, deriving tenant and principal from
+            # headers purely to scope an error record -- MCP's twin of the REST
+            # `_best_effort_rest_identity` already removed. The boundary records the error
+            # with the identity it resolved, so nothing needs deriving twice.
+            pass
         except Exception:
             logger.debug("Could not extract identity for error logging", exc_info=True)
 
@@ -206,6 +203,32 @@ def record_boundary_error(
     DEBUG) so a quiet outage in audit infrastructure is still findable
     when on-call goes looking.
     """
+    # ONCE per error, whoever asks first.
+    #
+    # The boundary records with the identity it resolved, and it is the INNERMOST recorder --
+    # so it wins, and the outer per-transport handlers that also call this skip. Without the
+    # guard every error that passed through the boundary was recorded twice: once scoped, and
+    # once with tenant "unknown", because A2A's own identity variable is always None now that
+    # the boundary resolves.
+    #
+    # They are not simply deleted because they are not simply redundant: an error that never
+    # reached the boundary -- a validation failure, an unroutable skill -- is still only seen
+    # out there, and must still be recorded.
+    # The mark is carried down the cause chain, not just on the object: the outer handlers
+    # see a TRANSLATED exception (adcp_error_for), so checking the object alone let REST
+    # record twice -- measured, once scoped by the boundary and once as tenant "unknown".
+    seen: Exception | BaseException | None = error
+    depth = 0
+    while seen is not None and depth < 10:  # bounded: a cause cycle must not hang a request
+        if getattr(seen, "_adcp_boundary_recorded", False):
+            return
+        seen = seen.__cause__ or seen.__context__
+        depth += 1
+    try:
+        error._adcp_boundary_recorded = True  # type: ignore[attr-defined]
+    except AttributeError:
+        pass  # a slotted or frozen exception cannot be marked; recording twice beats not at all
+
     error_code, error_message, _recovery = extract_error_info(error)
     is_typed = isinstance(error, AdCPSalesAgentError)
     transport_upper = transport.upper()

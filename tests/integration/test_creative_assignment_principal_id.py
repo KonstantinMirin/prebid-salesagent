@@ -30,6 +30,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.testing_hooks import AdCPTestContext
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_format
 from tests.integration.media_buy_helpers import (
     _get_tenant_dict,
@@ -55,7 +56,7 @@ def _make_identity(
     tenant: dict[str, Any],
     dry_run: bool = False,
 ) -> ResolvedIdentity:
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,

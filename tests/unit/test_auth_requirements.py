@@ -27,6 +27,7 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 
@@ -104,11 +105,10 @@ class TestAuthenticationRequirements:
         """update_media_buy must reject requests without authentication."""
         from unittest.mock import MagicMock
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
         # ResolvedIdentity with no principal_id — _verify_principal raises AdCPAuthenticationError
-        no_auth_identity = ResolvedIdentity(
+        no_auth_identity = PrincipalFactory.make_identity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
         )
         # repo is not accessed when principal_id is None (early exit)
@@ -119,11 +119,10 @@ class TestAuthenticationRequirements:
         """update_media_buy must reject requests with invalid auth."""
         from unittest.mock import MagicMock
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
         # ResolvedIdentity with None principal_id
-        invalid_identity = ResolvedIdentity(
+        invalid_identity = PrincipalFactory.make_identity(
             principal_id=None, tenant_id="test_tenant", tenant={"tenant_id": "test_tenant"}, protocol="rest"
         )
 
@@ -196,10 +195,9 @@ class TestAuthenticationErrorMessages:
         """Error message should be actionable for developers."""
         from unittest.mock import MagicMock
 
-        from src.core.resolved_identity import ResolvedIdentity
         from src.core.tools.media_buy_update import _verify_principal
 
-        no_auth = ResolvedIdentity(
+        no_auth = PrincipalFactory.make_identity(
             principal_id=None, tenant_id="default", tenant={"tenant_id": "default"}, protocol="rest"
         )
         # repo is not accessed when principal_id is None (early exit)

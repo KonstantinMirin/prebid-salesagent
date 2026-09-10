@@ -52,6 +52,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
     SyncResponseAccount,
 )
+from src.core.tenant_context import LazyTenantContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
@@ -822,7 +823,7 @@ def _provisioning_gates(
     billing_val: str | None,
     identity: ResolvedIdentity,
     sandbox: bool | None,
-    tenant: Mapping[str, object] | None,
+    tenant: LazyTenantContext | None,
     index: int,
     entry: SyncEntry,
     proof_failures: dict[int, list[GateFailure]],
@@ -937,9 +938,7 @@ def _extract_natural_key(entry: SyncEntry) -> NaturalKey:
     return NaturalKey.from_parts(brand_domain, brand_id, operator, entry.sandbox)
 
 
-def _check_sandbox_capability(
-    entry_sandbox: bool | None, tenant: Mapping[str, object] | None
-) -> list[GateFailure] | None:
+def _check_sandbox_capability(entry_sandbox: bool | None, tenant: LazyTenantContext | None) -> list[GateFailure] | None:
     """Reject sandbox provisioning when the seller has not declared account.sandbox support.
 
     Mirrors the ``_check_billing_policy`` per-entry gate shape.

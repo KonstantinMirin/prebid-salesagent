@@ -170,6 +170,22 @@ class LazyTenantContext:
         object.__setattr__(self, "_tenant_id", tenant_id)
         object.__setattr__(self, "_resolved", None)
 
+    @classmethod
+    def already(cls, tenant: TenantContext) -> "LazyTenantContext":
+        """A lazy context that is already resolved, so it never queries.
+
+        There is ONE tenant type on ``ResolvedIdentity`` -- this one. Laziness is about WHEN
+        the row loads, not about which type flows: a caller holding the row already (a test
+        factory with no database, or code that just read it) still hands the same type
+        onward, and every consumer keeps one annotation.
+
+        Without this the field had to be a union of hydrated-or-lazy, which spread into ten
+        consumer signatures each re-spelling it, and a dict-coercing validator besides.
+        """
+        obj = cls(tenant.tenant_id)
+        object.__setattr__(obj, "_resolved", tenant)
+        return obj
+
     def _resolve(self) -> TenantContext:
         """Load full tenant from DB on first access. Cache the result.
 
@@ -265,3 +281,15 @@ class LazyTenantContext:
         if self._resolved is not None:
             return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=True)"
         return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=False)"
+
+
+#: A tenant context, hydrated or lazy -- what ``ResolvedIdentity.tenant`` carries.
+#:
+#: The boundary builds the LAZY one on every request (tenant_id now, row on first access to
+#: any other field, cached once). A hydrated ``TenantContext`` is equally valid and is what
+#: tests supply with no database. Both answer the same reads, so a consumer that accepts a
+#: tenant should accept either -- and say so once, here, rather than each re-spelling the
+#: union and drifting. Notably NOT a dict: identity.tenant never is one.
+#: Retained as a name for the one tenant type, so consumers need not import the class
+#: under two spellings. It is NOT a union: identity.tenant is a LazyTenantContext.
+AnyTenantContext = LazyTenantContext

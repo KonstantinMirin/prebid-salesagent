@@ -39,6 +39,7 @@ from src.core.schemas import (
 )
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.principal import PrincipalFactory
 from tests.helpers.media_buy_approval import run_approval
 from tests.integration.media_buy_helpers import (
     _get_tenant_dict,
@@ -69,7 +70,7 @@ def _make_identity(
     """Build a ResolvedIdentity for integration tests."""
     if tenant is None:
         tenant = {"tenant_id": tenant_id}
-    return ResolvedIdentity(
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
