@@ -443,6 +443,12 @@ _PRIMITIVE_FUNCTIONS = frozenset(
     {
         "bdd/steps/_outcome_helpers.py wire_entry_errors",
         "bdd/steps/_outcome_helpers.py wire_advisory_errors",
+        # The third document the same protocol position appears in: the errors[] of a
+        # FAILED response's envelope. Blessed on the same terms as its two siblings --
+        # it goes through result.error_envelope() (which raises on a dead wire) and
+        # strips `message` via the shared _errors_array. Added because its absence is
+        # what made a step module write envelope.get("errors") by hand.
+        "bdd/steps/_outcome_helpers.py wire_envelope_errors",
     }
 )
 

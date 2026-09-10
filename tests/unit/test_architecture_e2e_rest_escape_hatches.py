@@ -575,13 +575,19 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "set_adapter_error",
             "adapter fault-injection has no server surface; needs an ADCP_TESTING fault-injection control (#1418)",
         ),
-        # Same shape as set_adapter_error above, and noted against this pin's
-        # shrink-only direction of travel: the scenario grades what the buyer
-        # receives when the seller's OWN work fails, and the only way to make it
-        # fail is to break something inside the seller. In-process that is a patch
-        # on the account repository; over real HTTP the seller is another process
-        # with no fault-injection control (#1418 again). The obligation is a wire
-        # obligation and grades fully on the three in-process transports.
+        # Added by 9921b8189 ("uc011 scenarios that never dispatched now let the seller
+        # answer"), and noted against this pin's shrink-only direction like the
+        # precedents above. It is a NET GAIN even so: the step it replaces constructed an
+        # AdCPSalesAgentError in the TEST process and returned without dispatching, so the
+        # scenario graded an object the test had just made and never exercised the
+        # boundary's error translation at all -- on any transport. Now three transports
+        # grade it for real and one declares it cannot, which is strictly more coverage
+        # than four transports grading nothing. The declaration is honest rather than
+        # convenient: the fault is injected at the REPOSITORY, one layer below the impl,
+        # so everything between it and the wire stays real -- and reaching that layer
+        # needs in-process patching, which a live HTTP server has no equivalent of.
+        # Lifting it needs a server-side fault-injection control, the same build
+        # set_adapter_error above is waiting on (#1418).
         (
             "tests/harness/account_sync.py",
             "fail_the_sync_internally",

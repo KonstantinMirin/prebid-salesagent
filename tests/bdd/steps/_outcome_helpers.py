@@ -246,6 +246,35 @@ def wire_entry_errors(ctx: dict, collection: str, *, index: int | None = None, *
     return _errors_array(entry.get("errors") or [], f"{collection} entry errors")
 
 
+def wire_envelope_errors(ctx: dict) -> list:
+    """The ``errors[]`` of a FAILED response's two-layer envelope, located on the wire.
+
+    The third member of the family, and the one that was missing: :func:`wire_entry_errors`
+    reads a rejected row inside an otherwise successful response, :func:`wire_advisory_errors`
+    reads the task-level advisory array ON a success, and this reads the array on a response
+    that FAILED outright. All three are the same protocol position in different documents,
+    which is precisely why the wire-discipline guard treats ``errors`` as the harness's
+    business rather than each step module's: without this one, a step needing it wrote
+    ``envelope.get("errors")`` itself and the guard flagged it, correctly.
+
+    Goes through ``result.error_envelope()``, which RAISES when no envelope was captured —
+    so a dead wire path fails loudly here instead of returning ``[]`` and letting a caller
+    read "no errors" as "the seller reported none".
+
+    Non-empty is asserted, unlike the entry reader's ``[]`` default: a response that failed
+    and carries no ``errors[]`` has nothing for a buyer to act on, so that is a defect rather
+    than a legitimate outcome to grade.
+
+    ``message`` is stripped by :func:`_errors_array`, same as its siblings — the sentence is
+    a function of the code through CODE_TABLE, so asserting both checks the table against
+    itself.
+    """
+    envelope = ctx["result"].error_envelope()
+    entries = _errors_array(envelope.get("errors"), "error envelope errors")
+    assert entries, f"the error envelope carries no errors[] to grade: {envelope!r}"
+    return entries
+
+
 def wire_advisory_errors(ctx: dict) -> list:
     """The response's TOP-LEVEL ``errors[]`` — the task-level advisory channel.
 

@@ -26,6 +26,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_dict,
     wire_entry,
     wire_entry_errors,
+    wire_envelope_errors,
     wire_error_dict,
     wire_error_envelope_or_none,
     wire_field,
@@ -1969,24 +1970,6 @@ def _assert_error_has_code(err: Any, index: int) -> None:
     assert isinstance(code, str) and code, f"Error [{index}] missing non-empty code: code={code!r}, error={err}"
 
 
-def _wire_errors(ctx: dict) -> list[Any]:
-    """The ``errors[]`` entries the BUYER received, off the wire envelope.
-
-    Reads the envelope rather than a reconstructed exception. ``result.error`` is a
-    ``WireError`` carrying the envelope verbatim -- deliberately NOT an
-    AdCPSalesAgentError subclass -- so ``err.error_code`` is an AttributeError, and any
-    assertion reaching for it grades the harness rather than the seller
-    (tests/CLAUDE.md, Error Verification Policy).
-
-    Through ``wire_error_objects``, which resolves the same single locator
-    ``assert_wire_error`` does: where the spec puts the array is the harness's
-    business, so a step re-deriving it would be a second answer to one question.
-    """
-    entries = ctx["result"].wire_error_objects()
-    assert entries, f"the error envelope carries no errors[] to grade: {ctx['result'].error_envelope_or_none()!r}"
-    return entries
-
-
 @then("the response is an error variant with no accounts array")
 def then_error_variant_no_accounts(ctx: dict) -> None:
     """Assert the response is an error variant (exception raised, no accounts)."""
@@ -2086,7 +2069,7 @@ def then_errors_array_may_contain_multiple(ctx: dict) -> None:
     Each entry must have code and message fields, proving the array is
     well-formed and could carry multiple errors.
     """
-    for i, err in enumerate(_wire_errors(ctx)):
+    for i, err in enumerate(wire_envelope_errors(ctx)):
         _assert_error_has_code(err, i)
 
 
@@ -2268,7 +2251,7 @@ def then_each_error_has_code_message(ctx: dict) -> None:
     For each error, asserts the code/error_code is a non-empty string and the
     message attribute (not str()) is a non-empty string.
     """
-    for i, err in enumerate(_wire_errors(ctx)):
+    for i, err in enumerate(wire_envelope_errors(ctx)):
         _assert_error_has_code(err, i)
 
 
