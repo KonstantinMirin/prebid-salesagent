@@ -277,6 +277,10 @@ def validate_creative_format_against_product(
     if not creative_format_id.agent_url or not creative_format_id.id:
         return False, "Creative format_id is missing agent_url or id"
 
+    # STRICT on this side, deliberately: the creative's format_id is a validated model,
+    # not a row read back out of a column, so a failure here is a real defect and should
+    # surface rather than quietly read as "the product does not accept this format".
+    # The product side, which IS column data, uses the tolerant helper.
     creative_identity = format_identity(creative_format_id)
     if creative_identity in supported:
         return True, None
