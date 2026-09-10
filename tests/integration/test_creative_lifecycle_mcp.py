@@ -100,7 +100,7 @@ class MockContext:
         if auth_token is None:
             self.meta = {"headers": {}}  # No auth header for testing optional auth
         else:
-            self.meta = {"headers": {"x-adcp-auth": auth_token}}
+            self.meta = {"headers": {"Authorization": f"Bearer {auth_token}"}}
 
 
 @pytest.mark.requires_db

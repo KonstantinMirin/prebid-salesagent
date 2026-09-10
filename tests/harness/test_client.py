@@ -254,7 +254,7 @@ class TestClientE2eRestDelivery:
         assert captured["base_url"] == "http://e2e-stack.test"
         assert captured["url"] == "/api/v1/products"
         assert captured["json"] == {"brief": "video ads"}
-        assert captured["headers"]["x-adcp-auth"] == "tok_abc"
+        assert captured["headers"]["Authorization"] == "Bearer tok_abc"
         assert captured["headers"]["x-adcp-tenant"] == identity.tenant["subdomain"]
 
     def test_e2e_rest_delivery_sends_same_header_set_the_deleted_inline_code_did(self, monkeypatch):
@@ -306,7 +306,7 @@ class TestClientE2eRestDelivery:
         assert result.is_success, result.error
         assert captured["headers"] == {
             "Content-Type": "application/json",
-            "x-adcp-auth": "tok_dry",
+            "Authorization": "Bearer tok_dry",
             "x-adcp-tenant": identity.tenant["subdomain"],
             "x-dry-run": "true",
         }
@@ -352,7 +352,7 @@ class TestClientE2eRestDelivery:
             client = AdCPTestClient(env)
             result = client.call("get_products", {"brief": "x"}, Transport.E2E_REST, identity=None)
 
-        assert "x-adcp-auth" not in captured["headers"]
+        assert "Authorization" not in captured["headers"]
         assert result.is_error
         # AUTH_MISSING, not the deprecated AUTH_REQUIRED: the pinned AdCP 3.1.1
         # ``enums/error-code.json`` marks AUTH_REQUIRED "**Deprecated** — use
@@ -518,7 +518,7 @@ class TestClientE2eMcpDelivery:
         client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, identity=identity)
 
         fake_client = self._FakeMcpClient.instances[0]
-        assert fake_client.transport.headers["x-adcp-auth"] == "tok_123"
+        assert fake_client.transport.headers["Authorization"] == "Bearer tok_123"
 
     def test_e2e_mcp_dispatch_requires_e2e_config(self):
         """Missing env.e2e_config is a genuine precondition failure (mirrors
@@ -658,7 +658,7 @@ class TestClientE2eA2aDelivery:
 
         assert result.is_success, result.error
         headers = mock_post.call_args.kwargs["headers"]
-        assert headers["x-adcp-auth"] == "tok_123"
+        assert headers["Authorization"] == "Bearer tok_123"
         assert headers["x-adcp-tenant"] == identity.tenant["subdomain"]
 
     def test_unauthenticated_dispatch_sends_no_auth_header(self):
@@ -683,7 +683,7 @@ class TestClientE2eA2aDelivery:
                 client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=None)
 
         headers = mock_post.call_args.kwargs["headers"]
-        assert "x-adcp-auth" not in headers
+        assert "Authorization" not in headers
         assert "x-adcp-tenant" not in headers
 
     def test_task_state_failed_reconstructs_wire_error(self):

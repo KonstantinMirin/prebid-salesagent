@@ -272,7 +272,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         if identity is not None:
             auth_token = identity.auth_token
             if auth_token:
-                headers["x-adcp-auth"] = auth_token
+                headers["Authorization"] = f"Bearer {auth_token}"
             if identity.tenant_id:
                 headers["x-adcp-tenant"] = identity.tenant_id
 

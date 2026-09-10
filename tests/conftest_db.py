@@ -366,7 +366,7 @@ def test_media_buy(db_session, test_tenant, test_principal, test_product):
 @pytest.fixture
 def auth_headers(test_principal):
     """Get auth headers for testing."""
-    return {"x-adcp-auth": test_principal.access_token}
+    return {"Authorization": f"Bearer {test_principal.access_token}"}
 
 
 # ── Optional fast path: template-clone + skip-drop (opt-in via TEST_DB_TEMPLATE=1) ──

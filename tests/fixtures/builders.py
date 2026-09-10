@@ -20,7 +20,7 @@ class RequestBuilder:
 
     def with_auth(self, token: str):
         """Add authentication."""
-        self.headers["x-adcp-auth"] = token
+        self.headers["Authorization"] = f"Bearer {token}"
         return self
 
     def with_tenant(self, tenant_id: str):

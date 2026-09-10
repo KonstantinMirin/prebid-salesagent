@@ -37,7 +37,7 @@ async def _call_mcp_tool(
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
     headers = {
-        "x-adcp-auth": auth_token,
+        "Authorization": f"Bearer {auth_token}",
         "x-adcp-tenant": TENANT_ID,
     }
     transport = StreamableHttpTransport(url=f"{live_server['mcp']}/mcp/", headers=headers)
