@@ -1106,12 +1106,26 @@ class BaseTestEnv:
         graded success.
         """
         token = getattr(identity, "auth_token", None)
-        if not token:
-            return {}
-        return {
-            "Authorization": f"Bearer {token}",
-            "x-adcp-tenant": getattr(identity, "tenant_id", None) or "",
-        }
+        tenant_id = getattr(identity, "tenant_id", None)
+
+        # The two headers are INDEPENDENT, and collapsing them was a harness-only fiction.
+        # ``Authorization`` says who the buyer is; ``x-adcp-tenant`` says which seller was
+        # addressed. Returning {} whenever there was no token dropped the tenant along with
+        # the credential, so a credential-less request arrived naming no seller -- a state
+        # production cannot produce, because a buyer who presents nothing has still CONNECTED
+        # to a host, and the host is the only thing that names the tenant (the request payload
+        # cannot: get-adcp-capabilities-request.json declares only protocols/context/ext).
+        #
+        # That fiction is what failed BR-UC-010's "authentication state does not affect
+        # response data content" on all three transports: unauthenticated requests were served
+        # minimal capabilities for want of a tenant, so the data DID differ by auth state --
+        # in the harness, never in production.
+        headers: dict[str, str] = {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        if tenant_id:
+            headers["x-adcp-tenant"] = tenant_id
+        return headers
 
     @staticmethod
     def _presents_unresolvable_credential(identity: Any) -> bool:

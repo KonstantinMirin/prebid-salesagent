@@ -63,8 +63,28 @@ def given_no_hostname_tenant(ctx: dict) -> None:
 
 @given("no tenant can be resolved from the request context")
 def given_no_tenant_resolved(ctx: dict) -> None:
-    """No tenant can be resolved from any source (MCP path)."""
-    ctx["identity"] = None
+    """No tenant can be resolved from any source — so there is no SELLER, not merely no buyer.
+
+    Expressed as an explicit tenant-less identity, not as ``identity=None``. ``None`` is what
+    "the Buyer has no authentication credentials" already means (20 feature lines), and that
+    is a different state: a buyer presenting nothing still reached a host, and the host is
+    what names the tenant. The capabilities request cannot name one --
+    ``get-adcp-capabilities-request.json`` declares only ``protocols``, ``context`` and
+    ``ext`` -- so the connection is the sole channel, and losing a credential does not lose
+    the seller.
+
+    Both sentences used to set ``identity = None`` and therefore produced the identical
+    dispatch, which meant these scenarios were served WITH a tenant and graded the opposite of
+    what they say.
+
+    This is the state the boundary genuinely produces when ``_detect_tenant`` matches nothing:
+    no principal, no tenant_id, and hence no tenant context, since it builds the lazy one only
+    from an id it has.
+    """
+    from tests.factories.principal import PrincipalFactory
+
+    ctx["has_auth"] = False
+    ctx["identity"] = PrincipalFactory.make_identity(principal_id=None, tenant_id=None, tenant=None)
 
 
 # ── Sandbox / production account ─────────────────────────────────────

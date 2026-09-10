@@ -20,10 +20,12 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from typing import Any
 from unittest.mock import patch
 
 from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
+from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
 #: The one patch target. Spelled once, here, and nowhere else in tests/.
 #:
@@ -47,21 +49,55 @@ def resolves_to(identity: ResolvedIdentity):
 
 
 @contextmanager
-def resolved_as(identity: ResolvedIdentity | None = None) -> Iterator[ResolvedIdentity]:
+def resolved_as(identity: Any = NO_IDENTITY_OVERRIDE) -> Iterator[ResolvedIdentity]:
     """Make the boundary resolve to *identity* instead of touching the database.
 
-    Defaults to an anonymous identity with a tenant, which is what a discovery route sees.
+    ``None`` and "no argument" are DIFFERENT, and conflating them is a defect this function
+    shipped with. It defaulted on ``identity is None``, so a caller saying "resolve to no
+    identity" got the default instead: an anonymous identity carrying ``tenant_id`` of
+    ``test_tenant``. BR-UC-010's "no tenant can be resolved from the request context"
+    scenarios dispatch with exactly that None, so they were handed a tenant, sailed past
+    ``get_adcp_capabilities``'s ``if not tenant: return minimal`` guard, and failed further in
+    -- grading the opposite of what they say. A sentence in a feature file and the state the
+    request actually carried have to be the same thing.
+
+    ``NO_IDENTITY_OVERRIDE`` is the repo's existing sentinel for this exact distinction
+    (tests/harness/transport.py, "scoped to the identity-argument omission disease"), reused
+    rather than re-invented.
+
+    * omitted or ``None`` -> an anonymous caller WITH a tenant. That is what a dispatch means
+      by ``identity=None``: NO CREDENTIAL, not "no seller". A buyer who presents nothing still
+      connected to a host, and the host is what names the tenant -- the request payload cannot
+      (``get-adcp-capabilities-request.json`` has no field identifying a seller), so the
+      connection is the only channel there is.
+    * an identity -> that identity, verbatim. A scenario whose subject is a request naming NO
+      tenant passes one explicitly, principal and tenant both None, rather than borrowing
+      ``None`` from the credential-less case. Those are different states and each sentence in
+      a feature file must produce its own; sharing one is how a scenario comes to grade the
+      opposite of what it says.
     """
-    if identity is None:
+    if identity is NO_IDENTITY_OVERRIDE or identity is None:
         from src.core.tenant_context import TenantContext
 
+        # A CONTROLLED tenant carrying only its id, deliberately, because this default serves
+        # every scenario that does not name an identity. Making it lazy so it loads the real
+        # row was tried and reverted: it fixed BR-UC-010's auth-invariance scenario and broke
+        # thirty others, which set tenant policy explicitly and were then overridden by
+        # whatever the database happened to hold.
+        #
+        # The residue is real but narrow. An unauthenticated leg gets this minimal tenant
+        # while its authenticated twin gets the row, so a tenant-scoped field like
+        # creative_approval_mode differs by auth state IN THE FIXTURE -- never in production,
+        # where the host names the same tenant either way. The fix belongs in that scenario's
+        # own setup (its unauthenticated leg wants the env's identity minus credentials), not
+        # in a default shared by everything.
         identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test_tenant",
             tenant=TenantContext(tenant_id="test_tenant"),
             protocol="rest",
         )
-    with patch("src.core.resolved_identity._resolve_identity", return_value=identity):
+    with patch(_RESOLVER, return_value=identity):
         yield identity
 
 
