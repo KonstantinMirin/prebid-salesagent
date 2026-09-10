@@ -75,28 +75,32 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # `idempotency_key` -- a field AdCP 3.1 puts on every task request and
 # compliance/universal/read-tool-idempotency.yaml requires sellers to TOLERATE.
 #
-# MCP goes straight to the service on 8080: nginx-development.conf is a pass-through that
-# forwards `Host` unchanged, so a proxy hop changes nothing MCP grades, and the FastAPI
-# process serves /mcp/ there directly (SKIP_NGINX is true on the service).
+# ONE ORIGIN, BOTH PROTOCOLS. Same host, same TLS front, same Host header, therefore the
+# same tenant resolution and the same published identity — differing only in the path,
+# which the protocols themselves fix. That sameness is the POINT of grading two surfaces:
+# what the axes are for is proving one deployment behaves the same either way, and two
+# axes on two origins compare nothing. A green A2A reached by dialing it differently from
+# MCP is a label, not evidence.
 #
-# A2A CANNOT, and the scheme is why. A2A is card-first: the runner reads the RPC endpoint
-# off `/.well-known/agent-card.json`, and `src/app.py`'s `get_protocol` renders **https**
-# for any host that is not loopback. Dialed plaintext on :8080, the card therefore
-# published `https://adcp-server-storyboard:8080/a2a` — TLS to a plaintext port — and
-# every call derived from it failed with `fetch failed`: 25 checks on run sa-0c74d963,
-# including the capability probe that SELECTS which storyboards run, so the A2A axis
-# graded 25 storyboards where MCP graded 44 and passed 3 checks where MCP passed 33.
+# The origin is `storyboard.adcp.test:8443`, behind `tls-proxy` (alias in
+# docker-compose.e2e.yml, SNI map in config/nginx/nginx-tls-test.conf.template) rather
+# than the service on plaintext :8080 — and A2A is why the scheme has to be real. A2A is
+# card-first: the runner reads the RPC endpoint off `/.well-known/agent-card.json` rather
+# than being told it, and `src/app.py`'s `get_protocol` renders **https** for any host
+# that is not loopback. Dialed plaintext, the card published
+# `https://adcp-server-storyboard:8080/a2a` — TLS to a plaintext port — so every
+# card-derived call failed with `fetch failed`: 25 checks on run sa-0c74d963, one of them
+# the capability probe the runner SELECTS storyboards from, which is why that axis
+# executed 25 storyboards where MCP executed 44 and passed 3 where MCP passed 33. The card
+# was right and the origin was wrong. This front forwards `Host` verbatim and sets
+# `X-Forwarded-Proto`, the signal `get_protocol` prefers, so what it publishes is what it
+# speaks.
 #
-# The card is not wrong; the origin was. Behind `tls-proxy` (docker-compose.e2e.yml, SNI
-# map in config/nginx/nginx-tls-test.conf.template) `storyboard.adcp.test:8443` speaks
-# the https the card advertises, and the front forwards `Host` verbatim with
-# `X-Forwarded-Proto`, which is the signal `get_protocol` prefers.
-#
-# MCP deliberately stays on plaintext :8080 rather than moving here too: its 33 passes
-# are the control for this change. Moving both at once would leave two variables and no
-# way to attribute a shift in either axis.
+# MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
+# that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
+# `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "http://adcp-server-storyboard:8080/mcp/",
+    "mcp": "https://storyboard.adcp.test:8443/mcp/",
     "a2a": "https://storyboard.adcp.test:8443",
 }
 
