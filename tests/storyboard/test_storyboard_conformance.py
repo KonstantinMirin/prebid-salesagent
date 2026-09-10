@@ -485,6 +485,39 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
+    """Copy the runner's summary into ``test-results/`` so it leaves the box.
+
+    The runner writes it under ``tests/storyboard/runner/results/``, which is gitignored
+    and outside the three paths a remote run pulls home (``test-results/``,
+    ``coverage.json``, ``htmlcov/`` — cassini's ``results.py``). So the one artifact
+    recording how many checks PASSED stayed on the runner box, and reading the score
+    meant an ssh. Published beside ``storyboard_collected.json``, which already rides
+    home this way.
+    """
+    dest = _REPO_ROOT / "test-results" / f"storyboard_summary_{protocol}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(summary, indent=2, sort_keys=True))
+
+
+def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
+    """The runner's own verdict for *protocol*, as one line.
+
+    Printed because the pytest outcome line CANNOT carry it: only failures and skips
+    become test items, so a protocol passing 33 checks and one passing none produce the
+    same "0 passed" in the suite total. Every denominator is named together —
+    passed/failed/skipped/not_selected plus how many storyboards were EXECUTED, which is
+    what explains one axis grading fewer checks than its sibling.
+    """
+    return (
+        f"storyboard[{protocol}] {summary.get('overall_status')}: "
+        f"passed={summary.get('passed')} failed={summary.get('failed')} "
+        f"skipped={summary.get('skipped')} not_selected={summary.get('not_selected_count')} "
+        f"storyboards_executed={len(summary.get('storyboards_executed', []))} "
+        f"agent_url={summary.get('agent_url')}"
+    )
+
+
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
@@ -494,6 +527,8 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     are gradeable per-check here.
     """
     summary = _run_storyboard_runner(protocol)
+    _publish_summary(protocol, summary)
+    print(_scoreboard(protocol, summary))
     checks: list[dict[str, Any]] = []
     for f in summary["failures"]:
         checks.append(
