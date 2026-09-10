@@ -111,6 +111,7 @@ class TestAuthTokenBecomesABearerHeader:
         mock_asend.assert_called_once_with(
             "https://agent.example.com/lists/list-1",
             method="GET",
+            # ast-grep-ignore: test-credential-header-single-producer - asserts the header PRODUCTION sent outbound, not one we build
             headers={"Authorization": "Bearer my-secret-token"},
             timeout=_DEFAULT_TIMEOUT,
             provenance=CounterpartyUrl(field=_REFUSED_FIELD_PATH),

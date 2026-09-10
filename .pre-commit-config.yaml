@@ -115,11 +115,15 @@ repos:
         pass_filenames: true
         stages: [pre-push]
 
-      - id: ast-grep-bdd-guards
-        name: ast-grep BDD step guards (scaffold — no rules yet)
-        entry: ast-grep scan
+      # Scope is the whole tree, because each rule under .ast-grep/rules/ declares its
+      # own `files:` and the narrower `^tests/bdd/steps/` here decided which rules could
+      # ever fire, silently. `make quality-ci` runs the same scan — this repo's workflow
+      # merges locally and never pushes, so the pre-push stage alone would never execute.
+      - id: ast-grep-structural-rules
+        name: ast-grep structural rules (.ast-grep/rules/)
+        entry: ast-grep scan --config sgconfig.yml
         language: system
-        files: '^tests/bdd/steps/.*\.py$'
+        files: '\.py$'
         pass_filenames: false
         stages: [pre-push]
 

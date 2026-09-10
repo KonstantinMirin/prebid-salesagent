@@ -35,7 +35,8 @@ nginx to the live Docker stack. ``RestE2EDispatcher`` and
 ``A2AE2EDispatcher`` (``tests/harness/dispatchers.py``) delegate to the
 matching DELIVER function instead of duplicating it, so there is one
 implementation per transport, not two. Auth-header construction is shared
-across all three via ``e2e_identity_headers`` below (this project's DRY
+across all three via ``identity_credential_headers`` (tests/helpers/credentials.py,
+this project's DRY
 invariant, CLAUDE.md) — WRAP/UNWRAP were already written per transport
 *family*, so each of these follow-ups only needed to add a
 DELIVER function; ADDRESS and WRAP needed no changes.
@@ -68,6 +69,7 @@ from tests.harness.transport import (
     _wire_envelope_from_exception,
     derive_error_status,
 )
+from tests.helpers.credentials import identity_credential_headers
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
@@ -197,42 +199,6 @@ def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any
     return getattr(client, method)(wrapped["url"], json=wrapped["body"])
 
 
-def e2e_identity_headers(identity: Any) -> dict[str, str]:
-    """Auth/tenant/dry-run HTTP headers for e2e dispatch, derived from a
-    resolved identity.
-
-    Shared by e2e REST, e2e MCP, and e2e A2A DELIVER (below) — production's
-    ``UnifiedAuthMiddleware`` (``src/core/auth_middleware.py``) extracts the
-    credential from ``Authorization: Bearer`` for every transport, so this is one
-    function rather than a convention reinvented per transport (this project's DRY
-    invariant, CLAUDE.md). The ``x-adcp-auth`` alias this used to send is no longer
-    read: pinned 3.1.1 ``L2/authentication.mdx:71`` says the credential MUST ride
-    ``Authorization`` and sellers MUST NOT require non-canonical aliases. A caller
-    still sending the alias presents nothing the seam can see, which surfaces as
-    AUTH_MISSING rather than a header error.
-
-    ``identity=None`` means "dispatch without auth headers" (explicit
-    unauthenticated) — the live server's own auth middleware then returns the
-    real 401/``AUTH_REQUIRED`` rejection. When identity carries no
-    ``auth_token`` (e.g. ``principal_id=None`` boundary tests), the header is
-    simply omitted rather than sent empty.
-    """
-    headers: dict[str, str] = {}
-    if identity is None:
-        return headers
-    if identity.auth_token is not None:
-        headers["Authorization"] = f"Bearer {identity.auth_token}"
-    tenant = getattr(identity, "tenant", None)
-    if tenant is not None:
-        subdomain = tenant.get("subdomain") if isinstance(tenant, dict) else getattr(tenant, "subdomain", None)
-        if subdomain is not None:
-            headers["x-adcp-tenant"] = subdomain
-    tc = getattr(identity, "testing_context", None)
-    if tc is not None and getattr(tc, "dry_run", False):
-        headers["x-dry-run"] = "true"
-    return headers
-
-
 def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
     """E2E_REST DELIVER: real HTTP through nginx to the live Docker stack.
 
@@ -259,7 +225,7 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
     resolved_identity = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
-    headers = {"Content-Type": "application/json", **e2e_identity_headers(resolved_identity)}
+    headers = {"Content-Type": "application/json", **identity_credential_headers(resolved_identity)}
     method = address.method or "post"
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
@@ -279,7 +245,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     ``WireError`` — only the transport under the FastMCP
     ``Client`` changes: a real ``StreamableHttpTransport`` against
     ``env.e2e_config.base_url`` instead of the in-memory ``mcp`` app object.
-    Auth flows as real HTTP headers (``e2e_identity_headers``) instead of the
+    Auth flows as real HTTP headers (``identity_credential_headers``) instead of the
     ``get_http_headers``/``resolve_identity_from_context`` patches
     ``_run_mcp_client`` installs for in-process dispatch — there is a real
     nginx -> ``UnifiedAuthMiddleware`` -> ``resolve_identity()`` chain running
@@ -301,7 +267,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     env._commit_factory_data()
 
     resolved_identity = env.identity_for(Transport.E2E_MCP) if identity is NO_IDENTITY_OVERRIDE else identity
-    headers = e2e_identity_headers(resolved_identity)
+    headers = identity_credential_headers(resolved_identity)
     url = f"{env.e2e_config.base_url}/mcp/"
 
     async def _call() -> DeliverResult:
@@ -415,7 +381,7 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     headers = {
         "Content-Type": "application/json",
         a2a_constants.VERSION_HEADER: a2a_constants.PROTOCOL_VERSION_CURRENT,
-        **e2e_identity_headers(resolved_identity),
+        **identity_credential_headers(resolved_identity),
     }
     rpc_body = _build_a2a_jsonrpc_body(address.name, wrapped)
 

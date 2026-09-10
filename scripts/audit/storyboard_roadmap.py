@@ -166,7 +166,7 @@ def _ledgered_failures(repo: Path) -> dict[str, list[str]]:
     host-side numbers do not carry over. They stay in the repo as history.
     """
     failures: dict[str, list[str]] = {}
-    for check_id in ledger.load(repo / ledger.LEDGER):
+    for check_id in ledger.load(ledger.ledger_path(repo)):
         # storyboard_key normalizes hyphens to underscores: the ledger carries
         # the runner's underscore spelling (webhook_emission) while
         # coverage_map stems are hyphenated for universal/ (webhook-emission).

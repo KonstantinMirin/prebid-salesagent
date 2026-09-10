@@ -86,6 +86,17 @@ Changelog = "https://github.com/prebid/salesagent/blob/main/CHANGELOG.md"
 [dependency-groups]
 dev = [
     "asgi-lifespan>=2.1.0",
+    # The structural-rule scanner `make quality-ci` runs over .ast-grep/rules/.
+    # Declared here rather than left to a system install so `uv run ast-grep`
+    # resolves to a pinned copy: a PATH lookup finds whatever version a developer
+    # happens to have, and a CI runner has none at all.
+    #
+    # EXACT, not a floor. Whether a `# ast-grep-ignore:` directive still suppresses
+    # when a reason follows the rule id changed between 0.41.1 and 0.45.3, and every
+    # exemption in tests/ is written in the form the pinned version honours. A floor
+    # would let CI resolve a version that silently un-suppresses all of them;
+    # tests/unit/test_ast_grep_credential_header_ban.py grades the pin for that reason.
+    "ast-grep-cli==0.45.3",
     "factory-boy>=3.3.0",
     "mypy>=1.18.2",
     "pytest>=9.0.3",  # GHSA-6w46-j5rx-g56g

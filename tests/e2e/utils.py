@@ -10,6 +10,8 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
+from tests.helpers.credentials import credential_headers
+
 
 def make_mcp_client(
     live_server: dict,
@@ -24,11 +26,14 @@ def make_mcp_client(
     """Build an MCP client against the live e2e stack (GH #1423 consolidation).
 
     Single home for the authed-client construction previously copy-pasted across
-    ~10 tests/e2e files. The intentional variations are explicit kwargs:
+    ~10 tests/e2e files. The credential trio comes from ``credential_headers``
+    (``tests/harness/client.py``), the one producer; the kwargs below are the
+    intentional variations, and only the first two are credentials:
 
-    - ``token``: value for ``x-adcp-auth`` (omit for unauthenticated flows).
+    - ``token``: the credential, sent as ``Authorization: Bearer`` (omit for
+      unauthenticated flows).
     - ``tenant``: value for ``x-adcp-tenant`` (default ``ci-test``; pass None to
-      omit, e.g. domain-routing tests that select the tenant via ``host``).
+      omit, for example domain-routing tests that select the tenant via ``host``).
     - ``dry_run``: adds ``X-Dry-Run: true`` (the ``e2e_client`` fixture default;
       lifecycle tests that must persist real state leave it off).
     - ``session_id``: adds ``X-Test-Session-ID`` for testing-hook isolation.
@@ -36,11 +41,7 @@ def make_mcp_client(
 
     Returns an un-entered ``Client``; callers use ``async with``.
     """
-    headers: dict[str, str] = {}
-    if token is not None:
-        headers["Authorization"] = f"Bearer {token}"
-    if tenant is not None:
-        headers["x-adcp-tenant"] = tenant
+    headers = credential_headers(token=token, tenant=tenant)
     if session_id is not None:
         headers["X-Test-Session-ID"] = session_id
     if dry_run:

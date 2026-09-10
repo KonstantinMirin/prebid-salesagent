@@ -16,10 +16,12 @@ from starlette.testclient import TestClient
 
 from src.app import app
 from tests.factories.principal import PrincipalFactory
+from tests.factories.request import CreateMediaBuyRequestFactory
 from tests.factories.webhook import ReportingWebhookRequestFactory
 from tests.helpers import assert_envelope_shape
 from tests.helpers.boundary_identity import resolves_to
 from tests.helpers.capture_wrapper_req import stub_impl
+from tests.helpers.credentials import credential_headers
 
 client = TestClient(app)
 
@@ -46,12 +48,20 @@ class TestCreateMediaBuyEndpoint:
     """Verify POST /api/v1/media-buys endpoint."""
 
     def test_requires_auth(self):
-        """create_media_buy requires authentication."""
-        response = client.post(
-            "/api/v1/media-buys",
-            json={"packages": []},
-        )
-        assert response.status_code == 401
+        """create_media_buy rejects a request that presents no credential.
+
+        The body must be VALID. FastAPI validates it while resolving the handler's
+        parameters, which is strictly before ``invoke_tool`` sees the credential, so a
+        body the DTO rejects answers INVALID_REQUEST and never reaches the auth check
+        this asserts. The previous ``{"packages": []}`` was such a body: it graded
+        request validation while claiming to grade authentication.
+        """
+        body = CreateMediaBuyRequestFactory.build().model_dump(mode="json", exclude_none=True)
+
+        response = client.post("/api/v1/media-buys", json=body)
+
+        assert response.status_code == 401, response.text
+        assert_envelope_shape(response.json(), "AUTH_MISSING", recovery="correctable")
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +133,7 @@ class TestCreateMediaBuyScalarForwarding:
             "account": {"account_id": "acct_rest_test"},
             field: wire_value,
         }
-        response = client.post("/api/v1/media-buys", json=body, headers={"Authorization": "Bearer test-token"})
+        response = client.post("/api/v1/media-buys", json=body, headers=credential_headers(token="test-token"))
 
         assert response.status_code == 200, response.text
         # Each scalar is graded on the built REQUEST the wrapper receives -- except
@@ -155,7 +165,7 @@ class TestGetMediaBuyDeliveryEndpoint:
                 "media_buy_ids": ["mb1"],
                 "account": {"brand": {"domain": "example.com"}, "operator": "op-1", "sandbox": False},
             },
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
 
         assert response.status_code == 200
@@ -177,7 +187,7 @@ class TestGetMediaBuyDeliveryEndpoint:
         response = client.post(
             "/api/v1/media-buys/delivery",
             json={"media_buy_ids": ["mb1"], "account": {}},
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
 
         assert response.status_code == 400
@@ -204,7 +214,7 @@ class TestPathFieldsBindFromTheUrl:
         response = client.post(
             "/api/v1/tasks/task_from_url",
             json={},
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
 
         assert response.status_code == 200
@@ -219,7 +229,7 @@ class TestPathFieldsBindFromTheUrl:
         response = client.post(
             "/api/v1/tasks/task_from_url",
             json={"task_id": "task_from_body"},
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
 
         assert response.status_code == 200

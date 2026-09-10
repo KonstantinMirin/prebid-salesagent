@@ -23,6 +23,7 @@ never ``storyboard_id``.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -116,6 +117,25 @@ def join_id(declared_id: str | None, stem: str) -> str:
 
 
 LEDGER = Path("tests") / "storyboard" / "known_failures.txt"
+
+
+def ledger_path(repo: Path) -> Path:
+    """The ledger file to load, under ``repo``; ``STORYBOARD_LEDGER_PATH`` redirects it.
+
+    ONE resolver, because two things read the ledger and must read the same one: the
+    xfail routing in ``tests/storyboard/conftest.py`` and the in-session stale-entry
+    join in ``tests/storyboard/test_storyboard_conformance.py``. Resolved in two places,
+    a redirect reaches one of them and the join then reports staleness against a file
+    the routing never saw.
+
+    The redirect exists because the committed ledger is empty — the storyboard grades
+    every check it collects — so the only way to grade the machinery is to hand it a
+    ledger with entries in it
+    (``tests/integration/test_storyboard_ledger_fitness_real_session.py``).
+    """
+    override = os.environ.get("STORYBOARD_LEDGER_PATH")
+    return Path(override) if override else repo / LEDGER
+
 
 # The runner-level synthetic. `test_storyboard_conformance` emits this row when
 # the runner grades zero checks, so it is a real ledger key with no `check:`

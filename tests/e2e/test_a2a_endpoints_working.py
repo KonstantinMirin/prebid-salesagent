@@ -24,6 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
+from tests.helpers.credentials import credential_headers
 
 # Read the declared set from production: a path added to (or dropped from)
 # `_AGENT_CARD_PATHS` must change what these tests grade. Sorted for a
@@ -527,7 +528,7 @@ class TestA2AServerIntegration:
         # Should require Bearer token for messaging
         response = requests.post(
             f"{live_server['a2a']}/a2a",
-            headers={"Authorization": "Bearer invalid-token"},
+            headers=credential_headers(token="invalid-token"),
             json={"method": "message/send", "params": {}},
             timeout=2,
         )

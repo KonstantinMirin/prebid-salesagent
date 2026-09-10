@@ -17,6 +17,7 @@ from tests.factories import (
     TenantFactory,
 )
 from tests.harness import CreativeListEnv, make_identity
+from tests.helpers.credentials import credential_headers
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -32,10 +33,7 @@ class TestInvalidTokenAtTransportBoundary:
         with CreativeListEnv():
             tenant = TenantFactory(tenant_id="token_test_tenant")
             # Pass a fabricated bad token that doesn't match any principal in the DB
-            headers = {
-                "Authorization": "Bearer bad-token-xyz-not-a-real-token",
-                "x-adcp-tenant": tenant.tenant_id,
-            }
+            headers = credential_headers(token="bad-token-xyz-not-a-real-token", tenant=tenant.tenant_id)
             with pytest.raises(AdCPAuthenticationError):
                 resolve_identity(headers, require_valid_token=True)
 

@@ -24,7 +24,6 @@ __all__ = [
     "MockHTTPRequest",
     "MockHTTPResponse",
     # Builders
-    "RequestBuilder",
     "ResponseBuilder",
     "TargetingBuilder",
     "TestDataBuilder",

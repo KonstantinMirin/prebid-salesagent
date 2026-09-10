@@ -28,6 +28,7 @@ import pytest
 
 from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
 from tests.helpers import assert_envelope_shape
+from tests.helpers.credentials import credential_headers
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -180,10 +181,7 @@ class TestAuthHelperFamilySuggestion:
 
             with pytest.raises(AdCPSalesAgentError) as exc_info:
                 _resolve_identity(
-                    headers={
-                        "Authorization": "Bearer not-a-real-token",
-                        "x-adcp-tenant": "auth_sugg_t2",
-                    },
+                    headers=credential_headers(token="not-a-real-token", tenant="auth_sugg_t2"),
                     require_valid_token=True,
                     protocol="mcp",
                 )

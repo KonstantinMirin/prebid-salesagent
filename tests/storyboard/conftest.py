@@ -18,10 +18,15 @@ from pathlib import Path
 
 import pytest
 
+from scripts.audit import ledger
 from tests.helpers.ledger import load_ledger_nodeids
 from tests.storyboard import collected
 
-_LEDGER_PATH = Path(__file__).parent / "known_failures.txt"
+#: The ledger this session xfails from, resolved by ``scripts.audit.ledger`` — the one
+#: owner of the path, shared with the in-session stale-entry join in
+#: ``test_storyboard_conformance``. Both must read the same file; resolving it here as
+#: well is how the two come to disagree.
+_LEDGER_PATH = ledger.ledger_path(Path(__file__).resolve().parents[2])
 
 # Known-failing storyboard-conformance test ids — genuine production/runner gaps
 # only. xfail(strict=False)'d by exact test id below. Locked by

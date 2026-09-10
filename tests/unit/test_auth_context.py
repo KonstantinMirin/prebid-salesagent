@@ -102,6 +102,7 @@ class TestAuthContextMiddleware:
         client = TestClient(middleware_test_app)
         response = client.get(
             "/test-auth/bearer-check",
+            # ast-grep-ignore: test-credential-header-single-producer - the header spelling IS what this grades in production
             headers={"Authorization": "Bearer my-test-token"},
         )
         assert response.status_code == 200

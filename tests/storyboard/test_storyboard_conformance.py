@@ -537,7 +537,8 @@ def _stale_ledger_entries(collected_ids: list[str]) -> list[str]:
     re-deriving either.
     """
     collected = set(collected_ids)
-    return [entry.format() for entry in ledger.load(ledger.LEDGER) if entry.format() not in collected]
+    entries = ledger.load(ledger.ledger_path(_REPO_ROOT))
+    return [entry.format() for entry in entries if entry.format() not in collected]
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:

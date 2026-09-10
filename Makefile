@@ -17,6 +17,13 @@ quality-ci:
 	uv run ruff check .
 	uv run ruff check --config ruff-egress.toml --ignore-noqa --no-respect-gitignore src/ scripts/
 	uv run ruff check --config ruff-boundary.toml --no-respect-gitignore src/ scripts/
+	# Structural rules, for the checks ruff cannot express. TID251 bans imports and
+	# attributes, which is what makes the egress line above work; a credential header is
+	# a dict-key string literal, so nothing in ruff or mypy can see it. .ast-grep/rules/
+	# is scoped by each rule's own `files:`. Runs HERE and not only at the pre-push stage
+	# the hook declares, because this repo's workflow merges locally and never pushes, so
+	# a pre-push-only rule never executes at all.
+	uv run ast-grep scan --config sgconfig.yml
 	uv run mypy src/ --config-file=mypy.ini
 	# Layer-2 ratchets. These are declared stages:[pre-push] in .pre-commit-config.yaml, and
 	# this repo's documented workflow (ephemeral branches merged LOCALLY, `git push` never run)

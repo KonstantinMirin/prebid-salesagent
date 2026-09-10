@@ -6,77 +6,8 @@ These builders provide fluent interfaces for creating test data.
 
 import json
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
-
-
-class RequestBuilder:
-    """Builder for constructing API request objects."""
-
-    def __init__(self):
-        """Initialize request builder."""
-        self.data = {}
-        self.headers = {}
-
-    def with_auth(self, token: str):
-        """Add authentication."""
-        self.headers["Authorization"] = f"Bearer {token}"
-        return self
-
-    def with_tenant(self, tenant_id: str):
-        """Add tenant context."""
-        self.headers["x-tenant-id"] = tenant_id
-        return self
-
-    def with_data(self, **kwargs):
-        """Add request data."""
-        self.data.update(kwargs)
-        return self
-
-    def with_media_buy(
-        self,
-        product_ids: list[str] = None,
-        total_budget: float = 5000.0,
-        flight_start_date: str = None,
-        flight_end_date: str = None,
-        **kwargs,
-    ):
-        """Add media buy data."""
-        self.data.update(
-            {
-                "product_ids": product_ids or [f"prod_{uuid.uuid4().hex[:8]}"],
-                "total_budget": total_budget,
-                "flight_start_date": flight_start_date or datetime.now(UTC).date().isoformat(),
-                "flight_end_date": flight_end_date or (datetime.now(UTC) + timedelta(days=30)).date().isoformat(),
-                **kwargs,
-            }
-        )
-        return self
-
-    def with_creative(self, format_id: str = "display_300x250", content: dict = None, **kwargs):
-        """Add creative data."""
-        default_content = {
-            "headline": "Test Ad",
-            "body": "Test ad content",
-            "image_url": "https://example.com/image.jpg",
-            "click_url": "https://example.com/landing",
-        }
-
-        self.data.update({"format_id": format_id, "content": content or default_content, **kwargs})
-        return self
-
-    def with_targeting(self, targeting: dict):
-        """Add targeting overlay."""
-        self.data["targeting_overlay"] = targeting
-        return self
-
-    def build(self) -> dict:
-        """Build the request object."""
-        return {"headers": self.headers, "data": self.data}
-
-    def build_json(self) -> str:
-        """Build as JSON string."""
-        return json.dumps(self.build())
 
 
 class ResponseBuilder:

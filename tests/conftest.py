@@ -312,7 +312,6 @@ from tests.fixtures import (
     MockOAuthProvider,
     PrincipalFactory,
     ProductFactory,
-    RequestBuilder,
     ResponseBuilder,
     TargetingBuilder,
     TenantFactory,
@@ -564,12 +563,6 @@ def mock_gemini_test_scenarios():
 
 
 @pytest.fixture
-def request_builder():
-    """Provide request builder."""
-    return RequestBuilder()
-
-
-@pytest.fixture
 def response_builder():
     """Provide response builder."""
     return ResponseBuilder()
@@ -584,12 +577,6 @@ def targeting_builder():
 # ============================================================================
 # Authentication Fixtures
 # ============================================================================
-
-
-@pytest.fixture
-def auth_headers(sample_principal):
-    """Provide authentication headers."""
-    return {"Authorization": f"Bearer {sample_principal['access_token']}"}
 
 
 @pytest.fixture
@@ -663,25 +650,6 @@ def authenticated_client(flask_client, admin_session):
     with flask_client.session_transaction() as sess:
         sess.update(admin_session)
     return flask_client
-
-
-# ============================================================================
-# MCP Context Fixtures
-# ============================================================================
-
-
-@pytest.fixture
-def mcp_context(auth_headers):
-    """Provide MCP context object."""
-
-    class MockContext:
-        def __init__(self, headers):
-            self.headers = headers
-
-        def get_header(self, name, default=None):
-            return self.headers.get(name, default)
-
-    return MockContext(auth_headers)
 
 
 # ============================================================================
