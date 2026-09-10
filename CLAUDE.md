@@ -337,6 +337,38 @@ Never hardcode `/api/endpoint` - breaks with nginx prefix.
 - **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
+**THE DTO IS THE ACCEPTED SHAPE. `additionalProperties: true` IN THE PIN DOES NOT WIDEN IT.**
+
+`deep_strip_to_schema` (`src/core/schemas/_accepted_shape.py`) strips every field the DTO does
+not declare, and it **ignores `additionalProperties` on purpose**. These three are identical and
+all three are correct:
+
+```python
+{"properties": {"a": {}}, "additionalProperties": True}   # -> rejects "/x"
+{"properties": {"a": {}}, "additionalProperties": False}  # -> rejects "/x"
+{"properties": {"a": {}}}                                 # -> rejects "/x"
+```
+
+We accept **only** parameters explicitly defined in the DTO, because that is what keeps the
+internal models predictable. A pinned schema saying `additionalProperties: true` is the SPEC
+permitting a sender to add fields; it is not an instruction to this seller to carry them
+inward. The dev/prod split is deliberate and is the whole mechanism: in dev an undeclared
+field is a HARD REJECTION so a spec field we have not implemented is loud, and in production
+it is silently dropped so a newer buyer is served rather than refused.
+
+**Do not "fix" this.** It has been mistaken for a bug at least twice. The tells are a scenario
+that sends a pin-permitted-but-undeclared field and fails with `INVALID_REQUEST` in dev, or a
+storyboard `known_failures.txt` entry for a tolerance check. Neither is a defect in the strip:
+
+- if we SHOULD accept the field, declare it on the DTO — that is the only mechanism;
+- if we should NOT, the scenario is wrong and gets fixed or deleted.
+
+Declaring a field only to satisfy a tolerance obligation is its own defect — it invents a spec
+field. `ListAccountsRequest.idempotency_key` was added that way once and removed again:
+**reads take no idempotency key.** A read is idempotent by construction, so there is no
+at-most-once guarantee for a key to carry, and `list-accounts-request.json` does not declare
+one. The same holds for every read tool.
+
 ### 8. Test Fixtures: Factory-Based, Not Inline
 **MANDATORY for new integration tests:** Use `factory-boy` factories for test data, not inline `session.add()` boilerplate.
 

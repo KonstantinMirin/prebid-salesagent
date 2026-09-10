@@ -172,24 +172,17 @@ Feature: BR-UC-011 Manage Accounts
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-response.json pointer=/properties/accounts/items
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account-authorization.json pointer=/required
 
-  @T-UC-011-list-read-idempotency-tolerance @list @idempotency @v3-1
-  Scenario: list_accounts tolerates the 3.1 every-request envelope (idempotency_key + ext)
-    Given the Buyer is authenticated
-    And the agent has 3 accessible accounts with statuses "active", "active", "active"
-    When the Buyer Agent sends a list_accounts request carrying idempotency_key "read-tool-idem-key-0001", an ext object, and context {"correlation_id": "uc011-read-idem"}
-    Then the response is compliant with the list_accounts spec
-    And the response contains an accounts array with 3 items
-    And the response includes context {"correlation_id": "uc011-read-idem"}
-    # NOT graduated, and the note that said so was stale: ListAccountsRequest.idempotency_key
-    # was declared once and REMOVED again, on the reasoning recorded in that model's docstring
-    # -- declaring it "satisfied a tolerance obligation by inventing a spec field". That
-    # reasoning stands. This scenario currently FAILS on all three in-process transports
-    # because deep_strip_to_schema ignores additionalProperties (salesagent-1x3lp), so a
-    # pin-permitted extra is rejected in non-production the same as a forbidden one.
-    # list-accounts-request.json does NOT declare idempotency_key as a property at 3.1.1;
-    # the duty is TOLERANCE (additionalProperties: true + graded storyboard step), not a declared field
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/read-tool-idempotency.yaml pointer=phases/read_requests_accept_idempotency_key/steps/list_accounts_with_idempotency_key
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/list-accounts-request.json pointer=/additionalProperties
+  # DELETED: "list_accounts tolerates the 3.1 every-request envelope (idempotency_key + ext)".
+  # READS TAKE NO IDEMPOTENCY KEY. A read is idempotent by construction, so there is no
+  # at-most-once guarantee for a key to carry, and account/list-accounts-request.json does not
+  # declare one. The scenario asserted that this seller ACCEPTS an undeclared field because the
+  # pinned schema says additionalProperties: true -- but the DTO is the accepted shape here and
+  # a pin permitting a sender to add fields is not an instruction to carry them inward
+  # (CLAUDE.md critical pattern #7). ListAccountsRequest.idempotency_key was declared once to
+  # satisfy exactly this obligation and removed again as an invented spec field; the scenario
+  # outlived the reasoning that retired it. Its storyboard citation
+  # (read-tool-idempotency.yaml) stays ledgered in tests/storyboard/known_failures.txt, which
+  # is the honest record of a conformance duty this seller declines.
 
   @T-UC-011-list-status-filter-no-match @list @status-filter @empty-result @partition @boundary
   Scenario: List accounts with status filter returns empty when no matches (status filter = specific value with no matches)
@@ -920,36 +913,21 @@ Feature: BR-UC-011 Manage Accounts
   # `spec_forbidden` / `ignored_by_design` label rather than "undecided debt".
   # ══════════════════════════════════════════════════════════════════════════
 
-  @T-UC-011-governance-omit-preserves @sync @list @governance @invariant @partition @boundary
-  Scenario: A provisioning re-sync that omits governance_agents preserves the binding
-    Given the Buyer is authenticated
-    And an account for brand domain "acme-corp.com" already exists with governance_agents
-    When the Buyer Agent sends a sync_accounts request with:
-    | brand.domain    | operator      | billing  | payment_terms |
-    | acme-corp.com   | acme-corp.com | operator | net_45        |
-    Then the response is compliant with the sync_accounts success spec
-    And the account for brand domain "acme-corp.com" has action "updated"
-    When the Buyer Agent sends a list_accounts request
-    Then the listed account for brand domain "acme-corp.com" binds governance agent "https://compliance.example.com/check"
-    # LOCAL EXTENSION, not a spec surface: `governance_agents` is not a
-    # sync-accounts-request property — the entry accepts it only via
-    # additionalProperties, and the spec's designated surface is sync_governance.
-    # Storyboard: UNGRADED on sync_accounts (governance/index.yaml runs sync_accounts
-    # with no governance payload, then sync_governance separately).
-    # The obligation graded here is therefore OURS: a re-sync that never mentions
-    # governance_agents must not silently clear them. `check_governance` keys off this
-    # binding, so an omission-wipe is a governance BYPASS, not merely data loss — the
-    # buyer re-syncs payment_terms and loses the approval gate with a success response.
-    # Read back through list_accounts (not the DB) because the wire is where the buyer
-    # would observe it: _db_account_to_schema already echoes governance_agents.
-    # `action "updated"` is the only intermediate grade: it proves the re-sync really did
-    # mutate the account (payment_terms went from unset to net_45), so the governance Then
-    # below is graded on a re-sync that WROTE, not a no-op. Deliberately NOT graded here:
-    # the payment_terms ECHO on the sync result — _build_sync_result's update branch omits
-    # it, which is a separate response-shape gap and does not belong in a governance scenario.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/additionalProperties
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/account.json pointer=/properties/governance_agents
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description (omission-preserves semantics this reuses)
+  # DELETED: "A provisioning re-sync that omits governance_agents preserves the binding".
+  # Its own comment called governance_agents a LOCAL EXTENSION accepted "only via
+  # additionalProperties" -- and this seller does not honour additionalProperties: the DTO is
+  # the accepted shape (CLAUDE.md critical pattern #7). So the scenario could never dispatch
+  # the field it depends on; it failed on all three transports with INVALID_REQUEST.
+  #
+  # NOT re-homed by declaring governance_agents on the sync DTO, because the pin does not
+  # declare it on that request (account/sync-accounts-request.json items carry 9 properties and
+  # this is not one) and the spec's designated surface is sync_governance.
+  #
+  # The INVARIANT it graded is real and is filed, not discarded: an omitting re-sync must not
+  # clear the binding. Production already resolves it that way (_resolve_governance_agents,
+  # omission-preserving, written after salesagent-gcze where a re-sync DID wipe it). What does
+  # not exist is check_governance -- the consumer that would make a wipe a governance BYPASS is
+  # referenced only in comments, so the gate is unbuilt and the scenario was anticipating it.
 
   @T-UC-011-settings-update-sandbox-reject @sync @list @settings-update @sandbox @error @post-f1 @post-f2 @partition @boundary
   Scenario: Settings-update entry carrying entry-root sandbox is rejected per account
