@@ -13,6 +13,7 @@ from starlette.testclient import TestClient
 from src.app import app
 from tests.factories import PrincipalFactory
 from tests.helpers.capture_wrapper_req import stub_impl
+from tests.helpers.credentials import credential_headers
 
 _IDENTITY = PrincipalFactory.make_identity(protocol="rest")
 _CLIENT = TestClient(app)
@@ -43,7 +44,7 @@ class TestRESTCreativeFormatsFilterForwarding:
         _CLIENT.post(
             "/api/v1/creative-formats",
             json=body,
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
 
         # Extract and verify the req argument passed to _impl

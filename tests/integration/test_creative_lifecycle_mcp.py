@@ -36,6 +36,7 @@ from src.core.testing_hooks import AdCPTestContext
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import asset_spec, build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.credentials import credential_headers
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -100,7 +101,7 @@ class MockContext:
         if auth_token is None:
             self.meta = {"headers": {}}  # No auth header for testing optional auth
         else:
-            self.meta = {"headers": {"Authorization": f"Bearer {auth_token}"}}
+            self.meta = {"headers": credential_headers(token=auth_token)}
 
 
 @pytest.mark.requires_db

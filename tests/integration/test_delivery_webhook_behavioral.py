@@ -137,6 +137,7 @@ class TestWebhookBearerTokenAuth:
             success, result = env.call_deliver(
                 webhook_url=env.webhook_url,
                 payload={"media_buy_id": "mb_001"},
+                # ast-grep-ignore: test-credential-header-single-producer - outbound seller->buyer webhook credential, not a request we present
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": "Bearer test-bearer-token-xyz",

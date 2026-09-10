@@ -50,6 +50,7 @@ from pydantic import BaseModel  # noqa: E402
 
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID  # noqa: E402  (re-export)
 from tests.harness.transport import DeliverResult  # noqa: E402
+from tests.helpers.credentials import identity_credential_headers  # noqa: E402
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -825,10 +826,7 @@ class BaseTestEnv:
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
-            headers = {
-                "Authorization": f"Bearer {auth_token}",
-                "x-adcp-tenant": a2a_identity.tenant_id or "",
-            }
+            headers = identity_credential_headers(a2a_identity, tenant="tenant_id")
             server_context = ServerCallContext(
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
@@ -1019,7 +1017,7 @@ class BaseTestEnv:
             # src/core/main.py imports it from fastmcp.server.dependencies inside the call, so
             # patching the DEFINING module is what a function-local import actually sees, and
             # it covers any further importer for free.
-            headers = self._credential_headers(mcp_identity)
+            headers = identity_credential_headers(mcp_identity, tenant="tenant_id")
 
             async def _call():
                 with patch("fastmcp.server.dependencies.get_http_headers", return_value=headers) as patched:
@@ -1088,46 +1086,6 @@ class BaseTestEnv:
         return client, identity
 
     @staticmethod
-    def _credential_headers(identity: Any) -> dict[str, str]:
-        """The headers that carry *identity*'s credential to the production auth chain.
-
-        One builder for both in-process wire transports: MCP patches
-        ``get_http_headers`` to return it, REST sends it on the TestClient
-        request. Shape is what production reads off the request
-        (``src/core/auth_middleware.py``: ``Authorization: Bearer`` for the
-        token, ``x-adcp-tenant`` for tenant detection). Empty when no credential
-        is presented, so callers can splat it unconditionally.
-
-        ``Authorization``, not ``x-adcp-auth``. The alias is no longer accepted
-        anywhere in production (pinned 3.1.1 L2/authentication.mdx:71 and :153),
-        and while the harness still sent it, every transport's "invalid
-        credential" scenario was really testing an UNRECOGNIZED HEADER -- which
-        is why BR-UC-010 graded A2A as AUTH_INVALID where its sibling rows
-        graded success.
-        """
-        token = getattr(identity, "auth_token", None)
-        tenant_id = getattr(identity, "tenant_id", None)
-
-        # The two headers are INDEPENDENT, and collapsing them was a harness-only fiction.
-        # ``Authorization`` says who the buyer is; ``x-adcp-tenant`` says which seller was
-        # addressed. Returning {} whenever there was no token dropped the tenant along with
-        # the credential, so a credential-less request arrived naming no seller -- a state
-        # production cannot produce, because a buyer who presents nothing has still CONNECTED
-        # to a host, and the host is the only thing that names the tenant (the request payload
-        # cannot: get-adcp-capabilities-request.json declares only protocols/context/ext).
-        #
-        # That fiction is what failed BR-UC-010's "authentication state does not affect
-        # response data content" on all three transports: unauthenticated requests were served
-        # minimal capabilities for want of a tenant, so the data DID differ by auth state --
-        # in the harness, never in production.
-        headers: dict[str, str] = {}
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        if tenant_id:
-            headers["x-adcp-tenant"] = tenant_id
-        return headers
-
-    @staticmethod
     def _presents_unresolvable_credential(identity: Any) -> bool:
         """True when *identity* presented a token that resolved to no principal.
 
@@ -1147,7 +1105,7 @@ class BaseTestEnv:
         dependency override supplied it so "its request needs no headers", and
         send real headers only for a presented-but-unresolvable credential. That
         made REST the one transport whose requests did not carry the credential
-        they were testing with: MCP calls ``_credential_headers`` unconditionally
+        they were testing with: MCP calls ``identity_credential_headers`` unconditionally
         (see ``_run_mcp_client``), and A2A puts it on the call context.
 
         With identity resolved at the boundary there is no override to supply
@@ -1155,7 +1113,7 @@ class BaseTestEnv:
         the same credential the same way, and the production chain reads it off
         the request on all three.
         """
-        return cls._credential_headers(identity)
+        return identity_credential_headers(identity, tenant="tenant_id")
 
     @classmethod
     def _configure_rest_auth(cls, identity: Any) -> None:
@@ -1188,7 +1146,7 @@ class BaseTestEnv:
         carries, so a REST route has no identity dependency to override -- and
         in-process REST now drives the same real chain as A2A, MCP and e2e_rest
         instead of modelling it. The credential still arrives the ordinary way, via
-        ``_credential_headers`` on the request (``Authorization: Bearer``).
+        ``identity_credential_headers`` on the request (``Authorization: Bearer``).
 
         That closes what this method's own history documents: the override treated
         ANY non-None identity as an already-resolved valid token, so REST answered

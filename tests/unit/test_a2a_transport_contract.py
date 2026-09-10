@@ -21,6 +21,7 @@ from src.app import _AGENT_CARD_PATHS, app
 from src.core.tools.registry import TOOLS
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.agent_card import host_routes_to_no_tenant
+from tests.helpers.credentials import credential_headers
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
@@ -134,7 +135,11 @@ def client():
 @pytest.fixture
 def auth_headers():
     """Headers with a valid Bearer token."""
-    return {"Authorization": "Bearer test-transport-token", "Content-Type": "application/json", "A2A-Version": "1.0"}
+    return {
+        **credential_headers(token="test-transport-token"),
+        "Content-Type": "application/json",
+        "A2A-Version": "1.0",
+    }
 
 
 @pytest.fixture

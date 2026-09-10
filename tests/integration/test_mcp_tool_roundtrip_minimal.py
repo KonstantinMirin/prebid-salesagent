@@ -16,6 +16,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers import assert_envelope_shape
+from tests.helpers.credentials import credential_headers
 
 
 @pytest.mark.integration
@@ -31,7 +32,7 @@ class TestMCPToolRoundtripMinimal:
     async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_account, sample_products):
         """Create MCP client for testing with test data."""
         # Use the mcp_server fixture which provides port and manages lifecycle
-        headers = {"Authorization": f"Bearer {sample_principal['access_token']}"}
+        headers = credential_headers(token=sample_principal["access_token"])
         transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
         client = Client(transport=transport)
 

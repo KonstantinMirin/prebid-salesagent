@@ -17,6 +17,7 @@ from src.app import app
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.boundary_identity import resolves_to
 from tests.helpers.capture_wrapper_req import stub_impl
+from tests.helpers.credentials import credential_headers
 
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
@@ -52,7 +53,7 @@ class TestRESTProductsEndpoint:
         response = client.post(
             "/api/v1/products",
             json={"brief": "video ads"},
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
         assert response.status_code == 200
 
@@ -67,7 +68,7 @@ class TestRESTProductsEndpoint:
         response = client.post(
             "/api/v1/products",
             json={"brief": "video ads"},
-            headers={"Authorization": "Bearer test-token"},
+            headers=credential_headers(token="test-token"),
         )
         body = response.json()
         assert "products" in body

@@ -363,12 +363,6 @@ def test_media_buy(db_session, test_tenant, test_principal, test_product):
     return media_buy
 
 
-@pytest.fixture
-def auth_headers(test_principal):
-    """Get auth headers for testing."""
-    return {"Authorization": f"Bearer {test_principal.access_token}"}
-
-
 # ── Optional fast path: template-clone + skip-drop (opt-in via TEST_DB_TEMPLATE=1) ──
 # Instead of running Base.metadata.create_all() on a fresh database per test (the
 # dominant CPU cost under heavy xdist parallelism) and DROP-ing it afterwards,

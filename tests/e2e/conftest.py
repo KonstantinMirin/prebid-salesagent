@@ -14,7 +14,6 @@ import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
-import httpx
 import pytest
 import requests
 
@@ -724,21 +723,6 @@ async def clean_test_data(live_server, request):
     if not request.config.getoption("--keep-data", False):
         # Could add database cleanup here
         pass
-
-
-@pytest.fixture
-async def a2a_client(live_server, test_auth_token):
-    """Provide A2A client for testing."""
-    async with httpx.AsyncClient() as client:
-        client.base_url = live_server["a2a"]
-        client.headers.update(
-            {
-                "Authorization": f"Bearer {test_auth_token}",
-                "X-Test-Session-ID": str(uuid.uuid4()),
-                "X-Dry-Run": "true",
-            }
-        )
-        yield client
 
 
 @pytest.fixture

@@ -207,6 +207,7 @@ def _xandr_authenticated(origin: LocalOrigin):
     adapter.token_expiry = datetime.now(UTC) + timedelta(hours=1)
     adapter._vendor = VendorHttpClient(
         base_url=origin.base_url,
+        # ast-grep-ignore: test-credential-header-single-producer - outbound vendor credential (not Bearer; the vendor's own scheme)
         headers={"Authorization": "seeded-token", "Content-Type": "application/json"},
     )
     return adapter

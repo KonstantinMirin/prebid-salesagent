@@ -287,6 +287,7 @@ class TestExtG07WebhookAuthFailureRecovery:
 
             success_after, result_after = env.call_deliver(
                 payload={"media_buy_id": "mb_001", "status": "active"},
+                # ast-grep-ignore: test-credential-header-single-producer - outbound seller->buyer webhook credential
                 headers={"Authorization": "Bearer new-valid-token"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",
@@ -331,6 +332,7 @@ class TestExtG07WebhookAuthFailureRecovery:
             env.set_http_status(403, "Forbidden")
 
             success, result = env.call_deliver(
+                # ast-grep-ignore: test-credential-header-single-producer - outbound seller->buyer webhook credential
                 headers={"Authorization": "Bearer expired-token"},
                 event_type="delivery.update",
                 tenant_id="test_tenant",

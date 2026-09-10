@@ -6,7 +6,7 @@ through ``sgconfig.yml``'s ``ruleDirs``) and runs as its own ``make quality-ci``
 line, the way ``ruff-egress.toml`` already does. It refuses a credential header
 (``Authorization`` / ``x-adcp-auth``, any casing) assembled inline anywhere in
 ``tests/`` instead of through the one shared test-credential producer in
-``tests/harness/client.py`` — the DRY defect measured on run innet_100926_1008,
+``tests/helpers/credentials.py`` — the DRY defect measured on run innet_100926_1008,
 where a one-line header change cost eleven edits and 691 of 1013 failures
 carried AUTH_MISSING (salesagent-2l6ii).
 
@@ -57,9 +57,11 @@ an insufficient enforcement point in this repo (``make quality`` is a step
 "nothing requires"), so the trigger is duplicated into the suite that always
 runs. ast-grep stays the only detector.
 
-Note a deliberate consequence of the verified rule: it has no
-comparison-operand exclusion, so an ``assert headers == {"Authorization": ...}``
-assertion IS flagged. Those sites are exemptions with a reason, not rule changes.
+One deliberate scoping decision in the rule: a dict literal that is an operand of
+a comparison is NOT flagged. An ``assert headers == {"Authorization": ...}`` is an
+assertion about what a producer emitted, not a second producer, and including those
+takes the population from 38 to 117 — a third of the rule's own matches would have
+to be exemptions, which is growth into an allowlist rather than out of one.
 """
 
 from __future__ import annotations
@@ -83,6 +85,10 @@ from tests.unit._architecture_helpers import repo_root
 RULE_ID = "test-credential-header-single-producer"
 RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
 
+# The version the suppression cases below were measured against, and the version
+# pyproject pins. See TestExemptionForm for why an upgrade cannot be silent.
+_MEASURED_VERSION = "0.45.3"
+
 # Synthetic probes are written INTO the scanned tree, because ast-grep scan has
 # no `--stdin-filename`: the rule's `files:` glob can only be graded by a real
 # path. The stem is excluded from the live-tree scan so a probe from a parallel
@@ -90,17 +96,38 @@ RULE_FILE = f".ast-grep/rules/{RULE_ID}.yml"
 _PROBE_STEM = "_synthetic_credential_probe"
 _PROBE_EXCLUDE_GLOB = f"!**/{_PROBE_STEM}_*.py"
 
-# Files allowed to build a credential header inline, each carrying
-# `# ast-grep-ignore: test-credential-header-single-producer` with its reason on
-# the PRECEDING line (see TestExemptionForm for why the line matters). The two
-# legitimate categories are outbound seller->buyer webhook/vendor credentials
-# (owned by adcp.webhook_auth) and tests where the header IS the subject under
-# test. Repo-root-relative paths. This set may SHRINK, never grow silently.
+# Files allowed to build a credential header inline. Each carries a suppression
+# comment naming RULE_ID and a reason, on the line above the construction --
+# TestExemptionForm grades that form, and does not restate it here, because ast-grep
+# reads its directive out of ANY comment: spelling the literal form in a note registers
+# a live suppression on the file holding the note. Paths are repo-root-relative. This
+# set may SHRINK, never grow silently: a new exemption fails case (f) until it is
+# recorded here, and a stale one fails because it no longer violates the rule.
 #
-# It starts empty on purpose: the 29-row disposition table in salesagent-2l6ii
-# was built with the under-catching literal rule and must be REGENERATED from
-# the relational rule before any row is called an exemption.
-_RECORDED_EXEMPTIONS: frozenset[str] = frozenset()
+# Three categories, all of them direction or subject facts:
+#
+#   OWNER          the one producer itself.
+#   OUTBOUND       seller -> buyer webhook and vendor credentials. A different
+#                  direction with a different owner (adcp.webhook_auth), so
+#                  routing them through the request-side producer would be wrong,
+#                  not merely redundant. test_property_list_resolver asserts the
+#                  header PRODUCTION sent, which is the same fact one step removed.
+#   HEADER-IS-SUBJECT
+#                  tests whose subject is the header spelling production reads.
+#                  Building those through the producer makes them grade the
+#                  producer against itself: change the producer to a wrong header
+#                  and the test that exists to catch it follows along.
+_RECORDED_EXEMPTIONS: frozenset[str] = frozenset(
+    (
+        "tests/helpers/credentials.py",
+        "tests/integration/test_delivery_webhook_behavioral.py",
+        "tests/integration/test_vendor_egress.py",
+        "tests/unit/test_a2a_testing_context_extraction.py",
+        "tests/unit/test_auth_context.py",
+        "tests/unit/test_delivery_service_behavioral.py",
+        "tests/unit/test_property_list_resolver.py",
+    )
+)
 
 
 # Every credential shape observed in this tree. `label -> source`.
@@ -312,7 +339,7 @@ class TestLiveTreeAndExemptions:
         matches = _matches(proc)
         assert matches == [], (
             f"{len(matches)} inline credential-header constructions remain in tests/. Route "
-            f"each through the shared test-credential producer in tests/harness/client.py, or "
+            f"each through the shared test-credential producer in tests/helpers/credentials.py, or "
             f"exempt it with a reason and record it in _RECORDED_EXEMPTIONS:\n  " + "\n  ".join(_sites(matches))
         )
 
@@ -348,16 +375,38 @@ class TestLiveTreeAndExemptions:
 
 
 class TestExemptionForm:
-    """The suppression form our exemptions depend on, pinned executably.
+    """The suppression form the exemptions depend on, pinned executably.
 
-    ast-grep suppresses on `# ast-grep-ignore: <id>`, but appending the reason on
-    the SAME line as the directive breaks the suppression silently — measured,
-    and the reason this convention puts the justification on the PRECEDING line.
-    An ast-grep upgrade that changes either behaviour changes what every
-    exemption in this tree means, so it is graded rather than written down.
+    Whether ast-grep suppresses is VERSION-SPECIFIC, which is why it is graded here
+    rather than written down: on 0.41.1 a reason appended after the rule id broke the
+    suppression silently, and on the pinned version it does not. An upgrade that changed
+    it back would un-suppress every exemption in this tree with no other signal, so
+    ``test_pinned_version_is_the_one_whose_suppression_was_measured`` fails on any
+    version this was not measured against.
     """
 
-    def test_reason_on_the_preceding_line_suppresses(self) -> None:
+    def test_pinned_version_is_the_one_whose_suppression_was_measured(self) -> None:
+        proc = subprocess.run([str(_ast_grep_bin()), "--version"], capture_output=True, text=True, check=True)
+        assert proc.stdout.split()[-1] == _MEASURED_VERSION, (
+            f"ast-grep is {proc.stdout.strip()!r}, and suppression parsing was measured on "
+            f"{_MEASURED_VERSION}. Re-measure both cases below against the new version before "
+            "changing the pin in pyproject.toml — a version that stops honouring the "
+            "directive form in use silently un-suppresses every exemption."
+        )
+
+    def test_reason_on_the_directive_line_suppresses(self) -> None:
+        """The convention: one line, `# ast-grep-ignore: <id> - <why>`."""
+        source = (
+            "def build(token):\n"
+            f"    # ast-grep-ignore: {RULE_ID} - outbound webhook credential\n"
+            '    return {"Authorization": f"Bearer {token}"}\n'
+        )
+        with _probe("tests/unit", source) as rel_path:
+            matches = _matches(_scan(rel_path))
+        assert matches == [], f"the documented exemption form did not suppress: {_sites(matches)}"
+
+    def test_reason_on_the_preceding_line_also_suppresses(self) -> None:
+        """The two-line form works too, so an existing comment above a directive is safe."""
         source = (
             "def build(token):\n"
             "    # outbound webhook credential: seller -> buyer, not a request we construct\n"
@@ -366,18 +415,4 @@ class TestExemptionForm:
         )
         with _probe("tests/unit", source) as rel_path:
             matches = _matches(_scan(rel_path))
-        assert matches == [], f"the documented exemption form did not suppress: {_sites(matches)}"
-
-    def test_reason_on_the_directive_line_does_not_suppress(self) -> None:
-        source = (
-            "def build(token):\n"
-            f"    # ast-grep-ignore: {RULE_ID} - outbound webhook credential\n"
-            '    return {"Authorization": f"Bearer {token}"}\n'
-        )
-        with _probe("tests/unit", source) as rel_path:
-            matches = _matches(_scan(rel_path))
-        assert matches, (
-            "a reason appended to the directive line now suppresses. It did not when this "
-            "convention was chosen, which is why reasons go on the preceding line; if "
-            "ast-grep changed, update the convention and this test together."
-        )
+        assert matches == [], f"the two-line exemption form did not suppress: {_sites(matches)}"

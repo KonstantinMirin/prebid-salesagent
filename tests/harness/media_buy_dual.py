@@ -21,6 +21,7 @@ from src.core.schemas import UpdateMediaBuyRequest
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import DeliverResult
+from tests.helpers.credentials import identity_credential_headers
 
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
 
@@ -268,13 +269,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # update scenario fires instead of test-mode auth letting it through.
         client, identity = self._prepare_rest_request(kwargs)
 
-        headers: dict[str, str] = {}
-        if identity is not None:
-            auth_token = identity.auth_token
-            if auth_token:
-                headers["Authorization"] = f"Bearer {auth_token}"
-            if identity.tenant_id:
-                headers["x-adcp-tenant"] = identity.tenant_id
+        headers = identity_credential_headers(identity, tenant="tenant_id")
 
         body = self._build_update_rest_body(**kwargs)
         # Same rule as REST_ENDPOINT above: the id in the URL is the one the SCENARIO

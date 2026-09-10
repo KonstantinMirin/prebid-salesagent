@@ -258,14 +258,13 @@ class TestClientE2eRestDelivery:
         assert captured["headers"]["x-adcp-tenant"] == identity.tenant["subdomain"]
 
     def test_e2e_rest_delivery_sends_same_header_set_the_deleted_inline_code_did(self, monkeypatch):
-        """``_deliver_e2e_rest`` (via ``e2e_identity_headers``)
-        must emit the SAME x-adcp-auth / x-adcp-tenant / x-dry-run header set that
-        ``RestE2EDispatcher`` used to build inline, before commit 4363757dc
-        deleted that code and routed delivery through this shared function
-        instead — e2e_rest is a live caller (real HTTP to the Docker stack), so a
-        regression here silently drops a header a real server request depends on.
-        The auth/tenant pair already has coverage above; this is the one place
-        x-dry-run (the third header the deleted code built) is checked."""
+        """``_deliver_e2e_rest`` (via ``identity_credential_headers``) must emit the full
+        Authorization / x-adcp-tenant / x-dry-run header set that ``RestE2EDispatcher``
+        used to build inline, before commit 4363757dc deleted that code and routed
+        delivery through the shared producer instead. e2e_rest is a live caller (real
+        HTTP to the Docker stack), so a regression here silently drops a header a real
+        server request depends on. The auth/tenant pair has coverage above; this is the
+        one place x-dry-run — the third header the deleted code built — is checked."""
         import httpx
 
         from tests.factories.principal import PrincipalFactory

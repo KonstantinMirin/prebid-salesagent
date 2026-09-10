@@ -29,6 +29,7 @@ from src.core.tenant_context import TenantContext
 from src.core.tools._boundary import invoke_tool
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.boundary_identity import refused_as, resolved_as
+from tests.helpers.credentials import credential_headers
 
 
 def _authenticated() -> ResolvedIdentity:
@@ -50,7 +51,7 @@ def _unresolvable_credential() -> AuthContext:
     """A credential that is presented and resolves to no principal."""
     return AuthContext(
         auth_token="not-a-real-token",
-        headers={"Authorization": "Bearer not-a-real-token", "host": "localhost"},
+        headers={**credential_headers(token="not-a-real-token"), "host": "localhost"},
     )
 
 

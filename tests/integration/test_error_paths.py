@@ -35,6 +35,7 @@ would have made that whole best-effort identity path unobserved.
 import pytest
 
 from tests.helpers.capture_wrapper_req import registry_impl
+from tests.helpers.credentials import credential_headers
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -61,7 +62,7 @@ class TestRestBoundaryAuditObservability:
             response = client.post(
                 "/api/v1/capabilities",
                 json={},
-                headers={"Authorization": f"Bearer {sample_principal['access_token']}"},
+                headers=credential_headers(token=sample_principal["access_token"]),
             )
 
         assert response.status_code == 404

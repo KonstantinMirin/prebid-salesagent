@@ -31,6 +31,7 @@ from tests.factories.principal import PrincipalFactory
 
 def _credential(**headers: str) -> AuthContext:
     """The AuthContext UnifiedAuthMiddleware parks on ASGI scope state, built by hand."""
+    # ast-grep-ignore: test-credential-header-single-producer - lowercase spelling is the subject: production reads headers case-insensitively
     base = {"authorization": "Bearer test-token", "x-adcp-tenant": "test-tenant"}
     return AuthContext(auth_token="test-token", headers=MappingProxyType({**base, **headers}))
 
