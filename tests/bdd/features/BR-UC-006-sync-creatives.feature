@@ -622,10 +622,19 @@ Feature: BR-UC-006 Sync Creative Assets
     And the media buy status should remain "active"
     # --- BR-RULE-039: Assignment Format Compatibility ---
 
+  # NARROWED from "strips trailing slash and /mcp". The /mcp half asserted a rule the pin
+  # does not state and production does not implement: adcp.signing.canonicalize_target_uri
+  # normalizes scheme/host/port and PRESERVES the path, so canonical_agent_url turns
+  # "https://agent.example.com/mcp/" into ".../mcp" — which correctly does NOT equal
+  # "https://agent.example.com". Stripping the path would be wrong, not missing: one host can
+  # serve MCP at /mcp and A2A at /a2a, and collapsing them would conflate two agents.
+  # The trailing-slash half IS the implemented rule, so that is what this now grades.
+  # Nothing in _schemas/3.1 mentions stripping /mcp; if it should, that is an upstream spec
+  # question, not a local normalizer change asserted by a test.
   @T-UC-006-rule-039-inv1 @invariant @BR-RULE-039
-  Scenario: INV-1 — URL normalization strips trailing slash and /mcp
+  Scenario: INV-1 — URL normalization strips a trailing slash
     Given the Buyer is authenticated
-    And a creative with format agent_url "https://agent.example.com/mcp/"
+    And a creative with format agent_url "https://agent.example.com/"
     And a product with format agent_url "https://agent.example.com"
     And matching format_id strings
     When format compatibility is checked

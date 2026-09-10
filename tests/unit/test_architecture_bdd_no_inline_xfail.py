@@ -180,7 +180,6 @@ _ALLOWLIST: set[XfailSite] = {
     ("domain/uc006_sync_creatives.py", "then_error_code_with_suggestion", 2),
     ("domain/uc006_sync_creatives.py", "then_existing_assignment_updated_not_duplicated", 1),
     ("domain/uc006_sync_creatives.py", "then_existing_creative_updated_by_triple_key", 1),
-    ("domain/uc006_sync_creatives.py", "then_formats_match_after_url_normalization", 2),
     ("domain/uc006_sync_creatives.py", "then_formats_match_using_format_id_key", 2),
     ("domain/uc006_sync_creatives.py", "then_generative_build_skipped", 1),
     ("domain/uc006_sync_creatives.py", "then_generative_build_uses_prompt", 1),

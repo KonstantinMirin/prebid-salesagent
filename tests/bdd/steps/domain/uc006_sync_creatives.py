@@ -4084,14 +4084,11 @@ def then_formats_match_after_url_normalization(ctx: dict) -> None:
     but named for the rule-039-inv1 scenario.
     """
     error = ctx.get("error")
-    if error is not None:
-        err_str = str(error).lower()
-        if "format" in err_str or "url" in err_str:
-            pytest.xfail(f"SPEC-PRODUCTION GAP: URL normalization should allow match, but production raised: {error}")
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected success after URL normalization, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"The seller refused a pairing that canonicalization should equate: {error!r}. "
+        f"canonical_agent_url (src/core/schemas/_base.py) normalizes scheme/host/port and "
+        f"strips a trailing slash, so two spellings differing only by that MUST match."
+    )
     resp = require_payload(ctx)
     assigned = _get_creative_assigned_to(ctx)
     expected = ctx["package"].package_id
