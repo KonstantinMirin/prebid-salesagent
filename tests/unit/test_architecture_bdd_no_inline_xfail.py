@@ -147,7 +147,7 @@ _ALLOWLIST: set[XfailSite] = {
     # those two calls back into one in uc006_sync_creatives.py and re-key to 3.
     # UNCONDITIONAL, and that is why it stays: "this is not implemented" is a legible
     # claim, unlike a conditional xfail keyed on the outcome, which passes when production
-    # agrees and excuses itself when it does not (salesagent-tne7q). The other 102
+    # agrees and excuses itself when it does not. The other 102
     # conditional sites in tests/bdd/steps are gone; this one was never one of them.
     ("domain/uc006_sync_creatives.py", "_assert_per_creative_failure", 1),
     ("domain/uc006_sync_creatives.py", "given_principal_no_associated_tenant", 1),
@@ -191,7 +191,7 @@ def find_conditional_xfail_calls(tree: ast.Module) -> list[tuple[int, str]]:
     falsifiable claim that stops being true when someone implements it. Conditional says
     "excuse me IF the outcome is the one I was written to catch", so the step passes when
     production agrees and excuses itself when it does not: it cannot fail in either
-    direction (salesagent-tne7q).
+    direction.
 
     Guarded by branch context rather than by reason text, because the reason is prose and
     drifts; ``if`` / ``try`` / ``except`` is structure and cannot.

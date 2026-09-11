@@ -38,7 +38,7 @@ _DUPLICATE_THRESHOLD = 2
 # Lower it when you collapse a pair. Never raise it: a new pair is a new defect, and the
 # scenario above is what one costs.
 #
-# 54 -> 46: ten uc006 groups collapsed to one canonical sentence each (salesagent-tne7q.1).
+# 54 -> 46: ten uc006 groups collapsed to one canonical sentence each.
 #
 # THIS SCAN FINDS CANDIDATES, NOT DEFECTS. It normalises string literals away, and in Gherkin
 # the literal is usually the claim -- so two steps that differ ONLY in the ctx key they read,
@@ -49,7 +49,7 @@ _DUPLICATE_THRESHOLD = 2
 # the creative NAME, which is the subject of the name-fallback scenario that uses one of them.
 # Read both bodies verbatim before lowering this number again.
 #
-# 46 -> 41: five uc019 groups collapsed (salesagent-tne7q.1). All five were SAFE by the
+# 46 -> 41: five uc019 groups collapsed. All five were SAFE by the
 # stricter rule the consolidation tool now applies -- bodies identical modulo docstrings
 # and assertion MESSAGES only, every literal that reaches ctx or production equal -- so
 # no claim was merged away; a sixth group was dead on both spellings and deleted whole.
@@ -77,7 +77,7 @@ _DUPLICATE_THRESHOLD = 2
 #
 # 26 -> 25: uc006's "(non-draft)" Given now refuses a draft status, so it no longer shares
 # a body with its "approved_at set" twin -- the sentence's claim got its own assertion
-# instead of a merge (salesagent-tne7q.2). The cluster's other groups were resolved on the
+# instead of a merge. The cluster's other groups were resolved on the
 # Gherkin side: two dead sentences swept to their canonical twin, one row corrected to the
 # pin, so nothing here to lower for them.
 _DUPLICATE_GROUP_BASELINE = 25

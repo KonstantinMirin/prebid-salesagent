@@ -407,8 +407,8 @@ def then_response_within_sla(ctx: dict) -> None:
 
     # The xfail that stood here was `if adapter_called_sync: pytest.xfail(...)` directly
     # above this assert — so the assert was UNREACHABLE in the only case it was written
-    # for, and the step reported an expected failure instead of the finding
-    # (salesagent-tne7q). Adapter I/O still runs synchronously on the request thread; the
+    # for, and the step reported an expected failure instead of the finding.
+    # Adapter I/O still runs synchronously on the request thread; the
     # architecture direction is background workers returning 201 pending, and until then
     # this assertion is the thing that says so out loud.
     assert not adapter_called_sync, (

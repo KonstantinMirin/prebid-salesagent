@@ -41,7 +41,7 @@ def _parse_array_value(raw: str, separator: str = "+") -> list[str]:
 # The `assert "error" not in ctx` that followed every call site is now the grader. If these
 # scenarios are ever wired, it fails with the TypeError and says the true thing: the steps
 # call list_tasks with a parameter shape the spec does not define. Fixing THAT is a scenario
-# change (pass sort={"field":..,"direction":..}), not an excuse (salesagent-tne7q).
+# change (pass sort={"field":..,"direction":..}), not an excuse.
 
 
 # ═══════════════════════════════════════════════════════════════════════

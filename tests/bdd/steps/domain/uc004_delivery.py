@@ -126,7 +126,7 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
     when the entries lacked the metric, one when NO package carried by_placement at
     all -- so a seller that stopped emitting placement breakdowns entirely, which is
     precisely the regression this step exists to catch, turned it green-by-xfail
-    instead of red (salesagent-tne7q names this the archetype).
+    instead of red (the archetype).
 
     The pinned 3.1 get-media-buy-delivery-response.json makes by_placement conditional
     -- "Available when the buyer requests placement breakdown via reporting_dimensions
@@ -2721,7 +2721,7 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
             # A breakdown entry with no dimension identifier is not a breakdown. The xfail
             # that stood here excused the one condition that makes the whole claim false --
             # unsegmented rows -- while the assert two lines down already refuses an EMPTY
-            # identifier. Absent and empty are the same defect (salesagent-tne7q).
+            # identifier. Absent and empty are the same defect.
             assert dim_value is not None, (
                 f"Breakdown entry in {pkg.package_id!r}.{field} is missing dimension "
                 f"identifier {dimension_key!r}: entries are not segmented by dimension"
@@ -2937,7 +2937,7 @@ def then_geo_system(ctx: dict, system: str) -> None:
     # buyer requests geo breakdown via reporting_dimensions and the seller supports it"),
     # so absence is legal in general — but a scenario asking which CLASSIFICATION SYSTEM
     # the geo rows use has already asserted the rows exist. The xfail that stood here
-    # excused exactly the case the step is for (salesagent-tne7q).
+    # excused exactly the case the step is for.
     packages = _collect_all_packages(resp)
     has_geo = any(getattr(pkg, "by_geo", None) for pkg in packages)
     assert has_geo, f"no package carried by_geo, so the classification-system claim ({system!r}) graded nothing"
@@ -3097,7 +3097,7 @@ def then_attribution_default(ctx: dict) -> None:
         # form of the defect this epic names: catch the failure and excuse it, so the step
         # cannot fail in either direction. A seller that echoes the buyer's attribution
         # window when it does not support configurable attribution is reporting a setting
-        # it will not honour, which is the thing worth failing on (salesagent-tne7q).
+        # it will not honour, which is the thing worth failing on.
         assert pc is None, (
             f"attribution_window.post_click should be None for a seller that does not "
             f"support configurable attribution (the buyer's request is discarded, not "

@@ -1197,8 +1197,7 @@ def _assert_flight_dates_present(pkg: Any) -> None:
     is not a spec MUST; it is this seller echoing the flight window the buyer
     supplied in the Given. Where production does not, the scenario is parked in
     the ledger, not excused here: the xfail that stood in this function was keyed
-    on the outcome, so it could not fail in the one direction that matters
-    (salesagent-tne7q).
+    on the outcome, so it could not fail in the one direction that matters.
     """
 
     def _has(field: str) -> bool:

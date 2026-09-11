@@ -1993,7 +1993,7 @@ def then_webhook_notification(ctx: dict) -> None:
         # A workflow step that does not carry the buyer's push_notification_config cannot
         # notify anyone: _send_push_notifications finds no URL and skips dispatch silently.
         # That is the defect this step exists to catch, and the xfail keyed on it meant the
-        # step could not report it (salesagent-tne7q). FIXME(#2132) tracks wiring the
+        # step could not report it. FIXME(#2132) tracks wiring the
         # production admin approve/reject flow that populates request_data.
         assert isinstance(step_push_cfg, dict), (
             f"workflow step carries no push_notification_config, so the buyer is never "
