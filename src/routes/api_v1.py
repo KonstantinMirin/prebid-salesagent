@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -144,9 +144,13 @@ def _rest_body_schemas() -> tuple[dict[type[Any], dict[str, Any]], dict[str, Any
     each other in ``components/schemas``, so a ref from one tool resolved to another tool's
     definition.
     """
+    from pydantic import BaseModel
     from pydantic.json_schema import models_json_schema
 
-    dtos = [spec.dto for spec in TOOLS.values() if spec.rest is not None]
+    # ``cast`` states a guarantee the registry already enforces: ``_register_tool`` refuses a
+    # row whose DTO is not a pydantic model, but a row's static type is the ``BuyerRequest``
+    # mixin, which cannot say so.
+    dtos: list[type[BaseModel]] = [cast(type[BaseModel], spec.dto) for spec in TOOLS.values() if spec.rest is not None]
     per_model, shared = models_json_schema(
         [(dto, "validation") for dto in dtos], ref_template="#/components/schemas/{model}"
     )

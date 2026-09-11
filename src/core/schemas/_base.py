@@ -697,6 +697,14 @@ class BuyerRequest:
         """The account this request names, or None when its schema declares no ``account``."""
         return self.__dict__.get("account")
 
+    def get_context(self) -> ContextObject | None:
+        """The buyer's opaque ``context``, or None when the request carried none.
+
+        Read by the boundary alone, which echoes it onto whatever leaves. Business logic may
+        call this too; nothing may set the field.
+        """
+        return self.__dict__.get("context")
+
     def get_idempotency_key(self) -> str | None:
         """The at-most-once key this request carries, or None when its schema declares none."""
         return self.__dict__.get("idempotency_key")

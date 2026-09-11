@@ -170,8 +170,13 @@ def wire_status(response: AdcpResponse) -> int:
     error = response.adcp_error
     if error is None:
         return 200
-    entry = CODE_TABLE.get(error.code)
-    return entry.status if entry is not None else 500
+    # The wire carries the code as a STRING; the table is keyed by the code enums. The
+    # str-to-enum map already exists beside the MCP renderer, so resolving through it keeps
+    # one answer to "which code is this string" rather than a second parse here.
+    from src.core.tool_error_logging import _CODE_BY_VALUE
+
+    code = _CODE_BY_VALUE.get(error.code)
+    return CODE_TABLE[code].status if code is not None else 500
 
 
 def validated_request(tool_name: str, raw: Any) -> BuyerRequest:
@@ -285,7 +290,7 @@ async def invoke_tool(
     # touch it (``ContextObject`` declares no properties and allows extras, and
     # ``deep_strip_to_schema`` passes a free-form container through whole), so ``req.context``
     # IS what arrived. Nothing between here and the stamp may read it, pass it, or set it.
-    echo = req.context
+    echo = req.get_context()
 
     # Inside a try that ECHOES but does not RECORD. An auth rejection is an outcome like any
     # other, so it owes the buyer its context; it is not recorded here because identity
@@ -415,7 +420,7 @@ async def _invoke_stamped(
     return _served(echo, await _invoke(tool_name, impl, req, identity))
 
 
-def _stamp(response: AdcpResponse) -> AdcpResponse:
+def _stamp[Stamped: AdcpResponse](response: Stamped) -> Stamped:
     """Stamp the release this build served onto one response, whatever its outcome."""
     response.adcp_version = SERVED_ADCP_VERSION
     return response
