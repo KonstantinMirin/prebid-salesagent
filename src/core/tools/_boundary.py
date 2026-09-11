@@ -58,11 +58,14 @@ import typing
 from collections.abc import Callable
 from typing import Any
 
+from adcp.types import ContextObject
+from pydantic import ValidationError
+
 from src.core.auth_context import AuthContext
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import ResolvedIdentity, TransportProtocol
-from src.core.schemas._base import AdcpResponse, BuyerRequest
+from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
 from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
 
 logger = logging.getLogger(__name__)
@@ -155,6 +158,50 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     return identity.tenant_id, identity.principal_id, identity.account_id, key
 
 
+def validated_request(tool_name: str, raw: Any) -> BuyerRequest:
+    """Parse a buyer's payload into its tool's DTO. A rejection carries the buyer's context out.
+
+    THE one validation. Every transport calls this where it used to call
+    ``dto.model_validate`` itself, so a malformed payload is answered identically over MCP,
+    A2A and REST -- three copies of one policy was how they came to disagree about which code
+    a rejection earns.
+
+    It lives beside ``invoke_tool`` rather than inside it because the two answer different
+    questions. This one asks "is this a request at all", which is about the PAYLOAD and is the
+    last thing that can happen while a payload is all there is. ``invoke_tool`` asks "run this
+    request for this caller", and takes a typed ``BuyerRequest`` because by then there is one.
+    Folding this into that would weaken its signature to an untyped bag for the sake of one
+    early read.
+
+    The echo is read from the RAW payload, and only here: this is the one outcome where no
+    ``req`` exists to read ``req.context`` off, so a rejection would otherwise be the single
+    response that owes the buyer its context and cannot return it.
+
+    Reading by subscript and catching, rather than probing the type: a payload that is not a
+    JSON object has no ``context`` to echo, which is the same answer as an object that carries
+    none. Both are ``None``, and the DTO rejects the non-object shape itself.
+
+    Coerced to ``ContextObject`` so this path passes the same declared type ``req.context``
+    already is. Lossless -- the model declares no properties and allows extras -- so the
+    buyer's object is unchanged, which is the obligation.
+    """
+    from src.core.exceptions import adcp_error_for
+    from src.core.tools.registry import TOOLS
+
+    try:
+        return TOOLS[tool_name].dto.model_validate(raw)
+    except Exception as exc:
+        try:
+            echo = ContextObject.model_validate(raw["context"])
+        except (TypeError, KeyError, IndexError, ValidationError):
+            echo = None
+        typed = adcp_error_for(exc)
+        typed.response = AdcpErrorResponse.of(typed, context=echo)
+        if typed is not exc:
+            raise typed from exc
+        raise
+
+
 async def invoke_tool(
     tool_name: str,
     req: BuyerRequest,
@@ -199,14 +246,41 @@ async def invoke_tool(
     # loses what the transports used to supply individually.
     testing_context = AdCPTestContext.from_headers(dict(credential.headers))
 
-    identity = await run_in_threadpool(
-        _resolve_identity,
-        headers=dict(credential.headers),
-        auth_token=credential.auth_token,
-        require_valid_token=spec.requires_credential(),
-        protocol=protocol,
-        testing_context=testing_context,
-    )
+    # CAPTURED at entry and stamped on the way out, and that is the whole mechanism. The
+    # buyer's ``context`` is opaque data this seller carries and returns: validation does not
+    # touch it (``ContextObject`` declares no properties and allows extras, and
+    # ``deep_strip_to_schema`` passes a free-form container through whole), so ``req.context``
+    # IS what arrived. Nothing between here and the stamp may read it, pass it, or set it.
+    echo = req.context
+
+    # Inside a try that ECHOES but does not RECORD. An auth rejection is an outcome like any
+    # other, so it owes the buyer its context; it is not recorded here because identity
+    # resolution sat outside the phase-2 try before this change, so the boundary recorder has
+    # never seen an auth failure and still does not. Leaving ``_adcp_boundary_recorded`` unset
+    # keeps the per-transport recorders firing, so nothing recorded today goes unrecorded.
+    #
+    # A separate block from phase 2 rather than one spanning both, so ``identity`` is BOUND
+    # wherever it is read: the phase-2 recorder takes ``identity.tenant_id`` directly, with no
+    # optional variable and no probe for one.
+    try:
+        identity = await run_in_threadpool(
+            _resolve_identity,
+            headers=dict(credential.headers),
+            auth_token=credential.auth_token,
+            require_valid_token=spec.requires_credential(),
+            protocol=protocol,
+            testing_context=testing_context,
+        )
+    except Exception as exc:
+        from src.core.exceptions import adcp_error_for
+
+        # ``adcp_error_for`` hands back the SAME object for an already-typed error, so the
+        # identity check is what keeps this from becoming ``raise exc from exc``.
+        typed = adcp_error_for(exc)
+        typed.response = AdcpErrorResponse.of(typed, context=echo)
+        if typed is not exc:
+            raise typed from exc
+        raise
 
     # Recording lives HERE because this is the only place holding all three things a record
     # needs: the tool name, the resolved identity, and the exception. Each transport used to
@@ -230,8 +304,9 @@ async def invoke_tool(
     # The record is scoped with the TYPED error, so the code the buyer sees and the code the
     # operator reads are the same object rather than two independent normalizations of one
     # exception.
+
     try:
-        return await _invoke_stamped(tool_name, spec.impl, req, identity)
+        return await _invoke_stamped(echo, tool_name, spec.impl, req, identity)
     except Exception as exc:
         from src.core.exceptions import adcp_error_for
         from src.core.tool_error_logging import record_boundary_error
@@ -244,6 +319,7 @@ async def invoke_tool(
         # A2A handler BEFORE dispatch. A version of this that made room for one anyway was
         # accommodating a test fixture that injected a shape production forbids.
         typed = adcp_error_for(exc)
+        typed.response = AdcpErrorResponse.of(typed, context=echo)
         # The ORIGINAL exception goes to the recorder, not the typed one. The recorder derives
         # the code itself, and it logs with ``exc_info``, so handing it ``typed`` would erase
         # the only place the fault's real identity is allowed to survive: the buyer-facing
@@ -273,6 +349,7 @@ async def invoke_tool(
 
 
 async def _invoke_stamped(
+    echo: Any,
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
@@ -302,17 +379,19 @@ async def _invoke_stamped(
     or be answered from it. It raises, so it leaves without passing through ``_served``.
     """
     negotiate_adcp_version(req.get_adcp_version(), req.get_adcp_major_version())
-    return _served(await _invoke(tool_name, impl, req, identity))
+    return _served(echo, await _invoke(tool_name, impl, req, identity))
 
 
-def _served(response: AdcpResponse) -> AdcpResponse:
-    """Stamp the release this build served onto one response envelope.
+def _served(echo: Any, response: AdcpResponse) -> AdcpResponse:
+    """Stamp what the BOUNDARY owns onto one response envelope: the release, and the echo.
 
-    THE one assignment. Both of ``invoke``'s answers pass through it -- a fresh run and a
-    replayed one -- so a replay echoes the release that is serving it, which is what the
-    buyer's connection is actually speaking.
+    THE one assignment for both. Every one of ``invoke``'s answers passes through it -- a
+    fresh run and a replayed one -- so a replay echoes the release that is serving it and the
+    context of the caller being served, rather than the context of whichever request filled
+    the cache.
     """
     response.adcp_version = SERVED_ADCP_VERSION
+    response.context = echo
     return response
 
 

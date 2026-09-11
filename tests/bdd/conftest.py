@@ -84,6 +84,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
@@ -5509,6 +5510,33 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
+    # Same reason the @egress rows below are UNSCOPED `when` rows: these
+    # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so
+    # storyboard_spec.detect_uc returns None and no coarse bucket can claim
+    # them. Two rows because the feature grades two tools on purpose —
+    # get_products is auth-OPTIONAL (a token-less caller reaches the
+    # implementation), so the auth-rejection scenarios need a tool whose
+    # ToolSpec declares auth=required, and get_media_buys is the cheapest of
+    # those (a pure read, no adapter).
+    EnvRoute(
+        tag="ctxecho-products",
+        when=lambda m: "ctxecho-products" in m,
+        env_builder=_build_product_env,
+        # A tenant plus its principal, nothing else: get_products needs no
+        # account (the field is optional on get-products-request.json) and no
+        # Product row — an empty catalog is a valid SUCCESS, and the echo is
+        # what these scenarios read off it. Without the seed there is no
+        # Principal for identity_for() to resolve, so every scenario would
+        # dispatch unauthenticated and grade the wrong refusal.
+        seed=_seed_tenant_and_principal,
+    ),
+    EnvRoute(
+        tag="ctxecho-media-buys",
+        when=lambda m: "ctxecho-media-buys" in m,
+        env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
+    ),
     # ── @egress (local SSRF / webhook-credential refusal feature) ───────────
     # These scenarios carry T-EGRESS-* identity tags, NOT T-UC-<n>, so
     # storyboard_spec.detect_uc returns None for them and no coarse bucket can

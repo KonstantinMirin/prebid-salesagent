@@ -14,7 +14,6 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from adcp.server.helpers import adcp_error
 from adcp.types import ErrorCode
 from pydantic import BaseModel, ValidationError
 
@@ -1145,10 +1144,18 @@ def build_error_object(exc: AdCPSalesAgentError) -> dict[str, Any]:
 def build_two_layer_error_envelope(exc: AdCPSalesAgentError) -> dict[str, Any]:
     """Build the AdCP spec-compliant two-layer error envelope from an exception.
 
-    Wraps the stable ``adcp_error()`` SDK helper for the payload half
-    (``errors[]``), then mirrors the single error object at envelope level
-    as ``adcp_error`` so the storyboard runner can read either path. Echoes
-    ``exc.context`` when present.
+    Serializes the ``AdcpErrorResponse`` the boundary built for this failure -- AdCP models a
+    failure as a RESPONSE (``core/protocol-envelope.json`` declares ``adcp_error``, ``context``
+    and a required ``status`` on every response envelope), so the envelope is a model dump and
+    no longer a dict assembled here. It falls back to building one for an exception that never
+    passed the boundary.
+
+    What this function used to do by hand -- call ``adcp_error()``, inject ``issues``, mirror
+    the error object to the envelope level, attach ``exc.context`` -- now lives in
+    ``AdcpErrorResponse.of``. Two things follow: the body carries the required ``status``, which
+    the hand-built dict could not and did not, so every error body was invalid against every
+    pinned response schema; and ``context`` is a field on a response rather than a value the
+    buyer's request had to thread down to each raise site.
 
     Returns:
         Plain dict with shape::
@@ -1165,34 +1172,11 @@ def build_two_layer_error_envelope(exc: AdCPSalesAgentError) -> dict[str, Any]:
     set, and receivers MUST decode an unknown code by reading ``error.recovery``), so
     a platform code reaches the buyer as the raise site declared it.
     """
-    payload = adcp_error(
-        exc.error_code,
-        exc.message,
-        recovery=exc.recovery,
-        field=exc.field,
-        suggestion=exc.suggestion,
-        retry_after=exc.retry_after,
-        details=_details_to_wire(exc.details),
-    )
-    # issues[] is injected into the payload BEFORE the mirror is copied below.
-    # It cannot ride adcp_error(): that helper has no `issues` parameter, and its
-    # `details` is typed flat-scalars-only, so the array fits through neither.
-    # Injecting after the copy would put issues on errors[0] and NOT on the
-    # envelope-level adcp_error -- the two-layer divergence the comment below
-    # exists to prevent.
-    if exc.issues:
-        payload["errors"][0]["issues"] = [issue.to_wire() for issue in exc.issues]
-    # Copy errors[0] for the envelope-level mirror so callers that mutate one
-    # layer don't accidentally mutate the other (aliasing footgun once both
-    # layers may be mutated independently).
-    envelope: dict[str, Any] = {
-        "adcp_error": dict(payload["errors"][0]),
-        "errors": payload["errors"],
-    }
-    serialized_context = _serialize_context(exc.context)
-    if serialized_context is not None:
-        envelope["context"] = serialized_context
-    return envelope
+    from src.core.schemas._base import AdcpErrorResponse
+    from src.core.tools._wire import to_wire
+
+    response = getattr(exc, "response", None) or AdcpErrorResponse.of(exc)
+    return to_wire(response)
 
 
 # Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):

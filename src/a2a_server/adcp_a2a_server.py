@@ -68,7 +68,7 @@ from src.core.schemas import CreativeStatusEnum
 from src.core.tool_error_logging import record_boundary_error
 
 # Signals tools removed - should come from dedicated signals agents, not sales agent
-from src.core.tools._boundary import invoke_tool
+from src.core.tools._boundary import invoke_tool, validated_request
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
@@ -837,18 +837,13 @@ class AdCPRequestHandler(RequestHandler):
         artifact is that it has no integer type, and pydantic's non-strict mode already coerces
         ``2.0`` to an ``int`` field.
         """
-        # PARSING is the transport's job, so a parse failure is typed here -- this is the one
-        # step that happens BEFORE the boundary and can therefore never be typed by it. Once
-        # the DTO exists, ``invoke_tool`` owns every failure and types it there
-        # (``named_adcp_error``), so nothing downstream re-decides what an error is.
-        try:
-            req = TOOLS[skill_name].dto.model_validate(parameters)
-        except ValueError as exc:
-            # ``ValueError`` alone: pydantic's ``ValidationError`` IS one, and
-            # ``adcp_error_for`` tells them apart itself -- a schema violation earns
-            # INVALID_REQUEST with the offending field, a plain ValueError VALIDATION_ERROR.
-            # Naming both here would state that distinction a second time.
-            raise adcp_error_for(exc) from exc
+        # ``validated_request`` is the one parse, shared with MCP and REST. This line used to
+        # call ``model_validate`` itself and type the failure here, on the ground that parsing
+        # is the one step the boundary could never reach -- true only because this line was the
+        # one doing it. A rejection now carries the buyer's ``context`` out, which a
+        # per-transport parse could not do, and all three transports answer a malformed payload
+        # identically because one function decides.
+        req = validated_request(skill_name, parameters)
 
         response = await invoke_tool(skill_name, req, credential, "a2a")
         return self._serialize_for_a2a(response)

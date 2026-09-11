@@ -434,13 +434,15 @@ class RegistryTool(Tool):
 
         from src.core.auth_context import AuthContext
         from src.core.tool_error_logging import _handle_tool_exception
-        from src.core.tools._boundary import invoke_tool
+        from src.core.tools._boundary import invoke_tool, validated_request
         from src.core.tools._mcp import mcp_result
 
         spec = TOOLS[self.name]
         ctx = get_context()
         try:
-            req = spec.dto.model_validate(arguments)
+            # The one validation, shared with A2A and REST. A rejection carries the buyer's
+            # context out, which a per-transport model_validate could not do.
+            req = validated_request(self.name, arguments)
             # The credential, not an identity. MCPAuthMiddleware used to resolve one and
             # stash it on ctx state for this line to read; the boundary resolves now, so the
             # middleware is gone and MCP enters through invoke_tool like A2A and REST rather

@@ -5,6 +5,7 @@
 #   overrides (required -> optional). Architectural; permanent.
 
 import copy
+import logging
 import re
 import warnings
 from collections.abc import Mapping
@@ -800,6 +801,81 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
         """
         adapter = _BRANCH_ADAPTERS.get(cls)
         return adapter.validate_python(data) if adapter is not None else cls.model_validate(data)
+
+
+class AdcpErrorResponse(AdcpResponse):
+    """What a FAILED tool call is: the response envelope, carrying the error.
+
+    AdCP models a failure as a response, not as a separate document.
+    ``core/protocol-envelope.json`` declares ``adcp_error``, ``context`` AND ``status`` on
+    every response envelope and lists ``status`` as required, so an error body is a response
+    body with the error fields filled in. This class is that body, declared once.
+
+    ``errors`` is declared HERE rather than on ``AdcpResponse`` because the pin puts it on
+    each tool's own schema (``media-buy/*-response.json``) and not on the envelope. One
+    subclass is the only place it can live without a per-tool copy, and a failure has no tool
+    payload to carry besides the error.
+
+    Why a class and not a dict: the dict this replaces
+    (``exceptions.build_two_layer_error_envelope``) could not carry ``status``, and did not --
+    so every error body this seller emitted was invalid against every pinned response schema,
+    and nothing caught it, because the graded error checks validate the error OBJECTS against
+    ``core/error.json`` and never the envelope around them (salesagent-3cs7o.4). A detached
+    dict also has no ``context`` field, which is why the buyer's context had to ride the
+    exception and be hand-threaded to every raise site to get there.
+    """
+
+    errors: list[_LibraryError] = Field(
+        default_factory=list, description="The failure, as the tool's schema declares it"
+    )
+
+    @classmethod
+    def of(cls, exc: "AdCPSalesAgentError", *, context: Any = None) -> "AdcpErrorResponse":
+        """Build the failure response for one typed exception.
+
+        Carries the SAME error object at both levels the wire expects -- ``adcp_error`` on the
+        envelope and ``errors[0]`` -- because a receiver is free to read either.
+
+        ``issues`` is attached after the SDK helper runs: ``adcp_error()`` has no ``issues``
+        parameter and its ``details`` is typed flat-scalars-only, so the array fits through
+        neither. It is set on the model rather than injected into two dicts, which is what
+        used to make the two levels able to disagree.
+        """
+        from adcp.server.helpers import adcp_error
+
+        from src.core.exceptions import _details_to_wire
+
+        error = _LibraryError.model_validate(
+            {
+                **adcp_error(
+                    exc.error_code,
+                    exc.message,
+                    recovery=exc.recovery,
+                    field=exc.field,
+                    suggestion=exc.suggestion,
+                    retry_after=exc.retry_after,
+                    details=_details_to_wire(exc.details),
+                )["errors"][0],
+                **({"issues": [issue.to_wire() for issue in exc.issues]} if exc.issues else {}),
+            }
+        )
+        # ``exc.context`` is the fallback while that field still exists. The boundary passes
+        # ``context=`` explicitly, which is the path that survives; the field and this fallback
+        # are deleted together in salesagent-3cs7o.2, along with the call sites that thread it.
+        echo = context if context is not None else exc.context
+        try:
+            return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error], context=echo)
+        except PydanticCoreValidationError:
+            # FAIL OPEN on an unusable context, never closed. The buyer is already being told
+            # its request failed; refusing to build that answer because the opaque field it
+            # sent cannot be modelled would replace a typed rejection with an internal error
+            # and lose the real fault. Dropped and logged, which is what the envelope builder
+            # this replaces did.
+            logging.getLogger(__name__).warning(
+                "dropping context of type %s: not a ContextObject, so it cannot ride the error response",
+                type(echo).__name__,
+            )
+            return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error])
 
 
 class CreateMediaBuyResult(AdcpResponse):
