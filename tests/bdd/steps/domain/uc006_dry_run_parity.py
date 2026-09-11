@@ -35,9 +35,13 @@ from tests.factories import CreativeFactory, MediaBuyFactory, MediaPackageFactor
 from tests.factories.request import CreativeAssetRequestFactory
 from tests.harness.transport import TransportResult
 
-#: A second format the harness's default agent serves, for the cases that need a
-#: creative to be on a format a product does NOT accept, or to move between formats.
-_ALT_FORMAT_ID = "display_300x250_image"
+#: A format id that differs from the transport's default on EVERY transport. It is never
+#: sent to a creative agent: the mismatch case puts it on the PRODUCT (a product may
+#: declare any format), and the format-update case seeds the library ROW on it (a row is
+#: not validated) and moves the creative to the default, which the agent serves. The
+#: first version of this file used display_300x250_image, which is the e2e stack's
+#: default format -- so on e2e_rest both cases quietly became "same format" and failed.
+_OTHER_FORMAT_ID = "display_300x250_other"
 
 
 def _creative(ctx: dict, creative_id: str, name: str, *, format_id: str | None = None) -> dict:
@@ -191,12 +195,13 @@ def _case_new_creative_assigned(ctx: dict):
 
 
 def _case_format_update_and_assignment(ctx: dict):
-    # The product accepts only the alternate format; the seeded creative is on the
-    # default one and the payload moves it -- the assignment must grade the POST-sync state.
-    pkg = _seed_package(ctx, product_format_id=_ALT_FORMAT_ID)
-    _seed_row(ctx, "asg_b2", "Reformat Me")
+    # The seeded row is on a format the product does NOT accept; the payload moves the
+    # creative to the default format, which the product accepts -- so the assignment must
+    # grade the POST-sync state, not the stale row.
+    pkg = _seed_package(ctx)
+    _seed_row(ctx, "asg_b2", "Reformat Me", format_id=_OTHER_FORMAT_ID)
     ctx["assignments"] = {"asg_b2": [pkg]}
-    payload = [_creative(ctx, "asg_b2", "Reformat Me", format_id=_ALT_FORMAT_ID)]
+    payload = [_creative(ctx, "asg_b2", "Reformat Me")]
 
     def expect(live: TransportResult) -> None:
         assert _actions(live) == ["updated"], _actions(live)
@@ -257,7 +262,7 @@ def _case_strict_package_not_found(ctx: dict):
 
 
 def _case_format_mismatch_lenient(ctx: dict):
-    pkg = _seed_package(ctx, product_format_id=_ALT_FORMAT_ID)
+    pkg = _seed_package(ctx, product_format_id=_OTHER_FORMAT_ID)
     ctx["assignments"] = {"asg_f": [pkg]}
     payload = [_creative(ctx, "asg_f", "Wrong Format")]
 
