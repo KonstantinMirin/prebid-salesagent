@@ -1034,13 +1034,6 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
     ),
     (
-        "T-UC-006-partition-idempotency-key",
-        {
-            '-boundary_min-"12345678"-the request should proceed normally]',
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
         "T-UC-006-partition-provenance",
         {
             "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
@@ -3469,8 +3462,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # a no-wire run raises). Verified xpassing on a2a and mcp — the only
             # transports this module collects; its total absence of [rest] is a
             # module-wide parametrize-time gap filed separately.
-            # Transport-agnostic main scenario
-            "T-UC-019-main",
         }
         # Snapshot scenarios (main-snapshot, inv-153-3/4/5): given_adapter_supports_reporting /
         # given_adapter_no_reporting assert "adapter" in env.mock, but MediaBuyListEnv

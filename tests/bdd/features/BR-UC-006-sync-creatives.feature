@@ -1099,17 +1099,23 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response is compliant with the sync_creatives spec
     And <expected>
 
+    # AdCP 3.1.1 creative/sync-creatives-request.json: idempotency_key is in /required and
+    # declares minLength 16, maxLength 255, pattern ^[A-Za-z0-9_.:-]{16,255}$. So an ABSENT
+    # key is a rejected request, not a "proceed without check" path (the key is
+    # client-generated precisely so a retry carries the same one -- there is nothing for
+    # the seller to proceed without), and the minimum boundary is 16 characters, not 8.
     Examples: Valid keys
       | partition      | key_value                                | expected                                              |
-      | absent         |                                          | the request should proceed without idempotency check  |
       | typical_valid  | "abc12345-retry-001"                     | the request should proceed normally                   |
-      | boundary_min   | "12345678"                               | the request should proceed normally                   |
+      | boundary_min   | "1234567890123456"                       | the request should proceed normally                   |
       | uuid_format    | "550e8400-e29b-41d4-a716-446655440000"   | the request should proceed normally                   |
 
     Examples: Invalid keys
-      | partition      | key_value  | expected                                                      |
-      | empty_string   | ""         | the error should be INVALID_REQUEST with suggestion |
-      | too_short      | "abc1234"  | the error should be INVALID_REQUEST with suggestion |
+      | partition          | key_value          | expected                                                      |
+      | absent             |                    | the error should be INVALID_REQUEST with suggestion |
+      | empty_string       | ""                 | the error should be INVALID_REQUEST with suggestion |
+      | too_short          | "abc1234"          | the error should be INVALID_REQUEST with suggestion |
+      | boundary_below_min | "123456789012345"  | the error should be INVALID_REQUEST with suggestion |
       | too_long       | "a]x256"   | the error should be INVALID_REQUEST with suggestion  |
 
     # --- idempotency_key BEHAVIOR (the partitions above grade the key's SHAPE only) ---
@@ -1276,12 +1282,17 @@ Feature: BR-UC-006 Sync Creative Assets
     And <expected>
     # --- authentication boundaries ---
 
+    # The last row's wire-observable outcome is the assignment itself: a package with no
+    # product_id has no product to check the format against, and the only thing the
+    # buyer can see of "the check was skipped" is that the assignment was created. The
+    # cell used to say "the format check should be skipped entirely", bound to a step
+    # whose body was byte-identical to the created-successfully one (salesagent-tne7q.2).
     Examples:
       | boundary_point                              | assignment_state                                                     | expected                                              |
       | format matches (exact)                      | an assignment to a package whose product accepts this format         | the assignment should be created successfully         |
       | format matches after URL normalization      | an assignment to a package whose product format has trailing slash   | the assignment should match after URL normalization   |
       | no product format restrictions              | assignments to a package whose product has empty format_ids        | the assignment should be created (all formats allowed)|
-      | no product_id on package                    | an assignment to a package with no product_id                        | the format check should be skipped entirely           |
+      | no product_id on package                    | an assignment to a package with no product_id                        | the assignment should be created successfully         |
       | format mismatch                             | an assignment to a package whose product does not accept this format | the error should include "suggestion" field           |
 
   @T-UC-006-boundary-principal @boundary @authentication

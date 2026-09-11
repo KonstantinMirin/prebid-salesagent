@@ -55,6 +55,7 @@ from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.creative_sync import creative_fingerprint
+from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -572,19 +573,6 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     Accepts both src.core.exceptions.AdCPSalesAgentError and adcp.types.Error shapes —
     different UCs dispatch through different error hierarchies.
     """
-    _SPEC_PRODUCTION_GAP_CODES = {
-        "ASSIGNMENTS_EMPTY",
-        "ASSIGNMENT_CREATIVE_ID_REQUIRED",
-        "ASSIGNMENT_PACKAGE_ID_REQUIRED",
-        "ASSIGNMENT_WEIGHT_BELOW_MINIMUM",
-        "ASSIGNMENT_WEIGHT_ABOVE_MAXIMUM",
-        # Idempotency-key length codes — merged from the shadowed duplicate step
-        # def this literal used to have (#1417): production does not
-        # validate idempotency_key length yet.
-        "IDEMPOTENCY_KEY_TOO_SHORT",
-        "IDEMPOTENCY_KEY_TOO_LONG",
-    }
-
     error = ctx.get("error")
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
@@ -2957,7 +2945,16 @@ def given_media_buy_with_approved_at_null(ctx: dict, status: str) -> None:
 
 @given(parsers.parse('a media buy with status "{status}" (non-draft)'))
 def given_media_buy_non_draft(ctx: dict, status: str) -> None:
-    """Create a non-draft media buy (BR-RULE-038 INV-5)."""
+    """Create a non-draft media buy (BR-RULE-038 INV-5).
+
+    The sentence's claim is the STATUS, and the Given refuses a row that contradicts
+    it: INV-4's twin (``... and approved_at set``) seeds the same buy, and the only
+    thing that made this one its own claim was the parenthetical nobody checked.
+    """
+    assert status != "draft", (
+        f"the sentence claims a non-draft media buy, but the scenario asked for status {status!r}; "
+        "INV-5 grades the non-draft path and cannot be established with a draft"
+    )
     _create_media_buy_with_status(ctx, status=status, approved_at_set=True)
 
 
@@ -3790,18 +3787,6 @@ def then_assignment_created_all_formats(ctx: dict) -> None:
     assigned = _get_creative_assigned_to(ctx)
     expected = ctx["package"].package_id
     assert expected in assigned, f"Expected {expected!r} in assigned_to (empty format_ids), got {assigned}"
-
-
-@then("the format check should be skipped entirely")
-def then_format_check_skipped_entirely(ctx: dict) -> None:
-    """Assert the format check was skipped because the package has no product_id.
-
-    Per BR-RULE-039 INV-6: no product_id on package means format check is skipped.
-    """
-    assert "error" not in ctx, f"Expected success (no product_id) but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to (no product_id), got {assigned}"
 
 
 # --- yqpf: format compatibility — format_id key variants + URL normalization (BR-RULE-039) ---
@@ -4656,8 +4641,15 @@ def given_idempotency_key(ctx: dict, key_value: str | None, empty: str | None) -
 
     Handles: absent (empty match), empty string (""), and quoted strings.
     Some values use ]xN notation for length generation (e.g., "a]x254").
+
+    ABSENT MEANS ABSENT ON THE WIRE. This used to return without touching ctx, and
+    the harness then supplied its default key -- so the "absent" row sent a valid key
+    and graded nothing about absence. The sentinel makes the harness DROP the field;
+    the pin lists idempotency_key in sync-creatives-request.json /required, so what
+    the row grades is the schema rejection.
     """
     if key_value is None and empty is not None:
+        ctx["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
         return
 
     actual_value = key_value or ""
@@ -4675,31 +4667,6 @@ def _expand_length_notation(value: str) -> str:
         length = int(match.group(2))
         return char * length
     return value
-
-
-@then("the request should proceed without idempotency check")
-def then_proceed_without_idempotency(ctx: dict) -> None:
-    """Assert request completed as a fresh sync (no idempotency short-circuit).
-
-    When idempotency_key is absent, the request must proceed as a normal
-    first-time sync: no error, and the response carries synced creative results.
-    """
-    error = ctx.get("error")
-    assert error is None, (
-        f"Expected request to proceed without idempotency check, but production raised {type(error).__name__}: {error}"
-    )
-    resp = require_payload(ctx)
-    # Verify the response represents a successful sync, not an error envelope
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, (
-        "Expected at least one creative result from a fresh sync without idempotency key, "
-        f"but got empty results from {type(resp).__name__}"
-    )
-    # Verify at least one creative was actually processed (created/updated)
-    actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
-    assert any(a in ("created", "updated") for a in actions), (
-        f"Expected a fresh sync action (created/updated), got {actions}"
-    )
 
 
 @then("the request should proceed normally")

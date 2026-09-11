@@ -74,7 +74,13 @@ _DUPLICATE_THRESHOLD = 2
 # distinct), uc026's paused-false vs should-deliver, uc010's adapter-unavailable vs
 # advisory-warning. Every one of those is a sentence claim the shared body does not
 # distinguish; merging would erase the claim, not the duplication.
-_DUPLICATE_GROUP_BASELINE = 26
+#
+# 26 -> 25: uc006's "(non-draft)" Given now refuses a draft status, so it no longer shares
+# a body with its "approved_at set" twin -- the sentence's claim got its own assertion
+# instead of a merge (salesagent-tne7q.2). The cluster's other groups were resolved on the
+# Gherkin side: two dead sentences swept to their canonical twin, one row corrected to the
+# pin, so nothing here to lower for them.
+_DUPLICATE_GROUP_BASELINE = 25
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).

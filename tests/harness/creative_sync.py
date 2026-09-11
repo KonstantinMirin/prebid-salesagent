@@ -61,6 +61,7 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 
@@ -663,7 +664,15 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # gets [], because setdefault does not override an explicit value: that is how the
         # minItems rejection itself stays testable.
         kwargs.setdefault("creatives", [creative_payload()])
-        kwargs.setdefault("idempotency_key", self.DEFAULT_IDEMPOTENCY_KEY)
+        # A scenario that means to send NO key cannot say so by leaving the kwarg out --
+        # that is what every scenario that does not care about keys looks like, and those
+        # get the default. The sentinel is the create harness's own, so both tools spell
+        # "absent" the same way; the pin lists idempotency_key in /required, so what it
+        # buys is a request the schema rejects, graded as such.
+        if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
+            kwargs.pop("idempotency_key")
+        else:
+            kwargs.setdefault("idempotency_key", self.DEFAULT_IDEMPOTENCY_KEY)
         # ``with_account=False`` for the IMPL path. account is a field of the REQUEST, and
         # requests are built by transport wrappers -- _sync_creatives_impl does not take one.
         # Injecting it there makes every direct-impl test resolve an account before reaching
