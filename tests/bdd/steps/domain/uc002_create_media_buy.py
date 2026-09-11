@@ -1853,7 +1853,6 @@ def then_webhook_notification(ctx: dict) -> None:
          FIXME: Wire through the production admin approve/reject
          flow, then remove the xfail.
     """
-    import pytest
     from sqlalchemy import select
 
     from src.core.database.models import ObjectWorkflowMapping, PushNotificationConfig
@@ -1991,13 +1990,19 @@ def then_webhook_notification(ctx: dict) -> None:
         # flow which populates request_data, then remove this xfail.
         req_data = step.request_data or {}
         step_push_cfg = req_data.get("push_notification_config") if isinstance(req_data, dict) else None
-        if not isinstance(step_push_cfg, dict) or step_push_cfg.get("url") != expected_url:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: step.request_data does not carry "
-                "push_notification_config with the buyer's URL — "
-                "_send_push_notifications would skip dispatch. "
-                "FIXME: wire through the admin flow."
-            )
+        # A workflow step that does not carry the buyer's push_notification_config cannot
+        # notify anyone: _send_push_notifications finds no URL and skips dispatch silently.
+        # That is the defect this step exists to catch, and the xfail keyed on it meant the
+        # step could not report it (salesagent-tne7q). FIXME(#2132) tracks wiring the
+        # production admin approve/reject flow that populates request_data.
+        assert isinstance(step_push_cfg, dict), (
+            f"workflow step carries no push_notification_config, so the buyer is never "
+            f"notified; request_data={req_data!r}"
+        )
+        assert step_push_cfg.get("url") == expected_url, (
+            f"workflow step carries push_notification_config for "
+            f"{step_push_cfg.get('url')!r}, not the buyer's {expected_url!r}"
+        )
 
         # Happy path (reached when harness wires the full admin flow):
         assert step_push_cfg["url"] == expected_url, (

@@ -380,7 +380,6 @@ def then_response_within_sla(ctx: dict) -> None:
     FIXME: Move adapter I/O to background workers
     so latency SLA is enforceable at the application layer.
     """
-    import pytest
 
     from src.core.schemas._base import CreateMediaBuySuccess
 
@@ -406,15 +405,12 @@ def then_response_within_sla(ctx: dict) -> None:
     mock_adapter = env.mock["adapter"].return_value
     adapter_called_sync = mock_adapter.create_media_buy.called
 
-    if adapter_called_sync:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Adapter I/O runs synchronously on the "
-            "request thread. Architecture direction is to move adapter calls "
-            "to background workers and return 201 pending. Until then, p95 "
-            "SLA is not enforceable at the application layer. "
-            "FIXME"
-        )
-
+    # The xfail that stood here was `if adapter_called_sync: pytest.xfail(...)` directly
+    # above this assert — so the assert was UNREACHABLE in the only case it was written
+    # for, and the step reported an expected failure instead of the finding
+    # (salesagent-tne7q). Adapter I/O still runs synchronously on the request thread; the
+    # architecture direction is background workers returning 201 pending, and until then
+    # this assertion is the thing that says so out loud.
     assert not adapter_called_sync, (
         "Adapter.create_media_buy was called on the request thread — "
         "synchronous adapter I/O is the primary latency risk for SLA compliance"
