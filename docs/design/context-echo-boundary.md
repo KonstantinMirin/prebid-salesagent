@@ -56,17 +56,35 @@ class AdcpErrorResponse(AdcpResponse):
 because the pin puts it on each tool's own schema rather than on the envelope, and one
 subclass is the one place it can live without a per-tool copy.
 
-- `invoke_tool` returns `AdcpResponse` for EVERY outcome. On failure it builds an
-  `AdcpErrorResponse` from the typed exception -- the work `build_two_layer_error_envelope`
-  does today (the SDK's `adcp_error(...)` call, the `issues[]` injection its helper cannot
-  take, the same error object mirrored to `adcp_error` and `errors[0]`) moves onto a
-  classmethod `AdcpErrorResponse.of(exc)` and keeps its tests.
-- `status` is `failed`, from `enums/task-status.json`, which is what makes the body valid.
-- `_served` stamps `adcp_version` and `context` on that instance exactly as on a success,
-  because it IS one. No second path.
-- Transports stop rendering errors. Each serializes the response it is handed with `to_wire`
-  and maps `response.adcp_error.code` to its own transport marker (HTTP status, `isError`,
-  A2A failed state) -- the one thing that is genuinely per-transport.
+One exception at the edge, whose payload is that response:
+
+```python
+class AdcpFailure(Exception):
+    def __init__(self, response: AdcpErrorResponse) -> None: ...
+```
+
+- Business logic keeps raising `AdCPSalesAgentError` subclasses and never sees either class.
+- The boundary converts ONCE: `AdcpErrorResponse.of(exc, context=...)` builds the response --
+  `status=failed`, the error mirrored to `adcp_error` and `errors[0]`, `context`, and
+  `adcp_version` stamped by `of` itself so no path can miss it -- and raises
+  `AdcpFailure(response)`. Raising, not returning: a return value can be ignored and a raise
+  cannot, and business logic across fourteen tools calls services that call services. What
+  changes is WHAT is raised, not whether.
+- `serve(tool_name, raw, credential, protocol)` is the transport entry. It parses the payload
+  and runs the tool, and both failures leave as `AdcpFailure`, so a transport wraps one call in
+  one `try` and cannot leave a schema rejection uncaught. `invoke_tool` keeps its typed
+  signature for callers that already hold a validated request.
+- Each transport catches `AdcpFailure`, serializes `failure.response` with the same `to_wire`
+  the success path uses, and adds only its own wire failure marker: an HTTP status for REST
+  (`wire_status`, read from `CODE_TABLE`), an `AdCPToolError` for MCP, a Task state for A2A.
+  That marker is the only part of a refusal that is genuinely per-transport.
+- A2A's Task state is the response's own `status`, translated through one total enum-to-enum
+  mapping (`_TASK_STATE_BY_ADCP_STATUS`, nine rows, exact counterparts). Derived once. The
+  per-creative `pending_review -> submitted` rule is deleted: pinned
+  `creative/sync-creatives-response.json` puts that state inside the synchronous branch as
+  per-item information, and its submitted branch cannot carry creatives at all.
+- `TransportProtocol` is a `StrEnum` in `src/core/resolved_identity.py`, the same three string
+  values the `Literal` had; the harness `Transport` derives its protocol members from it.
 
 ## Deletes
 
