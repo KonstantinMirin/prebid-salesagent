@@ -3385,6 +3385,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Suggestion parity for get_media_buys is pinned by
             # tests/integration/test_request_validation_suggestion_parity.py.
             "T-UC-019-partition-status-filter-invalid",
+            # Package details omit the flight window. The buyer supplies start/end in the
+            # Given, the pinned 3.1 core/package.json names the echo fields start_time /
+            # end_time (optional — required is ["package_id"]), and production does not
+            # populate them on the packages get_media_buys returns.
+            #
+            # Declared HERE rather than inside _assert_flight_dates_present, where an
+            # xfail keyed on the outcome could not fail in either direction: it passed
+            # when the fields were present and excused itself when they were not, so a
+            # seller that stopped echoing them entirely would never have turned it red
+            # (salesagent-tne7q). As a tag this XPASSes the day production populates them.
+            "T-UC-019-main",
             # Creative approval mapping — not implemented
             "T-UC-019-partition-approval",
             "T-UC-019-partition-approval-invalid",

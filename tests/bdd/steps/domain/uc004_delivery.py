@@ -122,8 +122,18 @@ def _extract_webhook_success(ctx: dict) -> bool:
 def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: bool) -> None:
     """Assert by_placement entries are sorted by the given metric descending.
 
-    If by_placement is not populated or the metric is absent from entries,
-    xfails with a targeted production gap message.
+    THE ABSENCE OF THE SUBJECT IS NOT AN EXCUSE. Both guards here used to xfail: one
+    when the entries lacked the metric, one when NO package carried by_placement at
+    all -- so a seller that stopped emitting placement breakdowns entirely, which is
+    precisely the regression this step exists to catch, turned it green-by-xfail
+    instead of red (salesagent-tne7q names this the archetype).
+
+    The pinned 3.1 get-media-buy-delivery-response.json makes by_placement conditional
+    -- "Available when the buyer requests placement breakdown via reporting_dimensions
+    and the seller supports it" -- so its absence is legal IN GENERAL. It is not legal
+    HERE: a scenario that asks whether the breakdown is SORTED has already asserted the
+    breakdown exists, and if this seller does not support it the scenario does not
+    belong, rather than belonging and excusing itself.
     """
     checked = False
     for pkg in packages:
@@ -135,12 +145,10 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
             first_val = placements[0].get(metric)
         else:
             first_val = getattr(placements[0], metric, None)
-        if first_val is None:
-            suffix = " (fallback)" if fallback else ""
-            pytest.xfail(
-                f"PRODUCTION GAP: by_placement entries lack metric '{metric}'"
-                f"{suffix} for sort verification — sorting not implemented"
-            )
+        suffix = " (fallback)" if fallback else ""
+        assert first_val is not None, (
+            f"by_placement entries lack metric {metric!r}{suffix}; a sort assertion needs the value it sorts by"
+        )
         values = []
         for p in placements:
             val = p.get(metric) if isinstance(p, dict) else getattr(p, metric, None)
@@ -150,8 +158,10 @@ def _assert_placements_sorted_by(packages: list[Any], metric: str, *, fallback: 
             f"Placement breakdown not sorted by '{metric}' descending: {values}"
         )
         checked = True
-    if not checked:
-        pytest.xfail("PRODUCTION GAP: no packages have by_placement data to verify sort")
+    assert checked, (
+        "no package carried by_placement data, so the sort claim graded nothing. A seller "
+        "that stopped emitting placement breakdowns entirely would reach this line."
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2723,12 +2733,14 @@ def then_packages_include_breakdown(ctx: dict, field: str) -> None:
             assert entry_impressions is not None, f"Breakdown entry in {pkg.package_id!r}.{field} missing 'impressions'"
             # Dimension identifier: proves data is actually segmented
             dim_value = entry.get(dimension_key) if isinstance(entry, dict) else getattr(entry, dimension_key, None)
-            if dim_value is None:
-                pytest.xfail(
-                    f"PRODUCTION GAP: breakdown entry in {pkg.package_id!r}.{field} "
-                    f"missing dimension identifier '{dimension_key}' — "
-                    f"entries are not segmented by dimension"
-                )
+            # A breakdown entry with no dimension identifier is not a breakdown. The xfail
+            # that stood here excused the one condition that makes the whole claim false --
+            # unsegmented rows -- while the assert two lines down already refuses an EMPTY
+            # identifier. Absent and empty are the same defect (salesagent-tne7q).
+            assert dim_value is not None, (
+                f"Breakdown entry in {pkg.package_id!r}.{field} is missing dimension "
+                f"identifier {dimension_key!r}: entries are not segmented by dimension"
+            )
             assert dim_value, (
                 f"Breakdown entry in {pkg.package_id!r}.{field} has empty "
                 f"dimension identifier '{dimension_key}': {dim_value!r}"
@@ -2935,14 +2947,15 @@ def then_geo_system(ctx: dict, system: str) -> None:
     assert resp.media_buy_deliveries, "Expected non-empty media_buy_deliveries"
     assert resp.reporting_period is not None, "Expected reporting_period"
 
-    # Check if by_geo is populated on any package
+    # The subject must be there for the claim to mean anything. The pinned 3.1
+    # get-media-buy-delivery-response.json makes by_geo conditional ("Available when the
+    # buyer requests geo breakdown via reporting_dimensions and the seller supports it"),
+    # so absence is legal in general — but a scenario asking which CLASSIFICATION SYSTEM
+    # the geo rows use has already asserted the rows exist. The xfail that stood here
+    # excused exactly the case the step is for (salesagent-tne7q).
     packages = _collect_all_packages(resp)
     has_geo = any(getattr(pkg, "by_geo", None) for pkg in packages)
-    if not has_geo:
-        pytest.xfail(
-            f"PRODUCTION GAP: by_geo breakdown not populated in response — "
-            f"cannot verify classification system '{system}'"
-        )
+    assert has_geo, f"no package carried by_geo, so the classification-system claim ({system!r}) graded nothing"
     # If geo data is present, verify system field
     for pkg in packages:
         by_geo = getattr(pkg, "by_geo", None) or []
@@ -3095,23 +3108,21 @@ def then_attribution_default(ctx: dict) -> None:
     pc = getattr(aw, "post_click", "MISSING")
     pv = getattr(aw, "post_view", "MISSING")
     if pc != "MISSING" or pv != "MISSING":
-        # Production currently echoes the buyer request instead of stripping it.
-        # Xfail only the specific assertion that checks the unimplemented behavior.
-        try:
-            assert pc is None, (
-                f"attribution_window.post_click should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pc!r}"
-            )
-            assert pv is None, (
-                f"attribution_window.post_view should be None for unsupported seller "
-                f"(buyer request should be discarded), got {pv!r}"
-            )
-        except AssertionError:
-            pytest.xfail(
-                "PRODUCTION GAP: seller 'does NOT support configurable attribution' "
-                "check not implemented — production echoes buyer request instead of "
-                "returning bare platform default (post_click/post_view should be None)"
-            )
+        # This was `try: assert ... except AssertionError: pytest.xfail(...)` — the purest
+        # form of the defect this epic names: catch the failure and excuse it, so the step
+        # cannot fail in either direction. A seller that echoes the buyer's attribution
+        # window when it does not support configurable attribution is reporting a setting
+        # it will not honour, which is the thing worth failing on (salesagent-tne7q).
+        assert pc is None, (
+            f"attribution_window.post_click should be None for a seller that does not "
+            f"support configurable attribution (the buyer's request is discarded, not "
+            f"echoed), got {pc!r}"
+        )
+        assert pv is None, (
+            f"attribution_window.post_view should be None for a seller that does not "
+            f"support configurable attribution (the buyer's request is discarded, not "
+            f"echoed), got {pv!r}"
+        )
 
 
 @then('the response attribution_window should include "model" field (required)')

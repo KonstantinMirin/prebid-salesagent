@@ -1284,26 +1284,32 @@ def when_query_invalid_status_filter(ctx: dict) -> None:
 
 
 def _assert_flight_dates_present(pkg: Any) -> None:
-    """Assert flight date fields are present on a package.
+    """Assert the package carries its flight window.
 
-    Step text claims 'flight dates' — check start_date/end_date or
-    start_time/end_time (naming varies by schema version).
+    The pinned 3.1 ``core/package.json`` names these fields ``start_time`` and
+    ``end_time``. It does NOT declare ``start_date``/``end_date`` at all, so the
+    old "naming varies by schema version" alternative accepted a spelling the pin
+    has no concept of — a package answering with those would have satisfied a
+    check for fields the buyer's own schema would reject.
+
+    The fields are optional in the pin (``required`` is ``["package_id"]``), so this
+    is not a spec MUST; it is this seller echoing the flight window the buyer
+    supplied in the Given. Where production does not, the scenario is parked in
+    the ledger, not excused here: the xfail that stood in this function was keyed
+    on the outcome, so it could not fail in the one direction that matters
+    (salesagent-tne7q).
     """
-    import pytest
 
     def _has(field: str) -> bool:
         if isinstance(pkg, dict):
             return field in pkg and pkg[field] is not None
         return getattr(pkg, field, None) is not None
 
-    has_dates = _has("start_date") and _has("end_date")
-    has_times = _has("start_time") and _has("end_time")
-    if not has_dates and not has_times:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Package missing flight date fields "
-            "(start_date/end_date or start_time/end_time). Step claims "
-            "'flight dates' are included in package details."
-        )
+    missing = [f for f in ("start_time", "end_time") if not _has(f)]
+    assert not missing, (
+        f"package details must carry the flight window the buyer supplied; "
+        f"missing {missing} (pinned 3.1 core/package.json names them start_time/end_time)"
+    )
 
 
 def _get_media_buys(ctx: dict) -> list:
@@ -1339,7 +1345,6 @@ def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) ->
 )
 def then_package_details(ctx: dict) -> None:
     """Assert each media buy has package-level details including all claimed fields."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     assert buys, "No media buys in response to check"
@@ -1371,19 +1376,21 @@ def then_package_details(ctx: dict) -> None:
                 )
             # Flight dates: step text explicitly claims these are present
             _assert_flight_dates_present(pkg)
-            # paused must be a boolean, not absent — collect gaps across ALL packages
+            # ``paused`` is declared in the pinned 3.1 core/package.json as
+            # {"type": "boolean", "default": false}. A DEFAULT means a parsed package can
+            # never legitimately carry None: absence resolves to False. So None is not a
+            # "field not present" gap to be excused, it is the local model failing to apply
+            # the pin's default, and that is worth failing on.
             if pkg.paused is None:
                 paused_gaps.append(f"package {pkg.package_id} in {mb_id}")
             else:
                 assert isinstance(pkg.paused, bool), f"Expected paused to be bool, got {type(pkg.paused)}"
     assert total_packages_checked > 0, "No packages checked despite media buys being present"
-    if paused_gaps:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} of "
-            f"{total_packages_checked} package(s): {', '.join(paused_gaps)}. "
-            f"All other fields (budget, bid_price, product_id, flight dates) verified. "
-            f"FIXME"
-        )
+    assert not paused_gaps, (
+        f"paused is None on {len(paused_gaps)} of {total_packages_checked} package(s): "
+        f"{', '.join(paused_gaps)}. The pin declares it boolean with default false, so a "
+        f"parsed package resolves absence to False and never to None."
+    )
 
 
 @then("each package should include creative approval state when creatives are assigned")
