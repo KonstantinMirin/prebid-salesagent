@@ -1774,12 +1774,13 @@ def then_assignment_created_with_weight(ctx: dict, weight: int) -> None:
             )
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        if assignment.weight != weight:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
-                f"Expected weight={weight}, got weight={assignment.weight}. "
-                f"Production hard-codes weight=100 on create."
-            )
+        # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+        # loudly if production implements it; this step now ASSERTS instead of excusing itself.
+        assert assignment.weight == weight, (
+            f"Expected assignment weight {weight}, got {assignment.weight} "
+            f"(creative={creative_id}, package={expected_pkg})"
+        )
 
 
 @then("the existing assignment should be updated")
@@ -1909,13 +1910,12 @@ def then_assignment_created_as_paused(ctx: dict) -> None:
     surface for per-entry weight. SPEC-PRODUCTION GAP on weight only.
     """
     assignment = _get_assignment_from_db(ctx)
-    # Xfail ONLY the specific unimplemented claim
-    if assignment.weight != 0:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused) is not supported. "
-            f"Expected weight=0, got weight={assignment.weight}. "
-            "Production hard-codes weight=100 on create."
-        )
+    # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
+    # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+    # loudly if production implements it; this step now ASSERTS instead of excusing itself.
+    assert assignment.weight == 0, (
+        f"weight=0 means assigned but PAUSED (pinned 3.1 assignments[].weight); got {assignment.weight}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2100,21 +2100,17 @@ def then_assignment_includes_placement(ctx: dict) -> None:
     SPEC-PRODUCTION GAP on placement_ids only.
     """
     assignment = _get_assignment_from_db(ctx)
-    # Check if placement_ids is supported on the assignment
+    creative_id = latest_creative_id(ctx)
+    expected_pkg = ctx["package"].package_id
+    # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].placement_ids, production
+    # does not carry it. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it
+    # XPASSes loudly if production implements it; this step now ASSERTS.
     placement_ids = getattr(assignment, "placement_ids", None)
-    if placement_ids is not None:
-        creative_id = latest_creative_id(ctx)
-        expected_pkg = ctx["package"].package_id
-        assert placement_ids, (
-            f"Assignment has placement_ids field but it is empty for creative={creative_id}, package={expected_pkg}"
-        )
-    else:
-        # Xfail ONLY the specific unimplemented claim
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Per-assignment placement_ids targeting "
-            "is not supported. CreativeAssignment model does not have a "
-            "placement_ids field."
-        )
+    assert placement_ids, (
+        "assignments[].placement_ids restricts a creative to specific placements within the "
+        f"package; the stored assignment carries {placement_ids!r} "
+        f"(creative={creative_id}, package={expected_pkg})"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6663,13 +6659,12 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
             )
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # Xfail ONLY the specific unimplemented claim
-        if assignment.weight != 0:
-            pytest.xfail(
-                "SPEC-PRODUCTION GAP: Per-assignment weight (weight=0 → paused, no delivery) "
-                f"is not supported. Expected weight=0, got weight={assignment.weight}. "
-                "Production hard-codes weight=100 on create."
-            )
+        # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+        # loudly if production implements it; this step now ASSERTS instead of excusing itself.
+        assert assignment.weight == 0, (
+            f"weight=0 means assigned but PAUSED, receiving no delivery; got {assignment.weight}"
+        )
 
 
 @then("the response should include the creative with assignment results")
@@ -6725,12 +6720,12 @@ def then_assignment_created_with_specified_weight(ctx: dict) -> None:
             )
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        if assignment.weight != requested_weight:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
-                f"Expected weight={requested_weight}, got weight={assignment.weight}. "
-                f"Production hard-codes weight=100 on create."
-            )
+        # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+        # loudly if production implements it; this step now ASSERTS instead of excusing itself.
+        assert assignment.weight == requested_weight, (
+            f"Expected assignment weight {requested_weight}, got {assignment.weight}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -7381,12 +7376,11 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
 
     _xfail_if_e2e(ctx)
 
+    # No excuse for a raised error: a dispatch that fails is the failure this scenario
+    # exists to catch. The xfail that stood here was conditional on the outcome, so the
+    # step could not fail in the one direction that matters (salesagent-tne7q).
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected proportional delivery, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, f"expected proportional delivery, but production raised {type(error).__name__}: {error}"
 
     # Retrieve requested weights from the Given step
     assignment_weights = ctx.get("assignment_weights", {})
@@ -7418,14 +7412,16 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
     assert assignment_a is not None, "No CreativeAssignment found for creative-A"
     assert assignment_b is not None, "No CreativeAssignment found for creative-B"
 
-    # Compare actual DB weights: creative-A should have strictly more weight
-    if assignment_a.weight <= assignment_b.weight:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: Per-assignment weight not supported. "
-            f"Requested weights creative-A={weight_a_requested}, creative-B={weight_b_requested}, "
-            f"but DB has creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}. "
-            f"Production hard-codes weight=100 on all assignments."
-        )
+    # Compare actual DB weights: creative-A should have strictly more weight.
+    # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight as
+    # "Relative delivery weight (0-100) ... weights determine impression distribution
+    # proportionally"; production hard-codes 100, so the ordering cannot hold. Declared
+    # ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes loudly if production
+    # implements it; this step now ASSERTS instead of excusing itself.
+    assert assignment_a.weight > assignment_b.weight, (
+        f"requested creative-A={weight_a_requested} > creative-B={weight_b_requested}, "
+        f"but stored creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════

@@ -917,8 +917,16 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {
             "-weight = -1 (min - 1)--1-the error should be INVALID_REQUEST with suggestion]",
             "-weight = 101 (max + 1)-101-the error should be INVALID_REQUEST with suggestion]",
+            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            "-weight = 0 (min, inclusive \\u2014 paused)-0-the assignment should be created as paused (no delivery)]",
+            "-weight = 1 (min + 1)-1-the assignment should be created with weight 1]",
+            "-weight = 50 (typical)-50-the assignment should be created with weight 50]",
+            "-weight = 99 (max - 1)-99-the assignment should be created with weight 99]",
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+        (
+            "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
+            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+        ),
     ),
     (
         "T-UC-006-boundary-assignments-structure",
@@ -926,8 +934,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
             "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
             "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
+            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            '-entry with placement_ids-an assignment with placement_ids ["slot_a"]-the assignment should include placement targeting]',
+            "-entry with weight = 0 (paused)-an assignment with weight 0-the assignment should be created as paused]",
         },
-        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers",
+        (
+            "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers"
+            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+        ),
     ),
     (
         "T-UC-006-boundary-generative",
@@ -968,16 +982,27 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {
             "-weight_above_max-101-the error should be INVALID_REQUEST with suggestion]",
             "-weight_below_min--1-the error should be INVALID_REQUEST with suggestion]",
+            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            "-weight_boundary_min-0-the assignment should be created as paused]",
+            "-weight_typical-50-the assignment should be created with weight 50]",
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+        (
+            "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
+            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+        ),
     ),
     (
         "T-UC-006-partition-assignments-structure",
         {
             "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
             '-with_placement_targeting-an assignment with creative_id "c1", package_id "p1", and placement_ids ["slot_a"]-the assignment should be created with placement targeting]',
+            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            '-with_weight-an assignment with creative_id "c1", package_id "p1", and weight 50-the assignment should be created with weight 50]',
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+        (
+            "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
+            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+        ),
     ),
     (
         "T-UC-006-partition-format-id",
