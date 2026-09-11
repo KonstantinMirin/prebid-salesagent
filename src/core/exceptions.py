@@ -26,6 +26,7 @@ from src.core.errors.details import (
     CapabilityRefusalDetails,
     ConfigurationDetails,
     ConflictDetails,
+    CreativeRefDetails,
     CreativeRejectionDetails,
     EntityRefDetails,
     ErrorDetails,
@@ -891,7 +892,7 @@ class AdCPContextNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SESSION_NOT_FOUND
 
 
-class AdCPCreativeNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+class AdCPCreativeNotFoundError(AdCPNotFoundError[CreativeRefDetails]):
     """Requested creative does not exist (404, wire CREATIVE_NOT_FOUND).
 
     ``CREATIVE_NOT_FOUND`` is a pinned-spec wire code (enums/error-code.json @

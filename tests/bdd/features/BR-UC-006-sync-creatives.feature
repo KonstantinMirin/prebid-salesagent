@@ -317,7 +317,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
-    # --- ext-k: CREATIVE_REJECTED (strict) ---
+    # --- ext-k: VALIDATION_ERROR (strict) ---
 
   @T-UC-006-ext-k @extension @ext-k @error
   Scenario: Format mismatch — creative format incompatible with product
@@ -328,16 +328,28 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the error is compliant with the AdCP error spec
     And the operation should fail with an assignment error
-    And the error code should be "CREATIVE_REJECTED"
+    And the error code should be "VALIDATION_ERROR"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3: WHICH format and product are incompatible travels
     #   structurally, not in the sentence -- message and suggestion are functions
     #   of the code (ADR-010), so "should contain 'not supported by product'" and
     #   "'list_creative_formats'" graded a copy of CODE_TABLE's own text.
-    #   The code is CREATIVE_REJECTED because that is what production raises
-    #   (_assignments.py:236, AdCPCreativeRejectedError, converging with
-    #   media_buy_update.py:233 per #1417) -- an earlier pass here mapped it to
-    #   VALIDATION_ERROR from the code NAME alone, without reading the raise site.
+    #
+    #   The code is VALIDATION_ERROR because 3.1.1 enums/error-code.json defines
+    #   it as "violates business rules beyond schema validation", and a format
+    #   outside the product's declared set is exactly that. CREATIVE_REJECTED
+    #   reads "Creative failed content policy review ... revise the creative per
+    #   the seller's advertising_policies" and shapes its details as
+    #   {policy_id, policy_url, reasons} (error-details/creative-rejected.json) --
+    #   a policy outcome this path never reaches. The creative is fine; the
+    #   ASSIGNMENT is what the product does not permit.
+    #
+    #   This line read CREATIVE_REJECTED until the pin was consulted, justified
+    #   in a comment by "that is what production raises". Production is the LAST
+    #   level of the authority order, not the first; #1417 picked the code from
+    #   the raise site and the raise site was wrong. Siblings @T-UC-006-rule-039-inv1b
+    #   and -inv2, and the :959 partition row, already said VALIDATION_ERROR --
+    #   one rule, three copies, and only the stale copy cited production.
 
   @T-UC-006-rule-033-inv1 @invariant @BR-RULE-033
   Scenario: INV-1 — per-creative failure does not abort other creatives

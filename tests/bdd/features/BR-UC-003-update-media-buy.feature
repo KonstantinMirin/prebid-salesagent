@@ -703,16 +703,14 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: Suggestion for recovery
 
   @T-UC-003-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
-  Scenario: Creative not found -- referenced creative_id not in library
+  Scenario Outline: Creative not found -- referenced creative_id not in library (<array>)
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
-    And the package update includes creative_assignments with:
-    | creative_id |
-    | cr_missing  |
+    And the package update references creative "cr_missing" via <array>
     And creative "cr_missing" does not exist in the creative library
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
@@ -723,10 +721,26 @@ Feature: BR-UC-003 Update Media Buy
     # another tenant' from 'does not exist'", anti-enumeration). Was CREATIVE_REJECTED,
     # which the same enum defines as a content-policy review failure.
     And the error code should be "CREATIVE_NOT_FOUND"
+    # 3.1.1 L3/error-handling.mdx: error.field MUST name the ARRAY parameter itself,
+    # and the two request members that reference creatives are different arrays --
+    # which is the whole reason this is an outline rather than one scenario. A single
+    # hard-coded pointer would be right for one caller and silently wrong for the other.
+    And the response error field is packages[0].<array>
+    # Same paragraph: "Sellers MAY enumerate specific unresolvable elements in
+    # error.details -- but only when the elements were supplied verbatim by the caller."
+    # cr_missing was. Enumerating does not breach the anti-enumeration MUST above,
+    # which forbids DISTINGUISHING "exists elsewhere" from "does not exist"; every
+    # unresolvable id is listed identically, so the two remain indistinguishable.
+    And the wire error details should include missing_creative_ids "cr_missing"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains creative not found
     # POST-F3: Suggestion for recovery
+
+    Examples: the two request members that reference creatives
+      | array                |
+      | creative_ids         |
+      | creative_assignments |
 
   @T-UC-003-ext-j-error @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in error state

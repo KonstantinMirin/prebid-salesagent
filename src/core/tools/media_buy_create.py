@@ -45,8 +45,9 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPCreativeRejectedError,
+    AdCPCreativeNotFoundError,
     AdCPFormatNotFoundError,
+    AdCPGoneError,
     AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
     AdCPProductNotFoundError,
@@ -398,24 +399,29 @@ def _validate_creatives_before_adapter_call(
     if missing_ids:
         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
         logger.error(log_safe(error_msg))
-        # FIXME(#1598): pinned enum says CREATIVE_NOT_FOUND MUST be uniform for
-        # unowned creative_ids, but this surface emits CREATIVE_REJECTED (the
-        # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
-        # upstream reconciliation.
-        raise AdCPCreativeRejectedError(
-            details=CreativeRejectionDetails(creative_ids=sorted(missing_ids)),
+        # 3.1.1 enums/error-code.json: "Sellers MUST return this code uniformly for any
+        # creative_id not owned by the calling account." The deferral that stood here
+        # cited the BR-UC-003 ext-i cell as grading CREATIVE_REJECTED; that cell asks for
+        # CREATIVE_NOT_FOUND, so the FIXME was resolved against a reading of the grader
+        # that the grader did not support.
+        raise AdCPCreativeNotFoundError(
+            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
+            field=PACKAGES_FIELD,
         )
 
     # Validate each creative has required fields
     validation_errors = []
+    # Terminal-state creatives are collected separately: the pinned enum codes
+    # "operation is not permitted for the resource's current status" as INVALID_STATE,
+    # a different condition from the field/format failures below, and update_media_buy
+    # already splits them the same way (_validate_creatives_for_assignment).
+    bad_state: list[Any] = []
     for creative in creatives_list:
         creative_data = creative.data or {}
 
         # BR-RULE-026: Reject creatives in terminal error states
         if hasattr(creative, "status") and creative.status in ("error", "rejected"):
-            validation_errors.append(
-                f"Creative {creative.creative_id} has status '{creative.status}' and cannot be used in a media buy"
-            )
+            bad_state.append(creative)
             continue
 
         # Get format specification from creative agent (uses in-memory cache with 30min TTL).
@@ -469,6 +475,20 @@ def _validate_creatives_before_adapter_call(
             validation_errors.append(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
+
+    if bad_state:
+        # The STATE per creative, not a joined sentence naming the ids: per-creative
+        # outcomes are per-ENTITY problems. Same shape and same code as the
+        # update_media_buy gate, so one condition reads identically on both tools.
+        raise AdCPGoneError(
+            details=InvalidStateDetails(
+                problems=[
+                    ErrorProblem(subject_type="creative", subject_id=c.creative_id, rejected_value=c.status)
+                    for c in bad_state
+                ]
+            ),
+            field=PACKAGES_FIELD,
+        )
 
     # --- Format compatibility check: creative format vs product accepted formats ---
     # Build creative_id -> format mapping from fetched creatives
@@ -527,8 +547,14 @@ def _validate_creatives_before_adapter_call(
             "The following creatives have validation errors:\n" + "\n".join(f"  • {err}" for err in validation_errors)
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
-        raise AdCPCreativeRejectedError(
-            details=CreativeRejectionDetails(reasons=validation_errors),
+        # A stored creative missing its required assets, or carrying a format the
+        # product does not accept, "violates business rules beyond schema validation"
+        # (3.1.1 enums/error-code.json) -- VALIDATION_ERROR. Not CREATIVE_REJECTED,
+        # which that enum defines as a content-policy review failure and shapes as
+        # {policy_id, policy_url, reasons}; no policy review runs on this path.
+        raise AdCPValidationError(
+            details=ValidationDetails(reasons=validation_errors),
+            field=PACKAGES_FIELD,
         )
 
 
@@ -1843,9 +1869,10 @@ from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
     ConfigurationDetails,
-    CreativeRejectionDetails,
+    CreativeRefDetails,
     EntityRefDetails,
     ErrorProblem,
+    InvalidStateDetails,
     PricingValidationDetails,
     ProductRefDetails,
     TimeWindowDetails,
@@ -3767,11 +3794,11 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
-                        # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
-                        # upstream reconciliation.
-                        raise AdCPCreativeRejectedError(
-                            details=CreativeRejectionDetails(creative_ids=sorted(missing_ids)),
+                        # Same MUST as the pre-adapter gate above: uniform
+                        # CREATIVE_NOT_FOUND for any creative_id not owned by the caller.
+                        raise AdCPCreativeNotFoundError(
+                            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
+                            field=PACKAGES_FIELD,
                         )
 
                     # Validate creative formats against product formats BEFORE creating assignments

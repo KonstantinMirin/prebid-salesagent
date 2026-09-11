@@ -49,6 +49,7 @@ __all__ = [
     "ValidationDetails",
     "PricingValidationDetails",
     "ConfigurationDetails",
+    "CreativeRefDetails",
     "CreativeRejectionDetails",
     "TimeWindowDetails",
     "RejectionReasonDetails",
@@ -244,6 +245,34 @@ class ProductRefDetails(EntityRefDetails):
     """
 
     missing_product_ids: list[str] | None = None
+
+
+class CreativeRefDetails(EntityRefDetails):
+    """A creative reference that may name several creatives at once.
+
+    Sibling of ``ProductRefDetails``, same reason: a creative-not-found either names
+    the one creative asked for, or the set that could not be resolved from a package
+    update referencing many.
+
+    The pin defines NO details shape for ``CREATIVE_NOT_FOUND`` — ``error-details/``
+    carries only ``creative-rejected.json`` — and ``core/error.json`` types ``details``
+    as a free object, so this is ours to shape. What the pin DOES constrain is what may
+    go in it, and the enumeration is permitted: 3.1.1 ``L3/error-handling.mdx`` says
+    "Sellers MAY enumerate specific unresolvable elements in ``error.details`` — but
+    only when the elements were supplied verbatim by the caller." A buyer's
+    ``creative_ids`` are exactly that.
+
+    What the same paragraph FORBIDS is the element-level oracle: "Sellers MUST NOT
+    distinguish 'supplied element resolved but caller unauthorized' from 'supplied
+    element does not exist' at the element level." So this field carries every
+    unresolvable id the SAME way — a creative owned by another tenant and a creative
+    that never existed both land here, indistinguishably. Never split it into
+    "unauthorized" and "missing" buckets; that reintroduces the enumeration oracle at
+    array granularity, which is the whole reason ``CREATIVE_NOT_FOUND`` is a uniformity
+    MUST in the first place.
+    """
+
+    missing_creative_ids: list[str] | None = None
 
 
 class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetails):

@@ -529,7 +529,11 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # 3.1.1 enums/error-code.json: "Sellers MUST return this code uniformly for any
+    # creative_id not owned by the calling account". create_media_buy is not exempt
+    # from a MUST that update_media_buy already honours (@T-UC-003-ext-i) -- one
+    # condition, one code, whichever tool the buyer reached it through.
+    And the error code should be "CREATIVE_NOT_FOUND"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -544,7 +548,12 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # 3.1.1 enums/error-code.json codes VALIDATION_ERROR as "violates business rules
+    # beyond schema validation", which is what a format outside the product's declared
+    # set is. CREATIVE_REJECTED reads "Creative failed content policy review" -- the
+    # creative is fine here, the ASSIGNMENT is what the product does not permit. Same
+    # reading as @T-UC-006-ext-k and @T-UC-006-rule-039-inv2 on sync_creatives.
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
@@ -1266,11 +1275,19 @@ Feature: BR-UC-002 Create Media Buy
       | assignment_with_weight_zero         | creative validation passes    |
       | assignment_with_placement_targeting | creative validation passes    |
 
+    # Three conditions, three codes. They read CREATIVE_REJECTED for all three and
+    # passed for years because production emitted that one code for all three too --
+    # a test that encodes production's bug is not coverage. Per 3.1.1
+    # enums/error-code.json: a creative_id not owned by the caller is CREATIVE_NOT_FOUND
+    # (a MUST, uniform); a format the product does not accept and a stored creative
+    # missing its required assets both "violate business rules beyond schema
+    # validation", i.e. VALIDATION_ERROR. CREATIVE_REJECTED is content-policy review,
+    # which none of the three reaches.
     Examples: Invalid partitions
       | partition                           | outcome                                        |
-      | creative_not_found                  | error CREATIVE_REJECTED with suggestion          |
-      | format_mismatch                     | error CREATIVE_REJECTED with suggestion          |
-      | missing_required_assets             | error CREATIVE_REJECTED with suggestion          |
+      | creative_not_found                  | error CREATIVE_NOT_FOUND with suggestion         |
+      | format_mismatch                     | error VALIDATION_ERROR with suggestion           |
+      | missing_required_assets             | error VALIDATION_ERROR with suggestion           |
       | exceeds_max_creatives               | error INVALID_REQUEST with suggestion            |
 
   @T-UC-002-partition-approval-workflow @partition @approval-workflow
@@ -1751,8 +1768,8 @@ Feature: BR-UC-002 Create Media Buy
       | no creatives (valid)              | no creatives         | creative validation passes                    |
       | valid library reference           | assignment cr-001    | creative validation passes                    |
       | valid inline upload               | upload with format   | creative validation passes                    |
-      | creative_id not in library        | assignment cr-bad    | error CREATIVE_REJECTED with suggestion        |
-      | format not in product             | wrong format         | error CREATIVE_REJECTED with suggestion        |
+      | creative_id not in library        | assignment cr-bad    | error CREATIVE_NOT_FOUND with suggestion       |
+      | format not in product             | wrong format         | error VALIDATION_ERROR with suggestion         |
       | weight = 0 (paused)               | weight=0             | creative validation passes                    |
       | weight = 100 (max)                | weight=100           | creative validation passes                    |
       | 101 inline creatives              | 101 uploads          | error INVALID_REQUEST with suggestion          |

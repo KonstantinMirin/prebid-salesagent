@@ -99,18 +99,22 @@ class TestCheckBillingPolicy:
         assert _check_billing_policy("operator", identity) is None
 
     def test_tenantcontext_access_works(self):
-        """When identity.tenant is a TenantContext object, the same .get() contract applies."""
+        """The policy reads supported_billing off identity.tenant via the .get() contract.
+
+        The sibling this replaces, ``test_dict_access_works``, claimed to grade the
+        OTHER shape — "a raw dict (IMPL transport)" — and asserted
+        ``isinstance(identity.tenant, dict)``. Both halves of that premise are gone:
+        ``ResolvedIdentity.tenant`` is typed ``LazyTenantContext | None``, so a raw
+        dict is not a value it can hold, and ``Transport.IMPL`` is deleted. Both tests
+        built their identity through ``PrincipalFactory.make_identity``, which coerces,
+        so the pair was one shape tested twice — and only the one with the isinstance
+        said so out loud, by failing.
+        """
         identity = _identity_with_tenantcontext(supported_billing=["agent"])
         assert _check_billing_policy("agent", identity) is None
         failures = _check_billing_policy("operator", identity)
         assert failures is not None
         assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
-
-    def test_dict_access_works(self):
-        """When identity.tenant is a raw dict (IMPL transport), same behavior."""
-        identity = _identity_with(supported_billing=["agent"])
-        assert isinstance(identity.tenant, dict)
-        assert _check_billing_policy("agent", identity) is None
 
 
 class TestBuildSetupForApproval:

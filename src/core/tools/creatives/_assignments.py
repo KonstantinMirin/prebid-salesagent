@@ -6,10 +6,11 @@ from typing import Any
 
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import ValidationDetails
+from src.core.errors.details import CreativeRefDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPPackageNotFoundError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
 from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
@@ -171,7 +172,15 @@ def _process_assignments(
                         # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
                         # correctable, MANDATED uniformly for unowned creative_ids) —
                         # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
-                        raise AdCPCreativeNotFoundError()
+                        # The id is echoed back because the caller supplied it verbatim,
+                        # which 3.1.1 L3/error-handling.mdx permits; every unresolvable
+                        # id reads identically, so the uniformity the enum mandates holds.
+                        # No index is available here (the list is normalised to a dict
+                        # above), so `field` names the array parameter itself.
+                        raise AdCPCreativeNotFoundError(
+                            details=CreativeRefDetails(creative_id=creative_id),
+                            field="assignments",
+                        )
                     logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
                     continue
 
@@ -376,17 +385,16 @@ def _process_assignments(
             # also carry package causes. Other synthesized causes still ride
             # VALIDATION_ERROR — a known residual (strict package-not-found emits
             # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
-            not_found = creative_id in not_found_creative_ids
-            cause = AdCPCreativeNotFoundError if not_found else AdCPValidationError
-            entry = _failed_sync_result(
-                creative_id,
-                cause(
-                    # ``assignment_errors`` is NOT duplicated into details: the line
-                    # below sets it on the result entry, which is the buyer's path to
-                    # it. Two copies of one fact is what this migration removes.
-                    details=ValidationDetails(creative_id=creative_id),
-                ),
-            )
+            # ``assignment_errors`` is NOT duplicated into details: the line below sets
+            # it on the result entry, which is the buyer's path to it. Two copies of one
+            # fact is what this migration removes. Each code carries its own details
+            # shape — the exception class declares which one it accepts.
+            cause: AdCPSalesAgentError
+            if creative_id in not_found_creative_ids:
+                cause = AdCPCreativeNotFoundError(details=CreativeRefDetails(creative_id=creative_id))
+            else:
+                cause = AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
+            entry = _failed_sync_result(creative_id, cause)
             entry.assignment_errors = errors
         results.append(entry)
 

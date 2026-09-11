@@ -31,7 +31,6 @@ from src.core.exceptions import (
     AdCPBudgetExceededError,
     AdCPConfigurationError,
     AdCPCreativeNotFoundError,
-    AdCPCreativeRejectedError,
     AdCPGoneError,
     AdCPProductNotFoundError,
     AdCPValidationError,
@@ -893,7 +892,10 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            # VALIDATION_ERROR: a stored creative missing its required assets
+            # "violates business rules beyond schema validation" (3.1.1
+            # enums/error-code.json). Not CREATIVE_REJECTED — no policy review runs here.
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert exc_info.value.details.reasons is not None
@@ -923,10 +925,17 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+        # INVALID_STATE: "Operation is not permitted for the resource's current status"
+        # (3.1.1 enums/error-code.json). AdCPGoneError is this repo's carrier for it, and
+        # update_media_buy's gate splits terminal state from the field/format failures
+        # the same way. The STATE travels per creative, as a problem, not as a sentence.
+        with pytest.raises(AdCPGoneError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-        assert exc_info.value.details.reasons is not None
+        problems = exc_info.value.details.problems or []
+        assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
+            ("creative", mock_creative.creative_id, mock_creative.status)
+        ]
 
     def test_creative_rejected_state_rejected(self):
         """UC-002-C03: creative with status=rejected rejected.
@@ -953,10 +962,17 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+        # INVALID_STATE: "Operation is not permitted for the resource's current status"
+        # (3.1.1 enums/error-code.json). AdCPGoneError is this repo's carrier for it, and
+        # update_media_buy's gate splits terminal state from the field/format failures
+        # the same way. The STATE travels per creative, as a problem, not as a sentence.
+        with pytest.raises(AdCPGoneError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-        assert exc_info.value.details.reasons is not None
+        problems = exc_info.value.details.problems or []
+        assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
+            ("creative", mock_creative.creative_id, mock_creative.status)
+        ]
 
     def test_creative_format_mismatch_rejected(self):
         """UC-002-C04: creative format not matching product format rejected.
@@ -1005,7 +1021,7 @@ class TestCreateMediaBuyCreativeValidation:
             product_result.all.return_value = [mock_product]
             session.scalars.side_effect = [creative_result, product_result]
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert exc_info.value.details.reasons is not None
@@ -1083,7 +1099,7 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             # Both errors should be accumulated in a single exception

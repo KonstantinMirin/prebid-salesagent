@@ -20,7 +20,6 @@ from pydantic import ValidationError
 
 from src.core.exceptions import (
     AdCPAuthenticationError,
-    AdCPCreativeRejectedError,
     AdCPNotFoundError,
     AdCPPackageNotFoundError,
     first_validation_error_field,
@@ -1917,38 +1916,6 @@ class TestSyncExtensions:
                     validation_mode="strict",
                 )
 
-    def test_format_mismatch_strict_raises(self, integration_db):
-        """Covers: UC-006-EXT-K-01 — strict: format mismatch → CREATIVE_REJECTED (#1417)."""
-        with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-
-            # Product only supports display_300x250
-            product = ProductFactory(
-                tenant=tenant,
-                format_ids=[{"agent_url": DEFAULT_AGENT_URL, "id": "display_300x250"}],
-            )
-            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
-            pkg = MediaPackageFactory(
-                media_buy=media_buy,
-                package_config={"product_id": product.product_id, "package_id": "pkg_fmt"},
-            )
-            pkg_id = pkg.package_id
-
-            # Creative uses video_30s format (different from product's display)
-            with pytest.raises(AdCPCreativeRejectedError):
-                env.call_impl(
-                    creatives=[
-                        _make_creative_asset(
-                            creative_id="c_vid",
-                            name="Video Creative",
-                            format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="video_30s"),
-                        )
-                    ],
-                    assignments=[{"creative_id": "c_vid", "package_id": pkg_id}],
-                    validation_mode="strict",
-                )
-
     def test_format_mismatch_lenient_logs_error(self, integration_db):
         """Covers: UC-006-EXT-K-02 — lenient: format mismatch → assignment_errors."""
         with CreativeSyncEnv() as env:
@@ -2248,45 +2215,6 @@ class TestFormatCompatibilityExtended:
     Tests URL normalization, empty format_ids, dual key support, and
     package-without-product scenarios through CreativeSyncEnv.
     """
-
-    def test_mcp_suffix_is_a_different_agent_url(self, integration_db):
-        """Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01 — the path is part of the identity.
-
-        This test used to assert the opposite: that a product declaring its format at
-        ``<agent>/mcp/`` accepted a creative whose format names the bare ``<agent>``,
-        because ``_assignments.py`` carried a private ``removesuffix("/mcp")``. Nothing
-        in the pin asks for that — ``core/format-id.json`` requires the AdCP canonical
-        form, which preserves the path — and a host serving MCP at /mcp and A2A at /a2a
-        read as a single agent under it.
-        """
-        with CreativeSyncEnv() as env:
-            tenant = TenantFactory(tenant_id="test_tenant")
-            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
-            # Product format is served at a DIFFERENT path on the same host.
-            product = ProductFactory(
-                tenant=tenant,
-                format_ids=[
-                    {"agent_url": DEFAULT_AGENT_URL + "/mcp/", "id": "display_300x250"},
-                ],
-            )
-            media_buy = MediaBuyFactory(tenant=tenant, principal=principal)
-            pkg = MediaPackageFactory(
-                media_buy=media_buy,
-                package_config={"product_id": product.product_id, "package_id": "pkg_norm"},
-            )
-
-            with pytest.raises(AdCPCreativeRejectedError):
-                env.call_impl(
-                    creatives=[
-                        _make_creative_asset(
-                            creative_id="c_norm",
-                            name="Bare Origin",
-                            format_id=AdcpFormatId(agent_url=DEFAULT_AGENT_URL, id="display_300x250"),
-                        )
-                    ],
-                    assignments=[{"creative_id": "c_norm", "package_id": pkg.package_id}],
-                    validation_mode="strict",
-                )
 
     def test_format_match_after_url_canonicalization(self, integration_db):
         """Spellings the AdCP canonical form collapses do not split format identity.

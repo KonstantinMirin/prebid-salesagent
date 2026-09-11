@@ -78,6 +78,7 @@ from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
+    CreativeRefDetails,
     EntityRefDetails,
     ErrorProblem,
     InvalidStateDetails,
@@ -173,6 +174,7 @@ def _validate_creatives_for_assignment(
     uow: "MediaBuyUoW",
     principal_id: str,
     product: "DBProduct | None",
+    field: str,
     product_name: str | None = None,
     context: ContextObject | None = None,
 ) -> None:
@@ -209,6 +211,10 @@ def _validate_creatives_for_assignment(
         principal_id: The requesting buyer's principal (from ResolvedIdentity).
         product: The package's product ORM record (or ``None`` if the package
             has no resolvable product, in which case the format check is skipped).
+        field: JSON pointer to the array parameter the ids came from — the two
+            callers pass different ones (``packages[i].creative_ids`` vs
+            ``packages[i].creative_assignments``), and the spec asks the pointer
+            to name the array itself when the failure is about the collection.
         product_name: Display name for error messages (falls back to the
             product's name, then the product_id).
         context: AdCP context object, flowed into the error envelope.
@@ -229,11 +235,19 @@ def _validate_creatives_for_assignment(
     found_by_id = {c.creative_id: c for c in creatives_list}
     missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
     if missing_ids:
-        # Bare, and deliberately so: the pinned enum makes CREATIVE_NOT_FOUND uniform for
-        # any creative_id not owned by the caller, "never distinguish 'exists in another
-        # tenant' from 'does not exist'" (anti-enumeration). Matches the sync path's
-        # AdCPCreativeNotFoundError() in creatives/_assignments.py.
-        raise AdCPCreativeNotFoundError(context=context)
+        # The ids come back. The anti-enumeration MUST is about not distinguishing
+        # "exists elsewhere" from "does not exist" -- it is not a vow of silence, and
+        # 3.1.1 L3/error-handling.mdx says so: "Sellers MAY enumerate specific
+        # unresolvable elements in error.details -- but only when the elements were
+        # supplied verbatim by the caller." These were. Every unresolvable id is listed
+        # the SAME way, so a co-tenant's creative and a nonexistent one are
+        # indistinguishable in the response, which is what the MUST actually protects.
+        # `field` names the ARRAY parameter, per the same paragraph.
+        raise AdCPCreativeNotFoundError(
+            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
+            field=field,
+            context=context,
+        )
 
     # (b) Status — terminal-state creatives are not assignable.
     bad_state = [c for c in creatives_list if c.status in ("error", "rejected")]
@@ -965,6 +979,7 @@ def _update_media_buy_impl(
                             uow=uow,
                             principal_id=principal_id,
                             product=product,
+                            field=package_field_path("creative_ids", pkg_index),
                             context=req.context,
                         )
 
@@ -1145,6 +1160,7 @@ def _update_media_buy_impl(
                             uow=uow,
                             principal_id=principal_id,
                             product=ca_product,
+                            field=package_field_path("creative_assignments", pkg_index),
                             context=req.context,
                         )
 

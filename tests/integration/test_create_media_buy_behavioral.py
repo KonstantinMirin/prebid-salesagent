@@ -53,7 +53,7 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPCreativeRejectedError,
+    AdCPCreativeNotFoundError,
     AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
@@ -335,14 +335,14 @@ class TestCreativeMissingUrl:
             # URL extraction returns None (missing)
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
                     [mock_package], "test_tenant", "test_principal", session=session
                 )
 
             assert exc_info.value.details is not None
             assert exc_info.value.details.reasons
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_missing_dimensions_raises_invalid_creatives(self):
         """When creative has URL but missing dimensions, raise INVALID_CREATIVES.
@@ -374,14 +374,14 @@ class TestCreativeMissingUrl:
             # Has URL but no dimensions
             mock_extract.return_value = ("https://example.com/ad.jpg", None, None)
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
                     [mock_package], "test_tenant", "test_principal", session=session
                 )
 
             assert exc_info.value.details is not None
             assert exc_info.value.details.reasons
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
 class TestCreativeUploadFailure:
@@ -553,7 +553,7 @@ class TestMultipleInvalidCreativesAccumulated:
             # All creatives missing URL and dimensions
             mock_extract.return_value = (None, None, None)
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call(
                     [mock_package], "test_tenant", "test_principal", session=session
                 )
@@ -565,7 +565,7 @@ class TestMultipleInvalidCreativesAccumulated:
             assert "creative_1" in accumulated
             assert "creative_2" in accumulated
             assert "creative_3" in accumulated
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
 
 class TestPricingOptionXOR:
@@ -657,10 +657,13 @@ class TestCreativeIdsNotFound:
                 data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
             )
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
                 env.call_impl(req=req)
 
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            # 3.1.1 enums/error-code.json makes CREATIVE_NOT_FOUND a MUST, uniform for
+            # any creative_id not owned by the calling account. The wire code is graded
+            # by @T-UC-002-ext-o; this level only pins which class _impl raises.
+            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
 
     def test_set_difference_logic_detects_missing_creative_ids(self):
         """The set-difference logic (requested - found) correctly identifies missing IDs.
@@ -680,13 +683,10 @@ class TestCreativeIdsNotFound:
 
         assert missing_ids == {"creative_missing_1", "creative_missing_2"}
 
-        # Verify the rejection would be raised with the correct error code
-        if missing_ids:
-            error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                raise AdCPCreativeRejectedError()
-
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+        # The block that stood here raised the error and caught its own raise, then
+        # asserted the class's own _code -- it could not fail for any behavior of
+        # production. Which code this condition emits is graded by @T-UC-002-ext-o on
+        # the wire, and by test_creative_ids_not_found_raises_tool_error at _impl.
 
     def test_all_creative_ids_found_no_error(self):
         """When all creative IDs are found, no error is raised."""
@@ -720,7 +720,11 @@ class TestManualApprovalPathCreativeValidation:
 
     def test_manual_path_rejects_missing_creative_ids(self, integration_db):
         """PR #1430 review: missing creative_ids on the manual-approval path fail
-        CREATIVE_REJECTED on the wire — not a pending SUCCESS that skips them.
+        on the wire — not a pending SUCCESS that skips them.
+
+        The code is CREATIVE_NOT_FOUND, which 3.1.1 enums/error-code.json makes a
+        MUST, uniform for any creative_id not owned by the caller. It read
+        CREATIVE_REJECTED — content-policy review, which this path never reaches.
         """
         from tests.factories import CreativeFactory
         from tests.harness.transport import Transport
@@ -755,14 +759,19 @@ class TestManualApprovalPathCreativeValidation:
                 f"Manual-approval path accepted missing creative_ids (pending success): {result.payload}"
             )
             result.assert_wire_error(
-                "CREATIVE_REJECTED",
+                "CREATIVE_NOT_FOUND",
                 recovery="correctable",
             )
 
-    def test_manual_path_format_mismatch_emits_creative_rejected(self, integration_db):
-        """PR #1430 review: creative-vs-product format mismatch must emit
-        CREATIVE_REJECTED on the manual-approval path — the same wire code the
-        auto path emits for the same buyer input — not VALIDATION_ERROR.
+    def test_manual_path_format_mismatch_matches_auto_path(self, integration_db):
+        """PR #1430 review: creative-vs-product format mismatch emits the SAME wire
+        code on the manual-approval path as on the auto path for the same buyer input.
+
+        That parity is the claim and it still holds; only the shared code moved. It is
+        VALIDATION_ERROR — 3.1.1 enums/error-code.json, "violates business rules beyond
+        schema validation" — and #1430 picked CREATIVE_REJECTED for both paths, which
+        the same enum defines as a content-policy review failure. The creative is fine;
+        the ASSIGNMENT is what the product does not permit.
         """
         from tests.factories import CreativeFactory
         from tests.harness.transport import Transport
@@ -796,7 +805,7 @@ class TestManualApprovalPathCreativeValidation:
 
             assert result.is_error, f"Manual-approval path accepted a format-mismatched creative: {result.payload}"
             result.assert_wire_error(
-                "CREATIVE_REJECTED",
+                "VALIDATION_ERROR",
                 recovery="correctable",
             )
 
@@ -1863,16 +1872,11 @@ class TestExtensionObligations:
         assert exc.details.product_id is not None
 
     @pytest.mark.asyncio
-    async def test_creative_ids_not_in_database(self):
-        """Creative IDs not in database returns CREATIVES_NOT_FOUND.
-
-        Covers: UC-002-EXT-O-01
-        """
-        # This is covered by TestCreativeIdsNotFound above.
-        # Verify the error code pattern: the create path now emits CREATIVE_REJECTED
-        # for missing creative_ids (unified with the update path).
-        error = AdCPCreativeRejectedError()
-        assert error.error_code == "CREATIVE_REJECTED"
+    # test_creative_ids_not_in_database is DELETED. It constructed the exception and
+    # asserted its own _code ClassVar against itself, so it could not fail for any
+    # behavior of production — and its own comment said "This is covered by
+    # TestCreativeIdsNotFound above". When the code changed to CREATIVE_NOT_FOUND it
+    # went red anyway, which is the tell: the only thing it could detect was a rename.
 
     def test_creative_upload_failed_error_code(self):
         """Creative upload failures raise AdCPAdapterError (wire code SERVICE_UNAVAILABLE).

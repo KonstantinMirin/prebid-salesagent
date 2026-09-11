@@ -8,7 +8,6 @@ from sqlalchemy import select
 
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
-from src.core.exceptions import AdCPCreativeRejectedError
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from tests.factories.principal import PrincipalFactory
@@ -353,113 +352,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
         assert len(assignments) == 2
         assigned_creative_ids = {a.creative_id for a in assignments}
         assert assigned_creative_ids == {"creative_2", "creative_3"}
-
-
-@pytest.mark.requires_db
-def test_update_media_buy_rejects_missing_creatives(integration_db):
-    """Test that update_media_buy rejects requests with non-existent creative IDs."""
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import MediaBuy, Principal, Product, PropertyTag, Tenant
-
-    with get_db_session() as session:
-        # Create tenant
-        tenant = Tenant(
-            tenant_id="test_tenant",
-            name="Test Org",
-            subdomain="test",
-        )
-        session.add(tenant)
-
-        # Create property tag (required for products)
-        property_tag = PropertyTag(
-            tenant_id="test_tenant",
-            tag_id="all_inventory",
-            name="All Inventory",
-            description="All available inventory",
-        )
-        session.add(property_tag)
-
-        # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            name="Test Advertiser",
-            access_token="test_token",
-            platform_mappings={"mock": {"id": "test_advertiser"}},
-        )
-        session.add(principal)
-        session.flush()  # Ensure principal exists before creating creatives
-
-        # Create product
-        product = Product(
-            product_id="test_product",
-            tenant_id="test_tenant",
-            name="Test Product",
-            description="Test product for creative assignment",
-            format_ids=["display_300x250"],
-            targeting_template={},
-            delivery_type="guaranteed",
-            property_tags=["all_inventory"],
-        )
-        session.add(product)
-
-        # Create media buy
-        media_buy = MediaBuy(
-            media_buy_id="test_buy_789",
-            tenant_id="test_tenant",
-            principal_id="test_principal",
-            order_name="Test Order",
-            advertiser_name="Test Advertiser",
-            start_date="2025-11-01",
-            end_date="2025-11-30",
-            start_time="2025-11-01T00:00:00Z",
-            end_time="2025-11-30T23:59:59Z",
-            raw_request={
-                "packages": [{"package_id": "pkg_default", "impressions": 100000, "products": ["test_product"]}]
-            },
-        )
-        session.add(media_buy)
-        session.commit()
-
-    # Create identity for the new _update_media_buy_impl signature
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_principal",
-        tenant_id="test_tenant",
-        tenant={"tenant_id": "test_tenant"},
-        auth_token="test_token",
-        protocol="mcp",
-    )
-
-    with (
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
-        patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
-        patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
-    ):
-        # Mock adapter
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_get_adapter.return_value = mock_adapter
-
-        # Mock context manager
-        mock_ctx_manager_inst = MagicMock()
-        mock_ctx_manager_inst.get_or_create_context.return_value = MagicMock(context_id="ctx_789")
-        mock_ctx_manager_inst.create_workflow_step.return_value = MagicMock(step_id="step_789")
-        mock_ctx_mgr.return_value = mock_ctx_manager_inst
-
-        # Call update_media_buy with non-existent creative IDs — should raise.
-        req = UpdateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            media_buy_id="test_buy_789",
-            packages=[
-                {
-                    "package_id": "pkg_default",
-                    "creative_ids": ["nonexistent_creative"],
-                }
-            ],
-        )
-        with pytest.raises(AdCPCreativeRejectedError):
-            _update_media_buy_impl(req=req, identity=identity)
 
 
 @pytest.mark.requires_db
