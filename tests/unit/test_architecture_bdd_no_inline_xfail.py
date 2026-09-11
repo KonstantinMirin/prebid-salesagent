@@ -137,7 +137,6 @@ def _scan_bdd_steps() -> set[XfailSite]:
 _ALLOWLIST: set[XfailSite] = {
     ("domain/uc002_create_media_buy.py", "_assert_pipeline_routing", 1),
     ("domain/uc003_ext_error_scenarios.py", "given_seller_minimum_budget", 1),
-    ("domain/uc006_sync_creatives.py", "_assert_generative_build", 1),
     # Merge reconciliation (spec-gaps-1210 <- main): this row was authored against
     # main's copy of the function (3 calls). The branch's copy has 4: its single
     # request-level hatch was SPLIT in two — "wire code mismatched" and "the request
@@ -146,63 +145,21 @@ _ALLOWLIST: set[XfailSite] = {
     # tighter. No new gap category is admitted; one decision point became two calls.
     # This is the ONE row here whose count moved UP, and it is a follow-up: collapse
     # those two calls back into one in uc006_sync_creatives.py and re-key to 3.
-    ("domain/uc006_sync_creatives.py", "_assert_per_creative_failure", 4),
-    ("domain/uc006_sync_creatives.py", "_assert_standard_processing", 1),
-    ("domain/uc006_sync_creatives.py", "_xfail_if_e2e", 1),
+    # UNCONDITIONAL, and that is why it stays: "this is not implemented" is a legible
+    # claim, unlike a conditional xfail keyed on the outcome, which passes when production
+    # agrees and excuses itself when it does not (salesagent-tne7q). The other 102
+    # conditional sites in tests/bdd/steps are gone; this one was never one of them.
+    ("domain/uc006_sync_creatives.py", "_assert_per_creative_failure", 1),
     ("domain/uc006_sync_creatives.py", "given_principal_no_associated_tenant", 1),
     ("domain/uc006_sync_creatives.py", "given_product_format_ids_using_format_id_key", 1),
-    ("domain/uc006_sync_creatives.py", "then_asset_has_provenance_not_inherited", 3),
-    ("domain/uc006_sync_creatives.py", "then_assignment_errors_contain_package_id", 2),
-    ("domain/uc006_sync_creatives.py", "then_assignment_results_list_assigned_packages", 1),
-    ("domain/uc006_sync_creatives.py", "then_assignment_skipped_with_warning", 2),
-    ("domain/uc006_sync_creatives.py", "then_compatible_package_assignment_created", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_action_created", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_action_created_or_updated", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_action_failed", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_associated_with_principal", 1),
-    ("domain/uc006_sync_creatives.py", "then_creative_has_generated_content", 2),
-    ("domain/uc006_sync_creatives.py", "then_creative_validated_by_agent", 1),
-    ("domain/uc006_sync_creatives.py", "then_error_code_with_suggestion", 2),
-    ("domain/uc006_sync_creatives.py", "then_existing_assignment_updated_not_duplicated", 1),
-    ("domain/uc006_sync_creatives.py", "then_existing_creative_updated_by_triple_key", 1),
-    ("domain/uc006_sync_creatives.py", "then_formats_match_using_format_id_key", 2),
-    ("domain/uc006_sync_creatives.py", "then_generative_build_skipped", 1),
-    ("domain/uc006_sync_creatives.py", "then_generative_build_uses_prompt", 1),
-    ("domain/uc006_sync_creatives.py", "then_invalid_creative_action", 1),
-    ("domain/uc006_sync_creatives.py", "then_invoke_generative_with_asset_prompt", 1),
-    ("domain/uc006_sync_creatives.py", "then_media_buy_status_should_remain", 1),
-    ("domain/uc006_sync_creatives.py", "then_new_creative_created_for_principal", 1),
-    ("domain/uc006_sync_creatives.py", "then_no_field_level_merging", 2),
-    ("domain/uc006_sync_creatives.py", "then_nonexistent_package_reported_as_warning", 1),
     # Graduated 7 -> 5 (salesagent-3dawm.18): the two prose-routed hatches
     # ("package not found"/"not supported by product" substring matches) are DELETED
     # and replaced with an unconditional wire-code assertion. Both were already dead —
     # CODE_TABLE derives the message from the code, so neither substring can appear.
-    ("domain/uc006_sync_creatives.py", "then_operation_fails_with_assignment_error", 5),
     # Graduated 2 -> 1 (salesagent-3dawm.18): the "AdCPNotFoundError.error_code is
     # 'NOT_FOUND' — needs a domain-specific subclass" hatch is DELETED; that subclass
     # exists (AdCPPackageNotFoundError, _assignments.py) and the step now asserts
     # PACKAGE_NOT_FOUND on the wire unconditionally.
-    ("domain/uc006_sync_creatives.py", "then_operation_should_abort_package_not_found", 1),
-    ("domain/uc006_sync_creatives.py", "then_preview_urls_generated", 1),
-    ("domain/uc006_sync_creatives.py", "then_proceed_with_resolved_account", 1),
-    ("domain/uc006_sync_creatives.py", "then_processed_as_generative", 1),
-    ("domain/uc006_sync_creatives.py", "then_processed_without_external_validation", 1),
-    ("domain/uc006_sync_creatives.py", "then_processing_continues_normally", 1),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_assignment_errors", 2),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_assignment_errors_for_nonexistent", 2),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_creative_with_assignment_results", 1),
-    ("domain/uc006_sync_creatives.py", "then_response_includes_one_creative_with_action", 1),
-    ("domain/uc006_sync_creatives.py", "then_review_workflow_with_ai", 1),
-    ("domain/uc006_sync_creatives.py", "then_second_is_idempotent_upsert", 1),
-    ("domain/uc006_sync_creatives.py", "then_system_should_reject_validation_error", 4),
-    ("domain/uc006_sync_creatives.py", "then_two_assignments_created_successfully", 1),
-    ("domain/uc006_sync_creatives.py", "then_uc006_result_should_be", 2),
-    ("domain/uc006_sync_creatives.py", "then_user_assets_preserved", 1),
-    ("domain/uc006_sync_creatives.py", "then_user_assets_priority_over_generated", 2),
-    ("domain/uc006_sync_creatives.py", "then_valid_assignment_created", 3),
-    ("domain/uc006_sync_creatives.py", "then_valid_creative_action", 1),
-    ("domain/uc006_sync_creatives.py", "then_valid_not_affected_by_invalid", 1),
     ("domain/uc011_accounts.py", "then_account_transitions", 1),
     ("domain/uc011_accounts.py", "then_push_sent", 1),
     ("domain/uc011_accounts.py", "then_response_includes_context", 1),

@@ -503,8 +503,11 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     #    On a resolution failure _sync_creatives_impl never runs and nothing is
     #    written, so this is what proves processing proceeded past resolution.
     env = ctx["env"]
-    if not getattr(env, "use_real_db", False):
-        pytest.xfail("harness does not provide a DB session — cannot verify persistence")
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing (salesagent-tne7q).
+    assert getattr(env, "use_real_db", False), (
+        "this env has no real DB, so 'the creative was persisted' cannot be verified. "
+        "Run this scenario under an IntegrationEnv, or the claim does not belong here."
+    )
 
     # Authenticated principal the creative must be scoped to (isolation guard).
     # Given steps expose it as ctx["principal_id"] (string) or ctx["principal"]
@@ -583,19 +586,9 @@ def then_error_code_with_suggestion(ctx: dict, error_code: str) -> None:
     }
 
     error = ctx.get("error")
-    if error is None and error_code in _SPEC_PRODUCTION_GAP_CODES:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: production does not raise {error_code} — "
-            "spec defines this code but production silently accepts the input"
-        )
     assert error is not None, f"Expected error {error_code} but none was recorded"
 
     actual_code, suggestion = _extract_error_code_and_suggestion(ctx, error)
-    if actual_code != error_code and error_code in _SPEC_PRODUCTION_GAP_CODES:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {error_code}, production raised "
-            f"'{actual_code}' ({type(error).__name__}: {error})"
-        )
     assert actual_code == error_code, (
         f"Expected error code '{error_code}', got '{actual_code}' ({type(error).__name__}: {error})"
     )
@@ -696,11 +689,27 @@ def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
 
 
 def _xfail_if_e2e(ctx: dict) -> None:
-    """xfail when running under e2e_rest: factory data is not in Docker's DB."""
+    """SKIP under e2e_rest: factory-created creatives are not in Docker's DB.
+
+    This is the ONE guard in this module that is not an outcome-keyed excuse, and the
+    distinction is what decides the primitive. ``is_e2e(ctx)`` is known BEFORE dispatch,
+    so it cannot mask a production regression the way `if error is not None: xfail` does —
+    production's behaviour has no influence on which transport is running.
+
+    It is therefore a statement of INAPPLICABILITY, not of expected failure, and skip is
+    the honest primitive: xfail claims "this should fail and does", which is false here —
+    the check simply cannot be performed against a database the fixtures never wrote to.
+    Fixing it means seeding the live server's DB via ``realize_e2e``
+    (tests/harness/_realize.py), at which point this guard is deleted rather than flipped.
+    """
     if is_e2e(ctx):
         import pytest
 
-        pytest.xfail("e2e_rest fixture injection gap — factory-created creatives are not in Docker DB. FIXME")
+        pytest.skip(
+            "e2e_rest fixture injection gap — factory-created creatives are never written to "
+            "Docker's DB, so a DB-readback assertion has nothing to read. Seed via realize_e2e "
+            "to make these scenarios gradeable on this transport."
+        )
 
 
 def _get_creative_from_db(ctx: dict) -> object:
@@ -874,13 +883,9 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
         or step_metadata.get("approval_mode") == "ai-powered"
         or getattr(step, "approval_mode", None) == "ai-powered"
     )
-    if not has_ai_indicator:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: workflow step exists and maps to creative, but "
-            "does not carry an AI-specific indicator (approval_mode='ai-powered') "
-            "to distinguish from human-review. "
-            f"Step config={step_config}, metadata={step_metadata}"
-        )
+    assert has_ai_indicator, (
+        f"SPEC-PRODUCTION GAP: workflow step exists and maps to creative, but does not carry an AI-specific indicator (approval_mode='ai-powered') to distinguish from human-review. Step config={step_config}, metadata={step_metadata}"
+    )
 
 
 @then("a workflow step should be created for the Seller")
@@ -1608,12 +1613,10 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
                 errs = getattr(r, "errors", None) or []
                 if errs:
                     actual = getattr(errs[0], "code", None) or getattr(errs[0], "error_code", None)
-                    if actual == expected_code:
-                        return
-                    pytest.xfail(
-                        f"SPEC-PRODUCTION GAP: expected {expected_code}, wire code {actual!r} "
-                        f"on the per-creative entry: {errs[0]!r}"
+                    assert actual == expected_code, (
+                        f"expected {expected_code} on the per-creative entry, got wire code {actual!r}: {errs[0]!r}"
                     )
+                    return
     # Request-level rejection: read the WIRE code, not the class of a rebuilt
     # exception (salesagent-3dawm.18). The per-creative branch above already reads
     # the payload's errors[] entry, which is the correct layer for a per-record
@@ -1621,14 +1624,11 @@ def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
     result = ctx.get("result")
     wire_code = result.wire_error_code() if result is not None else None
     if wire_code is not None:
-        if wire_code == expected_code:
-            return
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code}, wire code {wire_code!r}")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected {expected_code} on the wire, but the request failed "
-            f"before reaching it: {type(error).__name__}: {error}"
-        )
+        assert wire_code == expected_code, f"expected {expected_code} on the wire, got {wire_code!r}"
+        return
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected {expected_code} on the wire, but the request failed before reaching it: {type(error).__name__}: {error}"
+    )
     pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
 
 
@@ -1647,25 +1647,12 @@ def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
     still fires and raises sqlalchemy ForeignKeyViolation. This is a pydantic-
     schema / production limitation, not a behavioral defect in assignment logic.
     """
-    import pytest
-    from sqlalchemy.exc import IntegrityError
 
     # Common pre-check: spec format ids with '/' cannot round-trip through
     # production's FormatId pattern. Surface as SPEC-PRODUCTION GAP.
     err = ctx.get("error")
-    if isinstance(err, IntegrityError) and "creative_assignments" in str(err) and "is not present in table" in str(err):
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent/<name>' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Creative validation fails, "
-            "no creative row is persisted, and assignment processing then raises FK violation."
-        )
     # MCP's TypeAdapter rejects the format_id at the transport boundary (before
     # reaching _impl) with a pattern-mismatch ToolError — same underlying gap.
-    if err is not None and "format_id.id" in str(err) and "string_pattern_mismatch" in str(err):
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent/<name>' rejected by MCP/transport "
-            "boundary validation — FormatId.id pattern is ^[a-zA-Z0-9_-]+$ in adcp library schema."
-        )
 
     if outcome == "assignment created":
         assert err is None, f"Expected 'assignment created' but got {type(err).__name__}: {err}"
@@ -1805,11 +1792,9 @@ def then_existing_assignment_updated_not_duplicated(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     assignment_id = ctx["existing_assignment_id"]
@@ -2164,10 +2149,9 @@ def given_creative_agent_no_preview_urls(ctx: dict) -> None:
 def then_creative_action_created(ctx: dict) -> None:
     """Assert the per-creative SyncCreativeResult has action == "created"."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected action='created', but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected action='created', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
@@ -2190,11 +2174,9 @@ def then_creative_action_failed(ctx: dict) -> None:
     """
     resp = payload_or_none(ctx)
     err = ctx.get("error")
-    if resp is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: scenario expects action='failed' on a "
-            f"SyncCreativeResult but the dispatch raised {type(err).__name__}: {err}"
-        )
+    assert resp is not None, (
+        f"SPEC-PRODUCTION GAP: scenario expects action='failed' on a SyncCreativeResult but the dispatch raised {type(err).__name__}: {err}"
+    )
 
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult in response, got: {resp}"
@@ -2311,7 +2293,6 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
         and would fail strict equality. We pre-empt by mapping the error
         for downstream Then steps via details["error_code"].
     """
-    from sqlalchemy.exc import IntegrityError
 
     from src.core.exceptions import AdCPSalesAgentError
 
@@ -2323,47 +2304,35 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
             error = resp.errors[0]
             ctx["error"] = error
 
-    if error is None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected an assignment error but production succeeded. "
-            f"Response: {payload_or_none(ctx)!r}"
-        )
+    assert error is not None, (
+        f"SPEC-PRODUCTION GAP: expected an assignment error but production succeeded. Response: {payload_or_none(ctx)!r}"
+    )
 
     # MCP/TypeAdapter pre-impl rejection of FormatId pattern — surface as gap
     err_str = str(error)
-    if "format_id.id" in err_str and "string_pattern_mismatch" in err_str:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent1/banner-300x250' rejected by "
-            "MCP/transport TypeAdapter — adcp library FormatId.id pattern is ^[a-zA-Z0-9_-]+$."
-        )
 
     # SQLAlchemy FK violation cascade from format-id-with-slash gap (REST/impl path)
-    if isinstance(error, IntegrityError) and "creative_assignments" in err_str and "is not present in table" in err_str:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent1/<name>' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Creative validation fails, no "
-            "creative row is persisted, and assignment processing then raises FK violation."
-        )
 
     # E2E server crash from format-id-with-slash gap — same root cause as above
     # but manifested as HTTP 500 with empty body on the real Docker stack.
-    if isinstance(error, AdCPSalesAgentError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: spec format id 'agent1/<name>' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. Server returns 500 with empty "
-            "body on e2e_rest transport."
-        )
+    # A 500 here is a real defect worth failing on. The scenario's format id
+    # "agent1/<name>" is SCHEMA-INVALID: the pinned 3.1 core/format-id.json defines id as a
+    # "slug matching [a-zA-Z0-9_-]+", so the slash is forbidden BY THE SPEC, not merely by
+    # production's pattern. A spec-invalid input must be refused with a validation error,
+    # never answered with an empty-bodied 500 — excusing that hid a crash behind a
+    # scenario bug (salesagent-tne7q).
+    assert not (
+        isinstance(error, AdCPSalesAgentError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str
+    ), (
+        "server returned INTERNAL_ERROR/HTTP 500 for a format_id whose id contains '/'. "
+        "The pin forbids the slash, so this input must be REFUSED with a validation error, "
+        "not crash the server"
+    )
 
     # Catch-all for fictional format IDs with slashes (e.g. "agent1/banner-300x250").
     # Production's FormatId.id pattern is ^[a-zA-Z0-9_-]+$ — slashes are invalid.
     # Different transports reject at different layers with different error types.
     creative_fmt = str(ctx.get("creative_format_id", ""))
-    if "/" in creative_fmt and isinstance(error, (AdCPSalesAgentError, IntegrityError)):
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: spec format id '{creative_fmt}' contains '/', which violates "
-            "production's FormatId.id pattern ^[a-zA-Z0-9_-]+$. "
-            f"Error: {type(error).__name__}: {error.message if hasattr(error, 'message') else error}"
-        )
 
     # The two SPEC-PRODUCTION GAP xfails that used to live here are DELETED, because
     # both the gap and the mechanism that detected it are gone (salesagent-3dawm.18):
@@ -3184,11 +3153,9 @@ def then_media_buy_status_should_transition_to(ctx: dict, target_status: str) ->
 def then_media_buy_status_should_remain(ctx: dict, expected_status: str) -> None:
     """Assert the media buy status did NOT change from the expected value."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected media buy to remain '{expected_status}' "
-            f"but sync raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected media buy to remain '{expected_status}' but sync raised {type(error).__name__}: {error}"
+    )
     actual = _get_media_buy_status_from_db(ctx)
     assert actual == expected_status, f"Expected media buy status to remain '{expected_status}', but got '{actual}'"
 
@@ -4008,17 +3975,10 @@ def then_formats_match_using_format_id_key(ctx: dict) -> None:
     fails with a format-related error, mark as SPEC-PRODUCTION GAP.
     """
     error = ctx.get("error")
-    if error is not None:
-        err_str = str(error).lower()
-        if "format" in err_str:
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: product format_ids using 'format_id' key should be accepted, "
-                f"but production raised format error: {error}"
-            )
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected success with format_id key, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"a product declaring its formats under the 'format_id' key must be accepted, but "
+        f"production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     assigned = _get_creative_assigned_to(ctx)
     expected = ctx["package"].package_id
@@ -4072,28 +4032,21 @@ def then_asset_has_provenance_not_inherited(ctx: dict, expected: str, inherited:
     provenance should replace creative-level entirely (no field-level merge).
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected provenance assertion but sync raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected provenance assertion but sync raised {type(error).__name__}: {error}"
+    )
     creative = _get_creative_from_db(ctx)
     data = getattr(creative, "data", None) or {}
     assets = data.get("assets", {})
-    if not assets:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — "
-            "asset-level provenance storage not implemented in production. "
-            "BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
-        )
+    assert assets, (
+        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
+    )
     first_asset = next(iter(assets.values())) if assets else {}
     asset_provenance = first_asset.get("provenance", {})
     asset_source = asset_provenance.get("digital_source_type")
-    if asset_source is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored "
-            "in creative.data.assets — production may not support per-asset provenance yet. "
-            "BR-RULE-094 INV-5."
-        )
+    assert asset_source is not None, (
+        "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored in creative.data.assets — production may not support per-asset provenance yet. BR-RULE-094 INV-5."
+    )
     assert asset_source == expected, (
         f"INV-5: Expected asset provenance '{expected}', got '{asset_source}' "
         f"(creative-level was '{inherited}' — should NOT be inherited)"
@@ -4112,19 +4065,15 @@ def then_no_field_level_merging(ctx: dict) -> None:
     creative = _get_creative_from_db(ctx)
     data = getattr(creative, "data", None) or {}
     assets = data.get("assets", {})
-    if not assets:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — "
-            "cannot verify no-merge semantics. BR-RULE-094 INV-5."
-        )
+    assert assets, (
+        "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — cannot verify no-merge semantics. BR-RULE-094 INV-5."
+    )
     creative_provenance = data.get("provenance", {})
     first_asset = next(iter(assets.values())) if assets else {}
     asset_provenance = first_asset.get("provenance", {})
-    if not asset_provenance:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: no asset-level provenance stored — "
-            "cannot verify replacement semantics. BR-RULE-094 INV-5."
-        )
+    assert asset_provenance, (
+        "SPEC-PRODUCTION GAP: no asset-level provenance stored — cannot verify replacement semantics. BR-RULE-094 INV-5."
+    )
     # Full replacement: creative-only provenance keys must NOT appear in asset
     creative_only_keys = set(creative_provenance.keys()) - {"digital_source_type"}
     leaked = {k for k in creative_only_keys if k in asset_provenance}
@@ -4323,11 +4272,9 @@ def then_existing_creative_updated_by_triple_key(ctx: dict) -> None:
 
     _xfail_if_e2e(ctx)
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative update by triple key, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative update by triple key, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     creative_id = ctx["pre_existing_creative_id"]
@@ -4406,11 +4353,9 @@ def _get_creative_result_by_id(ctx: dict, creative_id: str) -> object | None:
 def then_valid_creative_action(ctx: dict, action: str) -> None:
     """Assert the valid creative has the expected action."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected valid creative action '{action}' "
-            f"but dispatch raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected valid creative action '{action}' but dispatch raised {type(error).__name__}: {error}"
+    )
     result = _get_creative_result_by_id(ctx, ctx["valid_creative_id"])
     assert result is not None, f"No result found for valid creative {ctx['valid_creative_id']}"
     action_str = str(getattr(getattr(result, "action", None), "value", getattr(result, "action", None)))
@@ -4421,11 +4366,9 @@ def then_valid_creative_action(ctx: dict, action: str) -> None:
 def then_invalid_creative_action(ctx: dict, action: str) -> None:
     """Assert the invalid creative has the expected action."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected invalid creative action '{action}' "
-            f"but dispatch raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected invalid creative action '{action}' but dispatch raised {type(error).__name__}: {error}"
+    )
     result = _get_creative_result_by_id(ctx, ctx["invalid_creative_id"])
     assert result is not None, f"No result found for invalid creative {ctx['invalid_creative_id']}"
     action_str = str(getattr(getattr(result, "action", None), "value", getattr(result, "action", None)))
@@ -4436,10 +4379,9 @@ def then_invalid_creative_action(ctx: dict, action: str) -> None:
 def then_valid_not_affected_by_invalid(ctx: dict) -> None:
     """Assert both results are present — the valid one was not aborted by the invalid one."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected per-creative isolation, but dispatch raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected per-creative isolation, but dispatch raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert len(results) == 2, f"Expected 2 creative results (one valid, one failed), got {len(results)}"
@@ -4498,28 +4440,27 @@ def then_processed_without_external_validation(ctx: dict) -> None:
         or ctx["env"].mock.get("external_validation")
         or ctx["env"].mock.get("creative_agent_validate")
     )
-    if mock_validate is not None:
-        assert mock_validate.call_count == 0, (
-            f"External agent validation should be skipped for adapter format, "
-            f"but was called {mock_validate.call_count} time(s)"
-        )
-    else:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: harness does not expose a mock for external "
-            "creative validation agent — cannot verify the validation path "
-            "was bypassed"
-        )
+    # No mock means the claim is ungradeable, and an ungradeable claim is a harness
+    # defect to fix rather than an expected failure to record: the xfail here reported a
+    # missing seam as though production were at fault (salesagent-tne7q).
+    assert mock_validate is not None, (
+        "CreativeSyncEnv exposes no mock for the external creative-validation agent, so "
+        "'validation was bypassed' cannot be graded. Wire one of validate_creative / "
+        "external_validation / creative_agent_validate into EXTERNAL_PATCHES."
+    )
+    assert mock_validate.call_count == 0, (
+        f"External agent validation should be skipped for adapter format, "
+        f"but was called {mock_validate.call_count} time(s)"
+    )
 
 
 @then('the creative should have action "created" or "updated"')
 def then_creative_action_created_or_updated(ctx: dict) -> None:
     """Assert the creative's action is either "created" or "updated"."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected action created/updated, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected action created/updated, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one SyncCreativeResult"
@@ -4637,25 +4578,19 @@ def given_assignments_two_packages_one_valid_one_missing(ctx: dict) -> None:
 def then_valid_assignment_created(ctx: dict) -> None:
     """Assert the valid package assignment was created despite the non-existent one."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should continue despite invalid assignment, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should continue despite invalid assignment, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    if not results:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected creative results with assignment info, "
-            "but response has no creatives/results."
-        )
+    assert results, (
+        "SPEC-PRODUCTION GAP: expected creative results with assignment info, but response has no creatives/results."
+    )
     assigned = results[0].assigned_to or []
     valid_pkg = ctx["valid_package"].package_id
-    if valid_pkg not in assigned:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should create valid assignment to {valid_pkg}, "
-            f"but assigned_to={assigned}"
-        )
+    assert valid_pkg in assigned, (
+        f"SPEC-PRODUCTION GAP: lenient mode should create valid assignment to {valid_pkg}, but assigned_to={assigned}"
+    )
     # The claim, stated on the path that RETURNS. The xfail above records the
     # known gap; without this the satisfied path returned having graded nothing.
     assert valid_pkg in assigned, f"expected assignment to {valid_pkg}, got assigned_to={assigned}"
@@ -4671,11 +4606,9 @@ def then_nonexistent_package_reported_as_warning(ctx: dict) -> None:
     failure.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should warn about non-existent "
-            f"package, but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should warn about non-existent package, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Lenient mode must return per-creative results (POST-S1/S2)"
@@ -4704,11 +4637,9 @@ def then_processing_continues_normally(ctx: dict) -> None:
     a success outcome (created/updated), confirming the sync completed.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should continue normally, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should continue normally, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one creative result from a completed sync"
@@ -4934,10 +4865,9 @@ def _assert_standard_processing(ctx: dict) -> None:
     mock must NOT have been called.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 'standard processing' but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 'standard processing' but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -4961,10 +4891,9 @@ def _assert_generative_build(ctx: dict, prompt_source: str) -> None:
                        "name_fallback" (prompt derived from creative name).
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -5254,10 +5183,9 @@ def then_processed_without_generative_build(ctx: dict) -> None:
 def then_invoke_generative_with_asset_prompt(ctx: dict) -> None:
     """Assert generative build was invoked using the exact prompt from assets."""
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 'generative build' but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -5528,8 +5456,7 @@ def then_processed_as_generative(ctx: dict) -> None:
     INV-1: format_obj.output_format_ids is truthy -> creative classified as generative.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected generative processing but got {type(error).__name__}: {error}")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected generative processing but got {type(error).__name__}: {error}"
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -5551,14 +5478,13 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     INV-1: verifies the generative build result was stored in the DB.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected generated content but got {type(error).__name__}: {error}")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected generated content but got {type(error).__name__}: {error}"
 
     # Verify via DB: read the creative back and check for generative data
     env = ctx["env"]
     session = env.get_session()
-    if session is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify generated content")
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing (salesagent-tne7q).
+    assert session is not None, "no DB session, so the generated-content claim cannot be verified against storage"
 
     from sqlalchemy import select
 
@@ -5589,11 +5515,9 @@ def then_generative_build_uses_prompt(ctx: dict, expected_prompt: str) -> None:
     and INV-4 (name fallback: "Create a creative for: {name}").
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected generative build with prompt "
-            f"'{expected_prompt}' but got {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected generative build with prompt '{expected_prompt}' but got {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     env = ctx["env"]
@@ -5624,10 +5548,9 @@ def then_generative_build_skipped(ctx: dict) -> None:
     INV-5: no prompt in assets or inputs (update) -> generative build skipped.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected generative build to be skipped but got {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected generative build to be skipped but got {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     actions = [str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None))) for r in results]
@@ -5708,8 +5631,7 @@ def then_user_assets_preserved(ctx: dict) -> None:
     catches generated content overwriting user values.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected user assets preserved but got {type(error).__name__}: {error}"
 
     stored_assets = _stored_assets_for_last_creative(ctx)
     specs = ctx["user_provided_assets"]
@@ -5726,10 +5648,11 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
     not the generated ones from build_creative.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}")
-    if ctx["env"].get_session() is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: no DB session available to verify asset priority")
+    assert error is None, f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}"
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing (salesagent-tne7q).
+    assert ctx["env"].get_session() is not None, (
+        "no DB session, so the user-asset-priority claim cannot be verified against storage"
+    )
 
     stored_assets = _stored_assets_for_last_creative(ctx)
     # User-provided assets must survive the generative build (not overwritten by generated content).
@@ -5843,21 +5766,17 @@ def then_response_includes_assignment_errors(ctx: dict) -> None:
     Warnings are NOT a substitute for assignment_errors.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, "Expected at least one creative result to check for assignment_errors"
     first = results[0]
     assignment_errors = getattr(first, "assignment_errors", None) or []
-    if not assignment_errors:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors on creative result "
-            f"(INV-4 lenient mode), but assignment_errors is empty: {assignment_errors!r}"
-        )
+    assert assignment_errors, (
+        f"SPEC-PRODUCTION GAP: expected non-empty assignment_errors on creative result (INV-4 lenient mode), but assignment_errors is empty: {assignment_errors!r}"
+    )
 
 
 # --- wsc1: creative setup and assertion steps ---
@@ -5888,11 +5807,9 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
 
     _xfail_if_e2e(ctx)
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     creative_id = latest_creative_id(ctx)
@@ -6045,11 +5962,9 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
 
     _xfail_if_e2e(ctx)
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     # Assert response has action="created"
@@ -6119,11 +6034,9 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     and that the response shows a successful sync outcome (action created/updated).
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative agent validation, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative agent validation, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     # Assert observable outcome: the creative was successfully synced
@@ -6159,11 +6072,9 @@ def then_response_includes_one_creative_with_action(ctx: dict, action: str) -> N
     and the response contains mixed results (e.g. one "created", one "failed").
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected one creative with action '{action}', "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected one creative with action '{action}', but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6457,11 +6368,9 @@ def then_second_is_idempotent_upsert(ctx: dict) -> None:
     from src.core.database.models import CreativeAssignment
 
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: idempotent upsert should succeed, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
 
     tenant_id = ctx["tenant"].tenant_id
@@ -6526,11 +6435,9 @@ def then_response_includes_creative_with_assignment_results(ctx: dict) -> None:
     POST-S3: Buyer knows which packages each creative was assigned to.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected creative with assignment results, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected creative with assignment results, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6595,12 +6502,9 @@ def then_operation_should_abort_package_not_found(ctx: dict) -> None:
     """
 
     error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: strict mode with non-existent package should abort "
-            "with PACKAGE_NOT_FOUND, but production succeeded without raising. "
-            f"Response: {payload_or_none(ctx)!r}"
-        )
+    assert error is not None, (
+        f"SPEC-PRODUCTION GAP: strict mode with non-existent package should abort with PACKAGE_NOT_FOUND, but production succeeded without raising. Response: {payload_or_none(ctx)!r}"
+    )
 
     # The xfail that used to sit here said "AdCPNotFoundError.error_code is
     # 'NOT_FOUND' -- needs a domain-specific subclass". That subclass now exists and
@@ -6626,12 +6530,9 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
     dict[str, str] where keys are package_ids and values are error messages.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should return response with "
-            f"assignment_errors, but production raised "
-            f"{type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, but production raised {type(error).__name__}: {error}"
+    )
 
     resp = require_payload(ctx)
 
@@ -6640,11 +6541,9 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
 
     first = results[0]
     assignment_errors = getattr(first, "assignment_errors", None)
-    if not assignment_errors:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, "
-            f"but got assignment_errors={assignment_errors!r}"
-        )
+    assert assignment_errors, (
+        f"SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, but got assignment_errors={assignment_errors!r}"
+    )
 
     # Retrieve the expected non-existent package_id from ctx
     assignments_dict = ctx.get("assignments", {})
@@ -6667,51 +6566,28 @@ def then_assignment_errors_contain_package_id(ctx: dict) -> None:
 
 @then("the system should reject with VALIDATION_ERROR")
 def then_system_should_reject_validation_error(ctx: dict) -> None:
-    """Assert rejection with VALIDATION_ERROR for invalid validation_mode value.
+    """Assert an unknown validation_mode is rejected, graded ON THE WIRE.
 
-    When validation_mode is an unknown value (e.g. "partial"), the system
-    should reject the request with VALIDATION_ERROR.
-
-    SPEC-PRODUCTION GAP: MCP transport rejects via FastMCP TypeAdapter
-    before reaching _impl. The error is a ToolError with a Pydantic
-    ValidationError message, not an AdCPSalesAgentError. The rejection is functionally
-    correct (invalid enum value rejected) but uses a transport-specific
-    error type. We xfail for the error_code mismatch.
+    The pinned 3.1 enums/validation-mode.json admits exactly ["strict", "lenient"], so
+    "partial" is schema-invalid and MUST be refused. Which LAYER refuses it differs by
+    transport -- MCP's TypeAdapter rejects before _impl, REST/A2A reach the boundary --
+    and that is precisely why this reads the wire code rather than the class of
+    ctx["error"]: the buyer sees a code, not a Python type, and asserting on the rebuilt
+    exception is what tests/CLAUDE.md forbids. Two xfails used to record the transport
+    difference as a production gap; the gap was in the assertion's layer
+    (salesagent-tne7q).
     """
-    from src.core.exceptions import AdCPSalesAgentError
-
-    error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: invalid validation_mode 'partial' should be rejected "
-            "with VALIDATION_ERROR, but production accepted it. Production may not validate "
-            f"the validation_mode enum at input. Response: {payload_or_none(ctx)!r}"
-        )
-
-    # MCP transport: FastMCP TypeAdapter rejects invalid enum before _impl
-    if not isinstance(error, AdCPSalesAgentError):
-        err_str = str(error)
-        if "validation_mode" in err_str and ("enum" in err_str or "partial" in err_str):
-            pytest.xfail(
-                f"SPEC-PRODUCTION GAP: MCP TypeAdapter rejected invalid validation_mode "
-                f"'partial' with {type(error).__name__} instead of AdCPSalesAgentError(VALIDATION_ERROR). "
-                f"Rejection is functionally correct but uses transport-specific error type."
-            )
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected AdCPSalesAgentError(VALIDATION_ERROR), got {type(error).__name__}: {error}"
-        )
-
-    actual_code = error.error_code
+    result = ctx.get("result")
+    assert result is not None, "no dispatch result recorded — the When step did not run"
+    wire_code = result.wire_error_code()
+    assert wire_code is not None, (
+        f"validation_mode 'partial' is not in the pinned enum [strict, lenient] and must be "
+        f"refused, but no error reached the wire. Response: {payload_or_none(ctx)!r}"
+    )
     expected_codes = {"VALIDATION_ERROR", "INVALID_REQUEST"}
-    if actual_code not in expected_codes:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected error_code in {expected_codes}, "
-            f"got '{actual_code}' ({type(error).__name__}: {error})"
-        )
-    # The claim this step's text makes, stated on the path that RETURNS. The
-    # xfail above records the known gap; without this the accepted path returned
-    # having graded nothing.
-    assert actual_code in expected_codes, f"expected error_code in {expected_codes}, got {actual_code!r}"
+    assert wire_code in expected_codes, (
+        f"expected the refusal to carry one of {sorted(expected_codes)} on the wire, got {wire_code!r}"
+    )
 
 
 @then("preview URLs should be generated")
@@ -6736,16 +6612,13 @@ def then_preview_urls_generated(ctx: dict) -> None:
             preview_found = True
             break
 
-    if not preview_found:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected at least one creative with a non-empty "
-            "preview_url, but none found. Production may not generate preview URLs "
-            "for this creative format. Results: "
-            + ", ".join(
-                f"creative_id={getattr(r, 'creative_id', '?')}, preview_url={getattr(r, 'preview_url', None)!r}"
-                for r in results
-            )
+    assert preview_found, (
+        "SPEC-PRODUCTION GAP: expected at least one creative with a non-empty preview_url, but none found. Production may not generate preview URLs for this creative format. Results: "
+        + ", ".join(
+            f"creative_id={getattr(r, 'creative_id', '?')}, preview_url={getattr(r, 'preview_url', None)!r}"
+            for r in results
         )
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6762,11 +6635,9 @@ def then_compatible_package_assignment_created(ctx: dict) -> None:
     should appear in assigned_to.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected compatible assignment to succeed, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected compatible assignment to succeed, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6793,11 +6664,9 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
     referencing the skipped package.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should skip and warn, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should skip and warn, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6817,12 +6686,9 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
     warnings = first.warnings or []
     has_error_entry = any(pkg_id in assignment_errors for pkg_id in nonexistent_pkgs)
     has_warning_entry = any(any(pkg_id in w for pkg_id in nonexistent_pkgs) for w in warnings)
-    if not has_error_entry and not has_warning_entry:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected assignment_errors or warnings referencing "
-            f"skipped package(s) {nonexistent_pkgs}, but assignment_errors={assignment_errors}, "
-            f"warnings={warnings}"
-        )
+    assert has_error_entry or has_warning_entry, (
+        f"SPEC-PRODUCTION GAP: expected assignment_errors or warnings referencing skipped package(s) {nonexistent_pkgs}, but assignment_errors={assignment_errors}, warnings={warnings}"
+    )
     # If we have an error entry, verify it has a meaningful message
     if has_error_entry:
         for pkg_id in nonexistent_pkgs:
@@ -6880,10 +6746,9 @@ def then_assignment_results_list_assigned_packages(ctx: dict) -> None:
     the response's assigned_to field.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected assignment results, but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected assignment results, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6905,11 +6770,9 @@ def then_two_assignments_created_successfully(ctx: dict) -> None:
     1 non-existent). The two valid packages should appear in assigned_to.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: expected 2 successful assignments, "
-            f"but production raised {type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: expected 2 successful assignments, but production raised {type(error).__name__}: {error}"
+    )
     resp = require_payload(ctx)
     results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
     assert results, f"Expected at least one SyncCreativeResult, got empty: {resp}"
@@ -6935,12 +6798,9 @@ def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
     assignment_errors with a non-empty error message.
     """
     error = ctx.get("error")
-    if error is not None:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: lenient mode should return response with "
-            f"assignment_errors, but production raised "
-            f"{type(error).__name__}: {error}"
-        )
+    assert error is None, (
+        f"SPEC-PRODUCTION GAP: lenient mode should return response with assignment_errors, but production raised {type(error).__name__}: {error}"
+    )
 
     resp = require_payload(ctx)
 
@@ -6951,11 +6811,9 @@ def then_response_includes_assignment_errors_for_nonexistent(ctx: dict) -> None:
     assignment_errors = getattr(first, "assignment_errors", None)
     nonexistent_pkg_id = ctx["nonexistent_package_id"]
 
-    if not assignment_errors:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, "
-            f"but got assignment_errors={assignment_errors!r}"
-        )
+    assert assignment_errors, (
+        f"SPEC-PRODUCTION GAP: expected non-empty assignment_errors in response, but got assignment_errors={assignment_errors!r}"
+    )
 
     assert isinstance(assignment_errors, dict), (
         f"Expected assignment_errors to be a dict, got {type(assignment_errors).__name__}"
