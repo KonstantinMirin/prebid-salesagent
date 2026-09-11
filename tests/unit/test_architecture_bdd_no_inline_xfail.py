@@ -184,6 +184,95 @@ _FIX_HINT = (
 )
 
 
+def find_conditional_xfail_calls(tree: ast.Module) -> list[tuple[int, str]]:
+    """Every ``pytest.xfail`` reachable only through a branch, as ``(lineno, guard)``.
+
+    A conditional xfail is categorically worse than an unconditional one, and the
+    difference is not stylistic. Unconditional says "this is not implemented" — a legible,
+    falsifiable claim that stops being true when someone implements it. Conditional says
+    "excuse me IF the outcome is the one I was written to catch", so the step passes when
+    production agrees and excuses itself when it does not: it cannot fail in either
+    direction (salesagent-tne7q).
+
+    Guarded by branch context rather than by reason text, because the reason is prose and
+    drifts; ``if`` / ``try`` / ``except`` is structure and cannot.
+    """
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    out: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "xfail"
+            and getattr(node.func.value, "id", "") == "pytest"
+        ):
+            continue
+        parent = parents.get(node)
+        while parent is not None:
+            if isinstance(parent, ast.If):
+                out.append((node.lineno, ast.unparse(parent.test)))
+                break
+            if isinstance(parent, (ast.Try, ast.ExceptHandler)):
+                out.append((node.lineno, "try/except"))
+                break
+            if isinstance(parent, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                break
+            parent = parents.get(parent)
+    return out
+
+
+class TestBddNoConditionalXfail:
+    """Structural guard: ZERO conditional xfails, with no allowlist.
+
+    There is deliberately no allowlist here. 103 of these existed and all 103 are gone,
+    so the honest pin is zero — an allowlist would only be a place to put the next one.
+    """
+
+    @pytest.mark.arch_guard
+    def test_no_conditional_xfail_anywhere_in_steps(self):
+        offenders: list[str] = []
+        for py_file in step_module_paths():
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            relative = str(py_file.relative_to(_BDD_STEPS_DIR))
+            for lineno, guard in find_conditional_xfail_calls(tree):
+                offenders.append(f"  {relative}:{lineno}  guarded by: {guard}")
+        assert not offenders, (
+            f"{len(offenders)} conditional pytest.xfail call(s) in tests/bdd/steps:\n"
+            + "\n".join(sorted(offenders))
+            + "\n\nA conditional xfail is keyed on the OUTCOME, so the step passes when "
+            "production agrees and excuses itself when it does not — it cannot fail in the "
+            "one direction that matters. Assert the obligation unconditionally, and declare "
+            "any genuine gap as a scenario/Examples-row tag in the ratcheted ledger "
+            "(a *_XFAIL_TAGS map in tests/bdd/conftest.py, or a nodeid in "
+            "tests/bdd/e2e_rest_known_failures.txt), where strict=True makes it XPASS loudly "
+            "the day the gap closes. If the guard is about the ENVIRONMENT rather than the "
+            "outcome (no DB session, wrong transport), it is a skip or a harness fix, not an "
+            "expected failure."
+        )
+
+    @pytest.mark.arch_guard
+    def test_detector_catches_a_conditional_xfail(self):
+        """The guard must go red on the shape it bans — a passing guard proves nothing."""
+        bad = ast.parse(
+            "import pytest\n"
+            "def then_x(ctx):\n"
+            "    error = ctx.get('error')\n"
+            "    if error is not None:\n"
+            "        pytest.xfail('SPEC-PRODUCTION GAP: excuse')\n"
+        )
+        assert find_conditional_xfail_calls(bad), "detector missed a conditional xfail"
+
+    @pytest.mark.arch_guard
+    def test_detector_allows_an_unconditional_xfail(self):
+        """An unconditional xfail is a legible claim and must NOT trip this guard."""
+        good = ast.parse("import pytest\ndef then_x(ctx):\n    pytest.xfail('not implemented')\n")
+        assert not find_conditional_xfail_calls(good), "detector flagged an unconditional xfail"
+
+
 class TestBddNoInlineXfail:
     """Structural guard: no inline xfail call in any tests/bdd/steps module."""
 
