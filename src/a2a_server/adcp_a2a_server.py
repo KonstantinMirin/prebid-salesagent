@@ -49,6 +49,7 @@ from a2a.types import (
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from adcp.types import ProtocolEnvelope
+from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
@@ -58,17 +59,18 @@ from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPCapabilityNotSupportedError,
+    AdcpFailure,
     AdCPSalesAgentError,
     AdCPUrlNotAllowedError,
     AdCPValidationError,
     adcp_error_for,
     build_two_layer_error_envelope,
 )
-from src.core.schemas import CreativeStatusEnum
-from src.core.tool_error_logging import record_boundary_error
 
 # Signals tools removed - should come from dedicated signals agents, not sales agent
-from src.core.tools._boundary import invoke_tool, validated_request
+from src.core.resolved_identity import TransportProtocol
+from src.core.tool_error_logging import record_boundary_error
+from src.core.tools._boundary import serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
@@ -174,6 +176,53 @@ A2A_WIRE_INTEGER_FIELDS = frozenset(
         "impressions",
     }
 )
+
+
+#: AdCP envelope status -> A2A Task state. The mapping A2A's Task state IS, declared once.
+#:
+#: TOTAL over ``enums/task-status.json``: all nine members are keys, because the consumer
+#: subscripts it. A partial mapping plus a default is how a status nobody had thought about
+#: came to report COMPLETED, and it is what the inline ``== "submitted"`` compares this
+#: replaces did for seven of the nine.
+#:
+#: The two vocabularies turn out to be the same set, one name apart, so every row is an exact
+#: counterpart rather than a judgement. ``unknown`` -> ``UNSPECIFIED`` is the only rename.
+_TASK_STATE_BY_ADCP_STATUS: dict[LibraryTaskStatus, TaskState] = {
+    LibraryTaskStatus.submitted: TaskState.TASK_STATE_SUBMITTED,
+    LibraryTaskStatus.working: TaskState.TASK_STATE_WORKING,
+    LibraryTaskStatus.input_required: TaskState.TASK_STATE_INPUT_REQUIRED,
+    LibraryTaskStatus.completed: TaskState.TASK_STATE_COMPLETED,
+    LibraryTaskStatus.canceled: TaskState.TASK_STATE_CANCELED,
+    LibraryTaskStatus.failed: TaskState.TASK_STATE_FAILED,
+    LibraryTaskStatus.rejected: TaskState.TASK_STATE_REJECTED,
+    LibraryTaskStatus.auth_required: TaskState.TASK_STATE_AUTH_REQUIRED,
+    LibraryTaskStatus.unknown: TaskState.TASK_STATE_UNSPECIFIED,
+}
+
+
+def _task_state_for_results(results: list[dict[str, Any]]) -> TaskState:
+    """The A2A Task state for one message's skill results. THE one derivation.
+
+    Reads each answer's OWN ``status`` -- required on the response envelope and defaulted to
+    ``completed``, so it is never absent -- and translates it through
+    :data:`_TASK_STATE_BY_ADCP_STATUS`. A failed skill is FAILED because its result carries an
+    error envelope instead of a response body.
+
+    Subscripted, not ``.get``-with-a-default: a missing ``status`` would mean a response that
+    did not come from the boundary, and answering COMPLETED for it would report success for
+    something never examined. A ``KeyError`` here is the correct outcome.
+
+    Three derivations of this one value stood in this handler: per-skill success flags, an
+    early ``== "submitted"`` compare, and a re-parse of the artifacts this handler had itself
+    just written. The last one is why the others existed -- serializing before deciding threw
+    away the type, so what was left to read was strings whose absence had to be guessed at.
+    """
+    state = TaskState.TASK_STATE_COMPLETED
+    for res in results:
+        if not res["success"]:
+            return TaskState.TASK_STATE_FAILED
+        state = _TASK_STATE_BY_ADCP_STATUS[LibraryTaskStatus(res["result"]["status"])]
+    return state
 
 
 def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
@@ -468,9 +517,10 @@ class AdCPRequestHandler(RequestHandler):
                 # Check for submitted status (manual approval required) - return early without artifacts
                 # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
                 for res in results:
-                    if res["success"] and isinstance(res["result"], dict):
-                        result_status = res["result"].get("status")
-                        if result_status == "submitted":
+                    if res["success"]:
+                        # The SAME read the final state uses, so the two cannot disagree about
+                        # what a submitted answer is.
+                        if LibraryTaskStatus(res["result"]["status"]) is LibraryTaskStatus.submitted:
                             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
                             del task.artifacts[:]  # No artifacts for pending tasks
                             logger.info(
@@ -531,14 +581,6 @@ class AdCPRequestHandler(RequestHandler):
                         )
                     )
 
-                # Check if any skills failed and determine task status
-                failed_skills = [res["skill"] for res in results if not res["success"]]
-                successful_skills = [res["skill"] for res in results if res["success"]]
-
-                if failed_skills and not successful_skills:
-                    # All skills failed - mark task as failed
-                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-                    return task
             else:
                 # A message that names no skill is refused, and that refusal is the whole
                 # point of deleting the natural-language fallback that used to stand here.
@@ -568,33 +610,26 @@ class AdCPRequestHandler(RequestHandler):
                     )
                 )
 
-            # Determine task status based on operation result
-            # For sync_creatives, check if any creatives are pending review
-            task_state = TaskState.TASK_STATE_COMPLETED
-
-            result_data = {}
-            if task.artifacts:
-                # Extract result from artifacts — part.data is a protobuf Value
-                for artifact in task.artifacts:
-                    if artifact.parts:
-                        for part in artifact.parts:
-                            if part.HasField("data"):
-                                data_dict = json.loads(json_format.MessageToJson(part.data))
-                                result_data[artifact.name] = data_dict
-
-                                # Check if this is a sync_creatives response with pending creatives
-                                if artifact.name == "result" and isinstance(data_dict, dict):
-                                    creatives = data_dict.get("creatives", [])
-                                    if any(
-                                        c.get("status") == CreativeStatusEnum.pending_review.value
-                                        for c in creatives
-                                        if isinstance(c, dict)
-                                    ):
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
-
-                                    # Check for explicit status field (e.g., create_media_buy returns this)
-                                    if data_dict.get("status") == "submitted":
-                                        task_state = TaskState.TASK_STATE_SUBMITTED
+            # The Task state is the RESPONSE's own status, mapped once. Every skill's answer
+            # declares what became of it -- ``status`` is required on the response envelope
+            # and defaults to ``completed`` -- so this transport reads a typed field and
+            # translates it, holding no knowledge of any particular tool.
+            #
+            # It used to derive the state TWICE: once from per-skill success flags above, and
+            # again here by re-parsing ``task.artifacts``, the bytes it had just written. That
+            # round trip is what lost the type, which is why the second derivation had to
+            # compare strings and guess a default for a status it could not be sure of.
+            #
+            # A per-creative ``pending_review`` deliberately does NOT make the Task
+            # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
+            # branches: a synchronous success required to carry ``creatives`` ("best-effort
+            # processing with per-item status/failures"), a terminal failure carrying
+            # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
+            # and which carries ``task_id`` and NO creatives. Per-creative review state is
+            # therefore per-item information inside branch one, and promoting it to a
+            # task-level status claimed the shape that cannot carry the creatives it just
+            # processed.
+            task_state = _task_state_for_results(results)
 
             # Mark task with appropriate status
             task.status.CopyFrom(TaskStatus(state=task_state))
@@ -612,7 +647,7 @@ class AdCPRequestHandler(RequestHandler):
             # No tenant and no principal are passed, because at this point A2A genuinely knows
             # neither. It used to pass the string "unknown" for both, which is not the absence
             # of a tenant -- it is a fabricated one, written into a tenant-scoped table.
-            record_boundary_error("a2a", "message_processing", e)
+            record_boundary_error(TransportProtocol.A2A, "message_processing", e)
 
             # Send protocol-level webhook notification for failure if configured
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
@@ -843,9 +878,15 @@ class AdCPRequestHandler(RequestHandler):
         # one doing it. A rejection now carries the buyer's ``context`` out, which a
         # per-transport parse could not do, and all three transports answer a malformed payload
         # identically because one function decides.
-        req = validated_request(skill_name, parameters)
 
-        response = await invoke_tool(skill_name, req, credential, "a2a")
+        try:
+            response = await serve(skill_name, parameters, credential, TransportProtocol.A2A)
+        except AdcpFailure as failure:
+            # A2A's wire failure marker is the Task STATE, set by the caller from the
+            # response's own ``status``. This transport adds nothing to the BODY -- it
+            # serializes the response the boundary built, through the same function the
+            # success path uses.
+            return self._serialize_for_a2a(failure.response)
         return self._serialize_for_a2a(response)
 
     async def _handle_explicit_skill(

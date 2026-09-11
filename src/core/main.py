@@ -299,6 +299,7 @@ from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
 # not optional -- _register_tool refuses a tool without one.
 from mcp.types import ToolAnnotations
 
+from src.core.resolved_identity import TransportProtocol
 from src.core.schemas._base import AdcpResponse
 from src.core.tools._announced_shape import sdk_grounding
 from src.core.tools._boundary import _response_model_for
@@ -433,22 +434,29 @@ class RegistryTool(Tool):
         from fastmcp.server.dependencies import get_context, get_http_headers
 
         from src.core.auth_context import AuthContext
-        from src.core.tool_error_logging import _handle_tool_exception
-        from src.core.tools._boundary import invoke_tool, validated_request
+        from src.core.exceptions import AdcpFailure
+        from src.core.tool_error_logging import AdCPToolError, _handle_tool_exception
+        from src.core.tools._boundary import serve, wire_status
         from src.core.tools._mcp import mcp_result
+        from src.core.tools._wire import to_wire
 
         spec = TOOLS[self.name]
         ctx = get_context()
         try:
             # The one validation, shared with A2A and REST. A rejection carries the buyer's
             # context out, which a per-transport model_validate could not do.
-            req = validated_request(self.name, arguments)
             # The credential, not an identity. MCPAuthMiddleware used to resolve one and
             # stash it on ctx state for this line to read; the boundary resolves now, so the
             # middleware is gone and MCP enters through invoke_tool like A2A and REST rather
             # than through the lower-level invoke() with spec.impl already selected.
             credential = AuthContext(headers=MappingProxyType(get_http_headers(include_all=True) or {}))
-            return mcp_result(await invoke_tool(self.name, req, credential, "mcp"))
+            return mcp_result(await serve(self.name, arguments, credential, TransportProtocol.MCP))
+        except AdcpFailure as failure:
+            # MCP's wire failure marker is a raised ToolError: FastMCP renders it as
+            # ``CallToolResult(isError=True, content=[TextContent(text=str(error))])``. That
+            # marker is all this transport adds -- the BODY is the response the boundary built,
+            # serialized by the same function the success path uses.
+            raise AdCPToolError(to_wire(failure.response), status_code=wire_status(failure.response)) from failure
         except Exception as exc:
             # Records to the activity feed and audit log, then raises AdCPToolError carrying
             # the two-layer envelope. Validation raises inside the try because the buyer's

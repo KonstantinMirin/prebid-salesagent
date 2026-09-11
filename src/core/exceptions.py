@@ -41,6 +41,8 @@ if TYPE_CHECKING:
 
     from adcp.types import ContextObject
 
+    from src.core.schemas._base import AdcpErrorResponse
+
 logger = logging.getLogger(__name__)
 
 # The recovery vocabulary is the ``Recovery`` StrEnum in src/core/errors/codes.py
@@ -1139,6 +1141,34 @@ def build_error_object(exc: AdCPSalesAgentError) -> dict[str, Any]:
     code, so 10 of 41 subclasses produced two different sentences for one failure.
     """
     return dict(build_two_layer_error_envelope(exc)["errors"][0])
+
+
+class AdcpFailure(Exception):
+    """A failed tool call, carrying the response that says so. THE edge exception.
+
+    One type, and its payload is an ``AdcpErrorResponse``. The boundary raises it; the three
+    transports catch it, serialize ``self.response`` and set their own wire failure marker --
+    an HTTP status, a ``ToolError``, a failed A2A Task state. That marker is the only part of
+    a refusal that is genuinely per-transport.
+
+    WHY AN EXCEPTION AND NOT A RETURN VALUE. A return can be ignored; a raise cannot. Business
+    logic across fourteen tools calls services that call services, and a caller that forgets to
+    check a returned failure proceeds on it silently. So the signal stays unignorable.
+
+    WHY IT CARRIES A RESPONSE. The thing a transport must write is a response --
+    ``core/protocol-envelope.json`` declares ``adcp_error``, ``context`` and a required
+    ``status`` on every response envelope -- so a transport handed a bare exception has to
+    build one, and three of them did, from a hand-assembled dict that could carry no ``status``.
+    Carrying the response means the conversion happens once, where the request's ``context`` is
+    still in hand.
+
+    Business logic keeps raising ``AdCPSalesAgentError`` subclasses and never sees this class:
+    the boundary is what turns one into the other.
+    """
+
+    def __init__(self, response: AdcpErrorResponse) -> None:
+        super().__init__(response.adcp_error.message if response.adcp_error else "tool call failed")
+        self.response = response
 
 
 def build_two_layer_error_envelope(exc: AdCPSalesAgentError) -> dict[str, Any]:

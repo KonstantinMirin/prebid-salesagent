@@ -12,10 +12,13 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 from src.core.auth_context import AuthContext, get_auth_context
+from src.core.exceptions import AdcpFailure
+from src.core.resolved_identity import TransportProtocol
 from src.core.tools._announced_shape import apply_signature
-from src.core.tools._boundary import invoke_tool, validated_request
+from src.core.tools._boundary import serve, wire_status
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 
@@ -66,7 +69,7 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
         body = await request.json()
         if path_values:
             body = {**body, **path_values}
-        req = validated_request(tool_name, body)
+
         # Named, not frozen: the handler names the TOOL and ``invoke_tool`` reads the registry
         # per call. A route that froze the callable at import could not be substituted -- the
         # registry row and the thing the route invoked were two different objects.
@@ -75,8 +78,14 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
         # ToolSpec.auth here too -- via two dependencies picked by `spec.auth == "optional"`,
         # one of which hardcoded require_valid_token=False and made REST the only transport
         # that served a rejected credential on a public tool.
-        response = await invoke_tool(tool_name, req, auth_ctx, "rest")
-        return to_wire(response)
+        try:
+            response = await serve(tool_name, body, auth_ctx, TransportProtocol.REST)
+        except AdcpFailure as failure:
+            # REST's wire failure marker is the HTTP STATUS, and that is all this transport
+            # adds. The BODY is the response the boundary built, serialized by the same
+            # function the success path uses.
+            return JSONResponse(status_code=wire_status(failure.response), content=to_wire(failure.response))
+        return JSONResponse(status_code=200, content=to_wire(response))
 
     handler.__name__ = tool_name
     handler.__doc__ = (spec.impl.__doc__ or "").strip().split("\n")[0]

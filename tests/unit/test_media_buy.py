@@ -70,6 +70,7 @@ from tests.factories.media_buy import (
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
 from tests.helpers.boundary_identity import resolved_as
+from tests.helpers.envelope_assertions import raises_adcp
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -1519,7 +1520,7 @@ class TestCreateMediaBuyIdempotency:
             # Idempotency probe miss → flow continues into product validation,
             # which fails with the typed AdCPProductNotFoundError. Capture it so
             # we can still assert the idempotency probe ran.
-            with pytest.raises(AdCPProductNotFoundError):
+            with raises_adcp(AdCPProductNotFoundError):
                 await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
 
         # β idempotency probe ran (verbatim success cache), found nothing → proceeded

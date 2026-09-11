@@ -58,11 +58,29 @@ from src.core.exceptions import (
     build_two_layer_error_envelope,
 )
 
-# The REST driver is IMPORTED, not re-declared: ``POST /api/v1/capabilities`` is
-# the thinnest route in the app and one helper already drives it with the tool
-# patched and the identity dependency overridden. A second copy here would be
-# the same logical operation with the variables renamed.
-from tests.unit.test_error_boundary_translation import _capabilities_response
+
+def _capabilities_response(side_effect: Exception):
+    """Drive ``POST /api/v1/capabilities`` with ``side_effect`` raised inside the tool.
+
+    The route is the thinnest endpoint in the app -- one call, one serialization -- so what
+    it grades is the exception-handler stack registered in ``src/app.py``, not the
+    capabilities tool. Lived in ``test_error_boundary_translation.py`` until that file was
+    removed for grading private helpers of the error path; this is the one thing it held that
+    a WIRE test needs.
+    """
+    from unittest.mock import AsyncMock
+
+    from starlette.testclient import TestClient
+
+    from src.app import app
+    from tests.helpers.boundary_identity import resolved_as
+    from tests.helpers.capture_wrapper_req import registry_impl
+
+    # The boundary resolves identity from the database, and the handler stack under test
+    # never looks at it. One resolver means one patch point.
+    with resolved_as(), registry_impl("get_adcp_capabilities", AsyncMock(side_effect=side_effect)):
+        client = TestClient(app, raise_server_exceptions=False)
+        return client.post("/api/v1/capabilities", json={})
 
 
 class TestContextEcho:

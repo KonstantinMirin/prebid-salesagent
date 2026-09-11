@@ -862,9 +862,22 @@ class AdcpErrorResponse(AdcpResponse):
         # ``exc.context`` is the fallback while that field still exists. The boundary passes
         # ``context=`` explicitly, which is the path that survives; the field and this fallback
         # are deleted together in salesagent-3cs7o.2, along with the call sites that thread it.
+        # ``adcp_version`` is stamped HERE, not by the caller. It is a property of this build,
+        # so every error response carries it however it was reached -- and they are reached by
+        # more than one path: the boundary's failure sites, and A2A's per-skill failure result.
+        # Leaving it to the caller meant REST's error body carried the release and A2A's did
+        # not, which ``TestWireBytesIdenticalAcrossTransports`` measured.
+        from src.core.version_negotiation import SERVED_ADCP_VERSION
+
         echo = context if context is not None else exc.context
         try:
-            return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error], context=echo)
+            return cls(
+                status=LibraryTaskStatus.failed,
+                adcp_version=SERVED_ADCP_VERSION,
+                adcp_error=error,
+                errors=[error],
+                context=echo,
+            )
         except PydanticCoreValidationError:
             # FAIL OPEN on an unusable context, never closed. The buyer is already being told
             # its request failed; refusing to build that answer because the opaque field it
@@ -875,7 +888,12 @@ class AdcpErrorResponse(AdcpResponse):
                 "dropping context of type %s: not a ContextObject, so it cannot ride the error response",
                 type(echo).__name__,
             )
-            return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error])
+            return cls(
+                status=LibraryTaskStatus.failed,
+                adcp_version=SERVED_ADCP_VERSION,
+                adcp_error=error,
+                errors=[error],
+            )
 
 
 class CreateMediaBuyResult(AdcpResponse):

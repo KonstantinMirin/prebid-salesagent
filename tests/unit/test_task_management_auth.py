@@ -19,7 +19,7 @@ be constructed to be passed in.
 import pytest
 
 from src.core.auth_context import AuthContext
-from src.core.exceptions import AdCPAuthenticationError, AdCPNotFoundError, AdCPTaskNotFoundError
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError, AdCPNotFoundError, AdCPTaskNotFoundError
 from src.core.resolved_identity import ResolvedIdentity
 
 # Every protocol field travels on the request now. Dispatch goes through the shared boundary
@@ -30,6 +30,7 @@ from src.core.tools._boundary import invoke_tool
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.boundary_identity import refused_as, resolved_as
 from tests.helpers.credentials import credential_headers
+from tests.helpers.envelope_assertions import raises_adcp
 
 
 def _authenticated() -> ResolvedIdentity:
@@ -63,7 +64,7 @@ def _unresolvable_credential() -> AuthContext:
 @pytest.mark.asyncio
 async def test_list_tasks_no_principal_raises_auth_error() -> None:
     """list_tasks must reject identity that has tenant but no principal_id."""
-    with pytest.raises(AdCPAuthenticationError) as exc_info:
+    with raises_adcp(AdCPAuthenticationError) as exc_info:
         with refused_as(AdCPAuthenticationError()):
             await invoke_tool("list_tasks", ListTasksRequest(), _unresolvable_credential(), "mcp")
 
@@ -71,7 +72,7 @@ async def test_list_tasks_no_principal_raises_auth_error() -> None:
 @pytest.mark.asyncio
 async def test_list_tasks_no_identity_raises_auth_error() -> None:
     """list_tasks must reject a completely missing identity."""
-    with pytest.raises(AdCPAuthenticationError):
+    with raises_adcp(AdCPAuthRequiredError):
         await invoke_tool("list_tasks", ListTasksRequest(), _no_credential(), "mcp")
 
 
@@ -83,7 +84,7 @@ async def test_list_tasks_no_identity_raises_auth_error() -> None:
 @pytest.mark.asyncio
 async def test_get_task_no_principal_raises_auth_error() -> None:
     """get_task_status must reject identity that has tenant but no principal_id."""
-    with pytest.raises(AdCPAuthenticationError) as exc_info:
+    with raises_adcp(AdCPAuthenticationError) as exc_info:
         with refused_as(AdCPAuthenticationError()):
             await invoke_tool(
                 "get_task_status", GetTaskStatusRequest(task_id="step-123"), _unresolvable_credential(), "mcp"
@@ -93,7 +94,7 @@ async def test_get_task_no_principal_raises_auth_error() -> None:
 @pytest.mark.asyncio
 async def test_get_task_no_identity_raises_auth_error() -> None:
     """get_task_status must reject a completely missing identity."""
-    with pytest.raises(AdCPAuthenticationError):
+    with raises_adcp(AdCPAuthRequiredError):
         await invoke_tool("get_task_status", GetTaskStatusRequest(task_id="step-123"), _no_credential(), "mcp")
 
 
@@ -105,7 +106,7 @@ async def test_get_task_no_identity_raises_auth_error() -> None:
 @pytest.mark.asyncio
 async def test_complete_task_no_principal_raises_auth_error() -> None:
     """complete_task must reject identity that has tenant but no principal_id."""
-    with pytest.raises(AdCPAuthenticationError) as exc_info:
+    with raises_adcp(AdCPAuthenticationError) as exc_info:
         with refused_as(AdCPAuthenticationError()):
             await invoke_tool(
                 "complete_task",
@@ -118,7 +119,7 @@ async def test_complete_task_no_principal_raises_auth_error() -> None:
 @pytest.mark.asyncio
 async def test_complete_task_no_identity_raises_auth_error() -> None:
     """complete_task must reject a completely missing identity."""
-    with pytest.raises(AdCPAuthenticationError):
+    with raises_adcp(AdCPAuthRequiredError):
         await invoke_tool(
             "complete_task", CompleteTaskRequest(task_id="step-123", status="completed"), _no_credential(), "mcp"
         )
@@ -156,7 +157,7 @@ async def test_get_task_authenticated_proceeds_past_auth_check(
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
     mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError()
 
-    with pytest.raises(AdCPNotFoundError) as _ei:
+    with raises_adcp(AdCPNotFoundError) as _ei:
         with resolved_as(_authenticated()):
             await invoke_tool(
                 "get_task_status", GetTaskStatusRequest(task_id="step-999"), _unresolvable_credential(), "mcp"
@@ -174,7 +175,7 @@ async def test_complete_task_authenticated_proceeds_past_auth_check(
     mock_uow = mocker.patch("src.core.tools.task_management.WorkflowUoW")
     mock_uow.return_value.__enter__.return_value.workflows.get_by_step_id_or_raise.side_effect = AdCPTaskNotFoundError()
 
-    with pytest.raises(AdCPNotFoundError) as _ei:
+    with raises_adcp(AdCPNotFoundError) as _ei:
         # status is REQUIRED by the DTO and typed Literal["completed", "failed"], so the
         # request cannot be built without one -- the rejection is the model's, not a
         # second check inside the impl.

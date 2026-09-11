@@ -7,7 +7,7 @@ This eliminates isinstance checks and auth extraction inside business logic.
 """
 
 import logging
-from typing import Literal
+from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
@@ -16,26 +16,36 @@ from src.core.testing_hooks import AdCPTestContext
 
 logger = logging.getLogger(__name__)
 
-#: The transports this seller speaks, as a closed set.
-#:
-#: Written ONCE. It was spelled out three times -- the field below, the resolver's parameter,
-#: and ``invoke_tool``'s -- which is three edits to add a transport and three chances for one
-#: of them to drift into a bare ``str``. A closed set stated in one place is the whole reason
-#: this is a ``Literal`` rather than a string: mypy rejects a typo at the call site.
-#:
-#: It is a LABEL, never a decision. Nothing in ``src/`` branches on it, and it has exactly ONE
-#: consumer: scoping an observability record, so an operator reading the activity feed can see
-#: which surface a request arrived on.
-#:
-#: It had a second consumer until this was measured. ``_workflow.py`` stored it on a creative-
-#: approval workflow step "for webhook payload creation", and nothing ever read it back. The
-#: premise was wrong as well as dead: that path fires ``creative.status_changed``, an
-#: account-level notification whose shape is fixed and whose subscribers are the registered
-#: ``notification_configs[]`` -- the originating call's transport does not enter into it. A
-#: response shape that varied by transport would be the thing this whole seam exists to
-#: prevent, so if a reader for this field is ever proposed, that is the question to ask first.
 
-TransportProtocol = Literal["mcp", "a2a", "rest"]
+class TransportProtocol(StrEnum):
+    """The transports a buyer can arrive on. THE declaration of what a transport is.
+
+    A ``StrEnum`` rather than the ``Literal["mcp", "a2a", "rest"]`` this replaces, because a
+    literal makes every call site spell the transport as a bare string -- and four of them did,
+    so the set of transports was only ever asserted by four agreeing typos. The values are
+    unchanged, so a stored ``protocol`` column, an audit row and a wire payload all read the
+    same as before, and ``protocol == "mcp"`` still holds for code that compares to a string.
+
+    ``tests/harness/transport.py``'s ``Transport`` takes its three core values from here rather
+    than restating them; it adds the ``E2E_*`` members, which are test dispatch paths and not
+    protocols a buyer can speak.
+
+    It is a LABEL, never a decision. Nothing in ``src/`` branches on it, and it has exactly ONE
+    consumer: scoping an observability record, so an operator reading the activity feed can see
+    which surface a request arrived on.
+
+    It had a second consumer until this was measured. ``_workflow.py`` stored it on a creative-
+    approval workflow step "for webhook payload creation", and nothing ever read it back. The
+    premise was wrong as well as dead: that path fires ``creative.status_changed``, an
+    account-level notification whose shape is fixed and whose subscribers are the registered
+    ``notification_configs[]`` -- the originating call's transport does not enter into it. A
+    response shape that varied by transport would be the thing this whole seam exists to
+    prevent, so if a reader for this field is ever proposed, that is the question to ask first.
+    """
+
+    MCP = "mcp"
+    A2A = "a2a"
+    REST = "rest"
 
 
 class ResolvedIdentity(BaseModel):
@@ -64,7 +74,7 @@ class ResolvedIdentity(BaseModel):
     # and that union is how dict-shaped tenant handling spread through production.
     tenant: LazyTenantContext | None = None
     auth_token: str | None = None
-    protocol: TransportProtocol = "mcp"
+    protocol: TransportProtocol = TransportProtocol.MCP
     testing_context: AdCPTestContext | None = None
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
     # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
@@ -153,7 +163,7 @@ def _detect_tenant(headers: dict) -> str | None:
 def _resolve_identity(
     headers: dict,
     auth_token: str | None = None,
-    protocol: TransportProtocol = "mcp",
+    protocol: TransportProtocol = TransportProtocol.MCP,
     require_valid_token: bool = True,
     testing_context: AdCPTestContext | None = None,
 ) -> ResolvedIdentity:
