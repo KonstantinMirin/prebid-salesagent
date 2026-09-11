@@ -35,12 +35,14 @@ nothing else in the suite exercises:
   the free kwargs let any call site pair any code with any text or recovery, and
   the wire carried the contradiction. Only ``status_code=`` has an equivalent
   grader elsewhere
-  (``test_error_boundary_translation.py::test_a_caller_cannot_name_a_status_that_contradicts_the_code``),
-  so the other three are pinned here.
-- The two dead A2A translation symbols staying dead. A2A error translation lives
-  in ``_build_error_envelope()`` in ``adcp_a2a_server.py``; ``exceptions.py``
-  carried a second, unreachable copy (PR #1083 review), and nothing else in the
-  suite notices if it comes back.
+  (``tests/unit/test_error_envelope.py::TestRestStatusIsTheCodesStatus``: the
+  status is the code's own, read off ``AdcpErrorResponse.http_status``), so the
+  other three are pinned here.
+- The two dead A2A translation symbols staying dead. A2A has no translation of
+  its own: ``_dispatch_skill`` in ``adcp_a2a_server.py`` serializes the
+  boundary's ``AdcpErrorResponse`` with ``to_wire``; ``exceptions.py`` carried a
+  second, unreachable copy (PR #1083 review), and nothing else in the suite
+  notices if it comes back.
 
 Retry-after on both envelope layers, the IDEMPOTENCY_* code/recovery pairs, and
 the two-layer envelope shape itself are all graded elsewhere (respectively
@@ -87,8 +89,8 @@ class TestTheRaiseSiteCannotAuthorTheCodesOwnValues:
     ``CODE_TABLE``: the values live in the table and are graded there, but the
     *shape of the constructor* lives in ``src/core/exceptions.py`` and is graded
     nowhere else. The sibling excision, ``status_code=``, is graded by
-    ``test_error_boundary_translation.py::TestRestStatusCodeRoundtrip::test_a_caller_cannot_name_a_status_that_contradicts_the_code``
-    and is deliberately not restated here.
+    ``tests/unit/test_error_envelope.py::TestRestStatusIsTheCodesStatus`` and is
+    deliberately not restated here.
     """
 
     @pytest.mark.parametrize("excised", ["message", "recovery", "suggestion"])
@@ -118,8 +120,8 @@ class TestTheRaiseSiteCannotAuthorTheCodesOwnValues:
         A constructor that rejected everything would satisfy the assertions above
         while emitting nothing. VALIDATION_ERROR's classification is the one
         value transcribed here, and only as the anchor for that check — its
-        delivery to a buyer is graded at the boundary by
-        ``test_error_boundary_translation.py::test_extract_error_info_reports_the_derived_recovery``.
+        delivery to a buyer is graded on the wire by every
+        ``assert_wire_error(code, recovery=...)`` call in the BDD error scenarios.
         """
         exc = AdCPValidationError()
 
@@ -149,7 +151,7 @@ class TestEveryEmittedCodeHasAnAuthoredStatus:
     The values are deliberately NOT transcribed here. They are authored in one
     place, and a second list of them would be a copy to keep in sync, not a
     grader. Delivery of the value to the wire is graded by
-    ``tests/unit/test_error_boundary_translation.py::TestRestStatusCodeRoundtrip``.
+    ``tests/unit/test_error_envelope.py::TestRestStatusIsTheCodesStatus``.
     """
 
     def test_no_class_falls_through_to_the_unclassified_default(self):
@@ -256,7 +258,7 @@ def context_echo_client() -> TestClient:
 
     The handler object registered here is ``src.app.adcp_error_handler`` itself,
     so what is graded is production's envelope path (``_envelope_response`` ->
-    ``build_two_layer_error_envelope``) and not a second copy of it. The app is
+    ``AdcpErrorResponse.of`` -> ``to_wire``) and not a second copy of it. The app is
     dedicated rather than ``src.app.app`` so the test is ordering-independent:
     with pytest-randomly the global app may already have admin catch-all mounts
     installed via lifespan, which would swallow a route added after startup.
@@ -289,8 +291,8 @@ class TestErrorEnvelopeContextEcho:
     def test_context_is_echoed_in_the_http_response(self, context_echo_client: TestClient):
         """A ``ContextObject`` on the exception reaches the response body serialized.
 
-        Graded at the HTTP boundary rather than on ``build_two_layer_error_envelope``:
-        the builder's own echo (including the omit-when-absent rule) is pinned in
+        Graded at the HTTP boundary rather than on ``AdcpErrorResponse.of``:
+        the model's own echo (including the omit-when-absent rule) is pinned in
         ``tests/unit/test_error_envelope.py::TestContextEcho``. What only the
         handler can lose is the key on the way out.
         """
@@ -308,27 +310,30 @@ class TestErrorEnvelopeContextEcho:
 class TestNoDeadA2AMap:
     """Dead A2A error map must not exist in exceptions module (PR #1083 review).
 
-    A2A error translation has one home, ``_build_error_envelope()`` in
-    ``adcp_a2a_server.py``. ``exceptions.py`` once carried a second, unreachable
-    copy; a re-introduction would compile, pass every other test, and only show
-    up as two transports disagreeing about a code. Kept from origin/main because
+    A2A has no error translation of its own: ``_dispatch_skill`` in
+    ``adcp_a2a_server.py`` serializes the boundary's ``AdcpErrorResponse`` with
+    ``to_wire``. ``exceptions.py`` once carried a second, unreachable copy; a
+    re-introduction would compile, pass every other test, and only show up as
+    two transports disagreeing about a code. Kept from origin/main because
     nothing else in the suite grades the absence.
     """
 
     def test_no_a2a_error_code_map_in_exceptions(self):
-        """_A2A_ERROR_CODE_MAP was dead code — real translation is in adcp_a2a_server.py."""
+        """_A2A_ERROR_CODE_MAP was dead code — A2A serializes the boundary's AdcpErrorResponse."""
         import src.core.exceptions as exc_module
 
         msg = (
-            "_A2A_ERROR_CODE_MAP is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
+            "_A2A_ERROR_CODE_MAP is dead code — A2A serializes the boundary's AdcpErrorResponse "
+            "in _dispatch_skill in adcp_a2a_server.py"
         )
         assert not hasattr(exc_module, "_A2A_ERROR_CODE_MAP"), msg
 
     def test_no_to_a2a_error_code_in_exceptions(self):
-        """to_a2a_error_code() was dead code — real translation is in adcp_a2a_server.py."""
+        """to_a2a_error_code() was dead code — A2A serializes the boundary's AdcpErrorResponse."""
         import src.core.exceptions as exc_module
 
         msg = (
-            "to_a2a_error_code() is dead code — A2A translation lives in _build_error_envelope() in adcp_a2a_server.py"
+            "to_a2a_error_code() is dead code — A2A serializes the boundary's AdcpErrorResponse "
+            "in _dispatch_skill in adcp_a2a_server.py"
         )
         assert not hasattr(exc_module, "to_a2a_error_code"), msg

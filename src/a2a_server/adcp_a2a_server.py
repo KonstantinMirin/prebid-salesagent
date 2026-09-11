@@ -54,7 +54,6 @@ from google.protobuf import json_format, struct_pb2
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.domain_config import get_a2a_server_url
-from src.core.errors.codes import AppErrorCode
 from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
     AdCPCapabilityNotSupportedError,
@@ -63,11 +62,11 @@ from src.core.exceptions import (
     AdCPUrlNotAllowedError,
     AdCPValidationError,
     adcp_error_for,
-    build_two_layer_error_envelope,
 )
 
 # Signals tools removed - should come from dedicated signals agents, not sales agent
 from src.core.resolved_identity import TransportProtocol
+from src.core.schemas._base import AdcpErrorResponse
 from src.core.tool_error_logging import record_boundary_error
 from src.core.tools._boundary import serve
 from src.core.tools._wire import to_wire
@@ -111,7 +110,7 @@ def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
         )
     return InvalidParamsError(
         message=adcp_err.message,
-        data=build_two_layer_error_envelope(adcp_err),
+        data=to_wire(AdcpErrorResponse.of(adcp_err)),
     )
 
 
@@ -199,31 +198,6 @@ _TASK_STATE_BY_ADCP_STATUS: dict[LibraryTaskStatus, TaskState] = {
 }
 
 
-def _task_state_for_results(results: list[dict[str, Any]]) -> TaskState:
-    """The A2A Task state for one message's skill results. THE one derivation.
-
-    Reads each answer's OWN ``status`` -- required on the response envelope and defaulted to
-    ``completed``, so it is never absent -- and translates it through
-    :data:`_TASK_STATE_BY_ADCP_STATUS`. A failed skill is FAILED because its result carries an
-    error envelope instead of a response body.
-
-    Subscripted, not ``.get``-with-a-default: a missing ``status`` would mean a response that
-    did not come from the boundary, and answering COMPLETED for it would report success for
-    something never examined. A ``KeyError`` here is the correct outcome.
-
-    Three derivations of this one value stood in this handler: per-skill success flags, an
-    early ``== "submitted"`` compare, and a re-parse of the artifacts this handler had itself
-    just written. The last one is why the others existed -- serializing before deciding threw
-    away the type, so what was left to read was strings whose absence had to be guessed at.
-    """
-    state = TaskState.TASK_STATE_COMPLETED
-    for res in results:
-        if not res["success"]:
-            return TaskState.TASK_STATE_FAILED
-        state = _TASK_STATE_BY_ADCP_STATUS[LibraryTaskStatus(res["result"]["status"])]
-    return state
-
-
 def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A2A_WIRE_INTEGER_FIELDS) -> Any:
     """Recursively coerce known integer-typed fields back to ``int``.
 
@@ -256,13 +230,12 @@ def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A
 def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     """Canonical InternalError shape for non-skill A2A boundary failures.
 
-    Skill handlers raise typed ``AdCPSalesAgentError`` (or untyped exceptions that the
-    dispatcher normalizes), and ``_handle_explicit_skill`` → ``on_message_send``
-    surface those as a two-layer envelope on a failed Task's DataPart. Non-skill
-    paths (``on_message_send`` fallthrough, NL handlers) historically picked their
-    own prefixes (``"Message processing failed: "``, ``"Error in ..."``)
-    for semantically identical untyped failures — divergence on the buyer-
-    facing wire message for the same condition.
+    A dispatched skill's failure never reaches here: ``serve`` answers it with a failed
+    response that rides the Task's artifact. Non-skill paths (``on_message_send``
+    fallthrough, the push-notification-config methods) historically picked their own
+    prefixes (``"Message processing failed: "``, ``"Error in ..."``) for semantically
+    identical untyped failures — divergence on the buyer-facing wire message for the
+    same condition.
 
     Use this helper at every non-skill ``InternalError(...)`` raise site that
     is NOT a deliberate protocol-level convention (see push-notif handlers
@@ -291,7 +264,7 @@ def _internal_error_for(operation: str, exc: Exception) -> InternalError:
     typed = adcp_error_for(exc)
     return InternalError(
         message=f"{operation} failed: {typed.message}",
-        data=build_two_layer_error_envelope(typed),
+        data=to_wire(AdcpErrorResponse.of(typed)),
     )
 
 
@@ -304,41 +277,6 @@ class AdCPRequestHandler(RequestHandler):
         # The VALUE, not the raw protobuf: what is stashed here is handed straight
         # to the sender, so it must carry the gate's receipt.
         logger.info("AdCP Request Handler initialized for direct function calls")
-
-    @staticmethod
-    def _build_error_envelope(exc: Exception) -> dict[str, Any]:
-        """Build a spec-compliant two-layer envelope for any exception.
-
-        Single source of truth for "wrap-arbitrary-exception → wire envelope"
-        used by both the per-skill dispatcher (``_build_failed_skill_result``)
-        and the top-level ``on_message_send`` error handler. Delegates to
-        ``adcp_error_for`` for the type→AdCPSalesAgentError mapping
-        (``ValueError → AdCPValidationError``, ``PermissionError →
-        AdCPAuthorizationError``, arbitrary ``Exception →
-        AdCPSalesAgentError(INTERNAL_ERROR)``) so the wire output stays in
-        ``CODE_TABLE`` (the pinned ``enums/error-code.json`` plus this platform's
-        own ``AppErrorCode`` members) and the envelope shape never degrades to a
-        flat ``{"error": "..."}`` dict the storyboard runner would synthesize
-        as ``MCP_ERROR``.
-        """
-
-        return build_two_layer_error_envelope(adcp_error_for(exc))
-
-    @staticmethod
-    def _build_failed_skill_result(skill_name: str, exc: Exception) -> dict[str, Any]:
-        """Build the dispatcher result dict for a failed skill invocation.
-
-        Both the typed-AdCPSalesAgentError branch and the untyped fallthrough land here so
-        the artifact DataPart always carries a spec-compliant two-layer envelope
-        under ``error_envelope`` — the single source of truth on the wire, never a
-        flat ``{"error": "..."}`` dict. Callers needing the human-readable message
-        read ``error_envelope["errors"][0]["message"]``.
-        """
-        return {
-            "skill": skill_name,
-            "error_envelope": AdCPRequestHandler._build_error_envelope(exc),
-            "success": False,
-        }
 
     def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
         """Extract Bearer token from ServerCallContext.
@@ -458,120 +396,70 @@ class AdCPRequestHandler(RequestHandler):
 
             # ONE route in: an explicit skill invocation. Anything else is refused below.
             if skill_invocations:
-                # Process explicit skill invocations
-                results = []
-                for invocation in skill_invocations:
-                    skill_name = invocation["skill"]
-                    parameters = invocation["parameters"]
-                    logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
-
-                    try:
-                        result = await self._handle_explicit_skill(skill_name, parameters, credential)
-                        results.append({"skill": skill_name, "result": result, "success": True})
-                    except A2AError:
-                        # A2AError should bubble up immediately (JSON-RPC error).
-                        # Reserved for transport-protocol failures (MethodNotFound,
-                        # malformed request, etc.) — never AdCP-level errors, which
-                        # are now caught below and surfaced as failed Tasks with a
-                        # two-layer envelope in the artifact DataPart.
-                        raise
-                    # No ``except AdCPAuthenticationError`` any more. A refused credential used
-                    # to be re-raised here as a JSON-RPC error, because that was the only
-                    # container AuthChallengeResponder read to lift the answer to 401. A refusal
-                    # is an outcome like any other now -- ``serve`` answers it with a failed
-                    # response that ``_dispatch_skill`` serializes into the Task's artifact, and
-                    # the responder reads that artifact (``adcp_error_code_in``, shape 4). So the
-                    # 401 handshake survives with no transport branch keyed on an error class,
-                    # and this frame never sees the typed exception at all.
-                    except AdCPSalesAgentError as e:
-                        # AdCP-level errors are async-task failures, not JSON-RPC
-                        # errors. Mirrors the SDK's _send_adcp_error reference for
-                        # storyboard scenarios that exercise invalid-state
-                        # transitions on an otherwise-routable skill.
-                        # NOTE: logging happens in ``_handle_explicit_skill``'s
-                        # except branch (with audit log + activity feed); duplicating
-                        # the logger call here would produce two messages for the
-                        # same failure.
-                        results.append(self._build_failed_skill_result(skill_name, e))
-                    except Exception as e:
-                        # Untyped fallthrough — same envelope shape as the AdCPSalesAgentError
-                        # branch so storyboard runners can `JSON.parse` the DataPart
-                        # uniformly regardless of which branch caught the failure.
-                        #
-                        # No recording here. Anything reaching this point was raised inside
-                        # ``invoke_tool``, which records it against the identity it resolved
-                        # (``_boundary``, guarded so a re-raise up the stack cannot record it
-                        # twice). This copy re-recorded the same failure a second time and
-                        # scoped it to tenant "unknown", because the ``identity`` it read was
-                        # never bound.
-                        results.append(self._build_failed_skill_result(skill_name, e))
-
-                # Check for submitted status (manual approval required) - return early without artifacts
-                # Per AdCP spec, async operations should return Task with status=submitted and no artifacts
-                for res in results:
-                    if res["success"]:
-                        # The SAME read the final state uses, so the two cannot disagree about
-                        # what a submitted answer is.
-                        if LibraryTaskStatus(res["result"]["status"]) is LibraryTaskStatus.submitted:
-                            task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                            del task.artifacts[:]  # No artifacts for pending tasks
-                            logger.info(
-                                f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
-                            )
-                            # Send protocol-level webhook notification
-                            self.tasks[task_id] = task
-                            return task
-
-                # Create artifacts for all skill results with human-readable text
-                for i, res in enumerate(results):
-                    if res["success"]:
-                        artifact_data = res["result"]
-                    elif "error_envelope" in res:
-                        # Failure path: surface the full two-layer envelope as
-                        # the DataPart so the storyboard runner / harness can
-                        # read either ``adcp_error.code`` or ``errors[0].code``.
-                        artifact_data = res["error_envelope"]
-                    else:
-                        # Every failure result comes from _build_failed_skill_result,
-                        # which always sets error_envelope. A failed result without it
-                        # is a contract violation — fail loud rather than silently emit
-                        # the legacy flat ``{"error": ...}`` shape.
-                        raise AdCPSalesAgentError(
-                            error_code=AppErrorCode.INTERNAL_ERROR,
-                            internal_detail=(
-                                f"Skill result for {res.get('skill', '?')!r} is marked failed "
-                                "but carries no error_envelope"
-                            ),
-                        )
-
-                    # Generate human-readable text from response __str__()
-                    # Per A2A spec, use TextPart + DataPart pattern (not description field)
-                    #
-                    # The text is READ from the payload, never re-derived from it:
-                    # _serialize_for_a2a already stamped str(response) onto
-                    # artifact_data["message"] at serialization time. An outbound
-                    # payload is finished — feeding it back through Model(**data)
-                    # to recover the same string handed pydantic before-validators
-                    # a reference to the dict about to go on the wire, and one of
-                    # them mutated it in place (the list_creatives format_id
-                    # bare-string defect). Nothing rebuilds an outbound payload.
-                    text_message = None
-                    if res["success"] and isinstance(artifact_data, dict):
-                        text_message = artifact_data.get("message")
-
-                    # Build parts list per A2A spec: optional text Part + required data Part
-                    parts = []
-                    if text_message:
-                        parts.append(Part(text=text_message))
-                    parts.append(Part(data=_dict_to_value(artifact_data)))
-
-                    task.artifacts.append(
-                        Artifact(
-                            artifact_id=f"skill_result_{i + 1}",
-                            name=f"{'error' if not res['success'] else res['skill']}_result",
-                            parts=parts,
-                        )
+                # One skill per message. The pinned 3.1.1 text describes an A2A invocation as
+                # one DataPart naming one skill and says nothing about batching several into
+                # a message, so a message naming two is malformed rather than a batch. Refused
+                # here, before anything runs, so no skill is served on a request that is
+                # refused as a whole.
+                if len(skill_invocations) > 1:
+                    raise InvalidRequestError(
+                        message="One skill per message. Send each skill invocation as its own message."
                     )
+                (invocation,) = skill_invocations
+                skill_name = invocation["skill"]
+                parameters = invocation["parameters"]
+                logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
+
+                # No ``except`` around this. A refused credential, a malformed payload and a
+                # failing tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill``
+                # serializes into the answer like any other response; the Task state below is
+                # read off that answer's own ``status``. An unknown skill is an ``A2AError`` and
+                # propagates to the JSON-RPC layer. AuthChallengeResponder reads a refused
+                # credential off the artifact (``adcp_error_code_in``, shape 4), so the 401
+                # handshake needs no branch here keyed on an error class.
+                result = await self._handle_explicit_skill(skill_name, parameters, credential)
+
+                # Per AdCP spec, async operations return a Task with status=submitted and no
+                # artifacts. The SAME read the final state uses, so the two cannot disagree
+                # about what a submitted answer is.
+                if LibraryTaskStatus(result["status"]) is LibraryTaskStatus.submitted:
+                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                    del task.artifacts[:]
+                    logger.info(
+                        f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
+                    )
+                    self.tasks[task_id] = task
+                    return task
+
+                # Per A2A spec, use TextPart + DataPart pattern (not description field). The
+                # text is READ from the payload, never re-derived from it: ``message`` is a
+                # declared envelope field, serialized with the rest. Feeding an outbound
+                # payload back through Model(**data) to recover it handed pydantic
+                # before-validators a reference to the dict about to go on the wire, and one
+                # of them mutated it in place (the list_creatives format_id bare-string
+                # defect). Nothing rebuilds an outbound payload.
+                parts = []
+                if result.get("message"):
+                    parts.append(Part(text=result["message"]))
+                parts.append(Part(data=_dict_to_value(result)))
+                task.artifacts.append(Artifact(artifact_id="skill_result_1", name=f"{skill_name}_result", parts=parts))
+
+                # The Task state is the RESPONSE's own status, mapped once. ``status`` is
+                # required on the response envelope and defaulted to ``completed``, so it is
+                # never absent; subscripted, not ``.get``-with-a-default, because a missing
+                # ``status`` would mean a response that did not come from the boundary, and
+                # answering COMPLETED for it would report success for something never examined.
+                #
+                # A per-creative ``pending_review`` deliberately does NOT make the Task
+                # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
+                # branches: a synchronous success required to carry ``creatives`` ("best-effort
+                # processing with per-item status/failures"), a terminal failure carrying
+                # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
+                # and which carries ``task_id`` and NO creatives. Per-creative review state is
+                # therefore per-item information inside branch one, and promoting it to a
+                # task-level status claimed the shape that cannot carry the creatives it just
+                # processed.
+                task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[LibraryTaskStatus(result["status"])]))
 
             else:
                 # A message that names no skill is refused, and that refusal is the whole
@@ -602,30 +490,6 @@ class AdCPRequestHandler(RequestHandler):
                     )
                 )
 
-            # The Task state is the RESPONSE's own status, mapped once. Every skill's answer
-            # declares what became of it -- ``status`` is required on the response envelope
-            # and defaults to ``completed`` -- so this transport reads a typed field and
-            # translates it, holding no knowledge of any particular tool.
-            #
-            # It used to derive the state TWICE: once from per-skill success flags above, and
-            # again here by re-parsing ``task.artifacts``, the bytes it had just written. That
-            # round trip is what lost the type, which is why the second derivation had to
-            # compare strings and guess a default for a status it could not be sure of.
-            #
-            # A per-creative ``pending_review`` deliberately does NOT make the Task
-            # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
-            # branches: a synchronous success required to carry ``creatives`` ("best-effort
-            # processing with per-item status/failures"), a terminal failure carrying
-            # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
-            # and which carries ``task_id`` and NO creatives. Per-creative review state is
-            # therefore per-item information inside branch one, and promoting it to a
-            # task-level status claimed the shape that cannot carry the creatives it just
-            # processed.
-            task_state = _task_state_for_results(results)
-
-            # Mark task with appropriate status
-            task.status.CopyFrom(TaskStatus(state=task_state))
-
         except A2AError:
             # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
@@ -652,7 +516,7 @@ class AdCPRequestHandler(RequestHandler):
                 Artifact(
                     artifact_id="error_1",
                     name="processing_error",
-                    parts=[Part(data=_dict_to_value(self._build_error_envelope(e)))],
+                    parts=[Part(data=_dict_to_value(to_wire(AdcpErrorResponse.of(adcp_error_for(e)))))],
                 )
             )
 
@@ -921,21 +785,11 @@ class AdCPRequestHandler(RequestHandler):
         # leniently and then dispatch a protected skill; with the decision per tool, the
         # boundary refuses before dispatch and this could never fire.
 
-        # No normalization here any more. It read ``adcp_error_for`` on every failure coming
-        # out of dispatch, which was a fourth site deciding a question that does not depend on
-        # the transport asking it -- MCP answered it in ``_handle_tool_exception``, REST in its
-        # exception handlers, and A2A twice (here and in ``_build_failed_skill_result``).
-        #
-        # Both sources of failure are now typed at the point that owns them: a parse failure by
-        # ``_dispatch_skill``, because parsing is the transport's job and happens before the
-        # boundary exists; everything else by ``invoke_tool``, which holds the tool, the
-        # identity and the exception together. What arrives here is already an
-        # ``AdCPSalesAgentError``, and the outer dispatcher's ``except AdCPSalesAgentError``
-        # branch renders it -- rendering being the part that IS per-transport.
+        # No normalization here. Every failure is typed at the point that owns it -- the
+        # boundary, which holds the tool, the identity and the exception together -- and
+        # answered as a response that ``_dispatch_skill`` serializes. Nothing typed escapes
+        # this frame; rendering, the part that IS per-transport, is choosing the container.
         return await self._dispatch_skill(skill_name, parameters, credential)
-        # Untyped exceptions fall through to the dispatcher's `except Exception`
-        # at the call site, which routes them through `_build_failed_skill_result`
-        # for uniform envelope shape. No catch-all here.
 
     def _extract_brand_name_from_query(self, query: str) -> str:
         """Extract or infer brand name from the user query.

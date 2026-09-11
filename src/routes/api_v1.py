@@ -18,7 +18,7 @@ from src.core.auth_context import AuthContext, get_auth_context
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
 from src.core.tools._announced_shape import apply_signature
-from src.core.tools._boundary import serve, wire_status
+from src.core.tools._boundary import serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 
@@ -98,7 +98,7 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
             # REST's wire failure marker is the HTTP STATUS, and that is all this transport
             # adds. The BODY is the response the boundary built, serialized by the same
             # function the success path uses.
-            return JSONResponse(status_code=wire_status(failure.response), content=to_wire(failure.response))
+            return JSONResponse(status_code=failure.response.http_status, content=to_wire(failure.response))
         return JSONResponse(status_code=200, content=to_wire(response))
 
     handler.__name__ = tool_name

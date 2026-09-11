@@ -534,8 +534,8 @@ class TransportResult:
         access; the fix is to move the parsing here, not to allowlist the step.
 
         Reads ``errors[]``, falling back to the envelope-level ``adcp_error``
-        mirror, because ``build_two_layer_error_envelope`` emits both and an
-        emitter is free to carry only one.
+        mirror, because ``AdcpErrorResponse`` carries both and an emitter is
+        free to carry only one.
         """
         from tests.helpers.pinned_schema import validator_for
 

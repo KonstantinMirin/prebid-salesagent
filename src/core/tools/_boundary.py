@@ -158,27 +158,6 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     return identity.tenant_id, identity.principal_id, identity.account_id, key
 
 
-def wire_status(response: AdcpResponse) -> int:
-    """The HTTP status one response deserves: 200, or its error code's own status.
-
-    Read from ``CODE_TABLE``, the one place a code's status is declared -- the same table the
-    typed exception's ``status_code`` property reads, so a transport cannot disagree with the
-    exception it no longer sees.
-    """
-    from src.core.errors.codes import CODE_TABLE
-
-    error = response.adcp_error
-    if error is None:
-        return 200
-    # The wire carries the code as a STRING; the table is keyed by the code enums. The
-    # str-to-enum map already exists beside the MCP renderer, so resolving through it keeps
-    # one answer to "which code is this string" rather than a second parse here.
-    from src.core.tool_error_logging import _CODE_BY_VALUE
-
-    code = _CODE_BY_VALUE.get(error.code)
-    return CODE_TABLE[code].status if code is not None else 500
-
-
 def validated_request(tool_name: str, raw: Any) -> BuyerRequest:
     """Parse a buyer's payload into its tool's DTO. A rejection carries the buyer's context out.
 
@@ -219,7 +198,7 @@ def validated_request(tool_name: str, raw: Any) -> BuyerRequest:
         # The carrier, not the typed error: what a transport has to write is a RESPONSE, and
         # this is the one outcome with no validated request to read ``context`` from, so it is
         # built here while the raw payload is still in hand.
-        raise AdcpFailure(_stamp(AdcpErrorResponse.of(adcp_error_for(exc), context=echo))) from exc
+        raise AdcpFailure(AdcpErrorResponse.of(adcp_error_for(exc), context=echo)) from exc
 
 
 async def serve(
@@ -313,12 +292,9 @@ async def invoke_tool(
     except Exception as exc:
         from src.core.exceptions import AdcpFailure, adcp_error_for
 
-        # ``adcp_error_for`` hands back the SAME object for an already-typed error, so the
-        # identity check is what keeps this from becoming ``raise exc from exc``.
-        # The carrier, not the typed error: what a transport has to write is a RESPONSE, and
-        # this is the one outcome with no validated request to read ``context`` from, so it is
-        # built here while the raw payload is still in hand.
-        raise AdcpFailure(_stamp(AdcpErrorResponse.of(adcp_error_for(exc), context=echo))) from exc
+        # The carrier, not the typed error: what a transport has to write is a RESPONSE, built
+        # here with the context captured above.
+        raise AdcpFailure(AdcpErrorResponse.of(adcp_error_for(exc), context=echo)) from exc
 
     # Recording lives HERE because this is the only place holding all three things a record
     # needs: the tool name, the resolved identity, and the exception. Each transport used to
@@ -332,8 +308,8 @@ async def invoke_tool(
     # PERMISSION_DENIED, anything else is an INTERNAL_ERROR -- and that answer does not depend
     # on who is asking. Three transports each reached it by their own route (MCP through
     # ``_handle_tool_exception``, REST through registered exception handlers, A2A through
-    # ``_handle_explicit_skill`` AND ``_build_failed_skill_result``), which is four sites
-    # deciding one transport-agnostic question.
+    # its skill dispatcher, twice), which is four sites deciding one transport-agnostic
+    # question.
     #
     # What stays per-transport is RENDERING: a JSON-RPC error, an HTTP status, a ToolError.
     # Those are genuinely different and belong where they are. A transport now receives an
@@ -376,7 +352,7 @@ async def invoke_tool(
         # assembles an error body. The fault's real identity survives in the record above,
         # which is where AdCP 3.1.1 transport-errors.mdx Security Considerations requires it
         # to stay: the buyer-facing envelope deliberately carries no exception text.
-        raise AdcpFailure(_stamp(AdcpErrorResponse.of(typed, context=echo))) from exc
+        raise AdcpFailure(AdcpErrorResponse.of(typed, context=echo)) from exc
 
     # No ``set_current_tenant`` anywhere on this path, deliberately. The tenant travels on
     # ``identity.tenant`` as a LazyTenantContext: it holds ``tenant_id`` immediately and
@@ -418,12 +394,6 @@ async def _invoke_stamped(
     """
     negotiate_adcp_version(req.get_adcp_version(), req.get_adcp_major_version())
     return _served(echo, await _invoke(tool_name, impl, req, identity))
-
-
-def _stamp[Stamped: AdcpResponse](response: Stamped) -> Stamped:
-    """Stamp the release this build served onto one response, whatever its outcome."""
-    response.adcp_version = SERVED_ADCP_VERSION
-    return response
 
 
 def _served(echo: Any, response: AdcpResponse) -> AdcpResponse:

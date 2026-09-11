@@ -433,72 +433,28 @@ class TestA2ASkillInvocation:
     # TODO: Needs investigation of proper error handling approach (A2AError not in current a2a library)
 
     @pytest.mark.asyncio
-    async def test_multiple_skill_invocations(
-        self, handler, sample_tenant, sample_principal, mock_identity, sample_products
-    ):
-        """Test multiple skill invocations in a single message."""
-        # Mock authentication token
+    async def test_message_naming_two_skills_is_refused_whole(self, handler, sample_tenant, sample_principal):
+        """One skill per message: a message naming two is refused before either runs.
+
+        An A2A invocation is one DataPart naming one skill, and the pinned 3.1.1 text
+        describes no batching of several into a message. The refusal is the same JSON-RPC
+        ``InvalidRequestError`` a message naming no skill earns, and no Task is produced, so
+        a buyer never receives a partial answer to a request refused as a whole.
+        """
+        from a2a.types import InvalidRequestError
+
+        from tests.a2a_helpers import make_a2a_context
+        from tests.utils.a2a_helpers import _dict_to_value
+
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
+        ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with resolved_as(mock_identity):
-            # Build ServerCallContext with Host header for subdomain detection
-            from tests.a2a_helpers import make_a2a_context
+        message = Message(message_id="msg_multi", context_id="ctx_multi", role=Role.ROLE_USER)
+        for skill in ("get_products", "list_creative_formats"):
+            message.parts.append(Part(data=_dict_to_value({"skill": skill, "parameters": {}})))
 
-            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
-
-            # Create message with multiple skill invocations
-            # Note: get_signals removed - should come from dedicated signals agents
-            from tests.utils.a2a_helpers import _dict_to_value
-
-            message = Message(
-                message_id="msg_multi",
-                context_id="ctx_multi",
-                role=Role.ROLE_USER,
-            )
-            message.parts.append(
-                Part(
-                    data=_dict_to_value(
-                        {
-                            "skill": "get_products",
-                            "parameters": {"brief": "video ads", "brand": {"domain": "testbrand.com"}},
-                        }
-                    )
-                )
-            )
-            message.parts.append(
-                Part(
-                    data=_dict_to_value(
-                        {
-                            "skill": "list_creative_formats",
-                            "parameters": {},
-                        }
-                    )
-                )
-            )
-            params = SendMessageRequest(message=message)
-
-            # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params, context=ctx)
-
-            # Verify both skills were processed
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert len(result.metadata["skills_requested"]) == 2
-            assert "get_products" in result.metadata["skills_requested"]
-            assert "list_creative_formats" in result.metadata["skills_requested"]
-            assert len(result.artifacts) == 2
-
-            # Verify both artifacts have data (parts may have TextPart before DataPart)
-            for artifact in result.artifacts:
-                data_part_found = False
-                for part in artifact.parts:
-                    # a2a-sdk 1.0 protobuf: Part uses oneof 'content' with text/raw/url/data
-                    if part.HasField("data"):
-                        data_part_found = True
-                        break
-                assert data_part_found, "Expected DataPart in artifact.parts"
+        with pytest.raises(InvalidRequestError):
+            await handler.on_message_send(SendMessageRequest(message=message), context=ctx)
 
     @pytest.mark.asyncio
     async def test_artifact_text_part_is_the_data_part_message(

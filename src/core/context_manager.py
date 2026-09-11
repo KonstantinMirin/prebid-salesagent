@@ -20,8 +20,10 @@ from src.core.database.jsonb_append import jsonb_list_append
 from src.core.database.models import Context, ObjectWorkflowMapping, WorkflowStep
 from src.core.database.models import Context as DBContext
 from src.core.database.repositories.workflow import append_step_comment, build_context, build_workflow_step
-from src.core.exceptions import AdCPValidationError, adcp_error_for, build_two_layer_error_envelope
+from src.core.exceptions import AdCPValidationError, adcp_error_for
+from src.core.schemas._base import AdcpErrorResponse
 from src.core.security.outbound_http import OutboundError
+from src.core.tools._wire import to_wire
 from src.core.webhook_validator import (
     webhook_url_for_log,
 )
@@ -351,9 +353,9 @@ class ContextManager(DatabaseManager):
         The webhook delivery path at ``_send_push_notifications`` emits
         ``step.response_data`` to push notification subscribers. Without
         structured payload, async subscribers receive ``status=failed`` with
-        an empty body. This helper builds the full two-layer envelope
-        (``adcp_error`` + ``errors[]``) via ``build_two_layer_error_envelope``
-        so async and sync paths see the same wire shape.
+        an empty body. This helper serializes the same ``AdcpErrorResponse`` the
+        boundary answers a synchronous failure with, so async and sync paths see
+        the same wire shape.
 
         Untyped exceptions are normalized to ``AdCPSalesAgentError`` via
         ``adcp_error_for``. Wire-code enforcement ensures webhook
@@ -367,7 +369,7 @@ class ContextManager(DatabaseManager):
         try:
             source = adcp_error_for(exc)
 
-            response_data = build_two_layer_error_envelope(source)
+            response_data = to_wire(AdcpErrorResponse.of(source))
             error_message = source.message or str(source)
 
             self.update_workflow_step(
@@ -836,7 +838,7 @@ class ContextManager(DatabaseManager):
                         #
                         # Operator-only, and checked rather than assumed: nothing on a
                         # buyer-wire path reads ``internal_detail``.
-                        # ``build_two_layer_error_envelope`` composes the envelope from
+                        # ``AdcpErrorResponse.of`` composes the response from
                         # error_code/message/recovery/field/suggestion/retry_after/
                         # details/issues/context and never this — and in any case the
                         # exception is swallowed two lines below, so it never reaches a

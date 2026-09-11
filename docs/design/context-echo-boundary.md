@@ -16,8 +16,7 @@ class, assigned in one place; nothing else reads, passes, or writes it.
 envelope, with `status` in its `required` list. So the spec's model of an error is a response
 envelope carrying an error, not a separate document.
 
-Our implementation instead raises out of `invoke_tool` and has each transport call
-`build_two_layer_error_envelope(exc)`, which hand-assembles a detached
+A transport handed a bare exception out of `invoke_tool` has to hand-assemble a detached
 `{"adcp_error": ..., "errors": [...]}` dict. Three consequences, all measured:
 
 - That dict omits `status`, so every error body this seller emits is invalid against every
@@ -76,7 +75,7 @@ class AdcpFailure(Exception):
   signature for callers that already hold a validated request.
 - Each transport catches `AdcpFailure`, serializes `failure.response` with the same `to_wire`
   the success path uses, and adds only its own wire failure marker: an HTTP status for REST
-  (`wire_status`, read from `CODE_TABLE`), an `AdCPToolError` for MCP, a Task state for A2A.
+  (`response.http_status`, read from `CODE_TABLE`), an `AdCPToolError` for MCP, a Task state for A2A.
   That marker is the only part of a refusal that is genuinely per-transport.
 - A2A's Task state is the response's own `status`, translated through one total enum-to-enum
   mapping (`_TASK_STATE_BY_ADCP_STATUS`, nine rows, exact counterparts). Derived once. The

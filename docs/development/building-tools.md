@@ -466,7 +466,7 @@ from, so it needs no guard checking that it hasn't. Platform codes are added as
 **Nothing rewrites a code between the raise site and the envelope.** The AdCP vocabulary is
 open: `error.code` is a wire-typed string, published codes are documentary, senders MAY emit
 outside the set, and receivers MUST decode via `error.recovery`. So there is no translation
-table, and `build_two_layer_error_envelope` is the only wire writer.
+table, and `AdcpErrorResponse.of` is the only place a failure response is built.
 
 ### Which code
 

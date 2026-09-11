@@ -824,18 +824,32 @@ class AdcpErrorResponse(AdcpResponse):
     subclass is the only place it can live without a per-tool copy, and a failure has no tool
     payload to carry besides the error.
 
-    Why a class and not a dict: the dict this replaces
-    (``exceptions.build_two_layer_error_envelope``) could not carry ``status``, and did not --
-    so every error body this seller emitted was invalid against every pinned response schema,
-    and nothing caught it, because the graded error checks validate the error OBJECTS against
-    ``core/error.json`` and never the envelope around them (salesagent-3cs7o.4). A detached
-    dict also has no ``context`` field, which is why the buyer's context had to ride the
-    exception and be hand-threaded to every raise site to get there.
+    Why a class and not a dict: the hand-assembled dict this replaces could not carry
+    ``status``, and did not -- so every error body this seller emitted was invalid against
+    every pinned response schema, and nothing caught it, because the graded error checks
+    validate the error OBJECTS against ``core/error.json`` and never the envelope around them
+    (salesagent-3cs7o.4). A detached dict also has no ``context`` field, which is why the
+    buyer's context had to ride the exception and be hand-threaded to every raise site to get
+    there.
     """
 
     errors: list[_LibraryError] = Field(
         default_factory=list, description="The failure, as the tool's schema declares it"
     )
+
+    @property
+    def http_status(self) -> int:
+        """The HTTP status this failure is signalled with: its code's own, read from ``CODE_TABLE``.
+
+        The same lookup ``AdCPSalesAgentError.status_code`` performs, keyed here by the wire
+        string this response carries. Subscripted, so a code outside the vocabulary raises
+        rather than answering a status the table never declared.
+        """
+        from src.core.errors.codes import CODE_BY_VALUE, CODE_TABLE
+
+        if self.adcp_error is None:
+            raise ValueError("an error response carries its error in adcp_error")
+        return CODE_TABLE[CODE_BY_VALUE[self.adcp_error.code]].status
 
     @classmethod
     def of(cls, exc: "AdCPSalesAgentError", *, context: Any = None) -> "AdcpErrorResponse":
@@ -871,10 +885,8 @@ class AdcpErrorResponse(AdcpResponse):
         # ``context=`` explicitly, which is the path that survives; the field and this fallback
         # are deleted together in salesagent-3cs7o.2, along with the call sites that thread it.
         # ``adcp_version`` is stamped HERE, not by the caller. It is a property of this build,
-        # so every error response carries it however it was reached -- and they are reached by
-        # more than one path: the boundary's failure sites, and A2A's per-skill failure result.
-        # Leaving it to the caller meant REST's error body carried the release and A2A's did
-        # not, which ``TestWireBytesIdenticalAcrossTransports`` measured.
+        # so every error response carries it however it was reached -- the boundary's failure
+        # sites and the transports' own pre-dispatch refusals alike.
         from src.core.version_negotiation import SERVED_ADCP_VERSION
 
         echo = context if context is not None else exc.context

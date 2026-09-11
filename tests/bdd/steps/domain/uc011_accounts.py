@@ -1534,7 +1534,7 @@ def then_per_account_error_suggestion(ctx: dict, code: str) -> None:
 
     The advisory lane is a different lane from a raised error: normalize_advisory_errors
     fills an Error embedded in a SUCCESS response's errors[] array, via model_copy, not
-    build_two_layer_error_envelope.
+    the boundary's AdcpErrorResponse.
 
     WHAT THIS DOES **NOT** WITNESS, measured rather than assumed: it does not grade
     salesagent-3dawm.8's advisory FILL. Reverting that fill and re-running this scenario

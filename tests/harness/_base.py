@@ -180,7 +180,7 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
 def _wire_envelope(envelope: dict) -> dict | None:
     """Normalise a captured error body into the two-layer envelope shape, or ``None``.
 
-    Accepts what ``build_two_layer_error_envelope`` produces
+    Accepts what ``to_wire(AdcpErrorResponse.of(exc))`` produces
     (``{"adcp_error": {...}, "errors": [...]}``) and the legacy flat shape
     (``{"error_code": ..., "recovery": ...}``), and RETURNS THE ENVELOPE.
 

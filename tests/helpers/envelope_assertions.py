@@ -36,6 +36,20 @@ from typing import Any
 from tests.helpers import pinned_schema
 
 
+def envelope_for(exc: Any) -> dict[str, Any]:
+    """The wire body a buyer receives for one typed exception, built the way the boundary builds it.
+
+    ``to_wire(AdcpErrorResponse.of(exc))`` -- the two production calls every transport makes on
+    a failure, composed here so a test that holds an exception and no wire can still assert on
+    the body. A test that HAS a wire asserts on it (``TransportResult.assert_wire_error``); this
+    is for the ones grading the envelope's own derivation from a code.
+    """
+    from src.core.schemas._base import AdcpErrorResponse
+    from src.core.tools._wire import to_wire
+
+    return to_wire(AdcpErrorResponse.of(exc))
+
+
 def locate_envelope_error(target: Any) -> dict[str, Any] | None:
     """The payload-layer error object (``errors[0]``) — the protocol position.
 

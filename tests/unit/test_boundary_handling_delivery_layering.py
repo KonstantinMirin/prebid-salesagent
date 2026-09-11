@@ -16,12 +16,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPValidationError
 
 # Importing the domain module registers its boundary handler post-refactor.
 from tests.bdd.steps.domain import uc004_delivery  # noqa: F401
 from tests.bdd.steps.generic.then_payload import then_boundary_handling_result
 from tests.harness.wire_fixtures import wire_error_result
+from tests.helpers.envelope_assertions import envelope_for
 
 DELIVERY_FIELD = "reporting_dimensions"  # a delivery-domain boundary field
 
@@ -53,10 +54,11 @@ def test_invalid_delivery_boundary_with_wire_rejection_passes():
     server-crash code as a "client rejection". After salesagent-3dawm.18 the step
     requires a real envelope, so the fixture builds one from a real rejection.
     """
-    envelope = build_two_layer_error_envelope(AdCPValidationError(field=DELIVERY_FIELD))
+    envelope = envelope_for(AdCPValidationError(field=DELIVERY_FIELD))
     # has_wire=True: the fixture stands in for a dispatch whose rejection was
     # CAPTURED off the wire, which is the state the step must read from. The
-    # envelope is built by the production builder only so the shape is genuine.
+    # envelope is serialized from a production AdcpErrorResponse only so the
+    # shape is genuine.
     ctx = {"result": wire_error_result(envelope)}
     then_boundary_handling_result(ctx, DELIVERY_FIELD, "invalid")  # no raise
 

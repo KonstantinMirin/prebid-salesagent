@@ -73,10 +73,10 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
-    build_two_layer_error_envelope,
 )
 from src.core.security.outbound_http import OperatorEndpoint
 from tests.helpers import assert_envelope_shape
+from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import LocalOrigin
 
 # Reused rather than restated: which escape hatches a case opens is one decision
@@ -257,7 +257,7 @@ class TestTaxonomy:
             await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
         assert_envelope_shape(
-            build_two_layer_error_envelope(excinfo.value),
+            envelope_for(excinfo.value),
             "CONFIGURATION_ERROR",
             recovery="terminal",
         )
@@ -285,7 +285,7 @@ class TestTaxonomy:
         with pytest.raises(AdCPRateLimitError) as excinfo:
             await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
-        envelope = build_two_layer_error_envelope(excinfo.value)
+        envelope = envelope_for(excinfo.value)
         assert_envelope_shape(envelope, "RATE_LIMITED", recovery="transient")
         assert envelope["adcp_error"].get("retry_after") == 1, (
             f"adcp_error carries no top-level retry_after: {envelope}"
@@ -315,7 +315,7 @@ class TestTaxonomy:
         with pytest.raises(AdCPConfigurationError) as excinfo:
             await registry._fetch_formats_raw_mcp(agent_at(local_origin), provenance=_OPERATOR_PROVENANCE)
 
-        envelope = build_two_layer_error_envelope(excinfo.value)
+        envelope = envelope_for(excinfo.value)
         assert_envelope_shape(envelope, "CONFIGURATION_ERROR", recovery="terminal")
         assert local_origin.hits == 0, f"a refused agent URL was still fetched: {local_origin.requests}"
         assert "field" not in envelope["errors"][0], (
@@ -339,7 +339,7 @@ class TestTaxonomy:
         with pytest.raises(AdCPServiceUnavailableError) as excinfo:
             await registry._fetch_formats_raw_mcp(agent_at(local_origin_tls), provenance=_OPERATOR_PROVENANCE)
 
-        envelope = build_two_layer_error_envelope(excinfo.value)
+        envelope = envelope_for(excinfo.value)
         assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
 
         serialized = json.dumps(envelope)

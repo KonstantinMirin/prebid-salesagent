@@ -18,13 +18,13 @@ from src.core.exceptions import (
     AdCPAccountNotFoundError,
     AdCPNotFoundError,
     AdCPSalesAgentError,
-    build_two_layer_error_envelope,
 )
 from src.core.helpers.account_helpers import _require_account_access, resolve_account
 from src.core.resolved_identity import ResolvedIdentity
 from tests.harness._base import IntegrationEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
+from tests.helpers.envelope_assertions import envelope_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -128,7 +128,7 @@ class TestRequireAccountAccessFalsyPrincipal:
                     _require_account_access(identity, account_id, uow.accounts)
 
             assert_envelope_shape(
-                build_two_layer_error_envelope(exc_info.value),
+                envelope_for(exc_info.value),
                 "AUTH_MISSING",
                 recovery="correctable",
             )
@@ -175,7 +175,7 @@ class TestResolveAccountFalsyPrincipalEntryGuard:
                     resolve_account(ref, identity, uow.accounts)
 
             assert_envelope_shape(
-                build_two_layer_error_envelope(exc_info.value),
+                envelope_for(exc_info.value),
                 "AUTH_MISSING",
                 recovery="correctable",
             )

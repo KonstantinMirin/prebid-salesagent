@@ -243,7 +243,7 @@ def _assert_registration_suggestion(envelope: dict, surface: str, *, code: str) 
     Graded because spec point 6 keeps our network out of the message, which
     leaves ``field`` + ``suggestion`` as the buyer's only repair instructions —
     the same triple BR-UC-006 ``@T-UC-006-ext-webhook-ssrf`` grades.
-    ``build_two_layer_error_envelope`` copies ``errors[0]`` into ``adcp_error``,
+    ``AdcpErrorResponse`` serializes ``errors[0]`` into ``adcp_error`` as well,
     so both layers must carry it and a suggestion that reaches only one is a
     real interop bug.
 

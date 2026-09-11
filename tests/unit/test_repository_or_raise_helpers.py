@@ -18,6 +18,7 @@ from src.core.exceptions import (
     AdCPPackageNotFoundError,
     AdCPTaskNotFoundError,
 )
+from tests.helpers.envelope_assertions import envelope_for
 
 
 def _repo_with_first(repo_cls, first_value):
@@ -47,15 +48,13 @@ class TestMediaBuyOrRaise:
         and survives into the two-layer envelope (assert_envelope_shape does not
         check context, so we assert envelope["context"] directly).
         """
-        from src.core.exceptions import build_two_layer_error_envelope
-
         repo = _repo_with_first(MediaBuyRepository, None)
         ctx = {"context_id": "ctx-9"}
         with pytest.raises(AdCPMediaBuyNotFoundError) as exc:
             repo.get_by_id_or_raise("mb-missing", context=ctx)
 
         assert exc.value.context == ctx
-        assert build_two_layer_error_envelope(exc.value)["context"] == ctx
+        assert envelope_for(exc.value)["context"] == ctx
 
     def test_get_package_or_raise_returns_when_present(self):
         package = MagicMock()

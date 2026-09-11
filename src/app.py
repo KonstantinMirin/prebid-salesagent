@@ -47,12 +47,13 @@ from src.core.exceptions import (
     AdCPInvalidRequestError,
     AdCPSalesAgentError,
     adcp_error_for,
-    build_two_layer_error_envelope,
 )
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
+from src.core.schemas._base import AdcpErrorResponse
 from src.core.tool_error_logging import handle_tool_error, record_boundary_error
+from src.core.tools._wire import to_wire
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
@@ -206,10 +207,8 @@ def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Ex
     # attaches it app-wide by reading the code off this very envelope. Setting it here too
     # was the third copy of one rule -- REST's status happened to agree with MCP's and A2A's,
     # which is not the same as being decided once.
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=build_two_layer_error_envelope(exc),
-    )
+    response = AdcpErrorResponse.of(exc)
+    return JSONResponse(status_code=response.http_status, content=to_wire(response))
 
 
 @app.exception_handler(AdCPSalesAgentError)
@@ -243,8 +242,8 @@ async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse
     it, not three translations. This docstring used to say the other two wrapped
     raw ``ValueError`` in a "synthetic ``AdCPValidationError`` envelope", which
     read as though each transport built its own answer. All three emit a
-    byte-identical envelope because all three call one
-    ``build_two_layer_error_envelope`` on one typed exception.
+    byte-identical body because all three serialize one ``AdcpErrorResponse``
+    built from one typed exception.
 
     The mapping is type-keyed, and the order inside ``adcp_error_for`` is what makes
     a pydantic ``ValidationError`` (a ``ValueError`` SUBCLASS, so it arrives at this

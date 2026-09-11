@@ -34,7 +34,7 @@ Feature: A buyer-facing suggestion is resolved from the code table, not authored
     And the wire error carries a non-empty suggestion
 
   # NO UNIFORMITY SCENARIO HERE, and the reason matters. A draft of this feature carried
-  # one that built two envelopes straight from build_two_layer_error_envelope and compared
+  # one that built two envelopes straight from AdcpErrorResponse.of and compared
   # them. That is a TRANSPORT-BYPASS — it never touches the wire, so it would have reported
   # green on four transports while running the same in-process code four times — and the
   # harness correctly refused to run it (auto-xfail, "harness not wired"). It is not

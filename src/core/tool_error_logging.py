@@ -15,19 +15,17 @@ from fastapi.responses import JSONResponse
 from fastmcp.exceptions import ToolError
 from fastmcp.server import Context as FastMCPContext
 
-from src.core.errors.codes import CODE_TABLE, AppErrorCode, Recovery
+from src.core.errors.codes import CODE_BY_VALUE, AppErrorCode, Recovery
 from src.core.errors.details import ErrorDetails
 from src.core.exceptions import (
     AdCPSalesAgentError,
     adcp_error_for,
-    build_two_layer_error_envelope,
 )
+from src.core.schemas._base import AdcpErrorResponse
 from src.core.tool_context import ToolContext
+from src.core.tools._wire import to_wire
 
 logger = logging.getLogger(__name__)
-
-#: Wire-string -> vocabulary member. DERIVED from CODE_TABLE; nothing to maintain.
-_CODE_BY_VALUE = {str(code): code for code in CODE_TABLE}
 
 _CONTEXT_LIKE_TYPES: tuple[type, ...] = (FastMCPContext, ToolContext)
 
@@ -296,11 +294,10 @@ def _log_tool_error(tool_name: str, error: Exception, tenant_id: str | None, pri
 def _translate_to_tool_error(error: Exception, typed: AdCPSalesAgentError | None = None) -> NoReturn:
     """Translate typed exceptions to AdCPToolError at the MCP boundary.
 
-    AdCPSalesAgentError → AdCPToolError carrying a two-layer envelope built by
-    ``build_two_layer_error_envelope()``. ValueError and PermissionError are
-    wrapped in synthetic AdCPValidationError / AdCPAuthorizationError so they
-    produce the same envelope shape. Already-translated AdCPToolError and
-    plain ToolError pass through.
+    AdCPSalesAgentError → AdCPToolError carrying the serialized ``AdcpErrorResponse``.
+    ValueError and PermissionError are wrapped in synthetic AdCPValidationError /
+    AdCPAuthorizationError so they produce the same envelope shape. Already-translated
+    AdCPToolError and plain ToolError pass through.
 
     This function always raises — it never returns. Uses ``raise error`` (not
     bare ``raise``) on the passthrough branches so the function works even if
@@ -317,8 +314,8 @@ def _translate_to_tool_error(error: Exception, typed: AdCPSalesAgentError | None
     # conversion or two produced the same AdCPSalesAgentError; doing it once is simply the
     # truth about how many mappings exist. The RAW error is still what `from`
     # chains, so __cause__ is unchanged either way.
-    typed = typed if typed is not None else adcp_error_for(error)
-    raise AdCPToolError(build_two_layer_error_envelope(typed), status_code=typed.status_code) from error
+    response = AdcpErrorResponse.of(typed if typed is not None else adcp_error_for(error))
+    raise AdCPToolError(to_wire(response), status_code=response.http_status) from error
 
 
 def _handle_tool_exception(tool_func: Callable, error: Exception, args: tuple, kwargs: dict) -> NoReturn:
@@ -423,7 +420,7 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # against the vocabulary, with an explicit named fallback rather than an
     # implicit one: an unknown code becomes INTERNAL_ERROR because that is what
     # it means, not because it is what a default happened to be.
-    resolved_code = _CODE_BY_VALUE.get(error_code, AppErrorCode.INTERNAL_ERROR)
+    resolved_code = CODE_BY_VALUE.get(error_code, AppErrorCode.INTERNAL_ERROR)
     # error_message is deliberately dropped: a plain ToolError's text has no
     # provenance guarantee, and the resolved code's table sentence is what the buyer
     # should see. The raw text is still logged server-side above.
@@ -441,4 +438,5 @@ def handle_tool_error(e: ToolError) -> JSONResponse:
     # contradicts it — which is what the old derived table, rebuilt per call from
     # whatever subclasses happened to be imported, could do (salesagent-pssfi).
     synthetic: AdCPSalesAgentError[ErrorDetails] = AdCPSalesAgentError(error_code=resolved_code)
-    return JSONResponse(status_code=synthetic.status_code, content=build_two_layer_error_envelope(synthetic))
+    response = AdcpErrorResponse.of(synthetic)
+    return JSONResponse(status_code=response.http_status, content=to_wire(response))

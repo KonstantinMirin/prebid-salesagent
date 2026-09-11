@@ -436,7 +436,7 @@ class RegistryTool(Tool):
         from src.core.auth_context import AuthContext
         from src.core.exceptions import AdcpFailure
         from src.core.tool_error_logging import AdCPToolError, _handle_tool_exception
-        from src.core.tools._boundary import serve, wire_status
+        from src.core.tools._boundary import serve
         from src.core.tools._mcp import mcp_result
         from src.core.tools._wire import to_wire
 
@@ -456,7 +456,7 @@ class RegistryTool(Tool):
             # ``CallToolResult(isError=True, content=[TextContent(text=str(error))])``. That
             # marker is all this transport adds -- the BODY is the response the boundary built,
             # serialized by the same function the success path uses.
-            raise AdCPToolError(to_wire(failure.response), status_code=wire_status(failure.response)) from failure
+            raise AdCPToolError(to_wire(failure.response), status_code=failure.response.http_status) from failure
         except Exception as exc:
             # Records to the activity feed and audit log, then raises AdCPToolError carrying
             # the two-layer envelope. Validation raises inside the try because the buyer's

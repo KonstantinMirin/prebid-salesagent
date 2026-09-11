@@ -174,10 +174,9 @@ def _get_error_dict(error: object) -> dict:
         # `locate_envelope_error` is where "which region does the spec put this in"
         # is answered. The envelope already uses the vocabulary the feature files
         # read (`code`, not `error_code`), so no remapping is needed.
-        from src.core.exceptions import build_two_layer_error_envelope
-        from tests.helpers.envelope_assertions import locate_envelope_error
+        from tests.helpers.envelope_assertions import envelope_for, locate_envelope_error
 
-        located = locate_envelope_error(build_two_layer_error_envelope(error))
+        located = locate_envelope_error(envelope_for(error))
         return dict(located) if located else {}
     # adcp.types.Error model (from partial success response.errors) — has code,
     # message, suggestion, recovery, field as direct attributes.

@@ -94,7 +94,7 @@ def then_error_compliant(ctx: dict) -> None:
     THE RULE IS THAT EVERY SCENARIO CARRIES A COMPLIANCE CHECK. A scenario whose
     dispatch is refused has no response document to grade, and leaving it with
     none is how "the suite is schema-clean" comes to mean "the happy paths are".
-    A refusal is still a wire contract: ``build_two_layer_error_envelope`` emits
+    A refusal is still a wire contract: the boundary's ``AdcpErrorResponse`` serializes to
     ``{adcp_error, errors[], context}`` and every entry in ``errors[]`` is a
     ``core/error.json`` object, required ``code`` and ``message``.
 

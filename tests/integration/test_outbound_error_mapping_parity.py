@@ -62,12 +62,12 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPRateLimitError,
     AdCPServiceUnavailableError,
-    build_two_layer_error_envelope,
 )
 from src.core.helpers.outbound_error_mapping import raise_mapped_mcp_error, raise_mapped_outbound_error
 from src.core.security.outbound_http import OperatorEndpoint, OutboundDeliveryFailed, send
 from src.core.utils.mcp_client import MCPConnectionError
 from tests.helpers import assert_envelope_shape
+from tests.helpers.envelope_assertions import envelope_for
 from tests.integration.test_outbound_http import fast_backoff, rate_limited, set_flags
 
 pytestmark = [pytest.mark.integration]
@@ -156,8 +156,8 @@ class TestA429WithRetryAfterIsRateLimitedIdenticallyAcrossSeams:
         )
 
         recovery = CODE_TABLE["RATE_LIMITED"].recovery
-        assert_envelope_shape(build_two_layer_error_envelope(outbound_err), "RATE_LIMITED", recovery=recovery)
-        assert_envelope_shape(build_two_layer_error_envelope(mcp_err), "RATE_LIMITED", recovery=recovery)
+        assert_envelope_shape(envelope_for(outbound_err), "RATE_LIMITED", recovery=recovery)
+        assert_envelope_shape(envelope_for(mcp_err), "RATE_LIMITED", recovery=recovery)
 
 
 class TestATerminal4xxIsConfigurationErrorIdenticallyAcrossSeams:
@@ -184,8 +184,8 @@ class TestATerminal4xxIsConfigurationErrorIdenticallyAcrossSeams:
         assert type(mcp_err) is AdCPConfigurationError, f"mcp raised {type(mcp_err).__name__}"
 
         recovery = CODE_TABLE["CONFIGURATION_ERROR"].recovery
-        assert_envelope_shape(build_two_layer_error_envelope(outbound_err), "CONFIGURATION_ERROR", recovery=recovery)
-        assert_envelope_shape(build_two_layer_error_envelope(mcp_err), "CONFIGURATION_ERROR", recovery=recovery)
+        assert_envelope_shape(envelope_for(outbound_err), "CONFIGURATION_ERROR", recovery=recovery)
+        assert_envelope_shape(envelope_for(mcp_err), "CONFIGURATION_ERROR", recovery=recovery)
 
 
 class TestOutboundExhaustionPreservesAttempts:
@@ -207,7 +207,7 @@ class TestOutboundExhaustionPreservesAttempts:
             raise_mapped_outbound_error(outbound_exc, provenance=_PROVENANCE, logger=_LOGGER)
         err = outbound_info.value
 
-        envelope = build_two_layer_error_envelope(err)
+        envelope = envelope_for(err)
         assert envelope["errors"][0]["details"] == {"attempts": 2, "last_status": 503}, (
             f"attempts/last_status did not survive the re-raise onto the wire: {envelope['errors'][0]['details']!r}"
         )

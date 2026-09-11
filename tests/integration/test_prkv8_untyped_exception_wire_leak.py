@@ -30,12 +30,13 @@ class TestInternalErrorCarriesTheEnvelope:
     """``_internal_error_for()`` builds the A2A JSON-RPC error, and must attach the envelope.
 
     Only NON-skill A2A boundary failures reach it: ``on_message_send``'s outer fallthrough
-    and the push-notification-config JSON-RPC methods. A dispatched skill's own catch goes
-    through ``_build_failed_skill_result`` instead, which
-    tests/unit/test_error_boundary_translation.py grades directly.
+    and the push-notification-config JSON-RPC methods. A dispatched skill's own failure is
+    the boundary's ``AdcpErrorResponse``, which ``_dispatch_skill`` serializes with
+    ``to_wire``; tests/unit/test_error_envelope.py grades that body directly.
 
-    The test raises during identity resolution, which runs inside that outer try/except
-    before skill dispatch, because no other input reaches this path.
+    The test raises while the handler reads the credential off the call context, which runs
+    inside that outer try/except before skill dispatch. Nothing raised inside dispatch can
+    reach it: ``serve`` answers every tool failure as a response.
     """
 
     def test_internal_error_carries_the_envelope_in_data(self, integration_db):
@@ -48,12 +49,7 @@ class TestInternalErrorCarriesTheEnvelope:
         from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
         handler = AdCPRequestHandler()
-        # get_products is in DISCOVERY_SKILLS (no auth required), so on_message_send
-        # still calls _resolve_a2a_identity(None, require_valid_token=False, ...)
-        # even with no auth token presented -- the simplest way to raise inside the
-        # outer try/except, before the skill-dispatch loop's own catch takes over.
-        handler._get_auth_token = lambda *a, **kw: None  # type: ignore[assignment]
-        handler._resolve_a2a_identity = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[assignment]
+        handler._credential_of = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[method-assign]
 
         message = create_a2a_message_with_skill(skill_name="get_products", parameters={"brief": "video ads"})
         params = SendMessageRequest(message=message)

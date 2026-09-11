@@ -38,6 +38,7 @@ from src.core.context_manager import ContextManager
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCode, Recovery
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
+from tests.helpers.envelope_assertions import envelope_for
 
 
 def _new_ctx_manager_with_mocked_update() -> tuple[ContextManager, MagicMock]:
@@ -56,8 +57,8 @@ def _expected_response_data(exc: AdCPSalesAgentError, *, code: ErrorCode | AppEr
     """Build the two-layer wire-shape ``response_data`` the helper must emit.
 
     Built from the SAME exception the test raises, through the same
-    ``build_two_layer_error_envelope`` production calls — so the assertion is on the
-    dict ``update_workflow_step`` receives, with nothing reconstructed.
+    ``AdcpErrorResponse.of`` + ``to_wire`` production calls (``envelope_for``) — so the
+    assertion is on the dict ``update_workflow_step`` receives, with nothing reconstructed.
 
     Reconstructing an equivalent error here would not be equivalent: a NAMED-code
     ``AdCPSalesAgentError`` resolves recovery and suggestion from CODE_TABLE, while a class-coded
@@ -70,13 +71,11 @@ def _expected_response_data(exc: AdCPSalesAgentError, *, code: ErrorCode | AppEr
     derivation agree with itself; stating the pair here means every caller
     declares the classification it expects a subscriber to read.
     """
-    from src.core.exceptions import build_two_layer_error_envelope
-
     assert (exc.error_code, exc.recovery) == (code, recovery), (
         f"expected {code} to derive recovery {recovery!r}, got "
         f"({exc.error_code!r}, {exc.recovery!r}) — the test's stated expectation and the pin disagree"
     )
-    return build_two_layer_error_envelope(exc)
+    return envelope_for(exc)
 
 
 def _normalized_for(exc: Exception) -> AdCPSalesAgentError:
@@ -120,10 +119,10 @@ class TestFailWorkflowStepForExceptionWebhookPayload:
         ``recovery`` (exceptions.py:74-102). The (code, recovery) pair a
         subscriber reads is stated below, not inferred.
 
-        This ``response_data`` is a PERSISTED record (exceptions.py's
-        ``build_two_layer_error_envelope`` docstring: "wire responses and
-        persisted workflow_step.response_data share the same two-layer
-        shape"), read back by async webhook subscribers — so it gets the
+        This ``response_data`` is a PERSISTED record: wire responses and
+        persisted ``workflow_step.response_data`` share the same two-layer
+        shape, both serialized from ``AdcpErrorResponse.of`` with ``to_wire``.
+        It is read back by async webhook subscribers — so it gets the
         SAME provenance protection prkv.8 gives the live transports:
         ``adcp_error_for()``'s untyped-Exception fallback carries NO text from
         the exception, only the code's own table sentence, because the
