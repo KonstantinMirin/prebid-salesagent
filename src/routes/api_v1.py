@@ -15,8 +15,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from src.core.auth_context import AuthContext, get_auth_context
-from src.core.exceptions import AdcpFailure
+from src.core.exceptions import AdcpFailure, AdCPInvalidRequestError
 from src.core.resolved_identity import TransportProtocol
+from src.core.schemas._base import AdcpErrorResponse
 from src.core.tools._announced_shape import apply_signature
 from src.core.tools._boundary import serve, wire_status
 from src.core.tools._wire import to_wire
@@ -67,18 +68,27 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
 
     async def handler(request: Request, auth_ctx: AuthContext = get_auth_context, **path_values: Any) -> Any:
         body = await request.json()
-        if path_values:
-            body = {**body, **path_values}
-
-        # Named, not frozen: the handler names the TOOL and ``invoke_tool`` reads the registry
-        # per call. A route that froze the callable at import could not be substituted -- the
-        # registry row and the thing the route invoked were two different objects.
-        #
-        # It hands over the CREDENTIAL, not an identity. Resolving it here meant reading
-        # ToolSpec.auth here too -- via two dependencies picked by `spec.auth == "optional"`,
-        # one of which hardcoded require_valid_token=False and made REST the only transport
-        # that served a rejected credential on a public tool.
+        # ONE try around everything that can produce a failure response, so every failure
+        # leaves through the same except and none can escape as a 500.
         try:
+            if path_values:
+                # The URL is the resource identity, so a path value WINS over a body that
+                # disagrees, and the merge happens before validation because the DTO requires
+                # the field. A body that is not a JSON object cannot take a path value and is
+                # not an AdCP request: answered as malformed, not as a 500 from the merge.
+                # Caught, not probed for type -- the same shape as the raw context read.
+                try:
+                    body = {**body, **path_values}
+                except TypeError as exc:
+                    raise AdcpFailure(AdcpErrorResponse.of(AdCPInvalidRequestError())) from exc
+            # Named, not frozen: the handler names the TOOL and ``serve`` reads the registry
+            # per call. A route that froze the callable at import could not be substituted --
+            # the registry row and the thing the route invoked were two different objects.
+            #
+            # It hands over the CREDENTIAL, not an identity. Resolving it here meant reading
+            # ToolSpec.auth here too -- via two dependencies picked by `spec.auth == "optional"`,
+            # one of which hardcoded require_valid_token=False and made REST the only transport
+            # that served a rejected credential on a public tool.
             response = await serve(tool_name, body, auth_ctx, TransportProtocol.REST)
         except AdcpFailure as failure:
             # REST's wire failure marker is the HTTP STATUS, and that is all this transport
@@ -121,13 +131,41 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
     return handler
 
 
+def request_body_schema(dto: type[Any]) -> dict[str, Any]:
+    """A DTO's JSON Schema for a request body, with its ``$ref``s aimed at ``components``.
+
+    ``$defs`` is stripped: those models are published once under ``components/schemas`` by
+    ``components_schemas()`` rather than repeated inside every route's body.
+    """
+    schema = dto.model_json_schema(ref_template="#/components/schemas/{model}")
+    schema.pop("$defs", None)
+    return schema
+
+
+def components_schemas() -> dict[str, Any]:
+    """Every nested model any REST request body refers to, keyed the way the refs name them."""
+    merged: dict[str, Any] = {}
+    for spec in TOOLS.values():
+        if spec.rest is None:
+            continue
+        merged.update(spec.dto.model_json_schema(ref_template="#/components/schemas/{model}").get("$defs", {}))
+    return merged
+
+
 for _name, _spec in TOOLS.items():
     if _spec.rest is None:
         continue
     # The DTO is ADVERTISED here, not enforced: ``openapi_extra`` publishes the model's own
     # JSON Schema so a client reads the shape it always did, while the handler receives the
-    # payload untouched and ``validated_request`` decides it. Both come from one declaration,
-    # so the advertised shape and the accepted shape cannot drift.
+    # payload untouched and ``serve`` decides it. Both come from one declaration, so the
+    # advertised shape and the accepted shape cannot drift.
+    #
+    # ``$ref``s point into ``#/components/schemas``, and the nested models they name are
+    # published there by ``src.app``'s OpenAPI hook. A verbatim ``model_json_schema()`` puts
+    # its ``$defs`` at the root of the SCHEMA, but a schema nested under a request body is not
+    # the root of the DOCUMENT, so its ``#/$defs/...`` pointers resolved against the document
+    # and found nothing -- 1466 dangling references under a comment claiming the contract was
+    # unchanged.
     router.add_api_route(
         _spec.rest.path,
         _rest_handler(_name, _spec),
@@ -136,7 +174,7 @@ for _name, _spec in TOOLS.items():
         openapi_extra={
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": _spec.dto.model_json_schema()}},
+                "content": {"application/json": {"schema": request_body_schema(_spec.dto)}},
             }
         },
     )

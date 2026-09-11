@@ -12,6 +12,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import create_jsonrpc_routes
@@ -687,6 +688,30 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 
 app.include_router(api_v1_router)
+
+
+def _openapi_with_rest_components() -> dict[str, Any]:
+    """The generated OpenAPI document, with every REST request body's nested models resolvable.
+
+    The REST routes advertise their DTOs through ``openapi_extra`` with ``$ref``s aimed at
+    ``#/components/schemas/<Model>``; FastAPI only populates ``components/schemas`` for models
+    it validates itself, and it no longer validates those bodies (``serve`` does). So the
+    models the refs name are merged in here, once, from the same DTOs -- one declaration,
+    published in one place, resolvable from the document root.
+    """
+    from fastapi.openapi.utils import get_openapi
+
+    from src.routes.api_v1 import components_schemas
+
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema.setdefault("components", {}).setdefault("schemas", {}).update(components_schemas())
+    return schema
+
+
+# Assigned, not generated on demand: ``FastAPI.openapi()`` returns ``openapi_schema`` when it
+# is already set, so filling it here is the supported way to publish a customized document
+# without reassigning the method (which mypy rejects as a method-assign).
+app.openapi_schema = _openapi_with_rest_components()
 app.include_router(health_router)
 app.include_router(health_debug_router)
 

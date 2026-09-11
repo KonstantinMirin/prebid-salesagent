@@ -57,7 +57,6 @@ from src.core.domain_config import get_a2a_server_url
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.issues import ErrorIssue, JsonPointer
 from src.core.exceptions import (
-    AdCPAuthenticationError,
     AdCPCapabilityNotSupportedError,
     AdcpFailure,
     AdCPSalesAgentError,
@@ -476,21 +475,14 @@ class AdCPRequestHandler(RequestHandler):
                         # are now caught below and surfaced as failed Tasks with a
                         # two-layer envelope in the artifact DataPart.
                         raise
-                    except AdCPAuthenticationError as e:
-                        # A REFUSED CREDENTIAL IS NOT AN ASYNC-TASK FAILURE. It is a
-                        # transport-level refusal: the caller has no identity and needs the
-                        # 401 handshake to learn how to authenticate, which
-                        # AuthChallengeResponder derives from a JSON-RPC error envelope --
-                        # not from a 200 carrying a failed Task.
-                        #
-                        # This branch must precede the AdCPSalesAgentError one below, which
-                        # would otherwise swallow it (AdCPAuthenticationError is a subclass).
-                        # The translation used to live in _resolve_a2a_identity, before the
-                        # boundary owned resolution; it belongs wherever the raise now lands.
-                        # AdCPAuthRequiredError subclasses AdCPAuthenticationError, so one
-                        # branch covers AUTH_MISSING and AUTH_INVALID and each keeps its own
-                        # code.
-                        raise InvalidRequestError(message=str(e), data=build_two_layer_error_envelope(e)) from e
+                    # No ``except AdCPAuthenticationError`` any more. A refused credential used
+                    # to be re-raised here as a JSON-RPC error, because that was the only
+                    # container AuthChallengeResponder read to lift the answer to 401. A refusal
+                    # is an outcome like any other now -- ``serve`` answers it with a failed
+                    # response that ``_dispatch_skill`` serializes into the Task's artifact, and
+                    # the responder reads that artifact (``adcp_error_code_in``, shape 4). So the
+                    # 401 handshake survives with no transport branch keyed on an error class,
+                    # and this frame never sees the typed exception at all.
                     except AdCPSalesAgentError as e:
                         # AdCP-level errors are async-task failures, not JSON-RPC
                         # errors. Mirrors the SDK's _send_adcp_error reference for
