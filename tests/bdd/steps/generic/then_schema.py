@@ -123,6 +123,15 @@ def then_error_compliant(ctx: dict) -> None:
     ``{adcp_error, errors[], context}`` and every entry in ``errors[]`` is a
     ``core/error.json`` object, required ``code`` and ``message``.
 
+    THIS IS THE LINE FOR A TOOL WITHOUT AN ERROR BRANCH. Where the pinned response
+    schema branches (``create_media_buy``, ``update_media_buy``, ``sync_creatives``,
+    ``sync_accounts`` carry an ``error`` title in their ``oneOf``), the canonical
+    sentence is ``the response is compliant with the <tool> error spec`` -- it runs
+    this same check and THEN grades the refusal against the tool's own error branch,
+    so it is strictly stronger and the generic line under-claims. Every refusal of
+    a branching tool was swept to it; what remains on this line is the read tools,
+    whose response schema has one shape and no branch to narrow to.
+
     Tool-independent on purpose. The AdCP error vocabulary is OPEN — ``code`` is
     a wire-typed string, published codes are documentary, and a receiver decodes
     an unknown one by reading ``recovery`` — so there is nothing per-tool to

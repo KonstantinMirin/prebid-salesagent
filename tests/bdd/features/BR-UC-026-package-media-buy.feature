@@ -166,7 +166,7 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: Reactivating a canceled package is impossible -- canceled is const:true
     Given the Buyer owns a media buy with a canceled package "pkg-001"
     When the Buyer Agent attempts to send an update_media_buy request setting canceled=false on "pkg-001"
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the request should be rejected as schema-invalid because canceled accepts only the constant true
     # canceled is const:true in PackageUpdate -- un-cancellation cannot be expressed on the wire
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
@@ -179,7 +179,7 @@ Feature: BR-UC-026 Package Media Buy
     | package_id | pkg-001 |
     | canceled   | true    |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "NOT_CANCELLABLE"
     And the error should include "suggestion" field
@@ -270,7 +270,7 @@ Feature: BR-UC-026 Package Media Buy
     | pricing_option_id  | cpm-standard      |
     And the product "nonexistent-prod" does not exist in seller inventory
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "PRODUCT_NOT_FOUND"
     And the error should include "suggestion" field
@@ -283,7 +283,7 @@ Feature: BR-UC-026 Package Media Buy
   Scenario Outline: Missing required package field -- INVALID_REQUEST (<missing_field>)
     Given a valid create_media_buy request with a package missing <missing_field>
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error field should contain "<missing_field>"
@@ -308,7 +308,7 @@ Feature: BR-UC-026 Package Media Buy
     | pricing_option_id  | nonexistent-option   |
     And the pricing_option_id "nonexistent-option" is not in product "prod-1" pricing_options
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -326,7 +326,7 @@ Feature: BR-UC-026 Package Media Buy
     | budget             | 500          |
     | pricing_option_id  | cpm-standard |
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "suggestion" field
@@ -345,7 +345,7 @@ Feature: BR-UC-026 Package Media Buy
     | format_ids         | [video-unsupported]   |
     And the format_id "video-unsupported" is not supported by product "prod-1"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -363,7 +363,7 @@ Feature: BR-UC-026 Package Media Buy
     | pricing_option_id  | cpm-standard                                                      |
     | catalogs           | [{"type": "product", "catalog_id": "c1"}, {"type": "product", "catalog_id": "c2"}] |
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -380,7 +380,7 @@ Feature: BR-UC-026 Package Media Buy
     | package_id | pkg-001     |
     | product_id | prod-2      |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -397,7 +397,7 @@ Feature: BR-UC-026 Package Media Buy
     | package_id | pkg-001            |
     | format_ids | [banner-728x90]    |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -414,7 +414,7 @@ Feature: BR-UC-026 Package Media Buy
     | package_id         | pkg-001     |
     | pricing_option_id  | cpm-auction |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -432,7 +432,7 @@ Feature: BR-UC-026 Package Media Buy
     | keyword_targets_add               | [{"keyword": "shoes", "match_type": "broad"}]    |
     | targeting_overlay.keyword_targets  | [{"keyword": "hats", "match_type": "exact"}]     |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -450,7 +450,7 @@ Feature: BR-UC-026 Package Media Buy
     | negative_keywords_add               | [{"keyword": "free", "match_type": "exact"}]     |
     | targeting_overlay.negative_keywords  | [{"keyword": "cheap", "match_type": "broad"}]    |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -494,7 +494,7 @@ Feature: BR-UC-026 Package Media Buy
     | budget | 7000  |
     And the package update contains no package_id
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -517,7 +517,7 @@ Feature: BR-UC-026 Package Media Buy
     Given the product "prod-1" does not have pricing_option "nonexistent-option"
     And a valid create_media_buy request with a package containing pricing_option_id "nonexistent-option"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -569,7 +569,7 @@ Feature: BR-UC-026 Package Media Buy
   Scenario: INV-4 violated -- empty format_ids array rejected
     Given a valid create_media_buy request with a package containing format_ids as empty array []
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field

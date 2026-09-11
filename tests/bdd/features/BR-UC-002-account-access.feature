@@ -34,5 +34,5 @@ Feature: BR-UC-002 Account access scoping
     And the natural key matches 2 accounts
     And the Buyer Agent's token resolves no principal
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the result should be error "AUTH_MISSING"

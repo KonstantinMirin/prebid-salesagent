@@ -150,7 +150,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But all package budgets sum to 0
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
@@ -170,7 +170,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package references product_id "prod-nonexistent" which does not exist
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "PRODUCT_NOT_FOUND"
     And the error recovery should be "correctable"
@@ -191,7 +191,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a valid create_media_buy request with start_time "2020-01-01T00:00:00Z"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -216,7 +216,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But end_time is before start_time
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -233,7 +233,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But the packages use currency "XYZ" which is not in the tenant's CurrencyLimit table
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
@@ -250,7 +250,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But both packages reference the same product_id "prod-001"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the wire error details should include duplicate_product_ids "prod-001"
     And the error should include "suggestion" field
@@ -265,7 +265,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package targeting_overlay contains unknown field "weather_targeting"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -280,7 +280,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package targeting_overlay sets a managed-only dimension
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -291,7 +291,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package targeting_overlay includes "US" in both geo_countries and geo_countries_exclude
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -313,7 +313,7 @@ Feature: BR-UC-002 Create Media Buy
     But a creative is missing the required URL in assets
     And the creative format is not generative
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response contains error code INVALID_REQUEST
     And the response error field is packages[0].creatives[0].assets.primary.AssetVariant.image.url
     # The two Thens that stood here — "the operation should fail" and "the error should
@@ -333,7 +333,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with an inline creative whose assets map value lacks an "asset_type" field
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error code should be "INVALID_REQUEST"
     And the error should reference the unresolvable asset_type discriminator
@@ -348,7 +348,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package format_id is a plain string "banner_300x250" instead of a FormatId object
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -362,7 +362,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package format_id references an unregistered agent_url
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "REFERENCE_NOT_FOUND"
     And the error should include "suggestion" field
@@ -372,7 +372,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: Authentication failure -- no principal in context
     Given the Buyer has no authentication credentials
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
@@ -387,7 +387,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But the ad server adapter returns an error
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And no media buy record should be persisted in the database
     And the response status should be "failed"
@@ -404,7 +404,7 @@ Feature: BR-UC-002 Create Media Buy
     And the tenant has max_daily_package_spend configured at 1000
     But a package has budget 50000 over a 2-day flight (daily = 25000)
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
@@ -420,7 +420,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But proposal "prop-expired" does not exist or has expired
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "PROPOSAL_EXPIRED"
     And the error recovery should be "correctable"
@@ -436,7 +436,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But the proposal's total_budget_guidance.min is 1000
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
@@ -452,7 +452,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package references pricing_option_id "po-nonexistent" not found on the product
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -466,7 +466,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     And a package selects an auction pricing option but provides no bid_price
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -477,7 +477,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     And a package has bid_price 0.50 but floor_price is 1.00
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -496,7 +496,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     And a package budget of 500 against a pricing option requiring a minimum spend of 1000
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
 
@@ -507,7 +507,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request
     And the request includes a reporting_webhook with url "http://169.254.169.254/latest/meta-data/"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
@@ -527,7 +527,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package creative_assignment references creative_id "cr-nonexistent"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     # 3.1.1 enums/error-code.json: "Sellers MUST return this code uniformly for any
     # creative_id not owned by the calling account". create_media_buy is not exempt
@@ -546,7 +546,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a creative's format_id does not match any of the product's supported format_ids
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     # 3.1.1 enums/error-code.json codes VALIDATION_ERROR as "violates business rules
     # beyond schema validation", which is what a format outside the product's declared
@@ -566,7 +566,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But the ad server rejects the creative upload
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "SERVICE_UNAVAILABLE"
     # A retryable ad-server failure must reach the buyer as retryable. Several
@@ -584,7 +584,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with account_id "acc-nonexistent"
     But the account_id does not exist in the seller's account store
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
     And the error recovery should be "terminal"
@@ -598,7 +598,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with account natural key brand "unknown.com" operator "unknown.com"
     But no account matches the brand + operator combination
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
     And the error recovery should be "terminal"
@@ -610,7 +610,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with account_id "acc-new"
     And the account "acc-new" exists but requires setup (billing not configured)
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "ACCOUNT_SETUP_REQUIRED"
     And the error recovery should be "correctable"
@@ -626,7 +626,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with account natural key brand "multi-brand.com" operator "agency.com"
     And the natural key matches 3 accounts
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "ACCOUNT_AMBIGUOUS"
     And the error recovery should be "correctable"
@@ -642,7 +642,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package has optimization_goal with kind "metric" and metric "attention_score" not in supported set
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error recovery should be "correctable"
@@ -657,7 +657,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package has optimization_goal with kind "event" and unregistered event_source_id
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -670,7 +670,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package has two catalogs both with type "product"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -685,7 +685,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package references catalog_id "cat-nonexistent" not found in synced catalogs
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -715,7 +715,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package pricing option has both fixed_price and floor_price set
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error should include "suggestion" field
 
@@ -747,7 +747,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with total budget 0
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error recovery should be "correctable"
@@ -794,7 +794,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with start_time "ASAP"
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -859,7 +859,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request that fails validation
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should have an "errors" array
     And the response should NOT have success fields (media_buy_id, packages)
     And each error should include "suggestion" field
@@ -870,7 +870,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     And the system returns a transient error (RATE_LIMITED)
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the error recovery should be "transient"
     And the error should include "retry_after" field
 
@@ -879,7 +879,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request that fails with a correctable error
     And the account exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     And the error should include "field" field
@@ -888,7 +888,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: INV-6 holds -- terminal error signals agent to escalate
     Given a create_media_buy request with account_id that does not exist
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the error code should be "ACCOUNT_NOT_FOUND"
     And the error recovery should be "terminal"
     # --- BR-RULE-020: Adapter Atomicity ---
@@ -897,7 +897,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: INV-8 holds -- two-layer envelope and payload error model
     Given a create_media_buy request that produces a response
     When the task fails fatally
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And both the protocol envelope "adcp_error" field and the payload "errors" array should be populated
     And when only a non-fatal warning occurs only the payload "errors" array should carry it with severity "warning"
     And a non-fatal warning should not set the envelope "adcp_error" field
@@ -923,7 +923,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But the ad server adapter returns an error
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And no media buy record should be persisted
     And no package records should be persisted
     And the error should include "suggestion" field
@@ -945,7 +945,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But pre-adapter validation fails on creative completeness or adapter pricing/budget constraints
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the ad server adapter should never be invoked
     And no database records should be created
     # BR-RULE-020 INV-4 (v3.1): validation precedes the adapter call; failure persists nothing
@@ -980,7 +980,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a referenced creative is in "error" state
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error should include "suggestion" field
 
@@ -990,7 +990,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a creative format is incompatible with the product's supported formats
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error should include "suggestion" field
     # --- BR-RULE-080: Account Resolution Validation ---
@@ -999,7 +999,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: INV-1 violated -- account field absent from request
     Given a create_media_buy request without account field
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -1011,7 +1011,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request
     But the resolved account has a terminal lifecycle status of "rejected" or "closed"
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the account should be treated as not operational and unable to create media buys
     And no dedicated error code exists in error-code.json for this state
     And the resolution outcome is unspecified by the protocol
@@ -1025,7 +1025,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package has two optimization goals with the same priority value
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -1037,7 +1037,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But a package has optimization_goals as an empty array
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -1050,7 +1050,7 @@ Feature: BR-UC-002 Create Media Buy
     But a package has an event kind optimization goal with target kind "per_ad_spend"
     And no event_sources entry has value_field set
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -2059,7 +2059,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a valid create_media_buy request with total budget 0
     And the request targets a sandbox account
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error should be a real validation error, not simulated
     And the error should include a suggestion for how to fix the issue
@@ -2099,7 +2099,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with the idempotency_key field omitted
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the error code should be "INVALID_REQUEST"
     And the error should reference the missing "idempotency_key" field
     And the error should include "suggestion" field
@@ -2122,7 +2122,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with idempotency_key "<value>"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error should reference idempotency_key constraint "<violation>"
     And the error should include "suggestion" field
@@ -2141,7 +2141,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with idempotency_key "buy-2026-q1-inflight-001"
     And a prior request for the same (seller, account, idempotency_key) pair is still in flight
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "IDEMPOTENCY_IN_FLIGHT"
     And the error should include "retry_after" field
@@ -2155,7 +2155,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with idempotency_key "buy-2026-q1-expired-001"
     And the (seller, account, idempotency_key) pair was recorded but its cached response expired past replay_ttl_seconds
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a correctable failure
     And the error code should be "IDEMPOTENCY_EXPIRED"
     And the error should include "suggestion" field
@@ -2255,7 +2255,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account "acc-001" exists and is active
     And the account has governance_agents configured
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error should reference the missing "plan_id" field
     And the error should include "suggestion" field
@@ -2283,7 +2283,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account has governance_agents configured
     And the plan "plan-missing" does not exist or is not accessible to the account
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a correctable failure
     And the error code should be "PLAN_NOT_FOUND"
     And the error should include "suggestion" field
@@ -2327,7 +2327,7 @@ Feature: BR-UC-002 Create Media Buy
     And the request does not include an io_acceptance field
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a correctable failure
     And the error code should be "IO_REQUIRED"
     And the error should include "suggestion" field
@@ -2363,7 +2363,7 @@ Feature: BR-UC-002 Create Media Buy
     And the proposal's insertion_order requires_signature is true
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error code should be "INVALID_REQUEST"
     And the error should reference the missing "<missing_member>" member
@@ -2455,7 +2455,7 @@ Feature: BR-UC-002 Create Media Buy
     And the request package includes committed_metrics with standard metric_id not in the product's available_metrics
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate an error
     And the error code should be "TERMS_REJECTED"
     And the error should reference the offending committed_metrics entry
@@ -2516,7 +2516,7 @@ Feature: BR-UC-002 Create Media Buy
     And the product minimum spend is 500 USD
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "BUDGET_TOO_LOW"
     And the error details should include minimum_budget 500
@@ -2532,7 +2532,7 @@ Feature: BR-UC-002 Create Media Buy
     And a prior media buy "mb-789" exists for the same (seller, idempotency_key) pair with revision 1
     And the new request payload diverges from the prior request payload
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a correctable failure
     And the error code should be "IDEMPOTENCY_CONFLICT"
     And the error "details" object should include "resource_id" with value "mb-789"
@@ -2548,7 +2548,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request that violates the seller's editorial policy
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "POLICY_VIOLATION"
     And the error details should include a "policy_id" field
@@ -2565,7 +2565,7 @@ Feature: BR-UC-002 Create Media Buy
     And the seller's supported_billing capability is ["operator", "advertiser"]
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error details scope should be "capability"
@@ -2582,7 +2582,7 @@ Feature: BR-UC-002 Create Media Buy
     And the seller does not accept "agent" billing on the account "acc-001" relationship
     And the caller's agent identity is established
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error details scope should be "account"
@@ -2596,7 +2596,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with billing value "agent"
     And the caller's agent identity is NOT established
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error details should NOT include a "scope" field
@@ -2611,7 +2611,7 @@ Feature: BR-UC-002 Create Media Buy
     And the seller's supported_billing capability includes "agent" generally
     And the calling agent's commercial relationship with the seller is passthrough-only
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
     And the error details rejected_billing should be "agent"
@@ -2626,7 +2626,7 @@ Feature: BR-UC-002 Create Media Buy
     Given a create_media_buy request with billing value "advertiser"
     And the calling agent has no retryable billing value for this seller's commercial relationship
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a terminal failure
     And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
     And the error details rejected_billing should be "advertiser"
@@ -2654,7 +2654,7 @@ Feature: BR-UC-002 Create Media Buy
     And the account exists and is active
     But the invoice_recipient is not authorized for the account
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the seller should validate the invoice_recipient authorization before the buy proceeds
     And the buy should be rejected at the buy-time billing-eligibility gate
     And no dedicated error code is defined in v3.1 for this rejection
@@ -2712,7 +2712,7 @@ Feature: BR-UC-002 Create Media Buy
     And the targeting includes a store_catchments entry providing BOTH radius and geometry
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error should reference the catchment oneOf constraint
     # v3.1: core/catchment.json — oneOf enforces exactly one method per catchment
@@ -2752,7 +2752,7 @@ Feature: BR-UC-002 Create Media Buy
     And the targeting frequency_cap.scope is "campaign"
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the response should indicate a validation error
     And the error should reference the frequency_cap.scope enum
     # v3.1: cross-package and cross-buy scoping NOT supported in this protocol release
@@ -2914,7 +2914,7 @@ Feature: BR-UC-002 Create Media Buy
     Given the buyer's governance agent has returned decision "DENIED" with a denial reason
     And the buyer attaches the governance_decision payload to the create_media_buy request
     When the Buyer Agent sends create_media_buy with the governance_decision payload
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "GOVERNANCE_DENIED"
     And the error details should include the denial reason from the governance decision
@@ -2982,7 +2982,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: Measurement terms unworkable for the seller -- TERMS_REJECTED with terms identified in error details
     Given the buyer attaches measurement_terms that the seller will not accept
     When the Buyer Agent sends create_media_buy with the unworkable measurement_terms
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "TERMS_REJECTED"
     And the error details should identify which measurement_terms are unworkable

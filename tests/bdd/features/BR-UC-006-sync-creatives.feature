@@ -139,7 +139,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the Buyer is authenticated
     And a sync request with both creative_ids filter and delete_missing set to true
     When the Buyer Agent syncs the creatives
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail with INVALID_REQUEST
     And the error code should be "INVALID_REQUEST"
     And the error should explain that delete_missing applies to the entire library scope, not a filtered subset
@@ -150,7 +150,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the Buyer has no authentication credentials
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include a "suggestion" field
@@ -163,7 +163,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the request has an empty principal_id
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include a "suggestion" field
@@ -174,7 +174,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with name "Summer Banner" and a known format_id
     And the request includes a push_notification_config with url "http://169.254.169.254/latest/meta-data/"
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error recovery should be "correctable"
@@ -200,7 +200,7 @@ Feature: BR-UC-006 Sync Creative Assets
     But the principal has no associated tenant
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail
     And the error code should be "AUTH_INVALID"
     And the error should include a "suggestion" field
@@ -312,7 +312,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And assignments to a non-existent package
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail with an assignment error
     And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include a "suggestion" field
@@ -326,7 +326,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And assignments to a package whose product only accepts "agent1/video-pre-roll"
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail with an assignment error
     And the error code should be "VALIDATION_ERROR"
     And the error should include a "suggestion" field
@@ -368,7 +368,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And assignments to two packages: one valid and one non-existent
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the assignment processing should abort with an error
     And no assignments should be created
     And the error should include a "suggestion" field
@@ -404,7 +404,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And assignments to a non-existent package
     And validation_mode is not set
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the assignment processing should abort with an error
     And the behavior should match strict mode
     # --- BR-RULE-034: Cross-Principal Isolation ---
@@ -590,7 +590,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And assignments referencing that package_id
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the assignment should fail with "PACKAGE_NOT_FOUND"
     And the cross-tenant package should not be accessible
 
@@ -670,7 +670,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a product whose format agent_url is the same host at a different path
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative with assignments
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the assignment should fail with "VALIDATION_ERROR"
 
   @T-UC-006-rule-039-inv2 @invariant @BR-RULE-039 @error
@@ -680,7 +680,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a product with format agent_url "https://agent.example.com" and format_id "video-pre-roll"
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative with assignments
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the assignment should fail with "VALIDATION_ERROR"
     And the error should include a "suggestion" field
     # Agent URL matches but format_id differs — partial match is not sufficient
@@ -1145,7 +1145,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And that creative was already synced with idempotency_key "sync-conflict-01-abcd"
     And the creative name is changed to "Materially Different Creative"
     When the Buyer Agent syncs the creative
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
     And the error recovery should be "correctable"
@@ -1477,7 +1477,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with an invalid format_id
     And the request targets a sandbox account
     When the Buyer Agent sends a sync_creatives request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the response should indicate a validation error
     And the error should be a real validation error, not simulated
     And the error should include a suggestion for how to fix the issue
@@ -1504,7 +1504,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the request targets a sandbox account
     And a sync request that fails operation-level validation
     When the Buyer Agent sends a sync_creatives request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the sync_creatives error spec
     And the response should indicate a validation error
     And the response should not include a sandbox field
     And the error should include a "suggestion" field
