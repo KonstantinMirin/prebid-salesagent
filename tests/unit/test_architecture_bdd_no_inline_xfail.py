@@ -169,8 +169,6 @@ _ALLOWLIST: set[XfailSite] = {
     ("domain/uc006_sync_creatives.py", "then_creative_associated_with_principal", 1),
     ("domain/uc006_sync_creatives.py", "then_creative_has_generated_content", 2),
     ("domain/uc006_sync_creatives.py", "then_creative_validated_by_agent", 1),
-    ("domain/uc006_sync_creatives.py", "then_error_assignment_creative_id_required", 1),
-    ("domain/uc006_sync_creatives.py", "then_error_assignment_package_id_required", 1),
     ("domain/uc006_sync_creatives.py", "then_error_code_with_suggestion", 2),
     ("domain/uc006_sync_creatives.py", "then_existing_assignment_updated_not_duplicated", 1),
     ("domain/uc006_sync_creatives.py", "then_existing_creative_updated_by_triple_key", 1),

@@ -3639,6 +3639,21 @@ def then_slack_notification_deferred(ctx: dict) -> None:
         f"ai-powered mode must defer Slack notification until AI review completes (INV-4), "
         f"but send_notifications was called {mock_notify.call_count} time(s) during sync"
     )
+    # DEFERRED is not NEVER. Asserting only "nothing was sent" is the body
+    # ``then_no_slack_notification`` already has, and it passes just as happily when the
+    # notification is never sent at all -- which is a different invariant (INV-2/INV-6) and
+    # a bug on this path. What makes this sentence its own claim is that something exists to
+    # defer TO, so the review task is asserted here as well (salesagent-tne7q.2).
+    executor = ctx["env"].mock.get("ai_review_executor")
+    assert executor is not None, (
+        "CreativeSyncEnv must patch src.admin.blueprints.creatives._ai_review_executor for "
+        "'deferred until AI review completes' to be distinguishable from 'never sent'"
+    )
+    assert executor.submit.call_count >= 1, (
+        "Slack is DEFERRED UNTIL AI REVIEW COMPLETES, so an AI review must have been "
+        "submitted to defer to; no submit() call means nothing was deferred and the "
+        "notification is simply absent"
+    )
 
 
 # --- nbfu: workflow step attributes (BR-RULE-037 INV-5) ---
@@ -5842,48 +5857,6 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
 
 
 # --- 5o9e: bare error-code Then steps (without "with suggestion") ---
-
-
-@then("the error should be ASSIGNMENT_CREATIVE_ID_REQUIRED")
-def then_error_assignment_creative_id_required(ctx: dict) -> None:
-    """Assert the error code is ASSIGNMENT_CREATIVE_ID_REQUIRED.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
-    express a missing creative_id. The spec requires this error code but
-    production cannot raise it — SPEC-PRODUCTION GAP.
-    """
-    error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: production does not raise "
-            "ASSIGNMENT_CREATIVE_ID_REQUIRED — the dict[creative_id -> "
-            "list[package_id]] shape cannot express a missing creative_id"
-        )
-    actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
-    assert actual_code == "ASSIGNMENT_CREATIVE_ID_REQUIRED", (
-        f"Expected error code 'ASSIGNMENT_CREATIVE_ID_REQUIRED', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
-
-
-@then("the error should be ASSIGNMENT_PACKAGE_ID_REQUIRED")
-def then_error_assignment_package_id_required(ctx: dict) -> None:
-    """Assert the error code is ASSIGNMENT_PACKAGE_ID_REQUIRED.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape expresses
-    "no packages" as an empty list, not a missing key. The spec requires
-    this error code but production cannot raise it — SPEC-PRODUCTION GAP.
-    """
-    error = ctx.get("error")
-    if error is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: production does not raise "
-            "ASSIGNMENT_PACKAGE_ID_REQUIRED — the dict[creative_id -> "
-            "list[package_id]] shape uses empty list for no packages"
-        )
-    actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
-    assert actual_code == "ASSIGNMENT_PACKAGE_ID_REQUIRED", (
-        f"Expected error code 'ASSIGNMENT_PACKAGE_ID_REQUIRED', got '{actual_code}' ({type(error).__name__}: {error})"
-    )
 
 
 # --- pzlv: Given steps for format compatibility scenarios ---
