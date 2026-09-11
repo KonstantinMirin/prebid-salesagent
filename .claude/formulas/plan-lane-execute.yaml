@@ -53,7 +53,7 @@ setup:
       reports, not the summary line.
 
       ```bash
-      saci run    # detaches; poll with `saci status`
+      cassini run    # detaches; poll with `cassini status`
       # when exit=0, read test-results/<latest>/ *.json — 0 failed/error in EVERY suite
       ```
 
@@ -281,7 +281,7 @@ iterate:
         - NO new tickets. NO codebase scan. NO plan amendment. An out-of-scope
           discovery gets ONE line under "## Out of scope (noted)" and you
           continue.
-        - Run the lane's own graders locally as you go (`saci test <slice>` —
+        - Run the lane's own graders locally as you go (`cassini test <slice>` —
           name FILES, never a dir).
 
         Record the resulting diff (files + net lines) in the bead.
@@ -363,7 +363,7 @@ iterate:
         wire or the reconstructed exception. Use **`ast-grep`** for structural
         queries (which helper a step calls, whether an assertion exists), never a
         text `grep` sweep; `grep` only for plain strings. Run lane slices with
-        `saci test <files>` (name FILES, never a dir).
+        `cassini test <files>` (name FILES, never a dir).
 
         ## Precondition
         ```bash
@@ -426,7 +426,7 @@ finalize:
       xpassed-set IDENTITY (a green suite cannot detect regression-to-xfail).
 
       ```bash
-      saci run   # detaches; poll saci status; read test-results/<latest>/*.json
+      cassini run   # detaches; poll cassini status; read test-results/<latest>/*.json
       ```
 
       Every pass-count drop is guilty until individually explained; every new or
