@@ -188,7 +188,7 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
     WHY THIS EXISTS. A scenario whose step has no binding executes nothing, and the
     auto-convert below reported it as a plain xfail -- indistinguishable in any
     summary from a graded spec-production gap. A suite could shrink to nothing while
-    every run stayed green, which is the state salesagent-prkv.39 found.
+    every run stayed green, which is the state that audit found.
 
     The judgement was already in this file and was simply not reached:
     ``pytest_bdd_step_func_lookup_error`` classifies a missing binding as dormancy,
@@ -202,7 +202,7 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
     serialize ``wasxfail``: the reason string is invisible in the JSON reports, so the
     only trace of dormancy there is the exception class inside a traceback. Measuring
     this required knowing that trick, and the first attempt at it returned zero
-    against a real count of 1356 (salesagent-vtreb). A user_property IS serialized, so
+    against a real count of 1356. A user_property IS serialized, so
     the next audit does not depend on folklore.
     """
     tag = _scenario_tag(item)
@@ -247,7 +247,7 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
         report.wasxfail = (
             f"Step definition not found: DORMANT (test-wiring) — no step definition for "
             f"{step_key!r} in {tag}, so this scenario grades nothing. Recorded in "
-            f"tests/bdd/dormant_scenarios.txt; closing the hole is salesagent-8j5nf."
+            f"tests/bdd/dormant_scenarios.txt; closing the hole means writing the step."
         )
         return True
     report.outcome = "failed"
@@ -515,7 +515,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # Suggestion parity for list_creative_formats is pinned instead by
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
-    # Graduated (salesagent-prkv.65, cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
+    # Graduated (cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
     # T-UC-005-ext-b-disclosure-invalid, -disclosure-empty, -output-empty,
     # -output-invalid, -output-noid, -input-empty, -input-invalid, -input-noid.
     #
@@ -671,8 +671,8 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: T-UC-002-inv-080-1 ("account field absent"). The entry said production
     # accepts a create_media_buy without account while BR-RULE-080 INV-1 and
     # create-media-buy-request.json /required both demand it. CreateMediaBuyRequest.account
-    # is REQUIRED now (salesagent-prkv.68; it was the last surviving instance of
-    # salesagent-prkv.28, which had already fixed update_media_buy and sync_creatives), so
+    # is REQUIRED now (it was the last surviving instance of the optional-account
+    # shape; update_media_buy and sync_creatives had already been fixed), so
     # an absent account is refused at the request boundary as the scenario always said.
     # FIXME: rate limiting + payload size validation not implemented
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
@@ -885,7 +885,7 @@ _XFAIL_TAGS: dict[str, str] = {
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
-    # ── UC-006 ROUTE PARTITION (salesagent-lqm79) ──
+    # ── UC-006 ROUTE PARTITION ──
     # These 16 Scenario Outlines disagree ROW TO ROW, which is why they are here and not
     # in _UC006_WIRED_SCENARIOS: a route matches on a scenario's markers and cannot say
     # "these Examples rows, not those". Wiring them wakes 128 passing nodes; these 70 are
@@ -911,7 +911,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             '-ai-powered-"ai-powered"-a review workflow should be created with AI review]',
             '[rest-auto-approve-"auto-approve"-the creative status should be set to approved immediately]',
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+        "uc006 route partition: unverified: not one of the named test-side blockers",
     ),
     (
         "T-UC-006-boundary-assignment-weight",
@@ -925,7 +925,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-weight = 99 (max - 1)-99-the assignment should be created with weight 99]",
         },
         (
-            "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
+            "uc006 route partition: unverified: not one of the named test-side blockers"
             " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
@@ -945,7 +945,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-entry with weight = 0 (paused)-an assignment with weight 0-the assignment should be created as paused]",
         },
         (
-            "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers"
+            "uc006 route partition: no step definition for one of its steps; unverified: not one of the named test-side blockers"
             " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
@@ -954,7 +954,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {
             '-generative, no GEMINI_API_KEY-a creative with a generative format but GEMINI_API_KEY not configured-the error should include "suggestion" field]',
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+        "uc006 route partition: unverified: not one of the named test-side blockers",
     ),
     (
         "T-UC-006-boundary-provenance",
@@ -962,14 +962,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-provenance present + no provenance policy-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
             "-provenance present + policy requires provenance-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
         },
-        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
+        "uc006 route partition: the dispatched payload is refused by the malformation gate and undeclared",
     ),
     (
         "T-UC-006-boundary-validation-mode",
         {
             '-unknown value-"partial"-the system should reject with INVALID_REQUEST]',
         },
-        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps",
+        "uc006 route partition: no step definition for one of its steps",
     ),
     (
         "T-UC-006-main-lenient-warnings",
@@ -978,7 +978,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "[a2a]",
             "[mcp]",
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side "
+        "uc006 route partition: unverified: not one of the named test-side "
         "blockers -- PLUS [a2a]/[mcp], where sync_creatives answers INTERNAL_ERROR on the "
         "wire. That was hidden by an inline `if error is not None: pytest.xfail(...)` inside "
         "the step until that guard was removed. An INTERNAL_ERROR is a real defect, not "
@@ -988,7 +988,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-006-partition-assignment-pkg",
         {},
-        "uc006 route partition (salesagent-lqm79): ",
+        "uc006 route partition: ",
     ),
     (
         "T-UC-006-partition-assignment-weight",
@@ -1000,7 +1000,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-weight_typical-50-the assignment should be created with weight 50]",
         },
         (
-            "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
+            "uc006 route partition: unverified: not one of the named test-side blockers"
             " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
@@ -1013,7 +1013,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             '-with_weight-an assignment with creative_id "c1", package_id "p1", and weight 50-the assignment should be created with weight 50]',
         },
         (
-            "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
+            "uc006 route partition: unverified: not one of the named test-side blockers"
             " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
@@ -1025,14 +1025,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-missing_format_id-no format_id-INVALID_REQUEST]",
             "-unknown_format-a format_id unknown to all agents-REFERENCE_NOT_FOUND]",
         },
-        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+        "uc006 route partition: the Then step does not handle this row's outcome string",
     ),
     (
         "T-UC-006-partition-generative",
         {
             "-generative_no_gemini_key-output_format_ids present-message asset but no GEMINI_API_KEY-CONFIGURATION_ERROR]",
         },
-        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+        "uc006 route partition: the Then step does not handle this row's outcome string",
     ),
     (
         "T-UC-006-partition-provenance",
@@ -1040,14 +1040,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
             "-provenance_present_required-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
         },
-        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
+        "uc006 route partition: the dispatched payload is refused by the malformation gate and undeclared",
     ),
     (
         "T-UC-006-partition-validation-mode",
         {
             "-unknown_value-partial-rejected with INVALID_REQUEST]",
         },
-        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
+        "uc006 route partition: the Then step does not handle this row's outcome string",
     ),
     # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
     # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
@@ -4202,7 +4202,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # does not pass -p no:randomly), so WHICH transport the scenario graded
         # changed run to run with no code change: measured over the UC-010
         # module, a2a 196 on every seed but mcp/rest 183/166, 171/178, 174/175
-        # on seeds 1/2/3 (salesagent-1iidr). The skipped transport was ungraded
+        # on seeds 1/2/3. The skipped transport was ungraded
         # and the skip was invisible — it presents as ~19 removed / ~19 added
         # nodeids, the shape scripts/audit/compare_runs.py documents as benign
         # transport-parameter noise, so every nodeid-set diff read CLEAN.
@@ -4714,8 +4714,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # and ended INTERNALERROR, and suites that touch none of this — admin, e2e — failed
     # too. A saturated box manufactures failures that look like defects.
     #
-    # So they are enabled per-run by BDD_E2E_TRANSPORTS=all, which is how the rollout in
-    # salesagent-e0enw is meant to go: turn them on for one feature, classify what breaks
+    # So they are enabled per-run by BDD_E2E_TRANSPORTS=all, which is how the rollout
+    # is meant to go: turn them on for one feature, classify what breaks
     # as harness gap versus real transport defect, and only then widen. Nothing about the
     # collection logic differs — the same six ids appear the moment the variable is set.
     e2e_members = [Transport.E2E_REST]
@@ -5389,16 +5389,16 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 #: By identity the same measurement selects 210 nodes across these 49 scenarios, every
 #: one of which passes on every transport and every Examples row.
 #:
-#: MEASURED, not assumed (salesagent-lqm79): the catch-all row below and this row build
+#: MEASURED, not assumed: the catch-all row below and this row build
 #: the SAME env, so "wiring" is not building a harness -- it is naming the scenarios the
 #: existing one serves. Setting the catch-all's xfail_reason to None locally and running
 #: the file against a real Postgres gives 410 passed / 209 failed / 85 xfailed; grouped
 #: by identity, 49 scenarios pass on every node, 23 are step-less, 20 carry their own
 #: xfail and 7 fail on production defects. These are the 49.
 #:
-#: The rest stay on the catch-all with their blockers named in salesagent-lqm79. Adding
+#: The rest stay on the catch-all with their blockers named per bucket below. Adding
 #: an entry here GROWS the executing surface; it exempts nothing from grading.
-#: 27 UC-006 scenarios, blocker measured (salesagent-lqm79).
+#: 27 UC-006 scenarios, blocker measured.
 _UC006_NO_STEP_DEFINITION = frozenset(
     {
         "T-UC-006-boundary-creative-status",
@@ -5431,7 +5431,7 @@ _UC006_NO_STEP_DEFINITION = frozenset(
     }
 )
 
-#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
+#: 2 UC-006 scenarios, blocker measured.
 _UC006_STALE_XFAIL = frozenset(
     {
         "T-UC-006-boundary-format-id",
@@ -5439,7 +5439,7 @@ _UC006_STALE_XFAIL = frozenset(
     }
 )
 
-#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
+#: 2 UC-006 scenarios, blocker measured.
 _UC006_UNDECLARED_MALFORMATION = frozenset(
     {
         "T-UC-006-partition-assignment-fmt",
@@ -5447,14 +5447,14 @@ _UC006_UNDECLARED_MALFORMATION = frozenset(
     }
 )
 
-#: 1 UC-006 scenarios, blocker measured (salesagent-lqm79).
+#: 1 UC-006 scenarios, blocker measured.
 _UC006_MISSING_HARNESS_SEAM = frozenset(
     {
         "T-UC-006-rule-037-inv4",
     }
 )
 
-#: 3 UC-006 scenarios, blocker measured (salesagent-lqm79).
+#: 3 UC-006 scenarios, blocker measured.
 _UC006_UNVERIFIED_FAILURE = frozenset(
     {
         "T-UC-006-rule-033-inv2",
@@ -5463,7 +5463,7 @@ _UC006_UNVERIFIED_FAILURE = frozenset(
     }
 )
 
-#: 16 UC-006 scenarios, blocker measured (salesagent-lqm79).
+#: 16 UC-006 scenarios, blocker measured.
 _UC006_OWN_XFAIL = frozenset(
     {
         "T-UC-006-ext-b",
@@ -5712,7 +5712,7 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Givens built instead of rebuilding it. It sat on the uc002-not-wired
                 # catch-all until now, which xfailed it at fixture setup, so it dispatched
                 # nothing and its two unique Thens had never executed anywhere in the corpus
-                # (salesagent-9p7oe). The sibling already on this row,
+                # The sibling already on this row,
                 # @T-UC-002-ext-dual-emit, has the byte-identical Given block and passes on
                 # a2a/mcp/rest/e2e_rest, which is why this is a row-share and not new wiring.
                 or "T-UC-002-main" in m
@@ -5823,7 +5823,7 @@ ENV_ROUTES: list[EnvRoute] = [
         when=_uc("UC-006", lambda m, s=_UC006_NO_STEP_DEFINITION: bool(m & s)),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
         xfail_reason=(
-            "UC-006 not wired: no step definition for one of its steps, so it grades nothing (salesagent-eii8n names the blocking sentence per scenario)"
+            "UC-006 not wired: no step definition for one of its steps, so it grades nothing (tests/bdd/dormant_scenarios.txt names the blocking sentence per scenario)"
         ),
     ),
     EnvRoute(
