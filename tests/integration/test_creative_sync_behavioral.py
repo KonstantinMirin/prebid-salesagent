@@ -428,9 +428,10 @@ class TestValidationModeSemantics:
         (_assignments.py: `continue` after the creative_row-is-None branch),
         so one synthesized entry can never mix the two causes — this test uses
         a SEPARATE, existing creative to pin that only the creative-not-found
-        cause flips to CREATIVE_NOT_FOUND. (Strict-mode PACKAGE_NOT_FOUND
-        parity for this condition is a known residual tracked in the
-        gl3m/#1598 lane, not claimed correct here.)
+        cause flips to CREATIVE_NOT_FOUND. (Lenient mode still synthesizes a
+        package-not-found cause as VALIDATION_ERROR while the strict path raises
+        PACKAGE_NOT_FOUND — a known residual, described at the synthesis site in
+        _assignments.py, and not claimed correct here.)
         """
         from tests.factories import CreativeFactory
 

@@ -379,12 +379,19 @@ def _process_assignments(
             )
         else:
             # Nothing assigned: every referenced package failed. Buyer-correctable.
-            # Creative-not-found entries carry CREATIVE_NOT_FOUND — the same code
-            # the strict-mode AdCPCreativeNotFoundError raise emits (287c93099);
-            # the continue in the not-found branch means such an entry can never
-            # also carry package causes. Other synthesized causes still ride
-            # VALIDATION_ERROR — a known residual (strict package-not-found emits
-            # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
+            #
+            # A creative-not-found entry carries CREATIVE_NOT_FOUND, the same code the
+            # strict-mode raise above emits, so the two validation modes agree on this
+            # condition. The ``continue`` in the not-found branch means such an entry can
+            # never also carry package causes, which is what keeps the two exclusive.
+            #
+            # RESIDUAL, and it is only this one: a package-not-found cause reaches here
+            # as VALIDATION_ERROR, while the strict path raises AdCPPackageNotFoundError
+            # for the same condition. So lenient and strict disagree on package-not-found
+            # in a way they no longer disagree on creative-not-found. Narrowing it means
+            # carrying the per-package cause through ``assignment_errors_by_creative``,
+            # which today holds prose, not a code.
+            #
             # ``assignment_errors`` is NOT duplicated into details: the line below sets
             # it on the result entry, which is the buyer's path to it. Two copies of one
             # fact is what this migration removes. Each code carries its own details
