@@ -1476,3 +1476,41 @@ def then_sole_entry_error_code(ctx: dict, collection: str, code: str) -> None:
     """The response's SOLE *collection* entry carries *code*. One property only."""
     codes = _entry_error_codes(ctx, collection)
     assert code in codes, f"Expected error code {code!r} on the sole {collection} entry, got {codes}"
+
+
+def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
+    """Index of the *collection* entry whose id field is *entry_id*, located on the wire.
+
+    The selector form the sole-entry docstring said to add with the scenario that
+    needs it: a sync that carries an anchor creative AND a synthesized entry for an
+    assignment reference has two rows, and grading "row 0" would grade the anchor.
+    The id key is the collection's singular -- ``creatives`` -> ``creative_id``,
+    ``accounts`` -> ``account_id`` -- which is how every per-item entry the pinned
+    response schemas define names itself.
+    """
+    id_key = f"{collection[:-1]}_id"
+    entries = wire_field(ctx, collection)
+    matches = [i for i, entry in enumerate(entries) if entry.get(id_key) == entry_id]
+    assert len(matches) == 1, (
+        f"expected exactly one {collection} entry with {id_key}={entry_id!r} on the wire, found "
+        f"{len(matches)} among {[e.get(id_key) for e in entries]}"
+    )
+    return matches[0]
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" carries error code "(?P<code>[^"]+)"$'))
+def then_selected_entry_error_code(ctx: dict, collection: str, entry_id: str, code: str) -> None:
+    """The *collection* entry selected by its id carries *code* in its ``errors[]``."""
+    index = _entry_index_for(ctx, collection, entry_id)
+    errors = wire_entry_errors(ctx, collection, index=index)
+    assert errors, f"the {collection} entry for {entry_id!r} carries an EMPTY errors[], so it reports no failure"
+    codes = [error.get("code") if isinstance(error, dict) else getattr(error, "code", None) for error in errors]
+    assert code in codes, f"Expected error code {code!r} on the {collection} entry for {entry_id!r}, got {codes}"
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" has action "(?P<action>[^"]+)"$'))
+def then_selected_entry_action(ctx: dict, collection: str, entry_id: str, action: str) -> None:
+    """The *collection* entry selected by its id reports *action* on the wire."""
+    index = _entry_index_for(ctx, collection, entry_id)
+    actual = wire_field(ctx, collection)[index].get("action")
+    assert actual == action, f"Expected action {action!r} on the {collection} entry for {entry_id!r}, got {actual!r}"

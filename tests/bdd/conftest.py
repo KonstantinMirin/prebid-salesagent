@@ -74,6 +74,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
+    "tests.bdd.steps.domain.uc006_dry_run_parity",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
@@ -917,7 +918,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {
             "-weight = -1 (min - 1)--1-the error should be INVALID_REQUEST with suggestion]",
             "-weight = 101 (max + 1)-101-the error should be INVALID_REQUEST with suggestion]",
-            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            # --- per-assignment fields, a DIFFERENT blocker ---
             "-weight = 0 (min, inclusive \\u2014 paused)-0-the assignment should be created as paused (no delivery)]",
             "-weight = 1 (min + 1)-1-the assignment should be created with weight 1]",
             "-weight = 50 (typical)-50-the assignment should be created with weight 50]",
@@ -925,7 +926,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         },
         (
             "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
-            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
     (
@@ -935,17 +936,17 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
             "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
             # a2a/mcp answer INTERNAL_ERROR for the idempotent-upsert row. Hidden until
-            # salesagent-tne7q removed the inline `if error is not None: xfail` guarding it;
+            # the inline `if error is not None: xfail` guarding it was removed;
             # a wire INTERNAL_ERROR is a defect, and this row makes it visible and XPASSable.
             "[a2a-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
             "[mcp-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
-            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            # --- per-assignment fields, a DIFFERENT blocker ---
             '-entry with placement_ids-an assignment with placement_ids ["slot_a"]-the assignment should include placement targeting]',
             "-entry with weight = 0 (paused)-an assignment with weight 0-the assignment should be created as paused]",
         },
         (
             "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers"
-            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
     (
@@ -980,7 +981,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side "
         "blockers -- PLUS [a2a]/[mcp], where sync_creatives answers INTERNAL_ERROR on the "
         "wire. That was hidden by an inline `if error is not None: pytest.xfail(...)` inside "
-        "the step until salesagent-tne7q removed it. An INTERNAL_ERROR is a real defect, not "
+        "the step until that guard was removed. An INTERNAL_ERROR is a real defect, not "
         "a spec gap; declared here so it XPASSes the day it is fixed rather than being "
         "excused on every run.",
     ),
@@ -994,13 +995,13 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {
             "-weight_above_max-101-the error should be INVALID_REQUEST with suggestion]",
             "-weight_below_min--1-the error should be INVALID_REQUEST with suggestion]",
-            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            # --- per-assignment fields, a DIFFERENT blocker ---
             "-weight_boundary_min-0-the assignment should be created as paused]",
             "-weight_typical-50-the assignment should be created with weight 50]",
         },
         (
             "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
-            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
     (
@@ -1008,12 +1009,12 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         {
             "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
             '-with_placement_targeting-an assignment with creative_id "c1", package_id "p1", and placement_ids ["slot_a"]-the assignment should be created with placement targeting]',
-            # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
+            # --- per-assignment fields, a DIFFERENT blocker ---
             '-with_weight-an assignment with creative_id "c1", package_id "p1", and weight 50-the assignment should be created with weight 50]',
         },
         (
             "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers"
-            " PLUS the rows marked salesagent-tne7q.3 above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
+            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
     (
@@ -2489,7 +2490,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #
             # This was `try: assert ... except AssertionError: pytest.xfail(...)` inside
             # then_attribution_default — catch the failure and excuse it, the purest form of
-            # the shape salesagent-tne7q removed. It could not fail in either direction, so
+            # the shape the conditional-xfail sweep removed. It could not fail in either direction, so
             # the echo had been reported as an expected failure on every run. strict=True
             # here means it XPASSes loudly the day production starts stripping the request.
             "T-UC-004-attr-unsupported": (
@@ -3414,7 +3415,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # xfail keyed on the outcome could not fail in either direction: it passed
             # when the fields were present and excused itself when they were not, so a
             # seller that stopped echoing them entirely would never have turned it red
-            # (salesagent-tne7q). As a tag this XPASSes the day production populates them.
+            # . As a tag this XPASSes the day production populates them.
             "T-UC-019-main",
             # Creative approval mapping — not implemented
             "T-UC-019-partition-approval",
@@ -5528,6 +5529,14 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-partition-auth",
         "T-UC-006-partition-creative-scope",
         "T-UC-006-partition-mb-status",
+        # The four assignment-reference scenarios migrated from
+        # tests/integration/test_creative_sync_behavioral.py: wired because they pass on
+        # every in-process transport.
+        "T-UC-006-local-assignment-unknown-creative",
+        "T-UC-006-local-assignment-only-missing-package",
+        "T-UC-006-local-assignment-only-existing-creative",
+        "T-UC-006-local-failed-creative-assignment",
+        "T-UC-006-local-dryrun-parity",
         "T-UC-006-rule-033-inv1",
         "T-UC-006-rule-033-inv3",
         "T-UC-006-rule-033-inv4",

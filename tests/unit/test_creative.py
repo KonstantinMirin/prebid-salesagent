@@ -2475,9 +2475,9 @@ class TestDryRun:
         So "repo.create was not called" is no longer the promise and asserting it
         would pin the deleted mechanism. What this level CAN see is the request
         the impl makes of its unit of work, which is asserted here. That nothing
-        ends up persisted is graded where it is observable — against a real
-        database — by TestDryRunPreviewMatchesLiveRun and the UC-006
-        out-of-transaction scenarios.
+        ends up persisted is graded where it is observable — on the wire, against a
+        real database — by the UC-006 dry-run preview-parity scenarios
+        (local-uc006-dry-run-preview-parity.feature) and the out-of-transaction ones.
 
         Covers: UC-006-DRY-RUN-01
         """

@@ -37,7 +37,7 @@ from pytest_bdd import given, parsers, then, when
 
 from src.core.errors.codes import ErrorCode
 from tests.bdd.steps._harness_db import db_session
-from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload, wire_field
 from tests.bdd.steps.generic._account_resolution import (
     ensure_tenant_principal,
     seed_account_with_access,
@@ -504,7 +504,7 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
     #    On a resolution failure _sync_creatives_impl never runs and nothing is
     #    written, so this is what proves processing proceeded past resolution.
     env = ctx["env"]
-    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing (salesagent-tne7q).
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing.
     assert getattr(env, "use_real_db", False), (
         "this env has no real DB, so 'the creative was persisted' cannot be verified. "
         "Run this scenario under an IntegrationEnv, or the claim does not belong here."
@@ -1010,6 +1010,111 @@ def given_assignment_to_existing_package(ctx: dict) -> None:
     ctx["package"] = package
     creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
+
+
+def _seed_library_creative(ctx: dict, creative_id: str) -> None:
+    """Seed *creative_id* in the caller's own library, on the request creative's format.
+
+    An assignment-only reference: the request must still carry a creative
+    (sync-creatives-request.json: ``creatives`` minItems 1), so the scenario's anchor
+    creative stays in ``ctx["creatives"]`` and this row is the one the assignment names.
+    """
+    from tests.factories import CreativeFactory
+
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = ctx["creatives"][-1]["format_id"]
+    CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=creative_id,
+        name="Library Creative",
+        agent_url=fmt["agent_url"],
+        format=fmt["id"],
+    )
+    env._commit_factory_data()
+
+
+@given(
+    parsers.parse(
+        'an assignment referencing the unknown creative "{creative_id}" to a package that exists in the tenant'
+    )
+)
+def given_assignment_unknown_creative_existing_package(ctx: dict, creative_id: str) -> None:
+    """The package is real; the creative_id the assignment names has no row anywhere."""
+    given_assignment_to_existing_package(ctx)
+    ctx["assignments"] = {creative_id: [ctx["package"].package_id]}
+
+
+@given(
+    parsers.parse(
+        'an assignment referencing the library creative "{creative_id}" to a package that exists in the tenant'
+    )
+)
+def given_assignment_library_creative_existing_package(ctx: dict, creative_id: str) -> None:
+    """Both ends exist: a creative already in the library, a package in the tenant."""
+    _seed_library_creative(ctx, creative_id)
+    given_assignment_to_existing_package(ctx)
+    ctx["assignments"] = {creative_id: [ctx["package"].package_id]}
+
+
+@given(parsers.parse('an assignment referencing the library creative "{creative_id}" to the package "{package_id}"'))
+def given_assignment_library_creative_named_package(ctx: dict, creative_id: str, package_id: str) -> None:
+    """The creative exists in the library; the package id is whatever the sentence says (here: none)."""
+    _seed_library_creative(ctx, creative_id)
+    ctx["assignments"] = {creative_id: [package_id]}
+
+
+@given("the creative has an empty name")
+def given_creative_has_empty_name(ctx: dict) -> None:
+    """Blank the request creative's name.
+
+    core/creative-asset.json requires ``name`` but sets no minLength, so an empty string
+    is a request the schema admits and the seller's own per-item validation refuses --
+    the same mechanism BR-RULE-033 INV-1's "one with an empty name" pair relies on.
+    """
+    ctx["creatives"][-1]["name"] = ""
+
+
+def _wire_creatives_entry(ctx: dict, creative_id: str) -> dict:
+    """The ONE ``creatives[]`` entry on the wire whose creative_id is *creative_id*."""
+    entries = wire_field(ctx, "creatives")
+    matches = [entry for entry in entries if entry.get("creative_id") == creative_id]
+    assert len(matches) == 1, (
+        f"expected exactly one creatives entry for {creative_id!r} on the wire, found {len(matches)} "
+        f"among {[entry.get('creative_id') for entry in entries]}"
+    )
+    return matches[0]
+
+
+@then(parsers.parse('the creatives entry for "{creative_id}" is assigned to the package'))
+def then_creatives_entry_assigned_to_package(ctx: dict, creative_id: str) -> None:
+    """The wire entry selected by creative_id names the scenario's package in ``assigned_to``."""
+    entry = _wire_creatives_entry(ctx, creative_id)
+    expected = [ctx["package"].package_id]
+    assert entry.get("assigned_to") == expected, (
+        f"expected the entry for {creative_id!r} to carry assigned_to={expected}, got {entry.get('assigned_to')!r}"
+    )
+
+
+@then(parsers.parse('the creatives entry for "{creative_id}" reports the package as an assignment error'))
+def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id: str) -> None:
+    """The entry names the scenario's package in ``assignment_errors`` and assigns nothing.
+
+    Both halves matter: ``assignment_errors`` keyed by the package is the report the
+    response schema defines for a skipped assignment, and an empty ``assigned_to`` is
+    what proves it was skipped rather than attempted (GH #1418: the attempt was an FK
+    violation surfacing as a 500).
+    """
+    entry = _wire_creatives_entry(ctx, creative_id)
+    package_id = ctx["package"].package_id
+    assignment_errors = entry.get("assignment_errors") or {}
+    assert package_id in assignment_errors, (
+        f"expected assignment_errors on the entry for {creative_id!r} to name {package_id!r}, got {assignment_errors!r}"
+    )
+    assert not entry.get("assigned_to"), (
+        f"a creative that failed validation must not be assigned, but the entry carries assigned_to={entry.get('assigned_to')!r}"
+    )
 
 
 @given("an assignment that already exists for this creative")
@@ -1738,7 +1843,7 @@ def then_assignment_created_with_weight(ctx: dict, weight: int) -> None:
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
         # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
         # loudly if production implements it; this step now ASSERTS instead of excusing itself.
         assert assignment.weight == weight, (
             f"Expected assignment weight {weight}, got {assignment.weight} "
@@ -1872,7 +1977,7 @@ def then_assignment_created_as_paused(ctx: dict) -> None:
     """
     assignment = _get_assignment_from_db(ctx)
     # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-    # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+    # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
     # loudly if production implements it; this step now ASSERTS instead of excusing itself.
     assert assignment.weight == 0, (
         f"weight=0 means assigned but PAUSED (pinned 3.1 assignments[].weight); got {assignment.weight}"
@@ -2047,7 +2152,7 @@ def then_assignment_includes_placement(ctx: dict) -> None:
     creative_id = latest_creative_id(ctx)
     expected_pkg = ctx["package"].package_id
     # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].placement_ids, production
-    # does not carry it. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it
+    # does not carry it. Declared ONCE in _SELECTIVE_XFAIL so it
     # XPASSes loudly if production implements it; this step now ASSERTS.
     placement_ids = getattr(assignment, "placement_ids", None)
     assert placement_ids, (
@@ -2308,7 +2413,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     # "slug matching [a-zA-Z0-9_-]+", so the slash is forbidden BY THE SPEC, not merely by
     # production's pattern. A spec-invalid input must be refused with a validation error,
     # never answered with an empty-bodied 500 — excusing that hid a crash behind a
-    # scenario bug (salesagent-tne7q).
+    # scenario bug.
     assert not (
         isinstance(error, AdCPSalesAgentError) and error.error_code == "INTERNAL_ERROR" and "HTTP 500" in err_str
     ), (
@@ -3524,7 +3629,7 @@ def then_slack_notification_deferred(ctx: dict) -> None:
     # ``then_no_slack_notification`` already has, and it passes just as happily when the
     # notification is never sent at all -- which is a different invariant (INV-2/INV-6) and
     # a bug on this path. What makes this sentence its own claim is that something exists to
-    # defer TO, so the review task is asserted here as well (salesagent-tne7q.2).
+    # defer TO, so the review task is asserted here as well.
     executor = ctx["env"].mock.get("ai_review_executor")
     assert executor is not None, (
         "CreativeSyncEnv must patch src.admin.blueprints.creatives._ai_review_executor for "
@@ -4411,7 +4516,7 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     )
     # No mock means the claim is ungradeable, and an ungradeable claim is a harness
     # defect to fix rather than an expected failure to record: the xfail here reported a
-    # missing seam as though production were at fault (salesagent-tne7q).
+    # missing seam as though production were at fault.
     assert mock_validate is not None, (
         "CreativeSyncEnv exposes no mock for the external creative-validation agent, so "
         "'validation was bypassed' cannot be graded. Wire one of validate_creative / "
@@ -5417,7 +5522,7 @@ def then_creative_has_generated_content(ctx: dict) -> None:
     # Verify via DB: read the creative back and check for generative data
     env = ctx["env"]
     session = env.get_session()
-    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing (salesagent-tne7q).
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing.
     assert session is not None, "no DB session, so the generated-content claim cannot be verified against storage"
 
     from sqlalchemy import select
@@ -5583,7 +5688,7 @@ def then_user_assets_priority_over_generated(ctx: dict) -> None:
     """
     error = ctx.get("error")
     assert error is None, f"SPEC-PRODUCTION GAP: expected user asset priority but got {type(error).__name__}: {error}"
-    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing (salesagent-tne7q).
+    # A missing DB session is a HARNESS defect, not a production gap: production's behaviour cannot influence whether the env opened one. Excusing it as an expected failure meant the persistence claim silently graded nothing.
     assert ctx["env"].get_session() is not None, (
         "no DB session, so the user-asset-priority claim cannot be verified against storage"
     )
@@ -6355,7 +6460,7 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
         # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
         # loudly if production implements it; this step now ASSERTS instead of excusing itself.
         assert assignment.weight == 0, (
             f"weight=0 means assigned but PAUSED, receiving no delivery; got {assignment.weight}"
@@ -6414,7 +6519,7 @@ def then_assignment_created_with_specified_weight(ctx: dict) -> None:
         ).first()
         assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
         # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes
+        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
         # loudly if production implements it; this step now ASSERTS instead of excusing itself.
         assert assignment.weight == requested_weight, (
             f"Expected assignment weight {requested_weight}, got {assignment.weight}"
@@ -6508,8 +6613,7 @@ def then_system_should_reject_validation_error(ctx: dict) -> None:
     and that is precisely why this reads the wire code rather than the class of
     ctx["error"]: the buyer sees a code, not a Python type, and asserting on the rebuilt
     exception is what tests/CLAUDE.md forbids. Two xfails used to record the transport
-    difference as a production gap; the gap was in the assertion's layer
-    (salesagent-tne7q).
+    difference as a production gap; the gap was in the assertion's layer.
     """
     result = ctx.get("result")
     assert result is not None, "no dispatch result recorded — the When step did not run"
@@ -7022,7 +7126,7 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
 
     # No excuse for a raised error: a dispatch that fails is the failure this scenario
     # exists to catch. The xfail that stood here was conditional on the outcome, so the
-    # step could not fail in the one direction that matters (salesagent-tne7q).
+    # step could not fail in the one direction that matters.
     error = ctx.get("error")
     assert error is None, f"expected proportional delivery, but production raised {type(error).__name__}: {error}"
 
@@ -7060,7 +7164,7 @@ def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
     # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight as
     # "Relative delivery weight (0-100) ... weights determine impression distribution
     # proportionally"; production hard-codes 100, so the ordering cannot hold. Declared
-    # ONCE in _SELECTIVE_XFAIL (salesagent-tne7q.3) so it XPASSes loudly if production
+    # ONCE in _SELECTIVE_XFAIL so it XPASSes loudly if production
     # implements it; this step now ASSERTS instead of excusing itself.
     assert assignment_a.weight > assignment_b.weight, (
         f"requested creative-A={weight_a_requested} > creative-B={weight_b_requested}, "

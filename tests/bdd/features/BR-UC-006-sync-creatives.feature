@@ -433,6 +433,72 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the created creative should be associated with principal "buyer-A"
+    # --- BR-RULE-034 / BR-RULE-033: assignment references graded on the wire ---
+    # These four came from tests/integration/test_creative_sync_behavioral.py, where
+    # they asserted _impl's returned DTO or a pytest.raises class -- neither of which
+    # can see a wrong wire code. The pinned 3.1 enums/error-code.json defines
+    # CREATIVE_NOT_FOUND ("Referenced creative does not exist in the agent's creative
+    # library ... Sellers MUST return this code uniformly for any creative_id not owned
+    # by the calling account", recovery correctable) and PACKAGE_NOT_FOUND; the response
+    # schema puts per-item failures on creatives[] with action "failed" and a
+    # core/error.json errors[] entry, so the same code reaches the buyer on both arms:
+    # strict aborts the request, lenient records it on the synthesized entry.
+
+  @T-UC-006-local-assignment-unknown-creative @invariant @BR-RULE-034 @error-details
+  Scenario Outline: Assignment naming a creative the library does not hold — <mode>
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And an assignment referencing the unknown creative "c_never_synced" to a package that exists in the tenant
+    And validation_mode is "<mode>"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives <branch> spec
+    And <expected>
+
+    Examples:
+      | mode    | branch  | expected                                                                    |
+      | strict  | error   | the error code should be "CREATIVE_NOT_FOUND"                               |
+      | lenient | success | the creatives entry for "c_never_synced" carries error code "CREATIVE_NOT_FOUND" |
+
+  @T-UC-006-local-assignment-only-missing-package @invariant @BR-RULE-033 @error-details
+  Scenario: Assignment-only reference whose package does not exist carries PACKAGE_NOT_FOUND on its entry
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And an assignment referencing the library creative "c_exists_in_library" to the package "pkg_does_not_exist"
+    And validation_mode is "lenient"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the creatives entry for "c_exists_in_library" has action "failed"
+    And the creatives entry for "c_exists_in_library" carries error code "PACKAGE_NOT_FOUND"
+
+  @T-UC-006-local-assignment-only-existing-creative @invariant @BR-RULE-033
+  Scenario: Assignment-only reference to a creative already in the library surfaces assigned_to
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And an assignment referencing the library creative "c_preexisting" to a package that exists in the tenant
+    And validation_mode is "lenient"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the creatives entry for "c_preexisting" has action "unchanged"
+    And the creatives entry for "c_preexisting" is assigned to the package
+
+  # GH #1418: a creative that fails per-item validation is never persisted, so its
+  # assignment must be reported on its entry rather than attempted (the attempt was a
+  # foreign-key violation surfacing as a 500). An empty name is schema-conformant
+  # (core/creative-asset.json sets no minLength) and fails the seller's own per-item
+  # validation -- the same mechanism BR-RULE-033 INV-1 grades live.
+  @T-UC-006-local-failed-creative-assignment @invariant @BR-RULE-033
+  Scenario: A creative that fails validation keeps its assignment out of the library and reports it
+    Given the Buyer is authenticated
+    And a creative with a known format_id
+    And the creative has an empty name
+    And an assignment to a package that exists in the tenant
+    And validation_mode is "lenient"
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the creatives entry for "creative-known-fmt-001" has action "failed"
+    And the creatives entry for "creative-known-fmt-001" carries error code "VALIDATION_ERROR"
+    And the creatives entry for "creative-known-fmt-001" reports the package as an assignment error
+
     # --- BR-RULE-035: Creative Format Validation ---
 
   @T-UC-006-rule-035-static @invariant @BR-RULE-035
@@ -1002,6 +1068,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | provenance_present_not_required  | a creative with provenance metadata     | no product with provenance_required                       | the creative should be processed without warning |
       | provenance_absent_not_required   | a creative without provenance metadata  | no product with provenance_required                       | the creative should be processed without warning |
       | provenance_absent_when_required  | a creative without provenance metadata  | a product with creative_policy.provenance_required = true | the creative should have a provenance warning    |
+      | provenance_absent_not_required_explicitly | a creative without provenance metadata | a product with creative_policy.provenance_required = false | the creative should be processed without warning |
 
   @T-UC-006-partition-assignments-structure @partition @assignments-structure
   Scenario Outline: Assignments array structure — <partition>
@@ -1286,7 +1353,7 @@ Feature: BR-UC-006 Sync Creative Assets
     # product_id has no product to check the format against, and the only thing the
     # buyer can see of "the check was skipped" is that the assignment was created. The
     # cell used to say "the format check should be skipped entirely", bound to a step
-    # whose body was byte-identical to the created-successfully one (salesagent-tne7q.2).
+    # whose body was byte-identical to the created-successfully one.
     Examples:
       | boundary_point                              | assignment_state                                                     | expected                                              |
       | format matches (exact)                      | an assignment to a package whose product accepts this format         | the assignment should be created successfully         |

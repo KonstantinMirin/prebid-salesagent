@@ -6,7 +6,7 @@ from typing import Any
 
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import CreativeRefDetails, ValidationDetails
+from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
     AdCPPackageNotFoundError,
@@ -106,6 +106,7 @@ def _process_assignments(
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
+    packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
@@ -199,6 +200,7 @@ def _process_assignments(
                         # Package not found - record error
                         error_msg = f"Package not found: {package_id}"
                         assignment_errors_by_creative[creative_id][package_id] = error_msg
+                        packages_not_found_by_creative.setdefault(creative_id, set()).add(package_id)
 
                         # Skip if in lenient mode, error if strict
                         if validation_mode == "strict":
@@ -385,20 +387,28 @@ def _process_assignments(
             # condition. The ``continue`` in the not-found branch means such an entry can
             # never also carry package causes, which is what keeps the two exclusive.
             #
-            # RESIDUAL, and it is only this one: a package-not-found cause reaches here
-            # as VALIDATION_ERROR, while the strict path raises AdCPPackageNotFoundError
-            # for the same condition. So lenient and strict disagree on package-not-found
-            # in a way they no longer disagree on creative-not-found. Narrowing it means
-            # carrying the per-package cause through ``assignment_errors_by_creative``,
-            # which today holds prose, not a code.
+            # A package-not-found entry carries PACKAGE_NOT_FOUND for the same reason: the
+            # strict path raises AdCPPackageNotFoundError for this condition, and the
+            # pinned enum defines the code, so the lenient advisory names the same thing.
+            # Only when EVERY package the entry names was not found -- a mixed entry (one
+            # package missing, another refusing the format) is a validation failure, and
+            # ``assignment_errors`` spells out each package's cause.
             #
             # ``assignment_errors`` is NOT duplicated into details: the line below sets
             # it on the result entry, which is the buyer's path to it. Two copies of one
             # fact is what this migration removes. Each code carries its own details
             # shape — the exception class declares which one it accepts.
             cause: AdCPSalesAgentError
+            missing_packages = packages_not_found_by_creative.get(creative_id, set())
             if creative_id in not_found_creative_ids:
                 cause = AdCPCreativeNotFoundError(details=CreativeRefDetails(creative_id=creative_id))
+            elif missing_packages and set(errors) == missing_packages:
+                cause = AdCPPackageNotFoundError(
+                    details=EntityRefDetails(
+                        creative_id=creative_id,
+                        package_id=next(iter(missing_packages)) if len(missing_packages) == 1 else None,
+                    )
+                )
             else:
                 cause = AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
             entry = _failed_sync_result(creative_id, cause)
