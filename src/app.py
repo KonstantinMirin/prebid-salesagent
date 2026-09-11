@@ -701,17 +701,16 @@ def _openapi_with_rest_components() -> dict[str, Any]:
     """
     from fastapi.openapi.utils import get_openapi
 
-    from src.routes.api_v1 import components_schemas
+    from src.routes.api_v1 import REST_COMPONENT_SCHEMAS
 
     schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
-    schema.setdefault("components", {}).setdefault("schemas", {}).update(components_schemas())
+    schema.setdefault("components", {}).setdefault("schemas", {}).update(REST_COMPONENT_SCHEMAS)
     return schema
 
 
 # Assigned, not generated on demand: ``FastAPI.openapi()`` returns ``openapi_schema`` when it
 # is already set, so filling it here is the supported way to publish a customized document
 # without reassigning the method (which mypy rejects as a method-assign).
-app.openapi_schema = _openapi_with_rest_components()
 app.include_router(health_router)
 app.include_router(health_debug_router)
 
@@ -788,3 +787,11 @@ app.router.routes.insert(0, Route("/", _handle_landing_page, methods=["GET"]))
 app.router.routes.insert(1, Route("/landing", _handle_landing_page, methods=["GET"]))
 
 logger.info("FastAPI app created: MCP at /mcp, A2A at /a2a, Admin at /admin")
+
+
+# Assembled LAST, after every route this module registers. ``get_openapi`` reads ``app.routes``
+# at the moment it is called, so assigning this ahead of a router drops that router's paths from
+# the document -- measured at 15 published against 23 eligible when it sat between two routers.
+# The A2A, landing and agent-card routes are plain Starlette ``Route``s, which FastAPI never
+# documents, so 23 ``APIRoute`` paths is the whole document and their absence is by design.
+app.openapi_schema = _openapi_with_rest_components()

@@ -15,9 +15,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from src.core.auth_context import AuthContext, get_auth_context
-from src.core.exceptions import AdcpFailure, AdCPInvalidRequestError
+from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
-from src.core.schemas._base import AdcpErrorResponse
 from src.core.tools._announced_shape import apply_signature
 from src.core.tools._boundary import serve, wire_status
 from src.core.tools._wire import to_wire
@@ -79,8 +78,13 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
                 # Caught, not probed for type -- the same shape as the raw context read.
                 try:
                     body = {**body, **path_values}
-                except TypeError as exc:
-                    raise AdcpFailure(AdcpErrorResponse.of(AdCPInvalidRequestError())) from exc
+                except TypeError:
+                    # Not a JSON object, so it cannot take a path value. Handed on UNMERGED
+                    # rather than rejected here: ``validated_request`` refuses it with the same
+                    # INVALID_REQUEST and ``issues`` every other row's malformed body earns,
+                    # where a rejection minted here answered it without the issues -- one
+                    # payload, two shapes, depending on whether the route was templated.
+                    pass
             # Named, not frozen: the handler names the TOOL and ``serve`` reads the registry
             # per call. A route that froze the callable at import could not be substituted --
             # the registry row and the thing the route invoked were two different objects.
@@ -131,25 +135,25 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
     return handler
 
 
-def request_body_schema(dto: type[Any]) -> dict[str, Any]:
-    """A DTO's JSON Schema for a request body, with its ``$ref``s aimed at ``components``.
+def _rest_body_schemas() -> tuple[dict[type[Any], dict[str, Any]], dict[str, Any]]:
+    """Every REST DTO's request-body schema, and the ONE ``$defs`` they all refer into.
 
-    ``$defs`` is stripped: those models are published once under ``components/schemas`` by
-    ``components_schemas()`` rather than repeated inside every route's body.
+    One ``models_json_schema`` call over all the DTOs, so pydantic assigns each nested model
+    a name that is unique ACROSS the set. Generating per-DTO and merging by name let two models
+    that happened to share a name -- ``Status``, ``Disclosure``, seventeen of them -- overwrite
+    each other in ``components/schemas``, so a ref from one tool resolved to another tool's
+    definition.
     """
-    schema = dto.model_json_schema(ref_template="#/components/schemas/{model}")
-    schema.pop("$defs", None)
-    return schema
+    from pydantic.json_schema import models_json_schema
+
+    dtos = [spec.dto for spec in TOOLS.values() if spec.rest is not None]
+    per_model, shared = models_json_schema(
+        [(dto, "validation") for dto in dtos], ref_template="#/components/schemas/{model}"
+    )
+    return {dto: per_model[(dto, "validation")] for dto in dtos}, shared.get("$defs", {})
 
 
-def components_schemas() -> dict[str, Any]:
-    """Every nested model any REST request body refers to, keyed the way the refs name them."""
-    merged: dict[str, Any] = {}
-    for spec in TOOLS.values():
-        if spec.rest is None:
-            continue
-        merged.update(spec.dto.model_json_schema(ref_template="#/components/schemas/{model}").get("$defs", {}))
-    return merged
+_BODY_SCHEMA_BY_DTO, REST_COMPONENT_SCHEMAS = _rest_body_schemas()
 
 
 for _name, _spec in TOOLS.items():
@@ -174,7 +178,7 @@ for _name, _spec in TOOLS.items():
         openapi_extra={
             "requestBody": {
                 "required": True,
-                "content": {"application/json": {"schema": request_body_schema(_spec.dto)}},
+                "content": {"application/json": {"schema": _BODY_SCHEMA_BY_DTO[_spec.dto]}},
             }
         },
     )
