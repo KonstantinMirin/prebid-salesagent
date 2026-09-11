@@ -30,13 +30,14 @@ tool is dispatchable because ``TOOLS[name].a2a`` is True.
 Regression prevention: https://github.com/prebid/salesagent/pull/337
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.auth_context import AuthContext
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.boundary_identity import resolved_as
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -232,7 +233,7 @@ class TestA2AErrorHandling:
         """Test that skill errors return proper message fields."""
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=_MOCK_IDENTITY):
+        with resolved_as(_MOCK_IDENTITY):
             # Force an error by passing invalid parameters
             params = {
                 # Missing required fields - should cause validation error

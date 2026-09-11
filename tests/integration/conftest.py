@@ -16,6 +16,11 @@ from sqlalchemy import create_engine, delete, select
 
 from src.admin.app import create_app
 
+# Registers the ci-test tenant/principal fixture for this package. Imported by
+# name rather than star-imported: the one star import in tests/conftest.py is an
+# allowlisted exception, not the pattern.
+from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
+
 admin_app = create_app()
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, MediaPackage, Principal, Tenant
@@ -875,7 +880,9 @@ def migration_db():
 def mock_identity(sample_tenant, sample_principal):
     """Build a ResolvedIdentity from real test DB fixtures.
 
-    Use this with: patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity)
+    Use this with ``resolved_as(mock_identity)`` / ``resolves_to(mock_identity)`` from
+    ``tests.helpers.boundary_identity`` — that module owns where the resolver lives, so a
+    rename is one edit. Spelling the dotted path here is what put it in thirteen places.
 
     Uses LazyTenantContext so the tenant dict is always read from the DB,
     matching production behavior (where resolve_identity → LazyTenantContext

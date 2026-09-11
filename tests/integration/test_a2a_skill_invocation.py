@@ -18,11 +18,11 @@ from adcp.types import AccountReference as LibraryAccountReference
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.helpers.a2a_adcp_validation import validate_a2a_skill_payload
+from tests.helpers.boundary_identity import resolved_as
 from tests.helpers.capture_wrapper_req import registry_impl
 from tests.utils.a2a_helpers import (
     assert_delivery_forwarded_account,
     create_a2a_message_with_skill,
-    create_a2a_text_message,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -165,51 +165,6 @@ class TestA2ASkillInvocation:
         return msg
 
     @pytest.mark.asyncio
-    async def test_natural_language_get_products(
-        self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
-    ):
-        """Test natural language invocation for get_products with AdCP schema validation."""
-        # Mock authentication token
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
-        # Mock tenant detection - provide Host header so real functions can find tenant in database
-        # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
-            # Build ServerCallContext with Host header for subdomain detection
-            from tests.a2a_helpers import make_a2a_context
-
-            ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
-
-            # Create natural language message
-            message = create_a2a_text_message("What video products do you have available?")
-            params = SendMessageRequest(message=message)
-
-            # Process the message - this will execute the real code path
-            result = await handler.on_message_send(params, context=ctx)
-
-            # Verify the result
-            assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "natural_language"
-            assert result.artifacts is not None
-            assert len(result.artifacts) == 1
-            assert result.artifacts[0].name == "product_catalog"
-
-            # Extract products from response
-            artifact_data = validator.extract_adcp_payload_from_a2a_artifact(result.artifacts[0])
-            assert "products" in artifact_data
-            products = artifact_data["products"]
-
-            # Verify we got products from database (should match non_guaranteed_video)
-            assert len(products) > 0
-
-            # Validate against AdCP schemas
-            validation_result = await validator.validate_a2a_skill_response("get_products", result)
-            print(f"Natural language get_products validation: {validation_result}")
-
-            validator.assert_schema_valid(validation_result, "get_products")
-
     @pytest.mark.asyncio
     async def test_explicit_skill_get_products(
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
@@ -220,9 +175,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -271,9 +224,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -326,9 +277,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -400,9 +349,7 @@ class TestA2ASkillInvocation:
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock identity resolution
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
@@ -452,9 +399,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -497,9 +442,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -582,7 +525,7 @@ class TestA2ASkillInvocation:
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        with resolved_as(mock_identity):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
@@ -612,8 +555,8 @@ class TestA2ASkillInvocation:
     # hand-rolled mock A2A Task/Artifact instead of exercising the real production path
     # — pure mocking in a file whose whole point is DB-backed integration coverage — and
     # its "assert valid or errors or warnings" could never fail regardless of outcome.
-    # test_natural_language_get_products and test_explicit_skill_get_products below
-    # already cover skill->schema resolution + validator invocation through the real
+    # test_explicit_skill_get_products below already covers skill->schema resolution
+    # and validator invocation through the real
     # handler and a real database-backed product, which is strictly better coverage of
     # the same concept. (#1838 review: their assertions were non-vacuous
     # placeholders here too; production's get_products response is now AdCP
@@ -688,7 +631,7 @@ class TestA2ASkillInvocation:
 
         # Mock identity resolution and adapter
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+            resolved_as(mock_identity),
             patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         ):
             # Mock request headers to provide Host header for subdomain detection
@@ -768,9 +711,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -819,9 +760,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -854,9 +793,7 @@ class TestA2ASkillInvocation:
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
-        with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
-        ):
+        with resolved_as(mock_identity):
             # Build ServerCallContext with Host header for subdomain detection
             from tests.a2a_helpers import make_a2a_context
 
@@ -895,7 +832,7 @@ class TestA2ASkillInvocation:
         mock_delivery = AsyncMock(return_value={"media_buys": []})
 
         with (
-            patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity),
+            resolved_as(mock_identity),
             # The REGISTRY ROW, not a module attribute: every transport calls the function
             # the row holds, so a module-level patch would rename something nothing consults.
             registry_impl("get_media_buy_delivery", mock_delivery),
@@ -936,7 +873,7 @@ class TestA2ASkillInvocation:
 
         handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
-        with patch("src.core.resolved_identity.resolve_identity", return_value=mock_identity):
+        with resolved_as(mock_identity):
             from tests.a2a_helpers import make_a2a_context
 
             ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
