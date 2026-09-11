@@ -934,6 +934,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
             "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
             "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
             "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
+            # a2a/mcp answer INTERNAL_ERROR for the idempotent-upsert row. Hidden until
+            # salesagent-tne7q removed the inline `if error is not None: xfail` guarding it;
+            # a wire INTERNAL_ERROR is a defect, and this row makes it visible and XPASSable.
+            "[a2a-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
+            "[mcp-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
             # --- salesagent-tne7q.3: per-assignment fields, a DIFFERENT blocker ---
             '-entry with placement_ids-an assignment with placement_ids ["slot_a"]-the assignment should include placement targeting]',
             "-entry with weight = 0 (paused)-an assignment with weight 0-the assignment should be created as paused]",
@@ -969,8 +974,15 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-006-main-lenient-warnings",
         {
             "[rest]",
+            "[a2a]",
+            "[mcp]",
         },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
+        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side "
+        "blockers -- PLUS [a2a]/[mcp], where sync_creatives answers INTERNAL_ERROR on the "
+        "wire. That was hidden by an inline `if error is not None: pytest.xfail(...)` inside "
+        "the step until salesagent-tne7q removed it. An INTERNAL_ERROR is a real defect, not "
+        "a spec gap; declared here so it XPASSes the day it is fixed rather than being "
+        "excused on every run.",
     ),
     (
         "T-UC-006-partition-assignment-pkg",
