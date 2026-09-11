@@ -396,12 +396,10 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     * **Host-side**: runner and published ports share a network namespace, so the
       SDK's default loopback receiver already works. Returns no args at all.
 
-    ADCP_WEBHOOK_RECEIVER_HOST is NOT an upstream feature. The CLI has no
-    `--webhook-receiver-host`, so it cannot pass `host` through to
-    createWebhookReceiver() even though the library accepts it -- filed as
-    adcontextprotocol/adcp-client#2448 and bridged meanwhile by
-    tests/storyboard/runner/patches/ (version-keyed by patch-package), which adds the
-    env var the issue proposes. Delete both when the flag ships.
+    The bind address is passed as ``--webhook-receiver-host``, a first-class CLI flag.
+    It was bridged by a patch-package edit while the flag did not exist (filed as
+    adcontextprotocol/adcp-client#2448); the flag ships in the pinned SDK, so the patch
+    and the ADCP_WEBHOOK_RECEIVER_HOST env var it added are both gone.
     """
     callback_host = os.environ.get(_WEBHOOK_CALLBACK_HOST_ENV)
     if not callback_host:
@@ -415,8 +413,13 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
         port,
         "--webhook-receiver-public-url",
         f"http://{callback_host}:{port}/",
+        # Not loopback: the server is a DIFFERENT container and calls back to this
+        # runner's compose alias, so a receiver bound to 127.0.0.1 puts the delivery on
+        # the container's eth0 with nothing listening.
+        "--webhook-receiver-host",
+        "0.0.0.0",
     ]
-    return args, {"ADCP_WEBHOOK_RECEIVER_HOST": "0.0.0.0"}
+    return args, {}
 
 
 def _run_storyboard_runner(protocol: str) -> dict[str, Any]:

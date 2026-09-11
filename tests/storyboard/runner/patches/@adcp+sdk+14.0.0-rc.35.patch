@@ -1,0 +1,26 @@
+diff --git a/node_modules/@adcp/sdk/dist/lib/protocols/a2a.js b/node_modules/@adcp/sdk/dist/lib/protocols/a2a.js
+index 1c7fba9..a8bd04c 100644
+--- a/node_modules/@adcp/sdk/dist/lib/protocols/a2a.js
++++ b/node_modules/@adcp/sdk/dist/lib/protocols/a2a.js
+@@ -206,7 +206,7 @@ async function createA2AClientFromCardUrl(cardUrl, fetchImpl) {
+   return createNativeA2AClientFromCardUrl(cardUrl, fetchImpl);
+ }
+ async function createNativeA2AClientFromCardUrl(cardUrl, fetchImpl) {
+-  const legacyCompat = { enabled: true };
++  const legacyCompat = { enabled: false };
+   const factory = new import_client.ClientFactory({
+     transports: [new import_client.JsonRpcTransportFactory({ fetchImpl, legacyCompat })],
+     cardResolver: new import_client.DefaultAgentCardResolver({ fetchImpl, legacyCompat })
+diff --git a/node_modules/@adcp/sdk/dist/lib/protocols/a2a.mjs b/node_modules/@adcp/sdk/dist/lib/protocols/a2a.mjs
+index 0840718..e6714a3 100644
+--- a/node_modules/@adcp/sdk/dist/lib/protocols/a2a.mjs
++++ b/node_modules/@adcp/sdk/dist/lib/protocols/a2a.mjs
+@@ -190,7 +190,7 @@ async function createA2AClientFromCardUrl(cardUrl, fetchImpl) {
+   return createNativeA2AClientFromCardUrl(cardUrl, fetchImpl);
+ }
+ async function createNativeA2AClientFromCardUrl(cardUrl, fetchImpl) {
+-  const legacyCompat = { enabled: true };
++  const legacyCompat = { enabled: false };
+   const factory = new ClientFactory({
+     transports: [new JsonRpcTransportFactory({ fetchImpl, legacyCompat })],
+     cardResolver: new DefaultAgentCardResolver({ fetchImpl, legacyCompat })

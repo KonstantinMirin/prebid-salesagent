@@ -45,21 +45,26 @@ class TestA2AHttpRouteIntegerRestoration:
             json={
                 "jsonrpc": "2.0",
                 "id": 1,
-                "method": "message/send",
+                "method": "SendMessage",
                 "params": {
                     "message": {
-                        "role": "user",
-                        "parts": [{"kind": "data", "data": {"skill": "get_adcp_capabilities", "parameters": {}}}],
+                        "role": "ROLE_USER",
+                        # Native 1.0 shapes: Part.data is a bare google.protobuf.Value (no
+                        # `kind` tag), and the skill carries `input`, not 0.3's `parameters`.
+                        "parts": [{"data": {"skill": "get_adcp_capabilities", "input": {}}}],
                         "messageId": "test-msg-1",
                     }
                 },
             },
+            headers={"A2A-Version": "1.0"},
         )
         assert response.status_code == 200, response.text
         body = response.json()
         assert "error" not in body, body
 
-        artifacts = body["result"]["artifacts"]
+        # Native 1.0 wraps the Task: `result.task`, not a bare result (the same shape
+        # tests/harness/client.py reads). 0.3 returned it unwrapped.
+        artifacts = body["result"]["task"]["artifacts"]
         data = next(
             part["data"]
             for artifact in artifacts

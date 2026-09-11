@@ -126,23 +126,3 @@ def create_a2a_message_with_skill(skill_name: str, parameters: dict[str, Any]) -
         )
     )
     return msg
-
-
-def create_a2a_text_message(text: str) -> Message:
-    """Create an A2A Message with natural language text.
-
-    This creates an A2A Message that will be processed via natural language
-    understanding (NLU) rather than explicit skill invocation.
-
-    Args:
-        text: Natural language text for the message
-
-    Returns:
-        Message: A properly formatted A2A Message with text Part
-    """
-    msg = Message(
-        message_id=str(uuid.uuid4()),
-        role=Role.ROLE_USER,
-    )
-    msg.parts.append(Part(text=text))
-    return msg

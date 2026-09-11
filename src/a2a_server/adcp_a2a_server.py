@@ -323,7 +323,7 @@ class AdCPRequestHandler(RequestHandler):
         params: SendMessageRequest,
         context: ServerCallContext,
     ) -> Task | Message:
-        """Handle 'message/send' method for non-streaming requests.
+        """Handle the ``SendMessage`` method for non-streaming requests.
 
         Supports both invocation patterns from AdCP PR #48:
         1. Natural Language: parts[{kind: "text", text: "..."}]
@@ -336,7 +336,7 @@ class AdCPRequestHandler(RequestHandler):
         Returns:
             Task object or Message response
         """
-        logger.info("Handling message/send request: %s", params)
+        logger.info("Handling SendMessage request: %s", params)
 
         # Parse message for both text and structured data parts
         message = params.message
@@ -345,7 +345,8 @@ class AdCPRequestHandler(RequestHandler):
 
         if hasattr(message, "parts") and message.parts:
             for part in message.parts:
-                # Handle text parts (natural language invocation)
+                # Text is collected for the task record only: a message that names no
+                # skill is refused below, not interpreted.
                 if part.text:
                     text_parts.append(part.text)
 
@@ -361,8 +362,8 @@ class AdCPRequestHandler(RequestHandler):
                             f"Found explicit skill invocation: {data['skill']} with params: {list(params_data.keys())}"
                         )
 
-        # Combine text for natural language fallback
-        combined_text = " ".join(text_parts).strip().lower()
+        # Recorded on the task so a refused request is diagnosable; nothing routes on it.
+        combined_text = " ".join(text_parts).strip()
 
         # Create task for tracking
         task_id = f"task_{uuid.uuid4().hex[:12]}"
@@ -373,7 +374,7 @@ class AdCPRequestHandler(RequestHandler):
         # Prepare task metadata (JSON-serializable only — protobuf Struct)
         task_metadata: dict[str, Any] = {
             "request_text": combined_text,
-            "invocation_type": "explicit_skill" if skill_invocations else "natural_language",
+            "invocation_type": "explicit_skill" if skill_invocations else "no_skill_named",
         }
         if skill_invocations:
             task_metadata["skills_requested"] = [inv["skill"] for inv in skill_invocations]
@@ -407,7 +408,7 @@ class AdCPRequestHandler(RequestHandler):
             # identity actually is.
             credential = self._credential_of(context)
 
-            # Route: Handle explicit skill invocations first, then natural language fallback
+            # ONE route in: an explicit skill invocation. Anything else is refused below.
             if skill_invocations:
                 # Process explicit skill invocations
                 results = []
@@ -538,76 +539,32 @@ class AdCPRequestHandler(RequestHandler):
                     # All skills failed - mark task as failed
                     task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
                     return task
-
-            # Natural language fallback (existing keyword-based routing)
-            elif any(word in combined_text for word in ["product", "inventory", "available", "catalog"]):
-                # The same handler the explicit-skill path uses, and the same one the
-                # pricing branch below already calls. There used to be a private twin here
-                # (_get_products) that built its own request and hardcoded adcp_version=None
-                # -- a second declaration of one tool on one transport, which is how it kept
-                # a lazy import of a deleted builder alive after every other caller was
-                # rewired: nothing enumerating the registry could see it.
-                result = await self._dispatch_skill("get_products", {"brief": combined_text}, credential)
-                del task.artifacts[:]
-                task.artifacts.append(
-                    Artifact(
-                        artifact_id="product_catalog_1",
-                        name="product_catalog",
-                        parts=[Part(data=_dict_to_value(result))],
-                    )
-                )
-            elif any(word in combined_text for word in ["price", "pricing", "cost", "cpm", "budget"]):
-                # Redirect pricing queries to get_products which has real price_guidance
-                result = await self._dispatch_skill("get_products", {"brief": combined_text}, credential)
-                del task.artifacts[:]
-                task.artifacts.append(
-                    Artifact(
-                        artifact_id="pricing_info_1",
-                        name="pricing_information",
-                        parts=[Part(data=_dict_to_value(result))],
-                    )
-                )
-            elif any(word in combined_text for word in ["target", "audience"]):
-                # Redirect targeting queries to get_adcp_capabilities which has real targeting info
-                result = await self._dispatch_skill("get_adcp_capabilities", {}, credential)
-                del task.artifacts[:]
-                task.artifacts.append(
-                    Artifact(
-                        artifact_id="targeting_opts_1",
-                        name="targeting_options",
-                        parts=[Part(data=_dict_to_value(result))],
-                    )
-                )
-            elif any(word in combined_text for word in ["create", "buy", "campaign", "media"]):
-                # ``_create_media_buy`` is an NL stub that always raises
-                # ``AdCPCapabilityNotSupportedError`` — the explicit-skill
-                # path is the spec contract for media buy creation. The
-                # outer error handler at on_message_send catches the raise
-                # and attaches a spec-compliant two-layer envelope to the
-                # failed Task artifact.
-                await self._create_media_buy(combined_text)
             else:
-                # General help response
-                capabilities = {
-                    "supported_queries": [
-                        "product_catalog",
-                        "targeting_options",
-                        "pricing_information",
-                        "campaign_creation",
-                    ],
-                    "example_queries": [
-                        "What video ad products do you have available?",
-                        "Show me targeting options",
-                        "What are your pricing models?",
-                        "How do I create a media buy?",
-                    ],
-                }
-                del task.artifacts[:]
-                task.artifacts.append(
-                    Artifact(
-                        artifact_id="capabilities_1",
-                        name="capabilities",
-                        parts=[Part(data=_dict_to_value(capabilities))],
+                # A message that names no skill is refused, and that refusal is the whole
+                # point of deleting the natural-language fallback that used to stand here.
+                #
+                # That fallback guessed a tool from keywords in the text ("price" ->
+                # get_products, "target" -> get_adcp_capabilities) and, when nothing
+                # matched, assembled a "supported_queries" blurb IN PROCESS -- never
+                # reaching invoke_tool, never reading ToolSpec.auth. So an
+                # UNAUTHENTICATED caller received a completed Task with a 200. One
+                # situation, two answers: 401 through the seam, 200 around it.
+                #
+                # It was also ungraded. Its only test mocked authentication away, covered
+                # one of its four branches, and had been failing since the identity
+                # rename. Nothing in the BDD fleet ever sent a text part -- every harness
+                # dispatch goes through create_a2a_message_with_skill, whose docstring
+                # says it triggers the explicit path "as opposed to natural language
+                # processing".
+                #
+                # Guessing a tool from text is a translation concern. If it returns, it
+                # belongs IN FRONT of the seam -- resolving text to (tool, parameters) and
+                # then invoking like any other caller -- not beside it with its own
+                # response and its own auth story.
+                raise InvalidRequestError(
+                    message=(
+                        "This agent is invoked by explicit skill. Send a data part carrying "
+                        "{'skill': <name>, 'input': {...}}; a text-only message names no skill."
                     )
                 )
 
@@ -708,23 +665,18 @@ class AdCPRequestHandler(RequestHandler):
         raising it is the correct thing to do here and is what an A2A client
         should be able to react to precisely.
 
-        What a client sees TODAY is still ``-32603``, not the spec's ``-32001``:
-        this app builds its A2A routes with ``enable_v0_3_compat=True``
-        (``src/app.py:306``), so requests dispatch through
-        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ends in a
-        bare ``except Exception -> CoreInternalError`` with no ``A2AError -> code``
-        mapping — the mapping the SDK's own main dispatcher performs. Returning
-        ``None`` produces the same ``-32603`` there, so the code cannot be fixed
-        at this layer (#1670). Raising the right type is still correct and is what
-        will surface ``-32001`` the moment that gap closes; the xfail'd
-        live-server test pins the current reality.
+        A client sees the spec's ``-32001``. It saw ``-32603`` for as long as the routes
+        carried ``enable_v0_3_compat=True``: requests dispatched through
+        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ended in a bare
+        ``except Exception -> CoreInternalError`` with no ``A2AError -> code`` mapping —
+        the mapping the SDK's own dispatcher performs. That adapter is gone (#1670), so
+        raising the right type now surfaces the right code, and the live-server test that
+        pinned ``-32603`` under a strict xfail has graduated.
 
-        The requested id is put on both the message and structured ``data``.
-        Only the message reaches a client today: the same compat adapter that
-        flattens the code to ``-32603`` rebuilds the error as
-        ``CoreInternalError(message=str(e))``, which drops ``data`` — driving
-        the real route returns ``data: null``. Populating it is still correct
-        and becomes readable when #1670 closes, the same as the code.
+        The requested id rides both the message and structured ``data``, and both reach a
+        client for the same reason: the compat adapter that rebuilt the error as
+        ``CoreInternalError(message=str(e))`` — dropping ``data`` and returning
+        ``data: null`` on the real route — is no longer in the path.
 
         Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
         same error.

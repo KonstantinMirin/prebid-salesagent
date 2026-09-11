@@ -447,11 +447,23 @@ _agent_card = create_agent_card()
 _request_handler = AdCPRequestHandler()
 
 # Build A2A routes using a2a-sdk 1.0 route factories
+# NO v0.3 COMPATIBILITY. `enable_v0_3_compat` is deliberately not passed (it defaults
+# off), so `/a2a` speaks the native 1.0 surface only: `SendMessage` with an
+# `A2A-Version: 1.0` header, not the 0.3 `message/send` family.
+#
+# The shim was not merely redundant, it was destructive. The SDK dispatches to it by
+# METHOD NAME before any version check, and its catch-all
+# (a2a/compat/v0_3/jsonrpc_adapter.py) rebuilt every raised exception as
+# `CoreInternalError(message=str(e))` -- keeping the message string and discarding both
+# the error TYPE and its `data`. So the two-layer AdCP envelope this server attaches to
+# an auth refusal never reached the wire, `AuthChallengeResponder` found no code to read,
+# and an unauthenticated call got 200 instead of 401. On the native path the same refusal
+# arrives intact: JSON-RPC -32600, `data.adcp_error.code == AUTH_MISSING`, lifted to 401
+# with `WWW-Authenticate`.
 _a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
     context_builder=AdCPCallContextBuilder(),
-    enable_v0_3_compat=True,
 )
 # Rebuild each route with an integer-restoring wrapper around its endpoint --
 # mutating route.endpoint in place would not change dispatch, since Starlette
