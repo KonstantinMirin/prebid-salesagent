@@ -343,17 +343,26 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint returns 500 Internal Server Error
     When the system attempts to deliver a webhook report
-    Then the system should retry up to 3 times
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the system should retry up to 3 times
     And retries should use exponential backoff (1s, 2s, 4s + jitter)
     # BR-RULE-029 INV-3: 5xx -> retry with exponential backoff
     # POST-F2: System knows the failure mode
+    # The BODY is graded too: a retry scenario that grades only the retry COUNT
+    # passes just as happily when the thing being retried is malformed.
 
   @T-UC-004-webhook-retry-network @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029
   Scenario: Webhook delivery retries on network error
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint is unreachable (connection timeout)
     When the system attempts to deliver a webhook report
-    Then the system should retry up to 3 times with exponential backoff
+    # A body DOES reach the wire here: the origin accepts the request and records it
+    # before closing without responding (local_http_origin.close_without_responding),
+    # so "unreachable" is a response-level failure, not a connect-level one.
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the system should retry up to 3 times with exponential backoff
     # BR-RULE-029 INV-3: network error -> retry
 
   @T-UC-004-webhook-no-retry-4xx @async @extension @ext-g @webhook-reliability @invariant @BR-RULE-029
@@ -361,7 +370,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint returns 401 Unauthorized
     When the system attempts to deliver a webhook report
-    Then the system should not retry the delivery
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the system should not retry the delivery
     And the system should log the authentication rejection
     And the webhook should be marked as failed
     # BR-RULE-029 INV-4: 4xx -> no retry (client error)
@@ -371,7 +382,11 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with an active reporting_webhook
     And the webhook endpoint has failed 5 consecutive delivery attempts
     When the system evaluates the circuit breaker state
-    Then the circuit breaker should be in "OPEN" state
+    # NO body reaches the wire: 5 failures hits failure_threshold, so send_delivery_webhook
+    # returns at `if not circuit_breaker.can_attempt()` before dialling. The skip is the
+    # OPEN breaker, not a missing config — a reporting_webhook is registered above.
+    Then the webhook delivery should be skipped without an HTTP POST
+    And the circuit breaker should be in "OPEN" state
     And subsequent scheduled deliveries should be suppressed
     # POST-F2: System knows the webhook is persistently failing
 
@@ -390,7 +405,9 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-001" with circuit breaker in "OPEN" state
     And the circuit breaker timeout (60s) has elapsed
     When the system evaluates the circuit breaker state
-    Then the circuit breaker should transition to "HALF_OPEN"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    And the payload notification_type should be "scheduled"
+    And the circuit breaker should transition to "HALF_OPEN"
     And the system should attempt a single probe delivery
 
   @T-UC-004-webhook-circuit-recovery @async @extension @ext-g @webhook-reliability
@@ -399,7 +416,12 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     And a media buy "mb-001" with circuit breaker in "HALF_OPEN" state
     And the webhook endpoint has recovered and returns 200
     When the system delivers 2 successful probe reports
-    Then the circuit breaker should transition to "CLOSED"
+    Then the webhook payload is compliant with the AdCP delivery webhook spec
+    # reporting_period rather than the metrics line: this scenario's Givens register no
+    # media_buy_labels entry, so the metrics step would resolve the literal "mb-001"
+    # against call_send's default "mb_001" and fail on an id spelling, not a defect.
+    And the payload should include the reporting_period
+    And the circuit breaker should transition to "CLOSED"
     And normal scheduled deliveries should resume
     # POST-F3: System has recovery path
 

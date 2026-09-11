@@ -716,9 +716,13 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_missing" does not exist in the creative library
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # adcp 3.1.1 enums/error-code.json: CREATIVE_NOT_FOUND is MANDATED uniformly for
+    # any creative_id not owned by the calling account ("never distinguish 'exists in
+    # another tenant' from 'does not exist'", anti-enumeration). Was CREATIVE_REJECTED,
+    # which the same enum defines as a content-policy review failure.
+    And the error code should be "CREATIVE_NOT_FOUND"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains creative not found
@@ -740,7 +744,11 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # adcp 3.1.1: INVALID_STATE is "Operation is not permitted for the resource's
+    # current status". CREATIVE_REJECTED is "Creative failed content policy review",
+    # whose pinned details shape is {policy_id, policy_url, reasons} — nothing this
+    # path can populate.
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-2: creative in error state → rejected
     # POST-F1: System state unchanged
@@ -762,10 +770,43 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # INVALID_STATE, even though the creative's STATUS is "rejected": the refusal here
+    # is "you cannot assign a creative in this state", not a fresh policy review. The
+    # policy rejection already happened and was reported when the status was set.
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-3: creative in rejected state → rejected
     # POST-F3: Suggestion for recovery
+
+  # The multi-subject half. Every scenario above drives ONE creative, so a refusal that
+  # named only the first would satisfy all of them — the buyer would fix it, resubmit,
+  # and meet the second, one round trip per bad creative with no way to know how many
+  # remain. adcp 3.1.1 leaves the shape open (core/error.json types `details` as a free
+  # object and reserves `issues[]` for per-FIELD schema failures, which a state refusal
+  # has no pointer or keyword for), so this grades the per-ENTITY channel this repo
+  # uses: details.problems, one entry per creative with the state that disqualified it.
+  @T-UC-003-ext-j-multi @extension @ext-j @error @post-f1 @post-f2 @post-f3
+  Scenario: Creative validation -- every unassignable creative is named, not just the first
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package update includes creative_assignments with:
+    | creative_id |
+    | cr_error    |
+    | cr_rejected |
+    And creative "cr_error" is in "error" state
+    And creative "cr_rejected" is in "rejected" state
+    And the package "pkg_001" exists in the media buy
+    When the Buyer Agent sends the update_media_buy request
+    Then the error is compliant with the AdCP error spec
+    And the operation should fail
+    And the error code should be "INVALID_STATE"
+    And the error details should name each rejected creative with its state
+    # POST-F1: System state unchanged
+    # POST-F2: Error explains which creatives blocked the update, and why
 
   @T-UC-003-ext-j-format @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- format incompatible with product
@@ -783,7 +824,9 @@ Feature: BR-UC-003 Update Media Buy
     When the Buyer Agent sends the update_media_buy request
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # adcp 3.1.1: VALIDATION_ERROR is "violates business rules beyond schema
+    # validation". The creative is fine; the ASSIGNMENT is what the product refuses.
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-4: format mismatch → rejected
     # POST-F3: Suggestion for recovery
@@ -1919,8 +1962,8 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition            | creative_state  | outcome                                        |
-      | error_state          | error           | error "CREATIVE_REJECTED" with suggestion       |
-      | format_incompatible  | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
+      | error_state          | error           | error "INVALID_STATE" with suggestion          |
+      | format_incompatible  | wrong_format    | error "VALIDATION_ERROR" with suggestion       |
 
   @T-UC-003-boundary-creative-state @boundary @creative_state_validation
   Scenario Outline: Creative state validation boundary - <boundary_point>
@@ -1940,8 +1983,8 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                              | creative_state  | outcome                                        |
       | all creatives valid state and format         | approved        | success                                        |
-      | creative in error state                     | error           | error "CREATIVE_REJECTED" with suggestion       |
-      | format incompatible with product            | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
+      | creative in error state                     | error           | error "INVALID_STATE" with suggestion          |
+      | format incompatible with product            | wrong_format    | error "VALIDATION_ERROR" with suggestion       |
 
   @T-UC-003-partition-placement-id @partition @placement_id_validation
   Scenario Outline: Placement ID validation partition - <partition>

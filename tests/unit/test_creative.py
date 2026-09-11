@@ -3333,9 +3333,9 @@ class TestFormatCompatibility:
         Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
         """
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            from src.core.exceptions import AdCPCreativeRejectedError
+            from src.core.exceptions import AdCPValidationError
 
-            with pytest.raises(AdCPCreativeRejectedError):
+            with pytest.raises(AdCPValidationError):
                 self._assign(
                     mock_db,
                     creative_agent_url="https://creative.example.com",

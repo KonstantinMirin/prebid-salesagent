@@ -2355,47 +2355,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "spec expects CREATIVE_FORMAT_REQUIRED for missing format_id"
             ),
             # Invariant scenarios: production behaviour diverges from spec
-            #
-            # inv1b grades the NEGATIVE half of BR-RULE-039 INV-1: the pinned
-            # canonicalization algorithm (docs/reference/url-canonicalization, step 5)
-            # PRESERVES the path, so one host serving MCP at /mcp and A2A at /a2a is two
-            # agents. Production gets the identity right -- it refuses the assignment --
-            # and then labels the refusal with a code the pin reserves for something else.
-            #
-            # The code assertion is graded against adcp 3.1.1's enums/error-code.json, not
-            # against what production emits:
-            #   CREATIVE_REJECTED  "Creative failed content policy review ... revise the
-            #                       creative per the seller's advertising_policies", and
-            #                       CREATIVE_VALUE_NOT_ALLOWED's own text calls it
-            #                       "generic content-policy failure".
-            #   VALIDATION_ERROR   "violates business rules beyond schema validation".
-            # A creative whose format is not among the product's declared format_ids is a
-            # business-rule violation, not a content-policy outcome, so the scenario
-            # asserts VALIDATION_ERROR -- the same code inv2 asserts for the same class of
-            # failure. No storyboard cell grades this case (the pinned index contains no
-            # CREATIVE_REJECTED at all), so the enum description is the authority.
-            #
-            # This puts the ledger in tension with #1417, which chose CREATIVE_REJECTED as
-            # "the canonical code for a rejected creative" and converged _assignments.py
-            # and media_buy_update.py on it. That choice is right for a content-policy
-            # rejection and looks wrong for format incompatibility. Reconciling it changes
-            # the wire on two paths, so it is NOT done here -- see salesagent-3xcdk's
-            # sibling issue.
-            "T-UC-006-rule-039-inv1b": (
-                "SPEC-PRODUCTION GAP (#1417): production emits CREATIVE_REJECTED, which "
-                "adcp 3.1.1's error-code enum defines as a content-policy review failure "
-                "('revise the creative per the seller's advertising_policies'). A format "
-                "outside the product's declared format_ids is a business-rule violation, "
-                "which the same enum codes as VALIDATION_ERROR. The identity half of this "
-                "scenario -- that a different path is a different agent -- is graded and "
-                "PASSES; only the error code is gapped."
-            ),
-            "T-UC-006-rule-039-inv2": (
-                "OVER-SPECIFIED OBLIGATION (#1417): scenario asserts the non-canonical "
-                "FORMAT_MISMATCH. Production now emits CREATIVE_REJECTED WITH a suggestion + "
-                "details (#1417), so the suggestion gap is closed; the code "
-                "assertion awaits upstream reconciliation (FORMAT_MISMATCH -> CREATIVE_REJECTED)."
-            ),
+            # Graduated: the gap this named is closed. The entry said the scenario asserted
+            # the non-canonical FORMAT_MISMATCH while production emitted CREATIVE_REJECTED.
+            # The .feature had already moved to VALIDATION_ERROR (the entry went stale), and
+            # production now RAISES AdCPValidationError for a format outside the product's
+            # declared set -- adcp 3.1.1's enum codes that "violates business rules beyond
+            # schema validation", and reserves CREATIVE_REJECTED for "Creative failed content
+            # policy review". Verified: the scenario passes under --runxfail on a2a, the only
+            # transport it routes to, and it is not listed in e2e_rest_known_failures.txt.
             # FIXME(#1417): ext-k asserts FORMAT_MISMATCH, which is NOT in the pinned
             # error-code enum (non-canonical). Production now emits CREATIVE_REJECTED
             # (_assignments.py), converged with the update path for the identical
@@ -5457,7 +5424,6 @@ _UC006_OWN_XFAIL = frozenset(
         "T-UC-006-main-unchanged",
         "T-UC-006-main-weight",
         "T-UC-006-rule-035-inv2",
-        "T-UC-006-rule-039-inv2",
         "T-UC-006-rule-039-inv4",
         "T-UC-006-sandbox-validation",
     }
@@ -5529,6 +5495,7 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-rule-038-inv5",
         "T-UC-006-rule-039-inv1",
         "T-UC-006-rule-039-inv1b",
+        "T-UC-006-rule-039-inv2",
         "T-UC-006-rule-039-inv3",
         "T-UC-006-rule-039-inv6",
         "T-UC-006-rule-040-inv1",

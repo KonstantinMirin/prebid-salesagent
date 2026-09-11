@@ -385,8 +385,15 @@ class AccountSetupDetails(EntityRefDetails):
     setup_steps: list[str] | None = None
 
 
-class InvalidStateDetails(EntityRefDetails):
-    """The resource's current status, and what that status forbids."""
+class InvalidStateDetails(EntityRefDetails, ProblemsDetails):
+    """The resource's current status, and what that status forbids.
+
+    Composes ``ProblemsDetails`` because an INVALID_STATE refusal is not always
+    about ONE resource: "these creatives are in a terminal state" names several,
+    each with the status that disqualified it. ``current_status`` answers for a
+    single subject (a media buy, a package); ``problems`` answers for a set,
+    without collapsing it to a joined sentence or naming only the first.
+    """
 
     current_status: str | None = None
     disallowed_actions: list[str] | None = None

@@ -6,10 +6,9 @@ from typing import Any
 
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import CreativeRejectionDetails, ValidationDetails
+from src.core.errors.details import ValidationDetails
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
-    AdCPCreativeRejectedError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -244,14 +243,14 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if validation_mode == "strict":
-                                    # Converge with the update path (media_buy_update.py:233):
-                                    # creative-format-incompatible-with-product is CREATIVE_REJECTED,
-                                    # the canonical code for a rejected creative (#1417).
-                                    raise AdCPCreativeRejectedError(
+                                    # Reverses #1417, which routed this to CREATIVE_REJECTED: adcp
+                                    # 3.1.1's enum reserves that for "Creative failed content policy
+                                    # review". Converged with the create and update paths.
+                                    raise AdCPValidationError(
                                         # `supported_formats` is the pin-canonical `accepted_values`.
                                         # supported_formats_display is a JOINED string, not a list -- wrap it so the
                                         # canonical accepted_values stays an array as the pin declares.
-                                        details=CreativeRejectionDetails(accepted_values=[supported_formats_display]),
+                                        details=ValidationDetails(accepted_values=[supported_formats_display]),
                                     )
                                 else:
                                     logger.warning(

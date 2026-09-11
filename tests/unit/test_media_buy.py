@@ -30,7 +30,9 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPConfigurationError,
+    AdCPCreativeNotFoundError,
     AdCPCreativeRejectedError,
+    AdCPGoneError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -2543,7 +2545,7 @@ class TestUpdateMediaBuyCreativeIds:
             # No creatives found via repository.
             mock_uow.creatives.get_by_ids.return_value = []
 
-            with pytest.raises(AdCPCreativeRejectedError):
+            with pytest.raises(AdCPCreativeNotFoundError):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_error_state_rejected(self):
@@ -2631,7 +2633,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
-            with pytest.raises(AdCPCreativeRejectedError) as _ei:
+            with pytest.raises(AdCPGoneError) as _ei:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
 
@@ -2720,7 +2722,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
-            with pytest.raises(AdCPCreativeRejectedError):
+            with pytest.raises(AdCPValidationError):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_change_set_computation(self):

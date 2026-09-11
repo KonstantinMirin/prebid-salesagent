@@ -3823,12 +3823,16 @@ async def _create_media_buy_impl(
                                             ctx_manager.update_workflow_step(
                                                 step.step_id, status="failed", error_message=format_error
                                             )
-                                            # A creative whose format is not accepted by the product is a
-                                            # rejected creative (CREATIVE_REJECTED), not a generic request
-                                            # validation failure — matching the sibling pre-adapter
-                                            # validation raise. Carry a remediation suggestion (POST-F3).
-                                            raise AdCPCreativeRejectedError(
-                                                details=CreativeRejectionDetails(
+                                            # A format outside the product's declared set is a
+                                            # BUSINESS-RULE violation: adcp 3.1.1's error-code enum
+                                            # codes that VALIDATION_ERROR, and reserves
+                                            # CREATIVE_REJECTED for "Creative failed content policy
+                                            # review". The creative is fine; the ASSIGNMENT is what
+                                            # this product does not permit. Converged with the
+                                            # sync_creatives and update paths, which raise the same
+                                            # class for the identical condition.
+                                            raise AdCPValidationError(
+                                                details=ValidationDetails(
                                                     creative_id=creative_id, product_id=package.product_id
                                                 ),
                                             )

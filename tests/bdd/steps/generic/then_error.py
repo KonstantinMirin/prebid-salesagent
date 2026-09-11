@@ -576,6 +576,63 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert d["suggestion"], "Expected non-empty suggestion"
 
 
+@then(parsers.parse("the error details should name each rejected {subject_type} with its state"))
+def then_error_details_name_each_subject(ctx: dict, subject_type: str) -> None:
+    """Assert EVERY offending entity is named, not just the first one.
+
+    The obligation this grades is a refusal that names its whole subject set. A
+    request referencing two unassignable creatives that comes back naming one
+    forces the buyer to fix, resubmit, and discover the second — a round trip per
+    bad item, with no way to know how many remain.
+
+    Graded on ``details.problems`` because that is where this repo puts per-ENTITY
+    outcomes. AdCP 3.1.1 leaves the shape open: ``core/error.json`` types
+    ``details`` as a free object and reserves ``issues[]`` for per-FIELD schema
+    failures ("pointer", "keyword"), which a business-rule state refusal has
+    neither of. The set is compared against the creative_ids the scenario
+    referenced, so the assertion fails both ways — a missing subject AND an
+    invented one.
+
+    Reads ``errors[0]`` through the harness accessor, never a hand-rolled
+    ``envelope["errors"][0]``: a second parser in a step module is free to drift
+    from the one on the result object, and the two disagreeing is how an error
+    assertion goes quietly vacuous.
+    """
+    referenced = ctx.get("referenced_creative_ids") or []
+    assert referenced, (
+        "no referenced_creative_ids on the context, so this step has nothing to compare "
+        "against. It belongs after Givens that named the offending entities."
+    )
+
+    error_object = _wire_error_object(ctx)
+    assert error_object is not None, (
+        "no wire envelope was captured, so there is nothing buyer-facing to grade. A "
+        "client-side exception is not a seller's answer."
+    )
+
+    details = error_object.get("details") or {}
+    problems = details.get("problems") or []
+    assert problems, (
+        f"the refusal names no {subject_type}s at all: details={details!r}. The buyer cannot "
+        f"tell WHICH of {sorted(referenced)} blocked the request."
+    )
+
+    named = {p.get("subject_id") for p in problems}
+    assert named == set(referenced), (
+        f"the refusal names {sorted(n for n in named if n)} but the request referenced "
+        f"{sorted(referenced)}. Every offending {subject_type} must be reported together, so "
+        f"the buyer fixes them in one pass rather than one round trip each."
+    )
+    for problem in problems:
+        assert problem.get("subject_type") == subject_type, (
+            f"expected subject_type {subject_type!r}, got {problem.get('subject_type')!r}"
+        )
+        assert problem.get("rejected_value"), (
+            f"{problem.get('subject_id')!r} is named without the state that disqualified it, "
+            f"so the buyer learns THAT it failed but not WHY"
+        )
+
+
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
     """Assert error includes an actionable suggestion for fixing the issue.

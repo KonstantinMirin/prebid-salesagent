@@ -54,19 +54,42 @@ CANONICALIZING = [c for c in CASES if c.get("expected_target_uri") is not None]
 REJECTING = [c for c in CASES if c.get("expected_target_uri") is None]
 
 
-def test_the_vector_file_is_the_pinned_spec_version_not_latest():
-    """Guard the fixture itself: `latest` carries obligations our pin does not have.
+def test_the_vector_file_is_the_full_published_set():
+    """Guard the fixture itself against silently shrinking.
 
-    The 3.2 set adds six DNS-root-dot and empty-label cases. Vendoring `latest` would
-    grade this codebase against a spec version it does not target -- the same mistake
-    `tests/fixtures/adcp_webhook_vectors_pinned/_refresh.py` calls out for its own
-    vectors ("we deliberately do NOT track its default branch").
+    PROVENANCE, because it is not what you would guess. Upstream serves a vector file
+    at every VERSIONED compliance path, and they are all the same stale artifact:
+
+        /compliance/3.1.1/...   md5 17538a58...  declares "version": "3.0"  31 cases
+        /compliance/3.1.15/...  md5 17538a58...  declares "version": "3.0"  31 cases
+        /compliance/3.2.0/...   md5 17538a58...  declares "version": "3.0"  31 cases
+        /compliance/latest/...  md5 713616e8...  declares "version": "3.2"  37 cases
+
+    So "pin the vectors for the spec version we target" is not a thing that can be
+    done here -- every versioned path hands back the identical 3.0-declared file. The
+    choice is only between that file and `latest`.
+
+    `latest` is taken, and it is the stronger choice on the merits rather than in
+    spite of being newer: its 37 cases are a STRICT SUPERSET -- all 31 shared cases
+    carry byte-identical expectations, and the 6 additions (DNS root dot, empty DNS
+    label) introduce no conflicting rule. The implementation vendored here satisfies
+    all 37 today, and the SDK release that eventually replaces it is the same code, so
+    grading the extra six costs nothing now and nothing at migration.
+
+    This is a deliberate departure from `adcp_webhook_vectors_pinned/_refresh.py`,
+    which pins its vectors to a tag and says so. That convention protects against a
+    moving target changing an expectation underneath us. Here the moving target is the
+    only source that HAS the current rules, and the subset check above is what guards
+    the risk it was protecting against -- if a refresh ever alters a shared
+    expectation rather than adding cases, the grading tests below go red, which is the
+    detection that matters.
     """
     assert CASES, "vector file is empty or failed to parse"
-    assert len(CASES) == 31, (
-        f"expected the 31-case AdCP 3.1.1 vector set, got {len(CASES)}. If this is a "
-        f"deliberate spec bump, update it in lockstep with docs/adcp-spec-version.md "
-        f"and tests/unit/test_adcp_spec_version.py."
+    assert len(CASES) == 37, (
+        f"expected the full 37-case published set, got {len(CASES)}. A SHRINK means "
+        f"someone swapped in a versioned path's 31-case file (see the provenance table "
+        f"above); a GROWTH means upstream added rules -- re-run the suite and confirm "
+        f"the vendored copy still satisfies them before accepting it."
     )
 
 
