@@ -83,6 +83,39 @@ def _capabilities_response(side_effect: Exception):
         return client.post("/api/v1/capabilities", json={})
 
 
+class TestRestStatusIsTheCodesStatus:
+    """The HTTP status REST answers is the failing code's own, read from ``CODE_TABLE``.
+
+    ``wire_status`` is the one place REST decides a status, and it is a production function
+    this lane introduced. It had no grader: making it answer 400 for every failure reddened
+    nothing, because the only tests that drove a typed error through REST and read the status
+    went with ``test_error_boundary_translation.py``. This is that obligation on the WIRE --
+    a real route, a real exception raised inside the tool, the status read off the response --
+    rather than a call to the helper by name, so restructuring how REST decides does not
+    force an edit here.
+
+    The expected value is read from ``CODE_TABLE`` rather than written as a literal, because
+    the table is the single declaration of a code's status: what is graded is that the value
+    SURVIVES the handler stack and lands on the response, not what the table says it is.
+    """
+
+    @pytest.mark.parametrize(
+        "exc_cls",
+        [AdCPMediaBuyNotFoundError, AdCPValidationError, AdCPBudgetTooLowError, AdCPCapabilityNotSupportedError],
+    )
+    def test_status_survives_to_the_response(self, exc_cls: type[AdCPSalesAgentError]) -> None:
+        from src.core.errors.codes import CODE_TABLE
+
+        exc = exc_cls()
+        response = _capabilities_response(exc)
+
+        assert response.status_code == CODE_TABLE[exc.error_code].status, (
+            f"{exc_cls.__name__} ({exc.error_code}) reached the buyer as HTTP {response.status_code}, "
+            f"but CODE_TABLE declares {CODE_TABLE[exc.error_code].status}"
+        )
+        assert response.json()["adcp_error"]["code"] == exc.error_code
+
+
 class TestContextEcho:
     """``exc.context`` is echoed on the ERROR envelope, and omitted when absent.
 

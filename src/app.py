@@ -708,9 +708,6 @@ def _openapi_with_rest_components() -> dict[str, Any]:
     return schema
 
 
-# Assigned, not generated on demand: ``FastAPI.openapi()`` returns ``openapi_schema`` when it
-# is already set, so filling it here is the supported way to publish a customized document
-# without reassigning the method (which mypy rejects as a method-assign).
 app.include_router(health_router)
 app.include_router(health_debug_router)
 
