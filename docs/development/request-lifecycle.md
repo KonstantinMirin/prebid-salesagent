@@ -246,13 +246,15 @@ added runs first.
 2. **`RequestCompatMiddleware`** (`src/core/mcp_compat_middleware.py`)
    normalizes the tool arguments — see
    [Backward compatibility at the boundary](#backward-compatibility-at-the-boundary).
-3. The tool wrapper (registered via `mcp.tool(...)` in `src/core/main.py`,
-   wrapped in `with_error_logging`) reads the pre-resolved identity —
-   `identity = await ctx.get_state("identity")` — and calls `_impl`. Tool
-   wrappers do not call `resolve_identity` themselves.
-4. Errors: `with_error_logging` (`src/core/tool_error_logging.py`) translates
-   typed `AdCPError`s into an `AdCPToolError` carrying the same two-layer
-   envelope, marked `isError: true` on the MCP wire.
+3. `RegistryTool.run` (`src/core/main.py`) reads the pre-resolved identity
+   off the FastMCP context state and calls `serve`, which parses the
+   arguments into the registry row's DTO and runs `_impl`. There is no
+   decorator on tools, and nothing here calls `resolve_identity` again.
+4. Errors: a failure is an `AdcpErrorResponse` built by `failure_response`
+   (`src/core/tools/_boundary.py`), which records the fault with
+   `record_boundary_error` and stamps `context` and `adcp_version` through
+   `_served`. `RegistryTool.run` raises `AdCPToolError(to_wire(response))`,
+   marked `isError: true` on the MCP wire.
 
 MCP needs its own auth layer rather than sharing `UnifiedAuthMiddleware`
 because the unit of work is different. The ASGI middleware sees one HTTP
@@ -265,8 +267,8 @@ is where identity is resolved and attached to the tool-call context.
 
 ```
 wire → CORS → RestCompat(no-op) → UnifiedAuth → messageId compat → /a2a route
-     → AdCPCallContextBuilder → AdCPRequestHandler → _resolve_a2a_identity
-     → skill handler → raw function / _impl
+     → AdCPCallContextBuilder → AdCPRequestHandler.on_message_send
+     → _dispatch_skill → serve → _impl → to_wire
 ```
 
 1. The A2A JSON-RPC routes are plain routes on the FastAPI app, built by the
@@ -276,21 +278,22 @@ wire → CORS → RestCompat(no-op) → UnifiedAuth → messageId compat → /a2
    the SDK's `ServerCallContext.state` — this is the bridge between the ASGI
    layer and the SDK's handler layer, and it is why the routes must live on
    the app itself rather than in a sub-app: `scope["state"]` has to propagate.
-2. `AdCPRequestHandler` (`src/a2a_server/adcp_a2a_server.py`) handles
-   `message/send`. It resolves identity **once** per request via
-   `_resolve_a2a_identity`, which reads the token and headers from the
-   `AuthContext`, extracts the testing context, calls
-   `resolve_identity(..., protocol="a2a")`, sets the tenant ContextVar, and
-   translates auth failures into A2A errors. Unauthenticated requests are
-   allowed through (with `require_valid_token=False`) only when every
-   requested skill is in the `DISCOVERY_SKILLS` set. No downstream handler calls `resolve_identity` again.
-3. Explicit skill invocations dispatch through `_handle_explicit_skill` to a
-   per-skill handler, which calls the shared raw function / `_impl` with the
-   pre-resolved identity (some build a `ToolContext` from it via
-   `_make_tool_context` — no database calls, identity is already resolved).
-4. Errors: `AdCPError` from business logic becomes a **failed Task** whose
-   artifact carries the two-layer envelope; JSON-RPC errors (`A2AError`) are
-   reserved for transport-protocol failures such as unknown methods.
+2. `AdCPRequestHandler.on_message_send` (`src/a2a_server/adcp_a2a_server.py`)
+   handles `message/send`. It reads the credential with
+   `_credential_of(context)` — the `AuthContext` the builder placed on the
+   call context — and hands it to `_dispatch_skill`. Identity is resolved
+   inside `serve`, once, the same way for every transport; the handler does
+   not call `resolve_identity` itself.
+3. `_dispatch_skill` is the whole request path: it refuses an unknown skill
+   with `MethodNotFoundError`, then calls `serve`, which validates the
+   parameter bag into the registry row's DTO and runs `_impl`, and serializes
+   the result with `to_wire`.
+4. Errors: a failure from business logic becomes a **failed Task** whose
+   artifact carries the two-layer envelope; the Task state is the response's
+   own `status`. A fault before dispatch is answered as a JSON-RPC
+   `InternalError` whose `data` is the failure body; other JSON-RPC errors
+   (`A2AError`) are reserved for transport-protocol failures such as unknown
+   methods.
 
 The agent card at `/.well-known/agent-card.json` is served by a dynamic route
 that rewrites the advertised A2A URL per tenant from the `Host` /
@@ -368,7 +371,7 @@ layers:
 ```mermaid
 flowchart TD
     wire["Wire (nginx)"] --> mw["ASGI middleware stack\nCORS → RestCompat → UnifiedAuth → A2A messageId compat"]
-    mw --> boundary["Transport boundary\nrequire_auth (REST) / FastMCP middleware (MCP) /\n_resolve_a2a_identity (A2A)"]
+    mw --> boundary["Transport boundary\nrequire_auth (REST) / FastMCP middleware (MCP) /\n_credential_of (A2A)"]
     boundary --> ident["resolve_identity\ntenant → token → principal"]
     ident --> wrapper["Wrapper / raw function\nwire dict → typed request"]
     wrapper --> impl["_impl\nbusiness logic on ResolvedIdentity + request"]
@@ -388,7 +391,7 @@ flowchart TD
 |---|---|---|
 | Read a new HTTP header for all transports | `resolve_identity` / `_detect_tenant` (identity-related), or the relevant boundary helper — headers reach every boundary | `_impl` (never sees headers) |
 | Accept a renamed/deprecated request field | The shared normalizer, `src/core/request_compat.py` — both compat middleware classes pick it up | Route handlers, tool wrappers, `_impl` |
-| Add an auth rule (who may call at all) | REST: the `require_auth`/`resolve_auth` dependencies; MCP: `MCPAuthMiddleware` / `AUTH_OPTIONAL_TOOLS`; A2A: `_resolve_a2a_identity` | Scattered checks inside `_impl` |
+| Add an auth rule (who may call at all) | REST: the `require_auth`/`resolve_auth` dependencies; MCP: `MCPAuthMiddleware` / `AUTH_OPTIONAL_TOOLS`; A2A: `_credential_of` feeding `serve` | Scattered checks inside `_impl` |
 | Add an authorization rule (what this principal may do) | `_impl`, using `ResolvedIdentity` (helpers in `src/core/auth.py`: `require_identity`, `require_tenant`) | Middleware (too early — no business context) |
 | Add a tenant-resolution strategy | `_detect_tenant` in `src/core/resolved_identity.py` | Per-transport code |
 | Add a field to what business logic knows about the caller | `ResolvedIdentity` + populate it in `resolve_identity` | Passing extra transport args into `_impl` |

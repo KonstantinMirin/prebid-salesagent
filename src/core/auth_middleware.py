@@ -101,10 +101,8 @@ def _envelope_in_a2a_task(body: dict) -> dict | None:
     A2A reports a tool failure the way it reports a success -- a Task whose artifact DataPart
     is the response body, with the Task state set to FAILED -- so the envelope sits at
     ``result.task.artifacts[].parts[].data`` (native 1.0 wraps the Task under ``result.task``;
-    the unwrapped shape puts ``artifacts`` directly under ``result``). A2A used to raise a
-    JSON-RPC error for an auth refusal specifically, which shape 2 read; that branch is gone
-    because a refusal is an outcome like any other, so this reader looks where every outcome
-    now lives.
+    the unwrapped shape puts ``artifacts`` directly under ``result``). A refusal is an outcome
+    like any other, so this reader looks where every outcome lives.
     """
     result = body.get("result")
     task = result.get("task") if isinstance(result, dict) else None

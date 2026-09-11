@@ -125,8 +125,7 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
     and details.
 
     Falls back to the legacy tuple-string shape for any plain ``ToolError`` raised
-    outside the boundary translator, and finally to ``extract_error_info`` for the
-    single-arg ``ToolError("message")`` form.
+    outside the boundary translator; anything else carries no envelope.
     """
     import ast as _ast
     import json
@@ -166,13 +165,6 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
             return {"adcp_error": dict(entry), "errors": [entry]}
     except (ValueError, SyntaxError):
         pass
-
-    from src.core.tool_error_logging import extract_error_info
-
-    error_code, _message, _recovery = extract_error_info(exc)
-    if error_code != "TOOL_ERROR":
-        entry = {"code": error_code}
-        return {"adcp_error": dict(entry), "errors": [entry]}
 
     return None
 
@@ -761,12 +753,11 @@ class BaseTestEnv:
         """A2A dispatch via real AdCPRequestHandler — exercises full A2A pipeline.
 
         Dispatches through the real AdCPRequestHandler.on_message_send(), which
-        exercises: message parsing → skill routing → ToolSpec.validate →
-        handler dispatch → _serialize_for_a2a → Task/Artifact framing.
+        exercises: message parsing → skill routing → ``serve`` → ``to_wire`` →
+        Task/Artifact framing.
 
-        Identity is injected by monkey-patching ``_resolve_a2a_identity`` and
-        ``_get_auth_token`` on the handler instance — single mock point, same
-        as the MCP Client approach patches resolve_identity_from_context.
+        Identity is injected the way every transport's is: the boundary's resolver is
+        patched, and the handler reads only the credential off the call context.
 
         Args:
             skill_name: A2A skill name (e.g., "get_products").
@@ -816,7 +807,7 @@ class BaseTestEnv:
         # Auth strategy mirrors _run_mcp_client. When the identity carries a real
         # auth_token (integration mode), populate the AuthContext that the SDK
         # call-context builder would have built from the wire and run the REAL
-        # _get_auth_token + _resolve_a2a_identity (header → token → DB lookup →
+        # _credential_of → serve chain (header → token → DB lookup →
         # ResolvedIdentity). Only the transport's state injection is supplied here
         # (the in-process equivalent of MCP's get_http_headers seam) — the auth
         # chain itself is real. When no real token exists (unit mode), inject the
@@ -831,16 +822,6 @@ class BaseTestEnv:
                 state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
             )
         else:
-            # _get_auth_token must return a non-None value when identity exists,
-            # otherwise the handler rejects the request before the boundary resolves.
-            # Use auth_token from identity, falling back to a sentinel.
-            #
-            # The sibling assignment to ``handler._resolve_a2a_identity`` is gone: that
-            # method is deleted, so assigning it created a fresh attribute nothing reads and
-            # left the harness looking like it still injected an identity when it did not.
-            handler._get_auth_token = lambda *args, **kw: (  # type: ignore[assignment]
-                (a2a_identity.auth_token or "harness-test-token") if a2a_identity else None
-            )
             server_context = ServerCallContext()
 
         # Seed the ambient tenant ContextVar for production code that still reads it.
@@ -930,7 +911,7 @@ class BaseTestEnv:
         # success-path assertions. Captured BEFORE stripping so siblings that need
         # the top-level envelope fields (message/success) still see them.
         wire_response = dict(artifact_data)
-        # Strip protocol fields added by _serialize_for_a2a (message, success).
+        # Strip protocol fields the A2A wire adds in _dispatch_skill → to_wire (message, success).
         # These are populated by the protocol layer per the pin's Protocol
         # Envelope branch (see tests/helpers/adcp_schema_validator.py) — not
         # declared on the Pydantic response model — and cause ValidationError

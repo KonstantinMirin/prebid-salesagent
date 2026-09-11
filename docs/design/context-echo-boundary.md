@@ -63,10 +63,12 @@ class AdcpFailure(Exception):
 ```
 
 - Business logic keeps raising `AdCPSalesAgentError` subclasses and never sees either class.
-- The boundary converts ONCE: `AdcpErrorResponse.of(exc, context=...)` builds the response --
-  `status=failed`, the error mirrored to `adcp_error` and `errors[0]`, `context`, and
-  `adcp_version` stamped by `of` itself so no path can miss it -- and raises
-  `AdcpFailure(response)`. Raising, not returning: a return value can be ignored and a raise
+- The boundary converts ONCE: `failure_response(protocol, operation, exc, echo=..., ...)`
+  builds the response from `AdcpErrorResponse.of(exc)` -- `status=failed`, the error
+  mirrored to `adcp_error` and `errors[0]` -- records the fault with `record_boundary_error`,
+  and stamps `context` and `adcp_version` through `_served`, on a failure exactly as on a
+  success, so no path can miss it. `_failed` raises it as `AdcpFailure(response)`. Raising,
+  not returning: a return value can be ignored and a raise
   cannot, and business logic across fourteen tools calls services that call services. What
   changes is WHAT is raised, not whether.
 - `serve(tool_name, raw, credential, protocol)` is the transport entry. It parses the payload
@@ -98,10 +100,11 @@ class AdcpFailure(Exception):
 
 ## Kept from the superseded lane
 
-`validated_request(tool_name, raw)` stays: a schema rejection has no `req`, so the buyer's
-context can only come from the raw payload. It now returns an `AdcpErrorResponse` rather than
-raising an echoed exception. The transport moves stay too -- MCP and A2A already had no native
-validation, and REST's raw body is what lets a rejection be answered at all.
+`validated_request(tool_name, raw, protocol)` stays: a schema rejection has no `req`, so the
+buyer's context can only come from the raw payload. It raises `AdcpFailure` carrying the
+`AdcpErrorResponse`, through the same `_failed` every other boundary failure leaves by. The
+transport moves stay too -- MCP and A2A already had no native validation, and REST's raw body
+is what lets a rejection be answered at all.
 
 ## Graded by
 

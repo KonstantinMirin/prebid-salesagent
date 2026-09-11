@@ -6,12 +6,9 @@ is one function's output, ``src.core.tools._wire.to_wire``, unmodified. A transp
 serializes a response itself, or that writes a key into the body afterwards, is a transport
 deciding what a buyer receives.
 
-That is not hypothetical: it is what this guard was written after. All three called
-``model_dump(mode="json")`` themselves and then diverged. A2A stamped ``message`` and
-``success`` INTO the payload; MCP put the same ``message`` in a wrapper field; REST emitted
-neither. ``success`` is not a property any of our fourteen pinned response schemas declares,
-so on A2A every response carried a key AdCP does not define, and one response object produced
-three different documents.
+A transport that stamps a key into the payload puts a property none of the fourteen pinned
+response schemas declares on the wire, and one response object produces three different
+documents.
 
 Envelope fields need no transport help, which is what makes the rule cheap to keep: every
 response model inherits ``adcp.types.ProtocolEnvelope``, so ``status``, ``message``,
@@ -31,7 +28,7 @@ import pytest
 _TRANSPORT_RESPONSE_PATHS: dict[str, str] = {
     "src/core/tools/_mcp.py": "mcp_result",
     "src/routes/api_v1.py": "handler",
-    "src/a2a_server/adcp_a2a_server.py": "_serialize_for_a2a",
+    "src/a2a_server/adcp_a2a_server.py": "_dispatch_skill",
 }
 
 

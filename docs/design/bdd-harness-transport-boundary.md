@@ -178,7 +178,7 @@ the wire contract requires is added at the boundary, *above* `_impl`:
 | Boundary behavior | Lives in | `_impl` has it? |
 |-------------------|----------|------------------|
 | Envelope `status` (TaskStatus, REQUIRED — D2) | `ProtocolEnvelope` / transport wrappers | No |
-| Two-layer error envelope (`adcp_error`, error code, recovery) | boundary (`AdcpErrorResponse.of`, raised as `AdcpFailure`; MCP via `_handle_tool_exception`) | No (raises `AdCPSalesAgentError`) |
+| Two-layer error envelope (`adcp_error`, error code, recovery) | boundary (`failure_response`, raised as `AdcpFailure`; MCP via `RegistryTool.run`) | No (raises `AdCPSalesAgentError`) |
 | Account resolution → `ACCOUNT_NOT_FOUND` | `enrich_identity_with_account` in wrappers (`media_buy_create.py:3927/4004`) | No |
 | Identity/auth resolution, `context_id`, `replayed`/idempotency | wrappers / middleware | No |
 

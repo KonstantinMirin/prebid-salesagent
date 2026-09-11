@@ -290,7 +290,7 @@ class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetai
 _impl               raises AdCPError -- never ToolError, no transport imports
                             │
                             ▼
-boundary            AdcpErrorResponse.of(exc, context=...), raised as AdcpFailure
+boundary            failure_response(...) -> AdcpErrorResponse.of(exc), context stamped by _served, raised as AdcpFailure
                       code/message/suggestion/recovery  <- CODE_TABLE, by code
                       details                           <- _details_to_wire(exc.details)
                       issues                            <- [i.to_wire() for i in exc.issues]

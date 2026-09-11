@@ -34,9 +34,8 @@ only TRANSITIVELY, via the harness class ``MediaBuyCreateListEnv``) — plus one
 nested inside a test function in ``tests/harness/test_harness_base.py``. This
 guard resolves class ancestry by name, transitively, across the whole ``tests/``
 tree, so an env is caught wherever it is written. It is also why the scan is
-AST and not text: ``tests/unit/test_architecture_harness_mcp_with_error_logging.py``
-holds a ``def call_mcp`` inside a meta-test STRING literal, which a grep census
-would miscount as a real definition.
+AST and not text: a ``def call_mcp`` inside a STRING literal, which a grep census
+would miscount as a real definition, is not a definition.
 
 """
 
@@ -427,18 +426,6 @@ def test_meta_membership_is_not_a_directory_glob():
         "the env subclass nested inside a test function in tests/harness/test_harness_base.py "
         "must be derived as a harness env — a directory glob would miss it"
     )
-
-
-def test_meta_scan_ignores_definitions_inside_string_literals():
-    """A ``def call_mcp`` inside a meta-test STRING is not a definition.
-
-    ``tests/unit/test_architecture_harness_mcp_with_error_logging.py`` holds
-    exactly that in its ``_BAD_SNIPPET`` constant; a text census would count
-    it, this AST census must not.
-    """
-    offenders = {path for path, _cls, _method in _scan_method_defs(_LEGACY_DISPATCH_METHODS)}
-    offenders |= {path for path, _cls, _method in _scan_method_defs(_DELIVER_METHODS)}
-    assert "tests/unit/test_architecture_harness_mcp_with_error_logging.py" not in offenders
 
 
 def test_meta_scanner_flags_an_override_on_an_env_and_ignores_a_non_env():

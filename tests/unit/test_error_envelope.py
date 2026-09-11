@@ -15,10 +15,9 @@ pinned table into a second place instead of grading production.
 
 What remains is behavior nothing else reaches:
 
-- The ``context`` echo AT THE BUILDER, including the omit-when-absent rule and the fail-open
-  branch for a context that cannot be modelled.
-  ``tests/unit/test_adcp_exceptions.py::TestErrorEnvelopeContextEcho`` grades the same echo
-  one layer up -- that the FastAPI handler doesn't lose the key on the way out.
+- A ``context`` the buyer sent that cannot be modelled as a ``ContextObject`` is dropped
+  from the rejection, never raised over. The echo itself, on every outcome and transport,
+  is graded by ``tests/bdd/features/local-context-echo-every-outcome.feature``.
 - Byte-identical bodies across REST and A2A. BDD grades each transport against the same
   expected code and recovery, but never asserts the two transports emit the same bytes, so
   a field appearing on one boundary only would pass every scenario.
@@ -32,7 +31,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 from types import MappingProxyType
 from unittest.mock import AsyncMock
 
@@ -46,7 +44,6 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from tests.helpers.envelope_assertions import envelope_for
 
 _TOOL = "get_adcp_capabilities"
 
@@ -110,73 +107,29 @@ class TestRestStatusIsTheCodesStatus:
         assert response.json()["adcp_error"]["code"] == exc.error_code
 
 
-class TestContextEcho:
-    """``exc.context`` is echoed on the ERROR response, and omitted when absent.
+class TestUnmodellableContextIsDropped:
+    """A ``context`` that is not an object is dropped from the rejection, never raised over.
 
-    Normative since AdCP spec 3.0.0 (``error-handling.mdx``): buyer agents correlate a
-    failure back to the request that produced it through this key. Graded here on the
-    builder -- ``tests/unit/test_adcp_exceptions.py`` grades that the FastAPI handler
-    carries the key through to the response body, which is the distinct obligation.
+    ``validated_request`` reads the echo off the raw payload for a schema rejection. A value
+    the DTO refuses AND ``ContextObject`` cannot model has nothing to echo, so the rejection
+    goes out without the key and without a second failure shadowing the first.
     """
 
-    def test_context_object_is_echoed_without_nulls(self):
-        """A ``ContextObject`` reaches the wire with only its populated fields.
+    def test_rejection_carries_no_context_key(self) -> None:
+        from starlette.testclient import TestClient
 
-        The spec's emit-only-populated-fields norm: an unset optional must not reach the
-        wire as ``null``.
-        """
-        from adcp.types import ContextObject
+        from src.app import app
+        from tests.helpers.boundary_identity import resolved_as
 
-        exc = AdCPMediaBuyNotFoundError(context=ContextObject(correlation_id="abc-123"))
+        with resolved_as():
+            response = TestClient(app, raise_server_exceptions=False).post(
+                "/api/v1/capabilities", json={"context": "not-an-object"}
+            )
 
-        envelope = envelope_for(exc)
-
-        assert envelope["context"]["correlation_id"] == "abc-123"
-        assert all(value is not None for value in envelope["context"].values())
-
-    def test_context_omitted_when_none(self):
-        """No context on the exception means no ``context`` key at all -- not ``null``."""
-        envelope = envelope_for(AdCPMediaBuyNotFoundError())
-
-        assert "context" not in envelope
-
-    def test_dict_context_is_not_aliased(self):
-        """Mutating the source dict after the build must not mutate the envelope.
-
-        An exception held across more than one serialization cannot leak a mutation from
-        one envelope into another.
-        """
-        source_context = {"correlation_id": "orig"}
-        exc = AdCPMediaBuyNotFoundError(context=source_context)
-
-        envelope = envelope_for(exc)
-        source_context["correlation_id"] = "mutated"
-        source_context["new_key"] = "added"
-
-        assert envelope["context"] == {"correlation_id": "orig"}
-
-
-class TestMalformedContextFailsOpen:
-    """A context that cannot be modelled as a ``ContextObject`` is logged and dropped.
-
-    The builder runs on the failure path. Raising here would shadow the buyer's original
-    error and leave the transport with no response to send at all. So the malformed value
-    drops and the rest of the response is emitted intact; the diagnostic goes to the server
-    log, which is the only place it can go without inventing buyer-facing text.
-    """
-
-    def test_non_model_context_is_dropped_not_raised(self, caplog: pytest.LogCaptureFixture):
-        exc = AdCPValidationError(context=object())
-
-        with caplog.at_level(logging.WARNING, logger="src.core.schemas._base"):
-            envelope = envelope_for(exc)  # must not raise
-
-        assert "context" not in envelope, "malformed context must be dropped, not serialized"
-        # The rest of the response survives -- dropping the context must not cost the buyer
-        # the error itself.
-        assert envelope["adcp_error"]["code"] == "VALIDATION_ERROR"
-        assert envelope["errors"][0]["code"] == "VALIDATION_ERROR"
-        assert "dropping context" in caplog.text, "the drop must leave a server-side breadcrumb"
+        assert response.status_code == 400
+        body = response.json()
+        assert body["adcp_error"]["code"] == "INVALID_REQUEST"
+        assert "context" not in body
 
 
 class TestWireBytesIdenticalAcrossTransports:

@@ -6,8 +6,8 @@ error ``message``. That leak is now structurally impossible rather than merely
 fixed. ``AdCPSalesAgentError.__init__`` takes no ``message`` parameter at all,
 and ``message`` is a read-only property returning ``CODE_TABLE[code].message``
 (src/core/exceptions.py), so no raise site can interpolate anything into
-buyer-facing text. ``_internal_error_for()`` builds its JSON-RPC message from
-``adcp_error_for(exc).message``, which is the same derived property.
+buyer-facing text. ``on_message_send`` builds its JSON-RPC message from the failure
+response's own error message, which is the same derived property.
 
 An assertion that an invented marker string is absent from that text therefore
 cannot fail unless the code table itself contains the marker. It was a tautology,
@@ -27,11 +27,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 class TestInternalErrorCarriesTheEnvelope:
-    """``_internal_error_for()`` builds the A2A JSON-RPC error, and must attach the envelope.
+    """``on_message_send`` answers a pre-dispatch fault with a JSON-RPC error carrying the body.
 
-    Only NON-skill A2A boundary failures reach it: ``on_message_send``'s outer fallthrough
-    and the push-notification-config JSON-RPC methods. A dispatched skill's own failure is
-    the boundary's ``AdcpErrorResponse``, which ``_dispatch_skill`` serializes with
+    Only a fault raised before any tool ran reaches that path. A dispatched skill's own
+    failure is the boundary's ``AdcpErrorResponse``, which ``_dispatch_skill`` serializes with
     ``to_wire``; tests/unit/test_error_envelope.py grades that body directly.
 
     The test raises while the handler reads the credential off the call context, which runs

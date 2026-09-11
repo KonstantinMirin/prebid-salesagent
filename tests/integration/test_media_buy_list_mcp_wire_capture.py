@@ -1,11 +1,10 @@
 """``MediaBuyListEnv`` must actually capture the MCP wire it declares.
 
 This env was the last one in ``tests/harness/`` still dispatching through
-``_run_mcp_wrapper``, which calls the UNDECORATED module function. The
-``with_error_logging`` decorator is applied at registration time
-(``src/core/main.py:348``), so the wrapper path never raises ``AdCPToolError``,
-never stashes an envelope, and the dispatcher captures ``None`` — while the env
-goes on declaring ``has_wire=True``.
+``_run_mcp_wrapper``, which calls the module function directly. A failure becomes an
+``AdCPToolError`` only in ``RegistryTool.run`` (``src/core/main.py``), so the wrapper
+path never raises one, never stashes an envelope, and the dispatcher captures ``None``
+— while the env goes on declaring ``has_wire=True``.
 
 That combination is one the harness itself calls a bug and raises on loudly
 (``tests/harness/transport.py``), so it cannot be left to a BDD scenario to

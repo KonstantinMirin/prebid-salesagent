@@ -27,7 +27,6 @@ from a2a.types import (
     GetTaskPushNotificationConfigRequest,
     GetTaskRequest,
     InternalError,
-    InvalidParamsError,
     InvalidRequestError,
     ListTaskPushNotificationConfigsRequest,
     ListTaskPushNotificationConfigsResponse,
@@ -48,70 +47,19 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-from adcp.types import ProtocolEnvelope
 from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.domain_config import get_a2a_server_url
-from src.core.errors.issues import ErrorIssue, JsonPointer
-from src.core.exceptions import (
-    AdCPCapabilityNotSupportedError,
-    AdcpFailure,
-    AdCPSalesAgentError,
-    AdCPUrlNotAllowedError,
-    AdCPValidationError,
-    adcp_error_for,
-)
-
-# Signals tools removed - should come from dedicated signals agents, not sales agent
+from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
-from src.core.schemas._base import AdcpErrorResponse
-from src.core.tool_error_logging import record_boundary_error
-from src.core.tools._boundary import serve
+from src.core.tools._boundary import failure_response, serve
 from src.core.tools._wire import to_wire
 from src.core.tools.registry import TOOLS
 from src.core.version import get_version
 
 logger = logging.getLogger(__name__)
-
-
-def _require_params(params: dict, required: list[str], *, field: str | None = None) -> None:
-    """Refuse a skill invocation missing required parameters.
-
-    Three handlers carried an identical copy of this check; one helper keeps them from
-    drifting apart (CLAUDE.md treats duplicated logic as a defect).
-    """
-    missing = [p for p in required if p not in params]
-    if missing:
-        raise AdCPValidationError(
-            issues=[ErrorIssue.of(pointer=JsonPointer.of(name).pointer, keyword="required") for name in missing],
-            field=field,
-        )
-
-
-def _invalid_params_from_ssrf_error(exc: Exception) -> InvalidParamsError:
-    """Wrap a refused registration as A2A InvalidParamsError with the AdCP ``data`` envelope.
-
-    Both typed rejections this seam can see pass through VERBATIM: a refused URL
-    (``AdCPUrlNotAllowedError``) and a refused credential (``AdCPValidationError``
-    naming ``push_notification_config.authentication.credentials``). Narrowing to
-    the URL class alone would send a credential refusal down the else branch and
-    re-label it as a URL problem. Only an untyped exception is manufactured into
-    ``AdCPUrlNotAllowedError``; its buyer-facing suggestion comes from the
-    CODE_TABLE entry for the code, never a per-class override (ADR-010), so no
-    ``suggestion=`` is passed here.
-    """
-    if isinstance(exc, (AdCPUrlNotAllowedError, AdCPValidationError)):
-        adcp_err: AdCPSalesAgentError = exc
-    else:
-        adcp_err = AdCPUrlNotAllowedError(
-            field="push_notification_config.url",
-        )
-    return InvalidParamsError(
-        message=adcp_err.message,
-        data=to_wire(AdcpErrorResponse.of(adcp_err)),
-    )
 
 
 def _dict_to_value(d: dict) -> struct_pb2.Value:
@@ -227,47 +175,6 @@ def restore_a2a_integer_types(data: Any, integer_field_names: frozenset[str] = A
     return data
 
 
-def _internal_error_for(operation: str, exc: Exception) -> InternalError:
-    """Canonical InternalError shape for non-skill A2A boundary failures.
-
-    A dispatched skill's failure never reaches here: ``serve`` answers it with a failed
-    response that rides the Task's artifact. Non-skill paths (``on_message_send``
-    fallthrough, the push-notification-config methods) historically picked their own
-    prefixes (``"Message processing failed: "``, ``"Error in ..."``) for semantically
-    identical untyped failures — divergence on the buyer-facing wire message for the
-    same condition.
-
-    Use this helper at every non-skill ``InternalError(...)`` raise site that
-    is NOT a deliberate protocol-level convention (see push-notif handlers
-    below). ``message`` is built from ``adcp_error_for(exc).message``,
-    NEVER the raw exception's own ``str()`` — the two are only the same value
-    when ``exc`` is already a typed ``AdCPSalesAgentError`` (passed through unchanged,
-    its message deliberately authored to be buyer-safe) or one of the other
-    typed branches (``ValueError``/``PermissionError``, our own deliberately-
-    raised validation text). For an arbitrary/untyped exception,
-    ``adcp_error_for`` itself replaces the message with
-    ``type(exc).__name__`` — the raw text has no provenance guarantee (AdCP
-    3.1.1 transport-errors.mdx Security Considerations MUST-NOT list) and must
-    not reach the JSON-RPC wire. This keeps ``message`` informative for the
-    common typed-error case (the same text ``data`` carries) without ever
-    re-deriving it from ``exc`` directly.
-
-    The four ``on_*_task_push_notification_config`` JSON-RPC protocol methods use
-    this helper too — they have no async Task to carry a DataPart, so the two-layer
-    envelope rides in the error's ``data`` field (``error.data["errors"][0]["code"]``
-    / ``error.data["adcp_error"]``). ``InternalError`` stays an ``A2AError`` so the
-    SDK's ``JsonRpcDispatcher`` serializes it as a structured JSON-RPC error; raising
-    a non-``A2AError`` (e.g. ``AdCPAdapterError``) would hit the dispatcher's
-    ``except Exception`` branch and be flattened to a bare ``InternalError`` with no
-    envelope.
-    """
-    typed = adcp_error_for(exc)
-    return InternalError(
-        message=f"{operation} failed: {typed.message}",
-        data=to_wire(AdcpErrorResponse.of(typed)),
-    )
-
-
 class AdCPRequestHandler(RequestHandler):
     """Request handler for AdCP A2A operations supporting JSON-RPC 2.0."""
 
@@ -277,17 +184,6 @@ class AdCPRequestHandler(RequestHandler):
         # The VALUE, not the raw protobuf: what is stashed here is handed straight
         # to the sender, so it must carry the gate's receipt.
         logger.info("AdCP Request Handler initialized for direct function calls")
-
-    def _get_auth_token(self, context: ServerCallContext | None = None) -> str | None:
-        """Extract Bearer token from ServerCallContext.
-
-        Args:
-            context: ServerCallContext from SDK (None when called directly in tests).
-        """
-        if context is None:
-            return None
-        auth_ctx = context.state.get(AUTH_CONTEXT_STATE_KEY)
-        return auth_ctx.auth_token if auth_ctx else None
 
     def _credential_of(self, context: ServerCallContext | None = None) -> AuthContext:
         """The AuthContext UnifiedAuthMiddleware parked on the call context.
@@ -299,231 +195,120 @@ class AdCPRequestHandler(RequestHandler):
             return AuthContext()
         return context.state.get(AUTH_CONTEXT_STATE_KEY) or AuthContext()
 
-    # (Deleted) _resolve_a2a_identity resolved A2A's own identity, including the
-    # set_current_tenant push that forced the lazy tenant to hydrate on every request. The
-    # boundary resolves once from the credential; A2A supplies the credential and nothing
-    # else.
-
     async def on_message_send(
         self,
         params: SendMessageRequest,
         context: ServerCallContext,
     ) -> Task | Message:
-        """Handle the ``SendMessage`` method for non-streaming requests.
+        """Handle ``SendMessage``: one explicit skill invocation per message, answered as a Task.
 
-        Supports both invocation patterns from AdCP PR #48:
-        1. Natural Language: parts[{kind: "text", text: "..."}]
-        2. Explicit Skill: parts[{kind: "data", data: {skill: "...", parameters: {...}}}]
-
-        Args:
-            params: Parameters including the message and configuration
-            context: Server call context
-
-        Returns:
-            Task object or Message response
+        The invocation is a DataPart carrying ``{"skill": ..., "input": {...}}``. Text parts
+        are recorded on the Task and route nothing.
         """
         logger.info("Handling SendMessage request: %s", params)
 
-        # Parse message for both text and structured data parts
-        message = params.message
-        text_parts = []
-        skill_invocations = []
-
-        if hasattr(message, "parts") and message.parts:
-            for part in message.parts:
-                # Text is collected for the task record only: a message that names no
-                # skill is refused below, not interpreted.
-                if part.text:
-                    text_parts.append(part.text)
-
-                # Handle structured data parts (explicit skill invocation)
-                # part.data is a protobuf Value — convert to Python dict
-                elif part.HasField("data"):
-                    data = json_format.MessageToDict(part.data)
-                    if isinstance(data, dict) and "skill" in data:
-                        # Support both "input" (A2A spec) and "parameters" (legacy) for skill params
-                        params_data = data.get("input") or data.get("parameters", {})
-                        skill_invocations.append({"skill": data["skill"], "parameters": params_data})
-                        logger.info(
-                            f"Found explicit skill invocation: {data['skill']} with params: {list(params_data.keys())}"
+        text_parts: list[str] = []
+        skill: str | None = None
+        parameters: Any = {}
+        for part in params.message.parts:
+            # Text is recorded on the Task and routes nothing.
+            if part.text:
+                text_parts.append(part.text)
+            elif part.HasField("data"):
+                data = json_format.MessageToDict(part.data)
+                if isinstance(data, dict) and "skill" in data:
+                    # One skill per message. The pinned 3.1.1 text describes an A2A invocation
+                    # as one DataPart naming one skill and says nothing about batching, so a
+                    # message naming two is malformed rather than a batch: refused whole,
+                    # before anything runs.
+                    if skill is not None:
+                        raise InvalidRequestError(
+                            message="One skill per message. Send each skill invocation as its own message."
                         )
+                    skill = data["skill"]
+                    # ``input`` is the A2A spelling; ``parameters`` is accepted for the same value.
+                    parameters = data.get("input") or data.get("parameters", {})
+        if skill is None:
+            # Guessing a tool from text is a translation concern. If it returns, it belongs IN
+            # FRONT of this seam -- resolving text to (skill, parameters) and then invoking like
+            # any other caller -- not beside it with its own response and its own auth story.
+            raise InvalidRequestError(
+                message=(
+                    "This agent is invoked by explicit skill. Send a data part carrying "
+                    "{'skill': <name>, 'input': {...}}; a text-only message names no skill."
+                )
+            )
 
-        # Recorded on the task so a refused request is diagnosable; nothing routes on it.
-        combined_text = " ".join(text_parts).strip()
-
-        # Create task for tracking
         task_id = f"task_{uuid.uuid4().hex[:12]}"
-        # In protobuf, message_id is always a string (empty string default)
+        # In protobuf, message_id is always a string (empty string default).
         msg_id = params.message.message_id or None
-        context_id = params.message.context_id or msg_id or f"ctx_{task_id}"
-
-        # Prepare task metadata (JSON-serializable only — protobuf Struct)
-        task_metadata: dict[str, Any] = {
-            "request_text": combined_text,
-            "invocation_type": "explicit_skill" if skill_invocations else "no_skill_named",
-        }
-        if skill_invocations:
-            task_metadata["skills_requested"] = [inv["skill"] for inv in skill_invocations]
-
         task = Task(
             id=task_id,
-            context_id=context_id,
+            context_id=params.message.context_id or msg_id or f"ctx_{task_id}",
             status=TaskStatus(state=TaskState.TASK_STATE_WORKING),
-            metadata=_dict_to_struct(task_metadata),
+            # Recorded so a refused request is diagnosable; nothing routes on it.
+            metadata=_dict_to_struct({"request_text": " ".join(text_parts).strip(), "skill": skill}),
         )
         self.tasks[task_id] = task
 
         try:
-            # Get authentication token
-            auth_token = self._get_auth_token(context)
-
-            # NO decision and NO resolution here. Both belong to the boundary, which reads
-            # ``ToolSpec.requires_credential()`` per tool and resolves once from this
-            # credential. A2A used to compute ``requires_auth`` for the whole BATCH --
-            # `any(... requires_credential() ...)` over every requested skill -- so a mixed
-            # public/protected batch forced auth on the public one too, and a second check
-            # downstream re-asked the same question. Per-tool resolution replaces both; the
-            # pinned 3.1.1 spec says nothing about multi-skill batching, and auth is a
-            # property of the tool.
-            #
-            # A2A therefore holds NO identity of its own, and must not: the one the tool runs
-            # under is minted inside ``invoke_tool`` from this credential. A local ``identity``
-            # survived here after the resolution moved, permanently None, and every log line
-            # that read it recorded tenant "unknown" against a real request. Those lines are
-            # gone; scoping an observability record is the boundary's job, where the resolved
-            # identity actually is.
+            # The CREDENTIAL, not an identity: the boundary resolves the caller once and reads
+            # the row's auth declaration itself. A2A holds no identity of its own.
             credential = self._credential_of(context)
 
-            # ONE route in: an explicit skill invocation. Anything else is refused below.
-            if skill_invocations:
-                # One skill per message. The pinned 3.1.1 text describes an A2A invocation as
-                # one DataPart naming one skill and says nothing about batching several into
-                # a message, so a message naming two is malformed rather than a batch. Refused
-                # here, before anything runs, so no skill is served on a request that is
-                # refused as a whole.
-                if len(skill_invocations) > 1:
-                    raise InvalidRequestError(
-                        message="One skill per message. Send each skill invocation as its own message."
-                    )
-                (invocation,) = skill_invocations
-                skill_name = invocation["skill"]
-                parameters = invocation["parameters"]
-                logger.info("Processing explicit skill: %s with parameters: %s", skill_name, parameters)
+            # No ``except`` around this. A refused credential, a malformed payload and a failing
+            # tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill`` serializes
+            # into the answer like any other response; the Task state below is read off that
+            # answer's own ``status``. An unknown skill is an ``A2AError`` and propagates to the
+            # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
+            # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
+            # on an error class.
+            result = await self._dispatch_skill(skill, parameters, credential)
 
-                # No ``except`` around this. A refused credential, a malformed payload and a
-                # failing tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill``
-                # serializes into the answer like any other response; the Task state below is
-                # read off that answer's own ``status``. An unknown skill is an ``A2AError`` and
-                # propagates to the JSON-RPC layer. AuthChallengeResponder reads a refused
-                # credential off the artifact (``adcp_error_code_in``, shape 4), so the 401
-                # handshake needs no branch here keyed on an error class.
-                result = await self._handle_explicit_skill(skill_name, parameters, credential)
+            # Per AdCP spec, an async operation returns a Task with status=submitted and no
+            # artifacts. The SAME read the final state uses, so the two cannot disagree.
+            if LibraryTaskStatus(result["status"]) is LibraryTaskStatus.submitted:
+                task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                logger.info("Task %s requires manual approval, returning status=submitted with no artifacts", task_id)
+                return task
 
-                # Per AdCP spec, async operations return a Task with status=submitted and no
-                # artifacts. The SAME read the final state uses, so the two cannot disagree
-                # about what a submitted answer is.
-                if LibraryTaskStatus(result["status"]) is LibraryTaskStatus.submitted:
-                    task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
-                    del task.artifacts[:]
-                    logger.info(
-                        f"Task {task_id} requires manual approval, returning status=submitted with no artifacts"
-                    )
-                    self.tasks[task_id] = task
-                    return task
+            # Per A2A spec, an optional TextPart then the DataPart. The text is READ from the
+            # payload: ``message`` is a declared envelope field, serialized with the rest, and
+            # nothing rebuilds an outbound payload to recover it.
+            parts = [Part(text=result["message"])] if result.get("message") else []
+            parts.append(Part(data=_dict_to_value(result)))
+            task.artifacts.append(Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=parts))
 
-                # Per A2A spec, use TextPart + DataPart pattern (not description field). The
-                # text is READ from the payload, never re-derived from it: ``message`` is a
-                # declared envelope field, serialized with the rest. Feeding an outbound
-                # payload back through Model(**data) to recover it handed pydantic
-                # before-validators a reference to the dict about to go on the wire, and one
-                # of them mutated it in place (the list_creatives format_id bare-string
-                # defect). Nothing rebuilds an outbound payload.
-                parts = []
-                if result.get("message"):
-                    parts.append(Part(text=result["message"]))
-                parts.append(Part(data=_dict_to_value(result)))
-                task.artifacts.append(Artifact(artifact_id="skill_result_1", name=f"{skill_name}_result", parts=parts))
-
-                # The Task state is the RESPONSE's own status, mapped once. ``status`` is
-                # required on the response envelope and defaulted to ``completed``, so it is
-                # never absent; subscripted, not ``.get``-with-a-default, because a missing
-                # ``status`` would mean a response that did not come from the boundary, and
-                # answering COMPLETED for it would report success for something never examined.
-                #
-                # A per-creative ``pending_review`` deliberately does NOT make the Task
-                # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
-                # branches: a synchronous success required to carry ``creatives`` ("best-effort
-                # processing with per-item status/failures"), a terminal failure carrying
-                # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
-                # and which carries ``task_id`` and NO creatives. Per-creative review state is
-                # therefore per-item information inside branch one, and promoting it to a
-                # task-level status claimed the shape that cannot carry the creatives it just
-                # processed.
-                task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[LibraryTaskStatus(result["status"])]))
-
-            else:
-                # A message that names no skill is refused, and that refusal is the whole
-                # point of deleting the natural-language fallback that used to stand here.
-                #
-                # That fallback guessed a tool from keywords in the text ("price" ->
-                # get_products, "target" -> get_adcp_capabilities) and, when nothing
-                # matched, assembled a "supported_queries" blurb IN PROCESS -- never
-                # reaching invoke_tool, never reading ToolSpec.auth. So an
-                # UNAUTHENTICATED caller received a completed Task with a 200. One
-                # situation, two answers: 401 through the seam, 200 around it.
-                #
-                # It was also ungraded. Its only test mocked authentication away, covered
-                # one of its four branches, and had been failing since the identity
-                # rename. Nothing in the BDD fleet ever sent a text part -- every harness
-                # dispatch goes through create_a2a_message_with_skill, whose docstring
-                # says it triggers the explicit path "as opposed to natural language
-                # processing".
-                #
-                # Guessing a tool from text is a translation concern. If it returns, it
-                # belongs IN FRONT of the seam -- resolving text to (tool, parameters) and
-                # then invoking like any other caller -- not beside it with its own
-                # response and its own auth story.
-                raise InvalidRequestError(
-                    message=(
-                        "This agent is invoked by explicit skill. Send a data part carrying "
-                        "{'skill': <name>, 'input': {...}}; a text-only message names no skill."
-                    )
-                )
+            # The Task state is the RESPONSE's own status, mapped once. ``status`` is required
+            # on the response envelope and defaulted to ``completed``, so it is never absent;
+            # subscripted, not ``.get``-with-a-default, because a missing ``status`` would mean
+            # a response that did not come from the boundary, and answering COMPLETED for it
+            # would report success for something never examined.
+            #
+            # A per-creative ``pending_review`` deliberately does NOT make the Task
+            # ``submitted``. Pinned ``creative/sync-creatives-response.json`` declares three
+            # branches: a synchronous success required to carry ``creatives`` ("best-effort
+            # processing with per-item status/failures"), a terminal failure carrying
+            # ``errors``, and a submitted envelope whose ``status`` is ``const: "submitted"``
+            # and which carries ``task_id`` and NO creatives. Per-creative review state is
+            # therefore per-item information inside branch one, and promoting it to a
+            # task-level status would claim the shape that cannot carry the creatives it just
+            # processed.
+            task.status.CopyFrom(TaskStatus(state=_TASK_STATE_BY_ADCP_STATUS[LibraryTaskStatus(result["status"])]))
 
         except A2AError:
-            # Re-raise A2AError as-is (will be caught by JSON-RPC handler)
             raise
         except Exception as e:
-            # Reached for a failure BEFORE any tool ran -- a malformed message, a refused
-            # push-notification config -- which never passes through ``invoke_tool`` and so is
-            # recorded nowhere else. Anything raised inside a tool is already recorded there,
-            # against the identity that ran it, and the guard in ``record_boundary_error``
-            # keeps this from recording it a second time on the way out.
-            #
-            # No tenant and no principal are passed, because at this point A2A genuinely knows
-            # neither. It used to pass the string "unknown" for both, which is not the absence
-            # of a tenant -- it is a fabricated one, written into a tenant-scoped table.
-            record_boundary_error(TransportProtocol.A2A, "message_processing", e)
-
-            # Send protocol-level webhook notification for failure if configured
+            # Raised before any tool ran -- reading the credential, framing the answer -- so no
+            # caller was resolved and the record is unscoped. Answered as the JSON-RPC error the
+            # SDK's dispatcher serializes structurally, with the failure response in ``data``:
+            # a non-``A2AError`` would be flattened to a bare InternalError with no body.
+            response = failure_response(TransportProtocol.A2A, "message_processing", e)
             task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_FAILED))
-            # Attach error to task artifacts as a spec-compliant two-layer
-            # envelope (same shape as failed-skill DataParts) so storyboard
-            # runners can ``JSON.parse`` the artifact uniformly regardless of
-            # which failure path produced it.
-            del task.artifacts[:]
-            task.artifacts.append(
-                Artifact(
-                    artifact_id="error_1",
-                    name="processing_error",
-                    parts=[Part(data=_dict_to_value(to_wire(AdcpErrorResponse.of(adcp_error_for(e)))))],
-                )
-            )
+            raise InternalError(
+                message=f"message processing failed: {response.errors[0].message}", data=to_wire(response)
+            ) from e
 
-            # Raise A2A error instead of creating failed task
-            raise _internal_error_for("message processing", e)
-
-        self.tasks[task_id] = task
         return task
 
     async def on_message_send_stream(
@@ -664,183 +449,29 @@ class AdCPRequestHandler(RequestHandler):
         """Handle 'GetExtendedAgentCard' method."""
         raise UnsupportedOperationError(message="Extended agent card not supported")
 
-    @staticmethod
-    def _serialize_for_a2a(response: ProtocolEnvelope | dict) -> dict[str, Any]:
-        """Wrap the one wire body in A2A's container.
+    async def _dispatch_skill(self, skill_name: str, parameters: Any, credential: AuthContext) -> dict[str, Any]:
+        """Run one skill through ``serve`` and return the body the artifact DataPart carries.
 
-        A2A adds NOTHING to the body. ``to_wire`` produces the same bytes for all three
-        transports and this method only chooses the container -- an artifact ``DataPart``,
-        where MCP chooses a ``ToolResult`` and REST the HTTP body.
+        The whole of A2A's request path. A row with ``a2a=True`` IS dispatchable: the registry
+        says which tools this transport serves and the card is derived from the same rows, so
+        the two cannot disagree; anything else is ``MethodNotFoundError``, a JSON-RPC error.
 
-        It used to stamp two keys INTO the payload: ``message``, from ``str(response)``, and
-        ``success``, derived from ``errors``. ``message`` is a declared envelope field now,
-        filled by the implementation and serialized like any other, so all three transports
-        carry it -- REST never did before. ``success`` is deleted rather than moved: only three
-        response schemas in the whole pinned 3.1 tree declare that property and none is one of
-        our fourteen, so A2A was writing a key AdCP does not define into every buyer's payload,
-        and a buyer can derive it from ``errors``, which they already have.
-
-        A dict passes through unchanged. Nothing on the skill path produces one any more --
-        the branch survives for callers holding a response built elsewhere.
-
-        Args:
-            response: Pydantic model returned by the tool, or an already-serialized dict.
-
-        Returns:
-            Dict ready for A2A DataPart.
+        ``parameters`` is a plain JSON-shaped value by the time it arrives -- the A2A path is
+        ``json_format.MessageToDict`` over a ``Struct`` -- and ``validated_request`` inside
+        ``serve`` is the one parse, shared with MCP and REST. The one Struct artifact is that it
+        has no integer type, and pydantic's non-strict mode already coerces ``2.0`` to an
+        ``int`` field.
         """
-        if isinstance(response, dict):
-            return response
-
-        return to_wire(response)
-
-    async def _dispatch_skill(
-        self,
-        skill_name: str,
-        parameters: dict,
-        credential: AuthContext,
-    ) -> dict[str, Any]:
-        """Validate a parameter bag into the row's DTO, run the tool, serialize the answer.
-
-        The whole of A2A's request path. Eleven ``_handle_<tool>_skill`` methods stood here,
-        and what they had in common was these three lines; what they did NOT have in common was
-        the defect. Each coerced its own parameters -- twelve call sites across
-        ``to_account_reference``, ``to_brand_reference``, ``coerce_creative_filters``,
-        ``upgrade_legacy_format_id`` and ``to_context_object`` -- and MCP and REST ran none of
-        them, so the same bytes had two meanings. All of them are deleted.
-
-        The coercions are gone rather than moved. Pydantic performs four of the five unaided on
-        the plain dict a buyer sends, and the helpers were worse than redundant:
-        ``_coerce_wire_object`` returns ``None`` for a non-dict, so where MCP and REST raised,
-        A2A silently dropped -- and for the seven tools whose ``account`` is optional the
-        request then proceeded with NO account scope, meaning no authorization against that
-        account and a different idempotency scope. What survives of that work is the
-        accepted-shape strip, and it moved onto ``BuyerRequest`` itself
-        (``src/core/schemas/_base.py``) so every transport gets it by constructing the DTO.
-
-        That normalizer runs HERE rather than in ``_handle_explicit_skill``, so the two natural
-        language entry points take the same steps as an explicit skill invocation. This is A2A's
-        whole request path, and a path that only some callers reach is the shape this change
-        exists to remove.
-
-        ``parameters`` is a plain JSON-shaped dict by the time it arrives: the A2A path is
-        ``json_format.MessageToDict`` over a ``Struct``, never binary protobuf. The one Struct
-        artifact is that it has no integer type, and pydantic's non-strict mode already coerces
-        ``2.0`` to an ``int`` field.
-        """
-        # ``validated_request`` is the one parse, shared with MCP and REST. This line used to
-        # call ``model_validate`` itself and type the failure here, on the ground that parsing
-        # is the one step the boundary could never reach -- true only because this line was the
-        # one doing it. A rejection now carries the buyer's ``context`` out, which a
-        # per-transport parse could not do, and all three transports answer a malformed payload
-        # identically because one function decides.
-
+        if skill_name not in TOOLS or not TOOLS[skill_name].a2a:
+            available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
+            raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
         try:
             response = await serve(skill_name, parameters, credential, TransportProtocol.A2A)
         except AdcpFailure as failure:
             # A2A's wire failure marker is the Task STATE, set by the caller from the
-            # response's own ``status``. This transport adds nothing to the BODY -- it
-            # serializes the response the boundary built, through the same function the
-            # success path uses.
-            return self._serialize_for_a2a(failure.response)
-        return self._serialize_for_a2a(response)
-
-    async def _handle_explicit_skill(
-        self,
-        skill_name: str,
-        parameters: dict,
-        credential: AuthContext,
-    ) -> dict:
-        """Handle explicit AdCP skill invocations.
-
-        Maps skill names to appropriate handlers and validates parameters.
-        Handlers return raw Pydantic models; serialization happens here at the boundary.
-
-        Args:
-            skill_name: The AdCP skill name (e.g., "get_products")
-            parameters: Dictionary of skill-specific parameters
-
-        Returns:
-            Dictionary containing the skill result
-
-        Raises:
-            ValueError: For unknown skills or invalid parameters
-        """
-        # Deprecated wire shapes are normalized in ``_dispatch_skill``, which is the one
-        # place every A2A request passes through -- the NL entry points reach it too.
-        logger.info("Handling explicit skill: %s with parameters: %s", skill_name, list(parameters.keys()))
-
-        # A row with ``a2a=True`` IS dispatchable. There is no second list and no per-tool
-        # method: the registry says which tools this transport serves, and the card is derived
-        # from the same rows, so the two cannot disagree. They used to -- a ``hasattr`` filter
-        # over ``_handle_{name}_skill`` methods silently overrode the declaration, so
-        # ``list_tasks``, ``get_task_status`` and ``complete_task`` appeared on the card and
-        # answered ``MethodNotFoundError``.
-        if skill_name not in TOOLS or not TOOLS[skill_name].a2a:
-            available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
-            raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
-
-        # (Deleted) A second auth check stood here, re-asking what the boundary already
-        # answered. It was load-bearing only because the batch decision above could resolve
-        # leniently and then dispatch a protected skill; with the decision per tool, the
-        # boundary refuses before dispatch and this could never fire.
-
-        # No normalization here. Every failure is typed at the point that owns it -- the
-        # boundary, which holds the tool, the identity and the exception together -- and
-        # answered as a response that ``_dispatch_skill`` serializes. Nothing typed escapes
-        # this frame; rendering, the part that IS per-transport, is choosing the container.
-        return await self._dispatch_skill(skill_name, parameters, credential)
-
-    def _extract_brand_name_from_query(self, query: str) -> str:
-        """Extract or infer brand name from the user query.
-
-        Used for backward compatibility with natural language queries.
-        Extracts a brand name to populate brand (BrandReference) for adcp v3.6.0.
-        """
-        # Look for common patterns that might indicate the brand/offering
-        query_lower = query.lower()
-
-        # If the query mentions specific brands or products, use those
-        if "advertise" in query_lower or "promote" in query_lower:
-            # Try to extract what they're promoting
-            parts = query.split()
-            for i, word in enumerate(parts):
-                if word.lower() in ["advertise", "promote", "advertising", "promoting"]:
-                    if i + 1 < len(parts):
-                        # Take the next few words as the brand name
-                        brand_parts = parts[i + 1 : i + 4]  # Take up to 3 words
-                        brand_name = " ".join(brand_parts).strip(".,!?")
-                        if len(brand_name) > 5:  # Make sure it's substantial
-                            return f"Business promoting {brand_name}"
-
-        # Default brand name based on query type
-        if any(word in query_lower for word in ["video", "display", "banner", "ad"]):
-            return "Brand advertising products and services"
-        elif any(word in query_lower for word in ["coffee", "beverage", "food"]):
-            return "Food and beverage company"
-        elif any(word in query_lower for word in ["tech", "software", "app", "digital"]):
-            return "Technology company digital products"
-        else:
-            # Generic fallback that should pass AdCP validation
-            return "Business advertising products and services"
-
-    async def _create_media_buy(self, request: str) -> dict:
-        """Natural-language create_media_buy is not supported; explicit skill is the spec contract.
-
-        Always raises ``AdCPCapabilityNotSupportedError``. Buyer agents reach
-        the explicit-skill path via ``create_media_buy`` skill invocation
-        through ``_handle_explicit_skill`` — that path runs the full
-        ``_create_media_buy_impl``, produces a spec-compliant Pydantic
-        response, and goes through ``_serialize_for_a2a``.
-
-        The previous NL stub returned a flat ``{"success": False, "message": "...
-        use explicit skill"}`` dict that bypassed the two-layer-envelope
-        contract — storyboard runners parsing that artifact synthesized
-        ``MCP_ERROR`` rather than seeing the real wire code. Raising here
-        flows to the outer ``on_message_send`` error handler which attaches
-        the proper two-layer envelope to the failed Task artifact.
-        """
-        raise AdCPCapabilityNotSupportedError()
+            # response's own ``status``. This transport adds nothing to the BODY.
+            return to_wire(failure.response)
+        return to_wire(response)
 
 
 def _derived_skills() -> list[AgentSkill]:

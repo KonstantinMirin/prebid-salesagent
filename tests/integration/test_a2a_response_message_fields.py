@@ -30,8 +30,6 @@ tool is dispatchable because ``TOOLS[name].a2a`` is True.
 Regression prevention: https://github.com/prebid/salesagent/pull/337
 """
 
-from unittest.mock import MagicMock
-
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
@@ -231,8 +229,6 @@ class TestA2AErrorHandling:
     @pytest.mark.asyncio
     async def test_skill_error_has_message_field(self, handler, sample_principal):
         """Test that skill errors return proper message fields."""
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         with resolved_as(_MOCK_IDENTITY):
             # Force an error by passing invalid parameters
             params = {
@@ -241,7 +237,7 @@ class TestA2AErrorHandling:
 
             try:
                 # _dispatch_skill IS A2A's whole request path: validate the parameter bag into
-                # the registry row's DTO, invoke_tool, then _serialize_for_a2a. It returns the
+                # the registry row's DTO via serve, then to_wire. It returns the
                 # serialized dict, so there is nothing left to serialize here.
                 result = await handler._dispatch_skill("create_media_buy", params, _MOCK_IDENTITY, AuthContext())
                 # If it doesn't raise, the failure has to be readable from the body itself.

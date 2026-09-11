@@ -170,9 +170,6 @@ class TestA2ASkillInvocation:
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation for get_products with AdCP schema validation."""
-        # Mock authentication token
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with resolved_as(mock_identity):
@@ -194,8 +191,7 @@ class TestA2ASkillInvocation:
 
             # Verify the result
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_products" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "get_products"
             assert result.artifacts is not None
             assert len(result.artifacts) == 1
             assert result.artifacts[0].name == "get_products_result"
@@ -219,9 +215,6 @@ class TestA2ASkillInvocation:
         self, handler, sample_tenant, sample_principal, sample_products, mock_identity, validator
     ):
         """Test explicit skill invocation using A2A spec 'input' field instead of 'parameters'."""
-        # Mock authentication token
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with resolved_as(mock_identity):
@@ -243,8 +236,7 @@ class TestA2ASkillInvocation:
 
             # Verify the result
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_products" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "get_products"
             assert result.artifacts is not None
             assert len(result.artifacts) == 1
             assert result.artifacts[0].name == "get_products_result"
@@ -272,9 +264,6 @@ class TestA2ASkillInvocation:
         NOTE: This test now uses the REAL mock adapter and code paths,
         only mocking authentication. This ensures we catch serialization bugs.
         """
-        # Mock authentication token
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with resolved_as(mock_identity):
@@ -313,8 +302,7 @@ class TestA2ASkillInvocation:
 
             # Verify the result
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "create_media_buy" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "create_media_buy"
             assert result.artifacts is not None
             assert len(result.artifacts) == 1
             assert result.artifacts[0].name == "create_media_buy_result"
@@ -344,9 +332,6 @@ class TestA2ASkillInvocation:
             tenant = session.get(Tenant, sample_tenant["tenant_id"])
             tenant.human_review_required = True
             session.commit()
-
-        # Mock authentication token
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock identity resolution
         with resolved_as(mock_identity):
@@ -394,9 +379,6 @@ class TestA2ASkillInvocation:
         self, handler, sample_tenant, sample_principal, sample_account, mock_identity, sample_products, validator
     ):
         """Test hybrid invocation with both text and skill."""
-        # Mock authentication token
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
         with resolved_as(mock_identity):
@@ -417,8 +399,7 @@ class TestA2ASkillInvocation:
 
             # Verify explicit skill took precedence
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_products" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "get_products"
             assert "video products for sports" in result.metadata["request_text"]
 
             # Extract products from response
@@ -446,7 +427,6 @@ class TestA2ASkillInvocation:
         from tests.a2a_helpers import make_a2a_context
         from tests.utils.a2a_helpers import _dict_to_value
 
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
         ctx = make_a2a_context(headers={"host": f"{sample_tenant['subdomain']}.example.com"})
 
         message = Message(message_id="msg_multi", context_id="ctx_multi", role=Role.ROLE_USER)
@@ -478,8 +458,6 @@ class TestA2ASkillInvocation:
         would show up here first.
         """
         from tests.utils.a2a_helpers import extract_data_from_artifact
-
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         with resolved_as(mock_identity):
             from tests.a2a_helpers import make_a2a_context
@@ -529,7 +507,7 @@ class TestA2ASkillInvocation:
         # Verify all skills have handlers
         expected_skills = {skill.name for skill in agent_card.skills}
 
-        # Test that _handle_explicit_skill can handle all advertised skills
+        # Test that _dispatch_skill can handle all advertised skills
         for skill_name in expected_skills:
             # This should not raise an exception for any advertised skill
             try:
@@ -583,8 +561,6 @@ class TestA2ASkillInvocation:
             session.add(media_buy)
             session.commit()
 
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         # Mock identity resolution and adapter
         with (
             resolved_as(mock_identity),
@@ -636,8 +612,7 @@ class TestA2ASkillInvocation:
 
             # Verify the skill was invoked
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "update_media_buy" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "update_media_buy"
 
             # adcp 6.6 (spec 3.1.1) guard: the A2A update_media_buy wire response must
             # carry the now-required status/revision fields. This proves the defaulted
@@ -663,7 +638,6 @@ class TestA2ASkillInvocation:
         self, handler, sample_tenant, sample_principal, mock_identity, sample_products, validator, sample_account
     ):
         """Test sync_creatives skill invocation."""
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
@@ -701,8 +675,7 @@ class TestA2ASkillInvocation:
 
             # Verify result
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "sync_creatives" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "sync_creatives"
             assert result.artifacts is not None
 
             # Extract response
@@ -712,7 +685,6 @@ class TestA2ASkillInvocation:
     @pytest.mark.asyncio
     async def test_list_creatives_skill(self, handler, sample_tenant, sample_principal, mock_identity, validator):
         """Test list_creatives skill invocation."""
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
@@ -732,8 +704,7 @@ class TestA2ASkillInvocation:
 
             # Verify result
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "list_creatives" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "list_creatives"
             assert result.artifacts is not None
 
             # Extract response
@@ -745,7 +716,6 @@ class TestA2ASkillInvocation:
         self, handler, sample_tenant, sample_principal, mock_identity, validator
     ):
         """Test get_media_buy_delivery skill invocation."""
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
 
         # Mock tenant detection - provide Host header so real functions can find tenant in database
         # Use actual tenant subdomain from fixture
@@ -767,8 +737,7 @@ class TestA2ASkillInvocation:
 
             # Verify result
             assert isinstance(result, Task)
-            assert result.metadata["invocation_type"] == "explicit_skill"
-            assert "get_media_buy_delivery" in result.metadata["skills_requested"]
+            assert result.metadata["skill"] == "get_media_buy_delivery"
             assert result.artifacts is not None
 
     @pytest.mark.asyncio
@@ -784,7 +753,6 @@ class TestA2ASkillInvocation:
         buyer's account reaches the core tool validated, not as the raw dict that crashed
         resolve_account (account_ref.root on a dict).
         """
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
         mock_delivery = AsyncMock(return_value={"media_buys": []})
 
         with (
@@ -826,9 +794,6 @@ class TestA2ASkillInvocation:
         the hand-written enumeration the registry replaced: dispatch derives from TOOLS, so
         "not in TOOLS" is one condition however many names you spell it with.
         """
-
-        handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-
         with resolved_as(mock_identity):
             from tests.a2a_helpers import make_a2a_context
 

@@ -20,27 +20,16 @@ logger = logging.getLogger(__name__)
 class TransportProtocol(StrEnum):
     """The transports a buyer can arrive on. THE declaration of what a transport is.
 
-    A ``StrEnum`` rather than the ``Literal["mcp", "a2a", "rest"]`` this replaces, because a
-    literal makes every call site spell the transport as a bare string -- and four of them did,
-    so the set of transports was only ever asserted by four agreeing typos. The values are
-    unchanged, so a stored ``protocol`` column, an audit row and a wire payload all read the
-    same as before, and ``protocol == "mcp"`` still holds for code that compares to a string.
-
-    ``tests/harness/transport.py``'s ``Transport`` takes its three core values from here rather
-    than restating them; it adds the ``E2E_*`` members, which are test dispatch paths and not
-    protocols a buyer can speak.
+    A ``StrEnum``, so a call site cannot spell a transport as a bare string, and so a stored
+    ``protocol`` column, an audit row and a wire payload all read the same value.
+    ``tests/harness/transport.py``'s ``Transport`` takes its three core values from here; it adds
+    the ``E2E_*`` members, which are test dispatch paths and not protocols a buyer can speak.
 
     It is a LABEL, never a decision. Nothing in ``src/`` branches on it, and it has exactly ONE
     consumer: scoping an observability record, so an operator reading the activity feed can see
-    which surface a request arrived on.
-
-    It had a second consumer until this was measured. ``_workflow.py`` stored it on a creative-
-    approval workflow step "for webhook payload creation", and nothing ever read it back. The
-    premise was wrong as well as dead: that path fires ``creative.status_changed``, an
-    account-level notification whose shape is fixed and whose subscribers are the registered
-    ``notification_configs[]`` -- the originating call's transport does not enter into it. A
-    response shape that varied by transport would be the thing this whole seam exists to
-    prevent, so if a reader for this field is ever proposed, that is the question to ask first.
+    which surface a request arrived on. A response shape that varied by transport would be the
+    thing this whole seam exists to prevent, so if a reader for this field is ever proposed,
+    that is the question to ask first.
     """
 
     MCP = "mcp"

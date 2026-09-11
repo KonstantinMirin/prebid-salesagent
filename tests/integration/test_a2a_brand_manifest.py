@@ -7,7 +7,6 @@ accepted; clients must use brief or brand (BrandReference with domain field).
 """
 
 import logging
-from unittest.mock import MagicMock
 
 import pytest
 from a2a.server.routes.common import ServerCallContext
@@ -16,6 +15,7 @@ from a2a.types import SendMessageRequest, Task
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.principal import PrincipalFactory
+from tests.helpers.boundary_identity import resolved_as
 from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -39,8 +39,6 @@ async def test_get_products_with_brief_only(sample_tenant, sample_principal, sam
     """Test get_products skill invocation with brief only (no brand)."""
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
     from src.core.config_loader import set_current_tenant
 
@@ -53,7 +51,8 @@ async def test_get_products_with_brief_only(sample_tenant, sample_principal, sam
     params = SendMessageRequest(message=message)
 
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    with resolved_as(identity):
+        result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -65,8 +64,6 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
     """Test get_products skill invocation with brand.domain (adcp 3.6.0 format)."""
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
     from src.core.config_loader import set_current_tenant
 
@@ -82,7 +79,8 @@ async def test_get_products_with_brand_domain(sample_tenant, sample_principal, s
     params = SendMessageRequest(message=message)
 
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    with resolved_as(identity):
+        result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -99,8 +97,6 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
     """
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
     from src.core.config_loader import set_current_tenant
 
@@ -117,7 +113,8 @@ async def test_get_products_brand_manifest_translated_to_brand(sample_tenant, sa
 
     # brand_manifest is now translated to brand: {domain: "nike.com"}
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    with resolved_as(identity):
+        result = await handler.on_message_send(params, context)
 
     assert isinstance(result, Task)
     assert result.artifacts is not None
@@ -139,8 +136,6 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
 
     handler = AdCPRequestHandler()
     identity = _make_identity(sample_tenant, sample_principal)
-    handler._get_auth_token = MagicMock(return_value=sample_principal["access_token"])
-    handler._resolve_a2a_identity = MagicMock(return_value=identity)
 
     from src.core.config_loader import set_current_tenant
 
@@ -153,7 +148,8 @@ async def test_get_products_neither_brief_nor_brand_rejected(sample_tenant, samp
     params = SendMessageRequest(message=message)
 
     context = ServerCallContext()
-    result = await handler.on_message_send(params, context)
+    with resolved_as(identity):
+        result = await handler.on_message_send(params, context)
 
     # Empty params → AdCPValidationError → failed Task with envelope DataPart
     assert isinstance(result, Task)

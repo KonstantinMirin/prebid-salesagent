@@ -8,6 +8,7 @@ REST transport for AdCP tools, proving the 3-transport pattern
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 from typing import Any, cast
 
@@ -27,72 +28,57 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["api-v1"])
 
 
-# Note: ToolError handling lives entirely in the global ``@app.exception_handler``
-# in src/app.py — REST routes never catch ToolError or import the MCP-boundary
-# type (AdCPToolError). The wire-code -> HTTP status table moved to
-# src/core/tool_error_logging.py alongside handle_tool_error.
-
-
 # ---------------------------------------------------------------------------------------
 # Routes are DERIVED from the registry. There is no @router decorator to write and no body
 # model to assign: TOOLS says which tools are reachable over REST, with what verb and at
-# what path, and everything else is resolved from the row.
-#
-# Every row with a ``rest`` binding gets a route. There is no second condition: the handler
-# calls ``invoke_tool``, which reaches the implementation through the registry, so a row can
-# no longer be reachable over one transport and not another for want of a per-tool wrapper.
+# what path, and everything else is resolved from the row. Every row with a ``rest`` binding
+# gets a route, and the handler names the tool for ``serve``, which reaches the implementation
+# through the registry.
+
+
+async def _payload(request: Request) -> Any:
+    """The body as the buyer sent it: parsed JSON, or the raw bytes when it is not JSON.
+
+    Both go to ``validated_request``, which refuses a non-object the same way, so a body that
+    is not JSON earns the same INVALID_REQUEST as a JSON list rather than a decode error
+    escaping to a handler that types it differently.
+    """
+    raw = await request.body()
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
 
 
 def _rest_handler(tool_name: str, spec: Any) -> Any:
     """One route handler, built from a registry row.
 
-    It takes ``Request`` and validates nothing itself. Declaring the DTO as the body
-    parameter is what makes FastAPI validate inside its dependency solving, ahead of this
-    function -- and ahead of this function is too early, because a rejected request owes the
-    buyer its ``context`` back and only ``validated_request`` returns it. MCP already made
-    exactly this trade, and for the same reason: ``RegistryTool`` subclasses ``Tool`` rather
-    than registering a function so that FastMCP's TypeAdapter cannot refuse or coerce a
-    payload before our accepted shape decides. Two validators for one policy is the defect;
-    this makes REST agree with the other two.
-
-    The published contract does not change: the route advertises ``dto.model_json_schema()``
-    through ``openapi_extra``, derived from the same model that validates.
+    It takes ``Request`` and validates nothing itself: declaring the DTO as the body parameter
+    would make FastAPI validate ahead of this function, and a rejected request owes the buyer
+    its ``context`` back, which only ``validated_request`` returns. The published contract is
+    unchanged: the route advertises the DTO's JSON Schema through ``openapi_extra``, derived
+    from the same model that validates.
 
     PATH FIELDS are the one place the body is not the whole request. A row whose path is
     templated (``PUT /media-buys/{media_buy_id}``) names those fields in ``path_fields``, and
-    the URL is the resource identity, so the path value WINS over a body that disagrees. With
-    a raw body that merge is a dict update, and the relaxed DTO subclass that existed only to
-    survive FastAPI's pre-validation is gone with it.
+    the URL is the resource identity, so the path value WINS over a body that disagrees.
     """
 
     async def handler(request: Request, auth_ctx: AuthContext = get_auth_context, **path_values: Any) -> Any:
-        body = await request.json()
         # ONE try around everything that can produce a failure response, so every failure
         # leaves through the same except and none can escape as a 500.
         try:
+            body = await _payload(request)
             if path_values:
-                # The URL is the resource identity, so a path value WINS over a body that
-                # disagrees, and the merge happens before validation because the DTO requires
-                # the field. A body that is not a JSON object cannot take a path value and is
-                # not an AdCP request: answered as malformed, not as a 500 from the merge.
-                # Caught, not probed for type -- the same shape as the raw context read.
+                # Caught, not probed for type: a body that is not a JSON object cannot take a
+                # path value and is handed on UNMERGED, so ``validated_request`` refuses it
+                # with the same INVALID_REQUEST and ``issues`` every other malformed body earns.
                 try:
                     body = {**body, **path_values}
                 except TypeError:
-                    # Not a JSON object, so it cannot take a path value. Handed on UNMERGED
-                    # rather than rejected here: ``validated_request`` refuses it with the same
-                    # INVALID_REQUEST and ``issues`` every other row's malformed body earns,
-                    # where a rejection minted here answered it without the issues -- one
-                    # payload, two shapes, depending on whether the route was templated.
                     pass
-            # Named, not frozen: the handler names the TOOL and ``serve`` reads the registry
-            # per call. A route that froze the callable at import could not be substituted --
-            # the registry row and the thing the route invoked were two different objects.
-            #
-            # It hands over the CREDENTIAL, not an identity. Resolving it here meant reading
-            # ToolSpec.auth here too -- via two dependencies picked by `spec.auth == "optional"`,
-            # one of which hardcoded require_valid_token=False and made REST the only transport
-            # that served a rejected credential on a public tool.
+            # The CREDENTIAL, not an identity: the boundary resolves the caller and reads the
+            # row's auth declaration itself.
             response = await serve(tool_name, body, auth_ctx, TransportProtocol.REST)
         except AdcpFailure as failure:
             # REST's wire failure marker is the HTTP STATUS, and that is all this transport
@@ -120,9 +106,7 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
                 # ``Request``, not the DTO: a typed body parameter is exactly what makes
                 # FastAPI validate before the handler runs.
                 inspect.Parameter("request", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Request),
-                # ONE parameter for every row. It used to be an ``identity`` whose
-                # dependency and annotation both keyed off ``spec.auth``; the boundary
-                # decides now, so the route carries the same credential either way.
+                # ONE credential parameter for every row; the boundary decides what it must be.
                 inspect.Parameter(
                     "auth_ctx",
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,

@@ -5,7 +5,6 @@
 #   overrides (required -> optional). Architectural; permanent.
 
 import copy
-import logging
 import re
 import warnings
 from collections.abc import Mapping
@@ -789,10 +788,10 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     correct and the codegen is not). Inheriting this base RESTORES that composition; it does not
     widen anything.
 
-    The boundary writes exactly two fields onto a response -- ``adcp_version`` in
-    ``_boundary._served`` and ``replayed`` in ``_boundary._deserializer_for`` -- and they come
-    from the two different bases above. Naming both here is what lets the boundary be typed
-    rather than cast.
+    The boundary writes exactly three fields onto a response -- ``adcp_version`` and
+    ``context`` in ``_boundary._served``, ``replayed`` in ``_boundary._deserializer_for`` --
+    and they come from the two different bases above. Naming both bases here is what lets the
+    boundary be typed rather than cast.
     """
 
     @classmethod
@@ -852,16 +851,16 @@ class AdcpErrorResponse(AdcpResponse):
         return CODE_TABLE[CODE_BY_VALUE[self.adcp_error.code]].status
 
     @classmethod
-    def of(cls, exc: "AdCPSalesAgentError", *, context: Any = None) -> "AdcpErrorResponse":
+    def of(cls, exc: "AdCPSalesAgentError") -> "AdcpErrorResponse":
         """Build the failure response for one typed exception.
 
         Carries the SAME error object at both levels the wire expects -- ``adcp_error`` on the
-        envelope and ``errors[0]`` -- because a receiver is free to read either.
+        envelope and ``errors[0]`` -- because a receiver is free to read either. ``issues`` is
+        attached after the SDK helper runs: ``adcp_error()`` has no ``issues`` parameter and
+        its ``details`` is typed flat-scalars-only, so the array fits through neither.
 
-        ``issues`` is attached after the SDK helper runs: ``adcp_error()`` has no ``issues``
-        parameter and its ``details`` is typed flat-scalars-only, so the array fits through
-        neither. It is set on the model rather than injected into two dicts, which is what
-        used to make the two levels able to disagree.
+        What the BOUNDARY owns -- ``context`` and ``adcp_version`` -- is stamped by the
+        boundary (``_boundary._served``), on a failure exactly as on a success.
         """
         from adcp.server.helpers import adcp_error
 
@@ -881,39 +880,7 @@ class AdcpErrorResponse(AdcpResponse):
                 **({"issues": [issue.to_wire() for issue in exc.issues]} if exc.issues else {}),
             }
         )
-        # ``exc.context`` is the fallback while that field still exists. The boundary passes
-        # ``context=`` explicitly, which is the path that survives; the field and this fallback
-        # are deleted together in salesagent-3cs7o.2, along with the call sites that thread it.
-        # ``adcp_version`` is stamped HERE, not by the caller. It is a property of this build,
-        # so every error response carries it however it was reached -- the boundary's failure
-        # sites and the transports' own pre-dispatch refusals alike.
-        from src.core.version_negotiation import SERVED_ADCP_VERSION
-
-        echo = context if context is not None else exc.context
-        try:
-            return cls(
-                status=LibraryTaskStatus.failed,
-                adcp_version=SERVED_ADCP_VERSION,
-                adcp_error=error,
-                errors=[error],
-                context=echo,
-            )
-        except PydanticCoreValidationError:
-            # FAIL OPEN on an unusable context, never closed. The buyer is already being told
-            # its request failed; refusing to build that answer because the opaque field it
-            # sent cannot be modelled would replace a typed rejection with an internal error
-            # and lose the real fault. Dropped and logged, which is what the envelope builder
-            # this replaces did.
-            logging.getLogger(__name__).warning(
-                "dropping context of type %s: not a ContextObject, so it cannot ride the error response",
-                type(echo).__name__,
-            )
-            return cls(
-                status=LibraryTaskStatus.failed,
-                adcp_version=SERVED_ADCP_VERSION,
-                adcp_error=error,
-                errors=[error],
-            )
+        return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error])
 
 
 class CreateMediaBuyResult(AdcpResponse):
@@ -2646,8 +2613,9 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
             #
             # WHY NOT THE TYPED ERROR: this validator runs inside pydantic, which FastMCP
             # drives through a TypeAdapter BEFORE the tool body. A typed error raised there
-            # never passes with_error_logging (the tool has not been entered) and is not a
-            # pydantic ValidationError either, so no converter on the MCP path picks it up --
+            # never reaches RegistryTool.run's AdcpFailure catch (the tool has not been
+            # entered) and is not a pydantic ValidationError either, so nothing on the MCP
+            # path converts it --
             # FastMCP masked it into a prose ToolError and the buyer received no envelope at
             # all: no code, no field, no suggestion. A pydantic error is the one shape every
             # boundary already converts.

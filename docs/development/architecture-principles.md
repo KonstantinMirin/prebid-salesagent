@@ -119,11 +119,14 @@ of being re-decided per call site. Repositories are the only DB writers
 the buyer-facing envelope; the raise site never authors it.
 
 **Illustration.** A validation failure raises `AdCPValidationError`; the
-boundary builds one `AdcpErrorResponse` with `AdcpErrorResponse.of(exc, context=...)`
-(`src/core/schemas/_base.py`) and raises it as `AdcpFailure`. Each transport
+boundary builds one `AdcpErrorResponse` with `failure_response(...)`
+(`src/core/tools/_boundary.py`), which records the fault with
+`record_boundary_error` and stamps `context` and `adcp_version` through
+`_served`, and `_failed` raises it as `AdcpFailure`. Each transport
 serializes that response with `to_wire(...)` and adds only its own marker —
-REST the HTTP status from `response.http_status`, MCP an `AdCPToolError`,
-A2A a failed Task state — all through `record_boundary_error`.
+REST the HTTP status from `response.http_status`, MCP an `AdCPToolError`
+raised in `RegistryTool.run`, A2A a Task state taken from the response's own
+`status`.
 
 **Consequence.** The error class *is* the wire code's identity, so a new error
 condition is a new subclass, not a string. Guards enforce both sides of the

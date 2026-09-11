@@ -184,13 +184,11 @@ class TestFunctionCallRegression:
 class TestAuthenticationFlow:
     """Tests to prevent authentication-related regressions."""
 
-    def test_auth_token_extraction_method_exists(self):
-        """Test that authentication token extraction works."""
+    def test_credential_read_method_exists(self):
+        """The handler reads the credential off the call context; the boundary resolves it."""
         handler = AdCPRequestHandler()
 
-        # Method should exist
-        assert hasattr(handler, "_get_auth_token"), "Handler should have _get_auth_token method"
-        assert callable(handler._get_auth_token), "_get_auth_token should be callable"
+        assert callable(handler._credential_of), "_credential_of should be callable"
 
 
 class TestHTTPBehaviorRegression:
