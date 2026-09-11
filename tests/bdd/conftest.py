@@ -2489,6 +2489,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
                 True,
             ),
+            # BR-RULE-092 INV-2: a seller that does NOT support configurable attribution must
+            # DISCARD the buyer's requested window and answer with its platform default.
+            # Production echoes the request back instead, so the response reports an
+            # attribution window the seller will not actually honour.
+            #
+            # This was `try: assert ... except AssertionError: pytest.xfail(...)` inside
+            # then_attribution_default — catch the failure and excuse it, the purest form of
+            # the shape salesagent-tne7q removed. It could not fail in either direction, so
+            # the echo had been reported as an expected failure on every run. strict=True
+            # here means it XPASSes loudly the day production starts stripping the request.
+            "T-UC-004-attr-unsupported": (
+                "production echoes the buyer's attribution_window instead of discarding it and "
+                "returning the platform default (BR-RULE-092 INV-2)",
+                True,
+            ),
             # Invalid status filter: NOT a production gap — the generic
             # 'with {request_params}' When step shadows the specific
             # status_filter step and parses 'status_filter "X"' (no '=') to {},
