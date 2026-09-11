@@ -6,14 +6,19 @@ MCP's wire marker for a failure -- the response body, raised as the ``ToolError`
 renders as ``isError=True``.
 """
 
+from __future__ import annotations
+
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastmcp.exceptions import ToolError
 
 from src.core.errors.codes import Recovery
 from src.core.exceptions import AdCPSalesAgentError
+
+if TYPE_CHECKING:
+    from src.core.resolved_identity import ResolvedIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +70,7 @@ def record_boundary_error(
     operation: str,
     error: Exception,
     *,
-    tenant_id: str | None = None,
-    principal_id: str | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> None:
     """Record an error at a transport boundary uniformly across MCP/A2A/REST.
 
@@ -74,9 +78,8 @@ def record_boundary_error(
         transport: ``"mcp"``, ``"a2a"``, or ``"rest"`` -- the audit logger's source string.
         operation: Tool/skill/route name.
         error: The exception that fired at the boundary.
-        tenant_id: Tenant ID when a caller was resolved. When None, the activity feed and
-            audit log are skipped; the log line still captures the error.
-        principal_id: Principal ID when a caller was resolved.
+        identity: The resolved caller, when the boundary had one. Without it the activity
+            feed and audit log are skipped; the log line still captures the error.
 
     Behavior:
         1. stdlib logger: WARNING for a typed ``AdCPSalesAgentError`` (the buyer-correctable
@@ -93,6 +96,8 @@ def record_boundary_error(
     error_code, error_message, _recovery = extract_error_info(error)
     is_typed = isinstance(error, AdCPSalesAgentError)
     transport_upper = transport.upper()
+    tenant_id = identity.tenant_id if identity is not None else None
+    principal_id = identity.principal_id if identity is not None else None
 
     if is_typed:
         logger.warning(

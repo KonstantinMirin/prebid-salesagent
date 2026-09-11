@@ -165,21 +165,22 @@ def failure_response(
     exc: Exception,
     *,
     echo: ContextObject | None = None,
-    tenant_id: str | None = None,
-    principal_id: str | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> AdcpErrorResponse:
     """Record one failure and build the response that answers it. THE one failure builder.
 
-    Every failure a buyer sees is built here: by ``_failed`` for anything ``serve`` catches,
-    and by a transport for the few faults raised before ``serve`` is reached -- a message the
-    A2A handler cannot read, an exception outside the tool -- which carry no ``echo`` and no
-    caller. The ORIGINAL exception goes to the recorder: the body carries no exception text
-    (AdCP 3.1.1 transport-errors.mdx, Security Considerations), so the server-side record is
-    the sole answer to what broke. ``adcp_error_for`` types it -- an untyped ValueError is a
+    A transport calls it with the three positional arguments, for a fault in its own container
+    handling raised outside ``serve``: that is protocol-level knowledge and nothing more. The
+    ``echo`` and the ``identity`` are the boundary's alone -- only ``serve`` holds a validated
+    request and a resolved caller -- so only ``_failed`` passes them.
+
+    The ORIGINAL exception goes to the recorder: the body carries no exception text (AdCP 3.1.1
+    transport-errors.mdx, Security Considerations), so the server-side record is the sole
+    answer to what broke. ``adcp_error_for`` types it -- an untyped ValueError is a
     VALIDATION_ERROR, a PermissionError a PERMISSION_DENIED, anything else an INTERNAL_ERROR --
     and that answer does not depend on which transport is asking.
     """
-    record_boundary_error(protocol, operation, exc, tenant_id=tenant_id, principal_id=principal_id)
+    record_boundary_error(protocol, operation, exc, identity=identity)
     return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc)))
 
 
@@ -188,14 +189,10 @@ def _failed(
     tool_name: str,
     exc: Exception,
     echo: ContextObject | None,
-    *,
-    tenant_id: str | None = None,
-    principal_id: str | None = None,
+    identity: ResolvedIdentity | None = None,
 ) -> NoReturn:
-    """Leave the boundary with the failure response for ``exc``, scoped to the caller if one was resolved."""
-    raise AdcpFailure(
-        failure_response(protocol, tool_name, exc, echo=echo, tenant_id=tenant_id, principal_id=principal_id)
-    ) from exc
+    """Leave the boundary with the failure response for ``exc``, scoped to the caller once resolved."""
+    raise AdcpFailure(failure_response(protocol, tool_name, exc, echo=echo, identity=identity)) from exc
 
 
 def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> BuyerRequest:
@@ -296,7 +293,7 @@ async def invoke_tool(
     try:
         return await _invoke_stamped(echo, tool_name, spec.impl, req, identity)
     except Exception as exc:
-        _failed(protocol, tool_name, exc, echo, tenant_id=identity.tenant_id, principal_id=identity.principal_id)
+        _failed(protocol, tool_name, exc, echo, identity)
 
 
 async def _invoke_stamped(
