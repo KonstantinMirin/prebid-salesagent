@@ -107,7 +107,7 @@ Feature: UC-006 sync_creatives — an effect that leaves the transaction runs on
     And the tenant has a slack_webhook_url configured
     And a creative with a known format_id
     And validation_mode is "strict"
-    And assignments referencing a non-existent package_id
+    And assignments to a non-existent package
     When the Buyer Agent syncs the creative
     Then the error is compliant with the AdCP error spec
     And the response arrives

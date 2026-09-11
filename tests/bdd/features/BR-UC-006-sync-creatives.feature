@@ -79,7 +79,7 @@ Feature: BR-UC-006 Sync Creative Assets
   Scenario: Sync creatives — approval workflow routing
     Given the Buyer is authenticated
     And a creative with a known format_id
-    And the tenant has approval_mode set to "require-human"
+    And the tenant has approval_mode "require-human"
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative status should be "pending_review"
@@ -103,7 +103,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-main-provenance-warning @main-flow
   Scenario: Sync creatives — provenance warning when policy requires it
     Given the Buyer is authenticated
-    And the tenant has a product with creative_policy.provenance_required = true
+    And a product with creative_policy.provenance_required = true
     And a creative with a known format_id but no provenance metadata
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
@@ -160,7 +160,7 @@ Feature: BR-UC-006 Sync Creative Assets
 
   @T-UC-006-ext-a-empty @extension @ext-a @error
   Scenario: Authentication required — empty principal_id
-    Given the Buyer has an empty principal_id in the authentication context
+    Given the request has an empty principal_id
     And a creative with a known format_id
     When the Buyer Agent syncs the creative
     Then the error is compliant with the AdCP error spec
@@ -309,7 +309,7 @@ Feature: BR-UC-006 Sync Creative Assets
   Scenario: Package not found — strict mode aborts
     Given the Buyer is authenticated
     And a creative with a known format_id
-    And assignments referencing a non-existent package_id
+    And assignments to a non-existent package
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
     Then the error is compliant with the AdCP error spec
@@ -402,7 +402,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the Buyer is authenticated
     And a creative with a known format_id
     And assignments to a non-existent package
-    And no validation_mode is specified
+    And validation_mode is not set
     When the Buyer Agent syncs the creative
     Then the error is compliant with the AdCP error spec
     And the assignment processing should abort with an error
@@ -799,7 +799,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-rule-094-inv1 @invariant @BR-RULE-094
   Scenario: INV-1 — provenance absent when required triggers warning
     Given the Buyer is authenticated
-    And the tenant has a product with creative_policy.provenance_required = true
+    And a product with creative_policy.provenance_required = true
     And a creative with a known format_id but no provenance metadata
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
@@ -810,8 +810,8 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-rule-094-inv2 @invariant @BR-RULE-094
   Scenario: INV-2 — provenance present when required passes normally
     Given the Buyer is authenticated
-    And the tenant has a product with creative_policy.provenance_required = true
-    And a creative with a known format_id and valid provenance metadata
+    And a product with creative_policy.provenance_required = true
+    And a creative with provenance metadata
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative should be processed normally
@@ -820,7 +820,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-rule-094-inv3 @invariant @BR-RULE-094
   Scenario: INV-3 — no provenance policy means check skipped
     Given the Buyer is authenticated
-    And no product in the tenant has provenance_required set
+    And no product with provenance_required
     And a creative with no provenance metadata
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
@@ -830,7 +830,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-rule-094-inv4 @invariant @BR-RULE-094
   Scenario: INV-4 — creative_policy null on product means check skipped
     Given the Buyer is authenticated
-    And the tenant has a product with creative_policy = null
+    And a product with creative_policy = null
     And a creative with no provenance metadata
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
@@ -916,7 +916,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | missing_format_id  | no format_id                             | INVALID_REQUEST     |
       | unknown_format     | a format_id unknown to all agents        | REFERENCE_NOT_FOUND      |
       | agent_unreachable  | a format_id whose agent is unreachable   | AGENT_UNREACHABLE   |
-      | empty_name         | an empty name and a known format_id      | INVALID_REQUEST          |
+      | empty_name         | format_id but an empty name      | INVALID_REQUEST          |
 
   @T-UC-006-partition-generative @partition @generative
   Scenario Outline: Generative build detection — <partition>
@@ -1172,7 +1172,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the Buyer is authenticated
     And a creative with name "Banner" and a known format_id
     And validation_mode is <mode>
-    And an assignment with a package that does not exist
+    And assignments to a non-existent package
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
     And <expected>
@@ -1280,7 +1280,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | boundary_point                              | assignment_state                                                     | expected                                              |
       | format matches (exact)                      | an assignment to a package whose product accepts this format         | the assignment should be created successfully         |
       | format matches after URL normalization      | an assignment to a package whose product format has trailing slash   | the assignment should match after URL normalization   |
-      | no product format restrictions              | an assignment to a package whose product has empty format_ids        | the assignment should be created (all formats allowed)|
+      | no product format restrictions              | assignments to a package whose product has empty format_ids        | the assignment should be created (all formats allowed)|
       | no product_id on package                    | an assignment to a package with no product_id                        | the format check should be skipped entirely           |
       | format mismatch                             | an assignment to a package whose product does not accept this format | the error should include "suggestion" field           |
 
@@ -1742,7 +1742,7 @@ Feature: BR-UC-006 Sync Creative Assets
 
   @T-UC-006-storyboard-provenance-required-rejection @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_REQUIRED -- provenance object absent on creative under a policy that requires it
-    Given the tenant has a product with creative_policy.provenance_required = true
+    Given a product with creative_policy.provenance_required = true
     And the Buyer Agent submits a creative whose manifest carries no provenance object at all
     When the Buyer Agent sends sync_creatives
     Then the response is compliant with the sync_creatives success spec

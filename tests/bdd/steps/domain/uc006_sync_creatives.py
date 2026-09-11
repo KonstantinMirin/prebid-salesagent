@@ -625,12 +625,6 @@ def given_creative_with_name_and_format(ctx: dict, name: str) -> None:
     ctx["creative_format_id"] = format_id
 
 
-@given(parsers.parse('the tenant has approval_mode set to "{mode}"'))
-def given_tenant_has_approval_mode_set_to(ctx: dict, mode: str) -> None:
-    """Set approval_mode on the tenant (REST main-flow scenario)."""
-    _set_tenant_approval_mode(ctx, mode)
-
-
 @given(parsers.parse('the tenant has approval_mode "{mode}"'))
 def given_tenant_has_approval_mode(ctx: dict, mode: str) -> None:
     """Set approval_mode on the tenant (partition scenario)."""
@@ -986,12 +980,6 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
 def given_validation_mode(ctx: dict, mode: str) -> None:
     """Set validation_mode on the sync_creatives request (strict or lenient)."""
     ctx["validation_mode"] = mode
-
-
-@given("no validation_mode is specified")
-def given_no_validation_mode(ctx: dict) -> None:
-    """Omit validation_mode from the request (default should be strict per spec)."""
-    ctx.pop("validation_mode", None)
 
 
 # --- 0xwq: assignment package boundary (existing pkg / existing assignment / missing pkg) ---
@@ -2002,23 +1990,6 @@ def given_request_empty_principal_id(ctx: dict) -> None:
     )
 
 
-@given("the Buyer has an empty principal_id in the authentication context")
-def given_buyer_empty_principal_id_in_auth(ctx: dict) -> None:
-    """Buyer presents an identity whose principal_id is the empty string.
-
-    Sets up the same state as 'the request has an empty principal_id'.
-    Production emits the standard AUTH_REQUIRED for the missing-auth path,
-    matching the spec; the downstream generic Then step
-    ``the error code should be "AUTH_REQUIRED"`` asserts it.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id="",
-        tenant_id=env._tenant_id,
-    )
-
-
 @given("the principal has no associated tenant")
 def given_principal_no_associated_tenant(ctx: dict) -> None:
     """Buyer's principal resolves but has no associated tenant.
@@ -2309,27 +2280,6 @@ def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -
     ctx["product"] = product
     creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
-
-
-@given("assignments referencing a non-existent package_id")
-def given_assignments_referencing_nonexistent_package(ctx: dict) -> None:
-    """Build an assignments payload whose package_id does not exist in the tenant.
-
-    Production's _assignments.py:62-69 raises AdCPNotFoundError, whose recovery the
-    code table supplies as "correctable", when ``find_package_with_media_buy`` returns nothing
-    AND validation_mode == "strict".
-
-    Distinct from the existing "an assignment to a package that does not
-    exist" step (line 747): that step also defaults ``validation_mode`` to
-    strict, while this Gherkin pairs the assignment Given with a separate
-    ``validation_mode is "strict"`` Given. We do NOT default validation_mode
-    here to keep the steps composable.
-    """
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: ["pkg-nonexistent-ryv4-404"]}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2886,39 +2836,6 @@ def given_no_product_with_provenance_required(ctx: dict) -> None:
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     env._commit_factory_data()
-
-
-@given("the tenant has a product with creative_policy.provenance_required = true")
-def given_tenant_has_product_provenance_required(ctx: dict) -> None:
-    """Create a product whose creative_policy requires provenance (tenant-scoped variant)."""
-    _setup_product_with_creative_policy(ctx, provenance_required=True)
-
-
-@given("the tenant has a product with creative_policy = null")
-def given_tenant_has_product_null_policy(ctx: dict) -> None:
-    """Create a product whose creative_policy is null (tenant-scoped variant)."""
-    _setup_product_with_creative_policy(ctx, creative_policy=None)
-
-
-@given("no product in the tenant has provenance_required set")
-def given_tenant_no_product_provenance(ctx: dict) -> None:
-    """No product in the tenant requires provenance — check is skipped entirely (INV-3)."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-
-
-@given("a creative with a known format_id and valid provenance metadata")
-def given_creative_known_format_with_provenance(ctx: dict) -> None:
-    """Set up a creative with a known format_id and valid provenance metadata (INV-2)."""
-    _build_creative_payload(
-        ctx,
-        provenance={
-            "source": "ai-generated",
-            "model": "stable-diffusion-xl",
-            "disclosure": "This creative was generated using AI.",
-        },
-    )
 
 
 @given("the tenant has no approval_mode configured")
@@ -3857,15 +3774,6 @@ def given_assignment_product_trailing_slash(ctx: dict) -> None:
         ctx,
         product_format_ids=[{"agent_url": agent_url_with_slash, "id": format_id}],
     )
-
-
-@given("an assignment to a package whose product has empty format_ids")
-def given_assignment_product_empty_format_ids(ctx: dict) -> None:
-    """Create a package whose product has an empty format_ids list.
-
-    Per BR-RULE-039 INV-3: empty format_ids means all formats are allowed.
-    """
-    _setup_assignment_package_for_format(ctx, product_format_ids=[])
 
 
 @given("an assignment to a package with no product_id")
@@ -5008,20 +4916,6 @@ def given_creative_with_format_unknown_to_all(ctx: dict) -> None:
 def given_creative_with_unreachable_agent_format(ctx: dict) -> None:
     """Set up a creative whose format agent returns a connection error."""
     given_creative_with_unreachable_agent(ctx)
-
-
-@given("a creative with an empty name and a known format_id")
-def given_creative_empty_name_known_format(ctx: dict) -> None:
-    """Set up a creative with an empty name and a known format_id."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    creative_payload = CreativeAssetRequestFactory.payload(
-        creative_id="creative-empty-name-001",
-        name="",
-        format_id=_creative_format_id_entry(ctx, env),
-    )
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = _scenario_format_id(ctx, env)
 
 
 # Format validation partition outcomes are handled by the existing
@@ -6334,21 +6228,6 @@ def given_validation_mode_not_set(ctx: dict) -> None:
 
 
 # --- yqpf: assignment lifecycle steps ---
-
-
-@given("an assignment with a package that does not exist")
-def given_assignment_with_nonexistent_package(ctx: dict) -> None:
-    """Reference a package_id that does NOT exist in any tenant.
-
-    Similar to ``given_assignment_to_missing_package`` but with different
-    step text (used by validation_mode boundary scenarios). Does NOT
-    pre-set validation_mode — the scenario controls it separately.
-    """
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    env._commit_factory_data()
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: ["pkg-nonexistent-yqpf-404"]}
 
 
 @given("assignments to an existing package")

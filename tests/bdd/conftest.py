@@ -1008,7 +1008,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "T-UC-006-partition-format-id",
         {
             "-agent_unreachable-a format_id whose agent is unreachable-AGENT_UNREACHABLE]",
-            "-empty_name-an empty name and a known format_id-INVALID_REQUEST]",
+            "-empty_name-format_id but an empty name-INVALID_REQUEST]",
             "-missing_format_id-no format_id-INVALID_REQUEST]",
             "-unknown_format-a format_id unknown to all agents-REFERENCE_NOT_FOUND]",
         },

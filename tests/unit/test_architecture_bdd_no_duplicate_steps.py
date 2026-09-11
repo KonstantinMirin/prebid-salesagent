@@ -32,12 +32,23 @@ _DUPLICATE_THRESHOLD = 2
 
 # The pairs that already exist, as a COUNT that may only fall -- the same ratchet shape as
 # .duplication-baseline, and for the same reason: lowering the threshold to 2 does not create
-# these, it reveals 54 that were always there. An enumerated allowlist of 54 would be 54 lines
-# nobody reads; a number fails the moment a 55th appears, which is the property that matters.
+# these, it reveals the ones that were always there. An enumerated allowlist would be lines
+# nobody reads; a number fails the moment one more appears, which is the property that matters.
 #
 # Lower it when you collapse a pair. Never raise it: a new pair is a new defect, and the
 # scenario above is what one costs.
-_DUPLICATE_GROUP_BASELINE = 54
+#
+# 54 -> 46: ten uc006 groups collapsed to one canonical sentence each (salesagent-tne7q.1).
+#
+# THIS SCAN FINDS CANDIDATES, NOT DEFECTS. It normalises string literals away, and in Gherkin
+# the literal is usually the claim -- so two steps that differ ONLY in the ctx key they read,
+# the action they assert, or the fixture value they set look byte-identical here. Four such
+# false positives were caught by reading the pair before collapsing it, two of them only after
+# a collapse went red: given_assignments_referencing_same_package reads "idempotent_package_id"
+# while its twin reads "cross_tenant_package_id", and the two output_format_ids steps differ in
+# the creative NAME, which is the subject of the name-fallback scenario that uses one of them.
+# Read both bodies verbatim before lowering this number again.
+_DUPLICATE_GROUP_BASELINE = 46
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
