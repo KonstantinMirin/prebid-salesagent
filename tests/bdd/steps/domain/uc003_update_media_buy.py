@@ -229,12 +229,6 @@ def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
     env._commit_factory_data()
 
 
-@given("a valid update_media_buy request")
-def given_update_request_no_table(ctx: dict) -> None:
-    """Initialize update request kwargs with defaults (media_buy_id from ctx)."""
-    _ensure_update_defaults(ctx)
-
-
 @given(parsers.parse("a valid update_media_buy request with:"))
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""

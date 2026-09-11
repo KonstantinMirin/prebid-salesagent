@@ -48,7 +48,33 @@ _DUPLICATE_THRESHOLD = 2
 # while its twin reads "cross_tenant_package_id", and the two output_format_ids steps differ in
 # the creative NAME, which is the subject of the name-fallback scenario that uses one of them.
 # Read both bodies verbatim before lowering this number again.
-_DUPLICATE_GROUP_BASELINE = 46
+#
+# 46 -> 41: five uc019 groups collapsed (salesagent-tne7q.1). All five were SAFE by the
+# stricter rule the consolidation tool now applies -- bodies identical modulo docstrings
+# and assertion MESSAGES only, every literal that reaches ctx or production equal -- so
+# no claim was merged away; a sixth group was dead on both spellings and deleted whole.
+#
+# 41 -> 35: uc011 (3 spellings + 1 dead def + the notification-subscriber pair, where the
+# PAUSED sentence was kept as canonical because both seeds set active=False), uc004 (2),
+# uc006 (2). The groups NOT collapsed are as informative as the ones that were: uc004's
+# supports / does-NOT-support pairs share a body on purpose -- production has no per-seller
+# capability gate for dimensions, metrics or attribution, so both sentences establish the
+# same fact and the Then does the grading (their docstrings say so). Body identity is
+# necessary, not sufficient; the SENTENCE is the final gate.
+#
+# 35 -> 26: uc010 (2), uc026 (1 + a dead def), then_error (2), then_payload (1),
+# given_media_buy (2), admin_accounts (1), given_entities (a dead second decorator), uc003
+# (a dead def). Left on purpose, each read verbatim: then_error's "no database records
+# should be created" vs "no new media buy should have been created" (the body grades only
+# media buys -- the broader sentence over-claims), then_media_buy's pricing- vs
+# date-validation-passes, given_config's "format named X" vs "format X with no render
+# dimensions" (the body sets no dimensions state), given_entities' 224-use tenant-resolvable
+# vs 7-use setup-checklist-complete, uc002's natural-key vs account_id not-found, uc003's
+# revision int vs "string" (identical source, different runtime TYPE -- legitimately
+# distinct), uc026's paused-false vs should-deliver, uc010's adapter-unavailable vs
+# advisory-warning. Every one of those is a sentence claim the shared body does not
+# distinguish; merging would erase the claim, not the duplication.
+_DUPLICATE_GROUP_BASELINE = 26
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).

@@ -378,8 +378,8 @@ Feature: BR-UC-005 Discover Creative Formats
     Given no creative agents have any registered formats
     When the Buyer Agent requests the format catalog
     Then the response is compliant with the list_creative_formats spec
-    And the response should include an empty formats array
-    And no error should be raised
+    And no formats should be returned
+    And no error should be returned
     # Edge case: PRE-B1 boundary — no formats available
 
   @T-UC-005-dim-boundary @UC-005-MAIN-MCP-08 @boundary @BR-RULE-049

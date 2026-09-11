@@ -1540,12 +1540,6 @@ def when_dispatch_create_named_transport(ctx: dict) -> None:
     _dispatch_create(ctx)
 
 
-@when(parsers.parse('the Buyer Agent sends the create_media_buy request for "{mb_id}"'))
-def when_send_create_for_mb(ctx: dict, mb_id: str) -> None:
-    """Dispatch create_media_buy for a specific (cross-buy) media buy."""
-    _dispatch_create(ctx)
-
-
 @when("the Buyer Agent sends the request")
 def when_send_generic_request(ctx: dict) -> None:
     """Send either a create or update request based on context."""
@@ -1924,16 +1918,6 @@ def then_outcome(ctx: dict, outcome: str) -> None:
 
 
 # --- Update-specific Then steps ---
-
-
-@then(parsers.parse("the response should contain the updated package with budget {budget:d}"))
-def then_updated_budget(ctx: dict, budget: int) -> None:
-    """Assert updated package has the expected budget."""
-    packages = _get_packages(ctx)
-    pkg = packages[0]
-    actual = _pkg_field(pkg, "budget")
-    assert actual is not None, "Package budget is None in update response"
-    assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
 
 
 @then(parsers.parse('the response should contain the updated package with budget {budget:d} and pacing "{pacing}"'))

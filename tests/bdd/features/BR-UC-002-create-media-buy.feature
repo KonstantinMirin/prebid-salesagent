@@ -189,7 +189,7 @@ Feature: BR-UC-002 Create Media Buy
   Scenario: Start time is in the past
     Given a valid create_media_buy request
     And the account exists and is active
-    But start_time is "2020-01-01T00:00:00Z" (in the past)
+    But a valid create_media_buy request with start_time "2020-01-01T00:00:00Z"
     When the Buyer Agent sends the create_media_buy request
     Then the error is compliant with the AdCP error spec
     And the operation should fail
@@ -2056,7 +2056,7 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-sandbox-validation @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account with invalid budget returns real validation error
-    Given a create_media_buy request with total_budget of 0
+    Given a valid create_media_buy request with total budget 0
     And the request targets a sandbox account
     When the Buyer Agent sends the create_media_buy request
     Then the error is compliant with the AdCP error spec
@@ -2512,7 +2512,7 @@ Feature: BR-UC-002 Create Media Buy
 
   @T-UC-002-v31-error-budget-too-low-details @v31 @error-details @budget-too-low @post-f2 @post-f3
   Scenario: v3.1 BUDGET_TOO_LOW error carries minimum_budget and currency in details
-    Given a create_media_buy request with total_budget 50
+    Given a valid create_media_buy request with total budget 50
     And the product minimum spend is 500 USD
     And the account "acc-001" exists and is active
     When the Buyer Agent sends the create_media_buy request
@@ -2520,7 +2520,7 @@ Feature: BR-UC-002 Create Media Buy
     And the response should indicate a terminal failure
     And the error code should be "BUDGET_TOO_LOW"
     And the error details should include minimum_budget 500
-    And the error details should include currency "USD"
+    And the error "details" object should include "currency" with value "USD"
     # v3.1: error-details/budget-too-low.json — recommended details for BUDGET_TOO_LOW
     # v3.1: recovery classification correctable — buyer adjusts and retries
     # --- v3.1 wave A: IDEMPOTENCY_CONFLICT error-details routing (idempotency revision mismatch) ---
@@ -2535,7 +2535,7 @@ Feature: BR-UC-002 Create Media Buy
     Then the error is compliant with the AdCP error spec
     And the response should indicate a correctable failure
     And the error code should be "IDEMPOTENCY_CONFLICT"
-    And the error details should include resource_id "mb-789"
+    And the error "details" object should include "resource_id" with value "mb-789"
     And the error details should include current_version 1
     And the error should include "suggestion" field
     # v3.1: error-details/conflict.json — recommended details for IDEMPOTENCY_CONFLICT

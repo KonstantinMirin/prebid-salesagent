@@ -842,12 +842,6 @@ def then_suggestion_agent_url_id(ctx: dict) -> None:
 # ── No error raised ─────────────────────────────────────────────────
 
 
-@then("no error should be raised")
-def then_no_error(ctx: dict) -> None:
-    """Assert no error was recorded."""
-    assert "error" not in ctx, f"Expected no error but got: {ctx.get('error')}"
-
-
 @then("no error should be returned")
 def then_no_error_returned(ctx: dict) -> None:
     """Assert no error was returned (synonym for no error raised)."""
@@ -1097,17 +1091,6 @@ def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None
     assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
     actual = details[key]
     _assert_detail_value_matches(key, actual, value)
-
-
-@then(parsers.parse('the error details should include {key} "{value}"'))
-def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
-    """Assert error.details contains a key with the given string value."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
-    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
-    actual = details[key]
-    assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
 
 
 @then(parsers.parse('the error "details" object should include "{key}" with value {value:d}'))

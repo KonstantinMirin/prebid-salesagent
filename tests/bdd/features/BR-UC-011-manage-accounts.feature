@@ -631,7 +631,7 @@ Feature: BR-UC-011 Manage Accounts
     And the account for brand domain "acme-corp.com" has action "created"
     And the account for brand domain "nova-motors.com" has action "failed"
     And the failed account includes a per-account errors array
-    And the response does not contain an operation-level errors field
+    And the response does not contain an operation-level errors array
 
   @T-UC-011-ext-c-rejected @sync @ext-c @billing @error @partition @boundary
   Scenario: Seller rejects unsupported billing -- billing_rejected (billing = unsupported value for seller)
@@ -816,7 +816,7 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-notif-replace-clear @sync @notification-configs @partition @boundary
   Scenario: Re-sending a subscriber_id replaces in place; an empty array clears the set
     Given the Buyer is authenticated
-    And an account for brand domain "acme-corp.com" exists with notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
+    And an account for brand domain "acme-corp.com" exists with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
     When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" as paused with url "https://buyer.example/webhooks/adcp/paused" and event_types "creative.purged"
     Then the response is compliant with the sync_accounts success spec
     And the account notification_configs echo exactly 1 subscriber
@@ -885,7 +885,7 @@ Feature: BR-UC-011 Manage Accounts
   @T-UC-011-notif-activation-proof-fail @sync @notification-configs @error @post-f1 @post-f2 @partition @boundary
   Scenario: Active subscriber whose proof-of-control challenge fails is rejected and prior state kept
     Given the Buyer is authenticated
-    And an account for brand domain "acme-corp.com" exists with notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
+    And an account for brand domain "acme-corp.com" exists with a paused notification config subscriber "buyer-primary" for url "https://buyer.example/webhooks/adcp/creative"
     And the webhook proof-of-control challenge for "https://buyer.example/webhooks/adcp/unreachable" fails
     When the Buyer Agent sends a sync_accounts request re-sending subscriber "buyer-primary" as active with url "https://buyer.example/webhooks/adcp/unreachable"
     Then the response is compliant with the sync_accounts success spec
@@ -995,7 +995,7 @@ Feature: BR-UC-011 Manage Accounts
     And the account for brand domain "acme-corp.com" has action "created"
     And the account has status "active"
     And the per-account result carries no errors
-    And the response does not contain an operation-level errors field
+    And the response does not contain an operation-level errors array
     # REGRESSION LOCK, not a gap: this pins the status quo so the field-policy table cannot
     # quietly turn an advisory hint into a buyer-visible rejection.
     # The request description is HINT language — "The seller provisions the account
@@ -1045,7 +1045,7 @@ Feature: BR-UC-011 Manage Accounts
     | acme-corp.com   | acme-corp.com | operator |
     Then the response is compliant with the sync_accounts success spec
     And the response includes dry_run true
-    And the account for brand domain "acme-corp.com" shows action "created"
+    And the account for brand domain "acme-corp.com" has action "created"
     And no accounts were actually created or modified on the seller
     # POST-S10: Buyer receives dry-run preview
 
@@ -1333,7 +1333,7 @@ Feature: BR-UC-011 Manage Accounts
     And the response contains an errors array with at least 1 error
     And the response does not contain an accounts array
     And the response does not contain a dry_run field
-    And the response is the error variant of oneOf
+    And the response is an error variant with no accounts array
     And the error should include "suggestion" field with remediation guidance
 
   @T-UC-011-atomic-service-error @sync @atomic @error @partition @boundary

@@ -85,18 +85,18 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-main-snapshot @main-flow @snapshot
   Scenario: Query media buys with delivery snapshots requested and available
-    Given the principal "buyer-001" owns media buy "mb-001" with an active package "pkg-001"
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
     And the ad platform adapter supports realtime reporting
     And snapshot data is available for package "pkg-001"
     When the Buyer Agent sends a get_media_buys request with include_snapshot true
     Then the response is compliant with the get_media_buys spec
-    And the response package "pkg-001" should include a snapshot
+    And package "pkg-001" should include a snapshot
     And the snapshot should include as_of, staleness_seconds, impressions, and spend
     # POST-S4: Near-real-time delivery metrics present per package
 
   @T-UC-019-main-no-results @main-flow
   Scenario: Query returns empty results when principal has no matching media buys
-    Given the principal "buyer-001" owns no media buys
+    Given an authenticated principal "buyer-001" who owns no media buys
     When the Buyer Agent sends a get_media_buys request with no filters
     Then the response is compliant with the get_media_buys spec
     And the response should include an empty media_buys array
@@ -313,14 +313,14 @@ Feature: BR-UC-019 Query Media Buys
       | partition                | creative_id | internal_status | extra_condition                              | expected_approval | rejection_check                                     |
       | approved_creative        | cr-001      | approved        |                                              | approved          | rejection_reason should be absent                   |
       | rejected_with_reason     | cr-002      | rejected        | and rejection_reason "Image too dark"        | rejected          | rejection_reason should be "Image too dark"         |
-      | rejected_without_reason  | cr-003      | rejected        | and no rejection_reason in data              | rejected          | rejection_reason should be null or absent           |
+      | rejected_without_reason  | cr-003      | rejected        | and no rejection_reason in data              | rejected          | rejection_reason should be absent |
       | pending_review_explicit  | cr-004      | submitted       |                                              | pending_review    | rejection_reason should be absent                   |
       | pending_review_catchall  | cr-005      | processing      |                                              | pending_review    | rejection_reason should be absent                   |
 
   @T-UC-019-partition-approval-invalid @partition @approval_status
   Scenario: Creative approval mapping - no_creative_found (silent skip)
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" has a creative assignment referencing creative_id "cr-999"
+    And package "pkg-001" has a creative assignment with creative_id "cr-999"
     And no creative with id "cr-999" exists in the tenant
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
@@ -355,7 +355,7 @@ Feature: BR-UC-019 Query Media Buys
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the creative approval should have approval_status "approved"
-    And rejection_reason should not be present in the approval entry
+    And rejection_reason should be absent
     # BR-RULE-152 INV-5: rejection_reason is absent when approval_status is not rejected
 
   @T-UC-019-partition-snapshot @partition @include_snapshot
@@ -390,7 +390,7 @@ Feature: BR-UC-019 Query Media Buys
       | include_snapshot true, adapter supports, snapshot returned               | the adapter supports realtime reporting and data is available    | include_snapshot true       | package "pkg-001" should include a snapshot                                                  |
       | include_snapshot true, adapter supports, snapshot null for a package     | the adapter supports realtime reporting but no data for pkg-001  | include_snapshot true       | snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE"                                |
       | include_snapshot true, adapter does not support realtime                 | the adapter does not support realtime reporting                  | include_snapshot true       | snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"                                            |
-      | include_snapshot true, all packages have snapshot                        | the adapter supports realtime reporting and data for all pkgs    | include_snapshot true       | all packages should include snapshots                                                        |
+      | include_snapshot true, all packages have snapshot                        | the adapter supports realtime reporting and data is available | include_snapshot true       | all packages should include snapshots                                                        |
       | include_snapshot true, mixed — some packages have snapshot, some do not  | the adapter supports reporting, data for pkg-001 but not pkg-002 | include_snapshot true       | pkg-001 has snapshot, pkg-002 has SNAPSHOT_TEMPORARILY_UNAVAILABLE                           |
 
   @T-UC-019-inv-153-5 @invariant @BR-RULE-153
@@ -431,8 +431,8 @@ Feature: BR-UC-019 Query Media Buys
       | boundary_point                          | principal_setup                                                       | expected_outcome                                                                                                          |
       | valid principal with multiple media buys | an authenticated principal "buyer-001" who owns 5 media buys         | the response should include 5 media buys scoped to buyer-001                                                              |
       | valid principal with zero media buys    | an authenticated principal "buyer-002" who owns no media buys         | the response should include an empty media_buys array                                                                     |
-      | principal_id is null                    | an authenticated identity with principal_id null                      | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
-      | principal_id is empty string            | an authenticated identity with principal_id ""                        | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
+      | principal_id is null                    | an authenticated identity with no principal_id | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
+      | principal_id is empty string            | an authenticated identity with no principal_id | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
       | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with soft error code "AUTH_INVALID" message "Principal buyer-ghost not found"                            |
       | identity not resolved (no auth)         | no authentication context                                             | hard error code "AUTH_MISSING" raised before any DB access                                                                |
 

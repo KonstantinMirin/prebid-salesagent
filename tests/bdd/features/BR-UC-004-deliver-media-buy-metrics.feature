@@ -386,7 +386,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # returns at `if not circuit_breaker.can_attempt()` before dialling. The skip is the
     # OPEN breaker, not a missing config — a reporting_webhook is registered above.
     Then the webhook delivery should be skipped without an HTTP POST
-    And the circuit breaker should be in "OPEN" state
+    And the circuit breaker should transition to "OPEN"
     And subsequent scheduled deliveries should be suppressed
     # POST-F2: System knows the webhook is persistently failing
 
@@ -911,7 +911,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario Outline: Delivery account boundary - <boundary_point>
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the ad server adapter has delivery data for "mb-001"
-    When the Buyer Agent requests delivery metrics at account boundary <value>
+    When the Buyer Agent requests delivery metrics with account <value>
     Then the response is compliant with the get_media_buy_delivery spec
     And the account handling should be <expected>
 

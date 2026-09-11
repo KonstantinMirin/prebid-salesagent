@@ -339,12 +339,6 @@ def given_full_degradation_baseline(ctx: dict) -> None:
     _config(ctx)["full"] = True
 
 
-@given("a tenant is resolvable but database query fails")
-def given_tenant_db_fails(ctx: dict) -> None:
-    """db_fail row: tenant resolves, publisher-partner DB read fails → placeholder domain."""
-    ctx["env"].break_tenant_config_db()
-
-
 @given("a tenant is resolvable but both adapter and DB fail")
 def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
     """adapter_and_db_fail row: both degrade — [display] channels + placeholder domain."""
@@ -781,11 +775,6 @@ def then_envelope_adcp_version_pattern(ctx: dict, pattern: str) -> None:
 
 @then(parsers.parse('the response should include supported_protocols containing "{protocol}"'))
 def then_supported_protocols_contains(ctx: dict, protocol: str) -> None:
-    assert protocol in wire_field(ctx, "supported_protocols")
-
-
-@then(parsers.parse('supported_protocols should contain "{protocol}"'))
-def then_supported_protocols_contains_short(ctx: dict, protocol: str) -> None:
     assert protocol in wire_field(ctx, "supported_protocols")
 
 

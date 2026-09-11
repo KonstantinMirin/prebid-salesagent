@@ -114,7 +114,7 @@ Feature: BR-UC-026 Package Media Buy
     | budget     | 7500    |
     When the Buyer Agent sends the update_media_buy request
     Then the response is compliant with the update_media_buy success spec
-    And the response should contain the updated package with budget 7500
+    And the package budget should be 7500
     And the package paused state should be unchanged
     # POST-S2: Updated package state reflects new budget
     # POST-S4: Paused state unchanged

@@ -169,7 +169,6 @@ _ALLOWLIST: set[XfailSite] = {
     ("domain/uc019_query_media_buys.py", "given_creative_status_with_reason", 1),
     ("domain/uc019_query_media_buys.py", "given_no_creative_exists", 1),
     ("domain/uc019_query_media_buys.py", "given_package_creative_assignment", 1),
-    ("domain/uc019_query_media_buys.py", "given_package_creative_ref_nonexistent", 1),
     ("generic/given_media_buy.py", "given_product_minimum_spend", 1),
     ("generic/given_media_buy.py", "given_proposal_budget_guidance_min", 1),
     ("generic/given_media_buy.py", "given_proposal_not_exists", 1),

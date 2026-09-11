@@ -1416,13 +1416,6 @@ def when_partition_account(ctx: dict, value: str) -> None:
     _dispatch_partition(ctx, "account", value)
 
 
-@when(parsers.parse("the Buyer Agent requests delivery metrics at account boundary {value}"))
-def when_boundary_account(ctx: dict, value: str) -> None:
-    """Boundary test: account value."""
-    _seed_valid_account_if_named(ctx, value)
-    _dispatch_partition(ctx, "account", value)
-
-
 # NOTE: the partition status_filter step is identical to
 # when_request_with_status_filter above (same regex + body); the single
 # definition there serves both the alternative and partition scenarios.
@@ -2245,14 +2238,6 @@ def then_circuit_breaker_recorded_failure(ctx: dict) -> None:
     env = ctx["env"]
     endpoint_key = ctx.get("circuit_breaker_endpoint_key", env.endpoint_key())
     env.assert_circuit_breaker_failure_recorded(endpoint_key)
-
-
-@then(parsers.parse('the circuit breaker should be in "{state}" state'))
-def then_circuit_breaker_state(ctx: dict, state: str) -> None:
-    """Assert circuit breaker state matches expected value."""
-    env = ctx["env"]
-    actual = env.get_breaker_state()
-    assert actual.lower() == state.lower(), f"Expected CB state '{state.lower()}', got '{actual}'"
 
 
 @then("subsequent scheduled deliveries should be suppressed")

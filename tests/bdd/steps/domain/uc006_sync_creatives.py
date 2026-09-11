@@ -3951,22 +3951,6 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
     registry.get_format = AsyncMock(return_value=fmt)
 
 
-@when("format compatibility is checked")
-def when_format_compatibility_checked(ctx: dict) -> None:
-    """Dispatch sync_creatives — the format compatibility check happens inside.
-
-    This is the same as 'the Buyer Agent syncs the creative' but named for
-    scenarios that focus on the format check behavior.
-    """
-    creatives = ctx.get("creatives", [])
-    kwargs: dict = {"creatives": creatives}
-    if "assignments" in ctx:
-        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"])
-    if "validation_mode" in ctx:
-        kwargs["validation_mode"] = ctx["validation_mode"]
-    dispatch_request(ctx, **kwargs)
-
-
 @then('the formats should match using the "format_id" key')
 def then_formats_match_using_format_id_key(ctx: dict) -> None:
     """Assert the format check passed with product using "format_id" key.
@@ -5377,23 +5361,6 @@ def given_generative_creative_exists_with_content(ctx: dict) -> None:
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = fmt["id"]
     ctx["existing_generative_data"] = existing_data
-
-
-@given("the update has no prompt assets or inputs")
-def given_update_no_prompt(ctx: dict) -> None:
-    """Ensure the update payload has NO prompt-bearing assets or inputs.
-
-    INV-5: no prompt in assets or inputs (update) -> generative build
-    skipped; existing creative data preserved.
-    """
-    creatives = ctx.get("creatives", [])
-    assert creatives, "No creative in context to strip prompt from"
-    last_creative = creatives[-1]
-    assets = last_creative.get("assets", {})
-    for role in ("message", "brief", "prompt"):
-        assets.pop(role, None)
-    last_creative["assets"] = assets
-    last_creative.pop("inputs", None)
 
 
 @given("a generative creative with both user-provided assets and generative prompt")

@@ -497,7 +497,7 @@ Feature: BR-UC-006 Sync Creative Assets
   Scenario: INV-5 — update without prompt preserves existing data
     Given the Buyer is authenticated
     And a generative creative that already exists with generated content
-    And the update has no prompt assets or inputs
+    And no prompt assets or inputs
     And GEMINI_API_KEY is configured
     When the Buyer Agent updates the creative
     Then the response is compliant with the sync_creatives success spec
@@ -700,7 +700,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Given the Buyer is authenticated
     And a product with format_ids using "format_id" key
     And a creative with a matching format
-    When format compatibility is checked
+    When the Buyer Agent syncs the creative with assignments
     Then the response is compliant with the sync_creatives success spec
     And the formats should match using the "format_id" key
 

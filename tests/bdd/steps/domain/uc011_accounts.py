@@ -2209,13 +2209,6 @@ def then_no_dry_run_field(ctx: dict) -> None:
     assert dry_run is None, f"Expected no dry_run on error, got {dry_run}"
 
 
-@then("the response is the error variant of oneOf")
-def then_response_is_error_variant(ctx: dict) -> None:
-    """Assert the response is the error variant (exception, not success response)."""
-    _get_error(ctx)
-    assert payload_or_none(ctx) is None, "Expected error variant (no success response)"
-
-
 @then("the response contains an accounts array")
 def then_has_accounts_array(ctx: dict) -> None:
     """Assert the response has a non-empty accounts array."""
@@ -2293,14 +2286,6 @@ def then_failed_has_errors(ctx: dict) -> None:
     for err in errors:
         assert err.code, f"Per-account error missing code: {err}"
         assert err.message, f"Per-account error missing message: {err}"
-
-
-@then("the response does not contain an operation-level errors field")
-def then_no_operation_level_errors(ctx: dict) -> None:
-    """Assert the success response has no top-level errors field."""
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None)
-    assert errors is None or len(errors) == 0, f"Unexpected operation-level errors: {errors}"
 
 
 @then("the error message explains the billing model is not available")
@@ -2722,16 +2707,6 @@ def then_no_dry_run_include(ctx: dict) -> None:
     silently passing) when the response never arrived at all.
     """
     wire_absent(ctx, "dry_run")
-
-
-@then(parsers.parse('the account for brand domain "{domain}" shows action "{action}"'))
-def then_account_shows_action(ctx: dict, domain: str, action: str) -> None:
-    """Assert account has expected action (alias for 'has action')."""
-    resp = require_payload(ctx)
-    acct = _find_account_by_brand(resp, domain)
-    actual = _action_str(acct.action)
-    assert actual == action, f"Expected action '{action}' for {domain}, got '{actual}'"
-    ctx["last_account"] = acct
 
 
 @then(
@@ -3634,33 +3609,6 @@ def _find_subscriber(subs: list[Any], subscriber_id: str) -> Any:
     return next((s for s in subs if str(_sub_attr(s, "subscriber_id")) == subscriber_id), None)
 
 
-@given(
-    parsers.re(
-        r'an account for brand domain "(?P<domain>[^"]+)" exists with notification config '
-        r'subscriber "(?P<sub>[^"]+)" for url "(?P<url>[^"]+)"'
-    )
-)
-def given_account_with_notif_subscriber(ctx: dict, domain: str, sub: str, url: str) -> None:
-    """Pre-create an account carrying one PAUSED notification subscriber.
-
-    Paused (``active: false``) deliberately, and it is the same prior state on every
-    transport. An active seed would need a successful proof-of-control challenge to
-    persist (T2 increment F4c), and the scenario urls are under a reserved TLD that
-    production's prover refuses by design — so on e2e_rest the seed itself would be
-    rejected and the "prior set" the scenario grades would never exist.
-
-    Nothing is weakened: the scenario text says only that a subscriber exists, and a
-    paused prior set grades the obligation MORE sharply — a failed activation must
-    leave the paused entry exactly as it was, rather than partially applying the
-    active re-send.
-    """
-    _setup_tenant_and_principal(ctx)
-    cfg = _notif_config(sub, url, "creative.status_changed, creative.purged", active=False)
-    _dispatch_sync_notification(ctx, domain, [cfg])
-    ctx["notif_domain"] = domain
-    ctx["notif_prior"] = {"subscriber_id": sub, "url": url, "active": False}
-
-
 @when(
     parsers.re(
         r'the Buyer Agent sends a sync_accounts request provisioning brand domain "(?P<domain>[^"]+)" '
@@ -4035,12 +3983,6 @@ def given_agent_with_n_accounts(ctx: dict, name: str, count: int) -> None:
 def given_agent_b_accounts_same_tenant(ctx: dict, name: str, count: int) -> None:
     """Create a second agent with N accessible accounts in the same tenant."""
     given_agent_with_n_accounts(ctx, name, count)
-
-
-@given("the Buyer Agent has a connection with tenant resolved but no principal_id")
-def given_connection_no_principal(ctx: dict) -> None:
-    """Set up identity with tenant_id but principal_id=None."""
-    _setup_tenant_and_principal(ctx)
 
 
 @when(parsers.parse('agent "{name}" sends a list_accounts request'))
