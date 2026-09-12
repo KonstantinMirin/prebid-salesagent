@@ -182,29 +182,49 @@ def given_three_creatives_three_formats(ctx: dict) -> None:
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    agent_url = env.DEFAULT_AGENT_URL
+    display = _creative_format_id_entry(ctx, env)
+    agent_url = display["agent_url"]
+    # The video and native formats must be ones the transport's agent SERVES: on
+    # e2e_rest the real reference agent (v3.1.1 catalog, mirrored by the SDK's
+    # v1-reference-formats.json) answers, and an unserved id is a failed entry with no
+    # status -- which would grade the catalog, not the per-creative status. Their asset
+    # slots are the catalog's required ones for the same reason.
+    if is_e2e(ctx):
+        video_id, native_id = "video_standard_30s", "native_standard"
+        video_assets = build_assets(video_spec("video_file", url="https://example.com/video.mp4"))
+        native_assets = build_assets(
+            text_spec("title", content="Discover something new"),
+            text_spec("description", content="A native placement"),
+            image_spec("main_image", url="https://example.com/native.png"),
+            text_spec("cta_text", content="Learn more"),
+            text_spec("sponsored_by", content="Acme"),
+        )
+    else:
+        video_id, native_id = "video_30s", "native_content"
+        video_assets = build_assets(video_spec("video", url="https://example.com/video.mp4"))
+        native_assets = build_assets(
+            text_spec("headline", content="Discover something new"),
+            image_spec("main_image", url="https://example.com/native.png"),
+        )
 
     creatives = [
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-display-001",
             name="Bulk Display Creative",
-            format_id=_creative_format_id_entry(ctx, env),
+            format_id=display,
             assets=build_assets(image_spec("banner_image", url="https://example.com/banner.png")),
         ),
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-video-001",
             name="Bulk Video Creative",
-            format_id={"id": "video_30s", "agent_url": agent_url},
-            assets=build_assets(video_spec("video", url="https://example.com/video.mp4")),
+            format_id={"id": video_id, "agent_url": agent_url},
+            assets=video_assets,
         ),
         CreativeAssetRequestFactory.payload(
             creative_id="creative-bulk-native-001",
             name="Bulk Native Creative",
-            format_id={"id": "native_content", "agent_url": agent_url},
-            assets=build_assets(
-                text_spec("headline", content="Discover something new"),
-                image_spec("main_image", url="https://example.com/native.png"),
-            ),
+            format_id={"id": native_id, "agent_url": agent_url},
+            assets=native_assets,
         ),
     ]
     ctx.setdefault("creatives", []).extend(creatives)
