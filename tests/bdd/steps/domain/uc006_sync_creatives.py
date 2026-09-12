@@ -335,9 +335,9 @@ def when_sync_creative(ctx: dict) -> None:
     the step text says "syncs the creative". Error handling is the production
     code's responsibility, not the step's.
 
-    Honors ``ctx["has_auth"] is False`` by passing ``identity=ctx["identity"]``
-    (typically None or a principal-less identity) so the auth boundary check
-    in _sync_creatives_impl fires.
+    Honors ``ctx["has_auth"] is False`` by presenting ``ctx["credential"]``
+    (a token-less credential, or one addressing a tenant that does not exist) so the
+    resolver's refusal fires on the wire.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
@@ -353,7 +353,7 @@ def when_sync_creative(ctx: dict) -> None:
     if "dry_run" in ctx:
         kwargs["dry_run"] = ctx["dry_run"]
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
+        dispatch_request(ctx, credential=ctx["credential"], **kwargs)
     else:
         dispatch_request(ctx, **kwargs)
 
@@ -455,15 +455,10 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 
     # Authenticated principal the creative must be scoped to (isolation guard).
     # Given steps expose it as ctx["principal_id"] (string) or ctx["principal"]
-    # (Principal object set by _ensure_tenant_principal); identity is the fallback.
+    # (Principal object set by _ensure_tenant_principal).
     expected_principal = ctx.get("principal_id")
     if not expected_principal and ctx.get("principal") is not None:
         expected_principal = getattr(ctx["principal"], "principal_id", None)
-    if not expected_principal and ctx.get("identity") is not None:
-        identity = ctx["identity"]
-        expected_principal = (
-            identity.get("principal_id") if isinstance(identity, dict) else getattr(identity, "principal_id", None)
-        )
     assert expected_principal, "Test setup error: no expected principal in ctx to verify account resolution"
 
     creative_id = latest_creative_id(ctx)
@@ -1939,56 +1934,34 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
 
 
 @given("the request has an empty principal_id")
-def given_request_empty_principal_id(ctx: dict) -> None:
-    """Buyer presents an identity whose principal_id is the empty string.
-
-    Distinct from 'no authentication credentials' (identity=None entirely):
-    here the identity resolves but principal_id is empty, which
-    _sync_creatives_impl rejects via ``if not principal_id`` before any DB
-    or adapter work.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id="",
-        tenant_id=env._tenant_id,
-    )
-
-
 @given("the Buyer has an empty principal_id in the authentication context")
-def given_buyer_empty_principal_id_in_auth(ctx: dict) -> None:
-    """Buyer presents an identity whose principal_id is the empty string.
+def given_request_empty_principal_id(ctx: dict) -> None:
+    """Buyer addresses the tenant but presents no token, so no principal resolves.
 
-    Sets up the same state as 'the request has an empty principal_id'.
-    Production emits the standard AUTH_REQUIRED for the missing-auth path,
-    matching the spec; the downstream generic Then step
+    Two sentences, one state: on the wire a principal cannot be "empty", it is present
+    or absent, and absent is what the resolver refuses before any DB or adapter work.
+    The same state ``the Buyer has no authentication credentials`` establishes, so it is
+    that step's body. Production emits the standard AUTH_REQUIRED for the missing-auth
+    path, matching the spec; the downstream generic Then step
     ``the error code should be "AUTH_REQUIRED"`` asserts it.
     """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id="",
-        tenant_id=env._tenant_id,
-    )
+    from tests.bdd.steps.generic.given_auth import given_buyer_no_auth
+
+    given_buyer_no_auth(ctx)
 
 
 @given("the principal has no associated tenant")
 def given_principal_no_associated_tenant(ctx: dict) -> None:
     """Buyer's principal resolves but has no associated tenant.
 
-    Creates an identity with a valid principal_id but a tenant_id that
-    does not exist in the database, so resolve_identity succeeds but
-    tenant lookup fails with TENANT_NOT_FOUND.
+    Presents the env principal's valid token addressed to a tenant_id that does
+    not exist in the database, so the tenant-scoped principal lookup fails.
 
     The harness always creates a valid tenant for its session, so the
     no-tenant error path cannot be exercised. xfail with reason.
     """
-    env = ctx["env"]
     ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id=env._principal_id,
-        tenant_id="nonexistent_tenant_404",
-    )
+    ctx["credential"] = ctx["env"].credential(tenant="nonexistent_tenant_404")
     pytest.xfail(
         "SPEC-PRODUCTION GAP: no-tenant error path not exercisable in harness — "
         "the IntegrationEnv always creates a valid tenant. See UC-005 ext-a xfails "

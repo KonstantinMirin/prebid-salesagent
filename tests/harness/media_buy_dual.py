@@ -21,7 +21,6 @@ from src.core.schemas import UpdateMediaBuyRequest
 from tests.harness._mixins import make_adapter_update_side_effect
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.harness.transport import DeliverResult
-from tests.helpers.credentials import identity_credential_headers
 
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
 
@@ -241,9 +240,9 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _build_update_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """The REST body, built by the SAME flatten the A2A and MCP paths use.
 
-        Three REST-specific differences, and only three: ``identity`` is resolved
-        by ``_prepare_rest_request`` rather than travelling in the body,
-        ``media_buy_id`` rides the URL, and the response is parsed from HTTP.
+        Three REST-specific differences, and only three: ``credential`` rides the
+        request headers rather than travelling in the body, ``media_buy_id``
+        rides the URL, and the response is parsed from HTTP.
 
         The wrapper-unsupported pop is NOT a fourth: ``UpdateMediaBuyBody``
         forbids the same field set for the same reason the flat A2A/MCP params
@@ -257,18 +256,17 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         When step's own docstring already named ``_flatten_update_request`` as
         the one owner of that overlay; now it is.
         """
-        kwargs.pop("identity", None)
+        kwargs.pop("credential", None)
         body = self._flatten_update_request(kwargs)
         body.pop("media_buy_id", None)
         return body
 
     def _run_update_rest_request(self, **kwargs: Any) -> Any:
-        # Shared preamble (identity resolution + commit + client + auth-dep
-        # override): with no identity the REST auth dep rejects, so the no-auth
-        # update scenario fires instead of test-mode auth letting it through.
-        client, identity = self._prepare_rest_request(kwargs)
-
-        headers = identity_credential_headers(identity, tenant="tenant_id")
+        # The credential rides the request headers, so a no-auth update scenario is
+        # refused by the real resolver rather than let through by a test-mode override.
+        headers = self._pop_credential(kwargs)
+        self._commit_factory_data()
+        client = self.get_rest_client()
 
         body = self._build_update_rest_body(**kwargs)
         # Same rule as REST_ENDPOINT above: the id in the URL is the one the SCENARIO

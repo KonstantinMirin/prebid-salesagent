@@ -90,9 +90,9 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # gaps by un-xfailing dn2s/mkso's scenarios; both graduated before landing
         # here, so neither is listed: uc010 auth-data-identity at salesagent-zna9
         # (_resolve_auth_dep now resolves tenant from headers regardless of
-        # credential presence), and uc003 ext-a-unknown at salesagent-z9e0 (harness
-        # identity_for() nulls principal_id on a failed token->principal DB lookup,
-        # mirroring production's resolve_identity() — all transports agree now).
+        # credential presence), and uc003 ext-a-unknown at salesagent-z9e0 (the harness
+        # presents no token when no Principal row exists, so production's resolver
+        # answers the failed lookup itself — all transports agree now).
     }
 )
 

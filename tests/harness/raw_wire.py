@@ -4,8 +4,10 @@
 happens before any tool runs -- a body that is not a JSON object, bytes that are not JSON,
 a name the registry does not know, an A2A message naming no skill or two -- is exactly what
 that client cannot send, because the shape being refused is the shape it builds. This is
-the one seam that sends such a document as written. The identity, the REST client, the A2A
-handler and the MCP client are the harness's own; only the document is raw.
+the one seam that sends such a document as written. The credential, the REST client, the A2A
+handler and the MCP client are the harness's own; only the document is raw. Each sender
+takes the credential headers dict and injects it where its transport reads headers, so the
+real resolver answers here exactly as it does for the client.
 
 What comes back is read the way the client reads it. An AdCP body goes through the one
 envelope normalizer and lands in ``wire_error_envelope``. A refusal the transport's own
@@ -35,7 +37,6 @@ from tests.harness.transport import (
     TransportResult,
     derive_error_status,
 )
-from tests.helpers.credentials import identity_credential_headers
 
 #: The A2A JSON-RPC route and the version header it requires, the same two the harness's
 #: wire dispatcher sends (``tests/harness/client.py::_deliver_e2e_a2a``).
@@ -59,14 +60,18 @@ class RawDocument:
 
 
 def dispatch_raw(
-    env: Any, transport: Transport, document: RawDocument, identity: Any = NO_IDENTITY_OVERRIDE
+    env: Any, transport: Transport, document: RawDocument, credential: Any = NO_IDENTITY_OVERRIDE
 ) -> TransportResult:
-    """Send *document* over *transport* and return what the buyer received."""
+    """Send *document* over *transport* and return what the buyer received.
+
+    *credential* is the headers dict to present; omitted, the env's own is presented.
+    """
     try:
         sender = _SENDERS[transport]
     except KeyError:
         raise NotImplementedError(f"raw-wire dispatch has no sender for {transport!r}") from None
-    return sender(env, document, identity)
+    headers = env.credential() if credential is NO_IDENTITY_OVERRIDE else dict(credential)
+    return sender(env, document, headers)
 
 
 # ── REST ─────────────────────────────────────────────────────────────
@@ -92,27 +97,26 @@ def _no_payload(_body: dict[str, Any]) -> None:
     return None
 
 
-def _rest(env: Any, document: RawDocument, identity: Any) -> TransportResult:
+def _rest(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     from tests.harness.client import unwrap_rest_response
 
-    kwargs: dict[str, Any] = {} if identity is NO_IDENTITY_OVERRIDE else {"identity": identity}
-    client, resolved = env._prepare_rest_request(kwargs)
+    env._commit_factory_data()
+    client = env.get_rest_client()
     method, path = _rest_address(document.tool)
-    headers = {"content-type": "application/json", **env._rest_request_headers(resolved)}
+    headers = {"content-type": "application/json", **credential}
     response = client.request(method, path, content=_rest_content(document.body), headers=headers)
     return unwrap_rest_response(env, response, Transport.REST, parse_response=_no_payload)
 
 
-def _e2e_rest(env: Any, document: RawDocument, identity: Any) -> TransportResult:
+def _e2e_rest(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     import httpx
 
     from tests.harness.client import unwrap_rest_response
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
-    resolved = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
     method, path = _rest_address(document.tool)
-    headers = {"content-type": "application/json", **identity_credential_headers(resolved)}
+    headers = {"content-type": "application/json", **credential}
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
         response = client.request(method, path, content=_rest_content(document.body), headers=headers)
     return unwrap_rest_response(env, response, Transport.E2E_REST, parse_response=_no_payload)
@@ -163,37 +167,21 @@ def _a2a_task_result(transport: Transport, failed: bool, bodies: list[dict[str, 
     )
 
 
-def _a2a(env: Any, document: RawDocument, identity: Any) -> TransportResult:
-    from a2a.server.routes.common import ServerCallContext
+def _a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     from a2a.types import SendMessageRequest, TaskState
     from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
 
     from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-    from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+    from tests.harness._base import _a2a_call_context
     from tests.utils.a2a_helpers import extract_data_from_artifact
 
     env._commit_factory_data()
-    resolved = env.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
-    if env.use_real_db and resolved is not None and resolved.tenant_id:
-        env._ensure_tenant_for_audit(resolved.tenant_id)
-    token = resolved.auth_token if resolved is not None else None
-    if token:
-        credential = AuthContext(auth_token=token, headers=identity_credential_headers(resolved, tenant="tenant_id"))
-        context = ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: credential})
-    else:
-        context = ServerCallContext()
+    context = _a2a_call_context(credential)
+    env._seed_ambient_tenant(credential)
 
     request = SendMessageRequest(message=_a2a_message(document))
     try:
-        if resolved is not None and not token:
-            # A token-less identity is injected through the resolver seam, as the harness's
-            # own A2A leg does; ``identity=None`` means no credential and runs the real chain.
-            from tests.helpers.boundary_identity import resolved_as
-
-            with resolved_as(resolved):
-                task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
-        else:
-            task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
+        task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
     except A2AError as exc:
         # The code the JSON-RPC layer would write for this class, read from the SDK's own
         # table rather than restated here.
@@ -202,7 +190,7 @@ def _a2a(env: Any, document: RawDocument, identity: Any) -> TransportResult:
     return _a2a_task_result(Transport.A2A, failed, [extract_data_from_artifact(a) for a in task.artifacts])
 
 
-def _e2e_a2a(env: Any, document: RawDocument, identity: Any) -> TransportResult:
+def _e2e_a2a(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     import httpx
     from a2a.types.a2a_pb2 import SendMessageRequest
     from google.protobuf import json_format
@@ -211,14 +199,13 @@ def _e2e_a2a(env: Any, document: RawDocument, identity: Any) -> TransportResult:
 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
-    resolved = env.identity_for(Transport.E2E_A2A) if identity is NO_IDENTITY_OVERRIDE else identity
     rpc_body = {
         "jsonrpc": "2.0",
         "id": str(uuid4()),
         "method": "SendMessage",
         "params": json_format.MessageToDict(SendMessageRequest(message=_a2a_message(document))),
     }
-    headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **identity_credential_headers(resolved)}
+    headers = {"Content-Type": "application/json", **_A2A_VERSION_HEADER, **credential}
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
         response = client.post(_A2A_RPC_PATH, json=rpc_body, headers=headers)
     rpc = response.json()
@@ -242,7 +229,7 @@ def _e2e_a2a(env: Any, document: RawDocument, identity: Any) -> TransportResult:
 # ── MCP ──────────────────────────────────────────────────────────────
 
 
-def _mcp(env: Any, document: RawDocument, identity: Any) -> TransportResult:
+def _mcp(env: Any, document: RawDocument, credential: dict[str, str]) -> TransportResult:
     from unittest.mock import patch
 
     from fastmcp import Client
@@ -252,12 +239,10 @@ def _mcp(env: Any, document: RawDocument, identity: Any) -> TransportResult:
     from tests.harness._base import WireError, _mcp_wire_envelope
 
     env._commit_factory_data()
-    resolved = env.identity_for(Transport.MCP) if identity is NO_IDENTITY_OVERRIDE else identity
-    headers = identity_credential_headers(resolved, tenant="tenant_id")
     arguments = {} if document.body is None else document.body
 
     async def _call() -> Any:
-        with patch("fastmcp.server.dependencies.get_http_headers", return_value=headers):
+        with patch("fastmcp.server.dependencies.get_http_headers", return_value=dict(credential)):
             async with Client(mcp) as client:
                 return await client.call_tool(document.tool, arguments)
 

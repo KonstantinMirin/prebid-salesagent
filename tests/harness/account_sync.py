@@ -96,6 +96,13 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         super().__init__(**kwargs)
         self._supported_billing = supported_billing
         self._account_approval_mode = account_approval_mode
+        # Constructor-passed policy reaches the ``call_impl`` identity and the unit-mode
+        # tenant substitute through the same overrides ``configure_tenant_field`` writes;
+        # ``setup_default_data`` folds them into the DB row for the wire legs.
+        if supported_billing is not None:
+            self._tenant_overrides["supported_billing"] = supported_billing
+        if account_approval_mode is not None:
+            self._tenant_overrides["account_approval_mode"] = account_approval_mode
         # Proof-of-control outcomes: a default plus per-url overrides.
         self._proof_default: bool = True
         self._proof_overrides: dict[str, bool] = {}
@@ -314,15 +321,6 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         if self._session:
             self._require_tenant_row("set_approval_mode")
         self.configure_tenant_field("account_approval_mode", mode)
-
-    def identity_for(self, transport: Any) -> Any:
-        """Build identity with billing policy and approval mode on the tenant dict."""
-        if self._supported_billing is not None:
-            self._tenant_overrides["supported_billing"] = self._supported_billing
-        if self._account_approval_mode is not None:
-            self._tenant_overrides["account_approval_mode"] = self._account_approval_mode
-        self._identity_cache.clear()
-        return super().identity_for(transport)
 
     async def call_impl_async(self, **kwargs: Any) -> SyncAccountsResponse:
         """Call _sync_accounts_impl with real DB (async version).

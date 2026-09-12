@@ -354,10 +354,15 @@ def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
 
 @given("a tenant is resolvable but no auth principal available")
 def given_tenant_no_principal(ctx: dict) -> None:
-    """no_principal row: tenant resolves, caller is principal-less (anonymous identity).
+    """no_principal row: tenant resolves, caller presents no token (anonymous).
     Per INV-4 the adapter is tenant-only/principal-free, so adapter-derived channels
-    are NOT degraded by the missing principal — the [display] expectation is the gap."""
-    ctx["identity"] = ctx["env"].anonymous_identity()
+    are NOT degraded by the missing principal — the [display] expectation is the gap.
+
+    The same state ``the Buyer has no authentication credentials`` establishes, so it is
+    that step's body, not a second copy of it."""
+    from tests.bdd.steps.generic.given_auth import given_buyer_no_auth
+
+    given_buyer_no_auth(ctx)
 
 
 @given(
@@ -407,21 +412,22 @@ def given_invalid_token(ctx: dict) -> None:
     ctx["token_state"] = "invalid"
 
 
-def _identity_for_token_state(ctx: dict) -> Any:
-    """Map the declared token_state onto a harness identity.
+def _credential_for_token_state(ctx: dict) -> Any:
+    """Map the declared token_state onto the credential the dispatch presents.
 
-    - no      → principal-less tenant identity (tenant Given holds; no credential)
-    - valid   → env default (real factory token)
-    - invalid → token matching no Principal row (real chain on MCP/A2A;
-                in-process REST models the treat-as-absent outcome via the
-                dep seam — the real header path is exercised on e2e_rest)
+    - no      → nothing presented, tenant still addressed (tenant Given holds)
+    - valid   → env default (the principal row's token)
+    - invalid → a token matching no Principal row; the real chain refuses or
+                treats it as absent on every transport alike
     """
+    from tests.harness._base import INVALID_TOKEN
+
     env = ctx["env"]
     state = ctx.get("token_state", "valid")
     if state == "no":
-        return env.anonymous_identity()
+        return env.credential(token=None)
     if state == "invalid":
-        return env.invalid_token_identity()
+        return env.credential(token=INVALID_TOKEN)
     return _DEFAULT
 
 
@@ -546,14 +552,14 @@ def given_seller_build_version(ctx: dict, build_version: str) -> None:
 def _call_capabilities(ctx: dict, **kwargs: Any) -> None:
     """Single funnel for every capabilities dispatch (DRY).
 
-    Honors ctx["identity"] = None (no-tenant Givens) and appends each
+    Honors ctx["credential"] (the no-auth and no-tenant Givens) and appends each
     dispatch's typed payload to ctx["response_history"] for dual-call
     comparisons. The payload comes from payload_or_none, which reads THIS
     dispatch's TransportResult: it is None exactly when the dispatch errored
     (or never happened), which is the distinction the dual-call Then grades.
     """
-    if "identity" not in kwargs and "identity" in ctx:
-        kwargs["identity"] = ctx["identity"]
+    if "credential" not in kwargs and "credential" in ctx:
+        kwargs["credential"] = ctx["credential"]
     dispatch_request(ctx, **kwargs)
     ctx.setdefault("response_history", []).append((payload_or_none(ctx), ctx.get("error")))
 
@@ -604,7 +610,7 @@ def when_call_with_major_version(ctx: dict, major: int) -> None:
 
 @when("the Buyer Agent calls get_adcp_capabilities without authentication")
 def when_call_unauthenticated(ctx: dict) -> None:
-    _call_capabilities(ctx, identity=ctx["env"].anonymous_identity())
+    _call_capabilities(ctx, credential=ctx["env"].credential(token=None))
 
 
 @when("the Buyer Agent invokes get_adcp_capabilities")
@@ -619,11 +625,11 @@ def when_invoke_capabilities(ctx: dict) -> None:
     hands the transport back to the shared parametrization, so one row runs on every
     transport and a per-transport answer is unwritable here.
     """
-    identity = _identity_for_token_state(ctx)
-    if identity is _DEFAULT:
+    credential = _credential_for_token_state(ctx)
+    if credential is _DEFAULT:
         _call_capabilities(ctx)
     else:
-        _call_capabilities(ctx, identity=identity)
+        _call_capabilities(ctx, credential=credential)
 
 
 # ── Thens: adcp envelope ─────────────────────────────────────────────

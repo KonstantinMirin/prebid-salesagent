@@ -25,7 +25,7 @@ from unittest.mock import MagicMock
 
 from src.core.schemas import CreateMediaBuyRequest
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict
-from tests.helpers.capture_wrapper_req import registry_impl
+from tests.helpers.capture_wrapper_req import stub_impl
 
 
 async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
@@ -41,17 +41,14 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
     from src.core.auth_context import AuthContext
     from src.core.schemas import CreateMediaBuyResult
     from src.core.tools._boundary import invoke_tool
-    from tests.helpers.boundary_identity import resolved_as
+    from tests.harness._base import BaseTestEnv
 
     req_dict = create_test_media_buy_request_dict()
     mock_result = MagicMock(spec=CreateMediaBuyResult)
     mock_result.__str__ = lambda self: "mock_result"
-
-    # tenant_id None keeps this out of the idempotency cache: an identity that resolved no
-    # tenant has no (agent, account, key) scope, so the boundary runs the implementation
-    # without a DB probe -- which a unit test has no database for.
-    mock_identity = MagicMock()
-    mock_identity.tenant_id = None
+    # The boundary reads the protocol status off every result it stamps; a spec'd mock
+    # does not expose the pydantic field, so it is set to the value a success carries.
+    mock_result.status = "completed"
 
     captured: dict[str, Any] = {}
 
@@ -59,9 +56,11 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
         captured.update(kwargs)
         return mock_result
 
-    # The boundary RESOLVES the identity from the credential; it is not handed one, so a test
-    # that needs a particular caller substitutes the resolver rather than passing an identity.
-    with registry_impl("create_media_buy", _capture), resolved_as(mock_identity):
+    # The boundary RESOLVES the identity from the credential; it is not handed one. A unit
+    # env substitutes the resolver's database reads, so the env's own credential resolves to
+    # its principal with no database, and ``stub_impl`` stubs the boundary's other two
+    # database steps (the idempotency probe and account resolution) for the same reason.
+    with BaseTestEnv() as env, stub_impl("create_media_buy", side_effect=_capture):
         # Everything, push_notification_config included, travels ON the request -- it is a
         # request FIELD (1f13cca0a), not a kwarg forwarded beside the request.
         await invoke_tool(
@@ -75,7 +74,7 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
                 account=req_dict.get("account"),
                 push_notification_config=pnc,
             ),
-            AuthContext(),
+            AuthContext(headers=env.credential()),
             "a2a",
         )
 

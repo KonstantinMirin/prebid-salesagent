@@ -108,8 +108,8 @@ class A2ADispatcher:
 class RestDispatcher:
     """Dispatch via FastAPI TestClient → route → invoke_tool() → _impl().
 
-    Identity flows through kwargs to env._run_rest_request(), which pops it
-    and configures the FastAPI auth dep override per-request.
+    The credential flows through kwargs to env._run_rest_request(), which pops it
+    and sends it as the request headers; the production middleware reads it there.
 
     Unlike other dispatchers, REST includes HTTP metadata in the envelope
     (status_code, content_type) since tests may assert on these.
@@ -139,8 +139,8 @@ class RestDispatcher:
 class McpDispatcher:
     """Dispatch via Client(mcp) — full FastMCP pipeline.
 
-    Identity flows through kwargs to env.deliver_mcp() → _run_mcp_client(),
-    which pops it and dispatches via FastMCP in-memory transport.
+    The credential flows through kwargs to env.deliver_mcp() → _run_mcp_client(),
+    which pops it and presents it as the request headers the tool reads.
     """
 
     def dispatch(self, env: BaseTestEnv, **kwargs: Any) -> TransportResult:
@@ -168,8 +168,8 @@ class McpDispatcher:
 class RestE2EDispatcher:
     """Dispatch via real HTTP through nginx to the Docker stack.
 
-    Exercises the full stack: nginx -> UnifiedAuthMiddleware ->
-    resolve_identity() -> get_principal_from_token() DB lookup -> route
+    Exercises the full stack: nginx -> the live server's header read ->
+    resolver -> get_principal_from_token() DB lookup -> route
     handler -> _impl().
 
     WRAP (``env.build_rest_body`` / ``env.REST_ENDPOINT`` / ``env.REST_METHOD``)
@@ -205,18 +205,17 @@ class RestE2EDispatcher:
                 error=RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)"), has_wire=False
             )  # no e2e_config: refused before any httpx call
 
-        # NO_IDENTITY_OVERRIDE default (not None): omitted identity must fall
-        # back to env.identity_for(transport) inside _deliver_e2e_rest, the
-        # same resolution every other transport's omitted-identity dispatch
-        # gets — a bare ``None`` default here would force every omitted-
-        # identity call unauthenticated instead.
-        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        # NO_IDENTITY_OVERRIDE default (not ``{}``): an omitted credential must fall
+        # back to env.credential() inside _deliver_e2e_rest, the same default every
+        # other transport's omitted-credential dispatch gets — a bare ``{}`` default
+        # here would send every omitted-credential call unauthenticated instead.
+        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
         body = env.build_rest_body(**kwargs)
         endpoint = env.REST_ENDPOINT  # type: ignore[attr-defined]
         method = getattr(env, "REST_METHOD", "post")
         address = ToolAddress(Transport.E2E_REST, name=endpoint, method=method)
 
-        response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, identity)
+        response = _deliver_e2e_rest(env, address, {"url": endpoint, "body": body}, credential)
         return unwrap_rest_response(env, response, Transport.E2E_REST, env.parse_rest_response)
 
 
@@ -256,11 +255,11 @@ class McpE2EDispatcher:
                 "Prefer AdCPTestClient(env).call(tool_name, payload, Transport.E2E_MCP) directly."
             )
 
-        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
         req = kwargs.pop("req", None)
         payload = flatten_payload(req, **kwargs)
 
-        return _dispatch_core(env, Transport.E2E_MCP, tool_name, payload, identity)
+        return _dispatch_core(env, Transport.E2E_MCP, tool_name, payload, credential)
 
 
 class A2AE2EDispatcher:
@@ -293,7 +292,7 @@ class A2AE2EDispatcher:
         from tests.harness.client import _dispatch_core, flatten_payload
         from tests.harness.transport import NO_IDENTITY_OVERRIDE, MissingToolNameError, Transport
 
-        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
         tool_name = kwargs.pop("tool_name", None) or getattr(env, "A2A_SKILL", None)
         if not tool_name:
             raise MissingToolNameError(
@@ -307,7 +306,7 @@ class A2AE2EDispatcher:
         req = kwargs.pop("req", None)
         payload = flatten_payload(req, **kwargs)
 
-        return _dispatch_core(env, Transport.E2E_A2A, tool_name, payload, identity)
+        return _dispatch_core(env, Transport.E2E_A2A, tool_name, payload, credential)
 
 
 DISPATCHERS: dict[

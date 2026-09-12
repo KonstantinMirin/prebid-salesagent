@@ -50,7 +50,12 @@ from pydantic import BaseModel  # noqa: E402
 
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID  # noqa: E402  (re-export)
 from tests.harness.transport import DeliverResult  # noqa: E402
-from tests.helpers.credentials import identity_credential_headers  # noqa: E402
+from tests.helpers.credentials import credential_headers  # noqa: E402
+
+#: The token the harness presents when a scenario wants a credential that is presented and
+#: rejected: it matches no Principal row, so the resolver answers AUTH_INVALID on a protected
+#: tool and treats it as absent on a public one.
+INVALID_TOKEN = "invalid-token-harness"
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -255,6 +260,30 @@ def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
     return SendMessageConfiguration(task_push_notification_config=TaskPushNotificationConfig(**fields))
 
 
+def _a2a_call_context(credential: dict[str, str]) -> Any:
+    """The ``ServerCallContext`` an in-process A2A dispatch presents *credential* on.
+
+    Carries the request headers the way the wire does, so ``AdCPRequestHandler`` reads the
+    credential off its call context and the real resolver parses it. ``auth_token`` is
+    left ``None`` on purpose: the resolver re-parses the Bearer value from the headers
+    when nothing pre-parsed it, so the chain that runs is the same one a request over
+    HTTP runs. Shared by the harness's A2A leg and the raw-wire A2A sender.
+    """
+    from a2a.server.routes.common import ServerCallContext
+
+    from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
+
+    return ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=None, headers=dict(credential))})
+
+
+def _addressed_tenant(credential: dict[str, str]) -> str | None:
+    """The tenant_id a credential addresses through ``x-adcp-tenant``, or ``None``."""
+    for name, value in credential.items():
+        if name.lower() == "x-adcp-tenant":
+            return value
+    return None
+
+
 class _TestClock:
     """Minimal clock for BDD relative date-token resolution.
 
@@ -326,7 +355,13 @@ class BaseTestEnv:
 
     Attributes:
         mock: dict[str, MagicMock]  -- active mocks keyed by short name
-        identity: ResolvedIdentity  -- default identity (override via constructor)
+        identity: ResolvedIdentity  -- the caller ``call_impl`` hands the implementation
+
+    THE HARNESS PRESENTS A CREDENTIAL, NEVER AN IDENTITY. ``credential()`` builds the
+    headers dict a buyer would send; every wire leg injects that dict where its transport
+    reads headers, and the real resolver answers. There is no token-less identity and no
+    resolver patch: a scenario that needs a particular caller mints that caller's principal
+    and presents its token.
     """
 
     EXTERNAL_PATCHES: dict[str, str] = {}
@@ -369,7 +404,10 @@ class BaseTestEnv:
         self.mock: dict[str, MagicMock] = {}
         self._enter_cleanups: list[tuple[str, Callable[[], None]]] = []
         self._session: Session | None = None
-        self._identity_cache: dict[str, ResolvedIdentity] = {}
+        # Unit mode has no Principal row to read a token from, so the env holds the
+        # principal the factory BUILT for it, keyed by the (principal, tenant) pair so a
+        # ``switch_principal`` mints a different token.
+        self._unit_principals: dict[tuple[str, str], Any] = {}
         self._rest_client: Any = None  # Lazy-created TestClient
         self.clock = _TestClock()  # BDD steps may use env.clock for date tokens
         # Raw A2A Task returned by the last _run_a2a_handler call. The submitted
@@ -441,170 +479,161 @@ class BaseTestEnv:
         self._guard("patch:_untyped_exception", patcher.stop)
         self.REST_RAISE_SERVER_EXCEPTIONS = False
 
-    # -- Identity (one function, all transports) ----------------------------
+    # -- Credential (one method, all legs) -----------------------------------
 
-    def identity_for(self, transport: Transport) -> ResolvedIdentity:
-        """Build ResolvedIdentity with the correct protocol for *transport*.
+    def credential(self, **overrides: Any) -> dict[str, str]:
+        """The headers this env's buyer presents: THE one way a wire leg authenticates.
 
-        This is the single source of truth for test identity across all
-        transports. The identity is cached per protocol so repeated calls
-        with the same transport return the same object.
+        ``credential_headers(token=<the env principal's access_token>, tenant=self._tenant_id,
+        dry_run=self._dry_run)`` with *overrides* applied through the same three keywords.
 
-        In integration mode (``use_real_db=True``), the identity carries
-        the real ``auth_token`` from the factory-created Principal row.
-        This enables full auth chain testing: header → token → DB lookup.
+        - ``env.credential()``: the env's principal, valid token.
+        - ``env.credential(token=INVALID_TOKEN)``: presented and rejected.
+        - ``env.credential(token=None)``: nothing presented, tenant still addressed.
+        - ``{}``: no headers at all, which is what ``credential={}`` on a dispatch sends.
+
+        The token is read at DISPATCH time. In integration and e2e mode it comes from the
+        Principal row, so a row committed by a later Given is seen; no row means
+        ``token=None``, which the resolver answers AUTH_MISSING on a protected tool. In unit
+        mode it comes from the principal the factory built for this env, and the
+        substitutes ``__enter__`` installs make the resolver accept exactly that token.
+
+        ``x-adcp-tenant`` carries the tenant_id on every leg. ``_detect_tenant`` tries it as a
+        subdomain and then takes it as the literal id, so it resolves either way.
         """
-        from tests.harness.transport import TRANSPORT_PROTOCOL
+        values: dict[str, Any] = {"tenant": self._tenant_id, "dry_run": self._dry_run}
+        if "token" not in overrides:
+            values["token"] = self._principal_token()
+        unknown = set(overrides) - {"token", "tenant", "dry_run"}
+        if unknown:
+            raise TypeError(f"credential() takes token, tenant and dry_run, not {sorted(unknown)}")
+        values.update(overrides)
+        return credential_headers(**values)
 
-        protocol = TRANSPORT_PROTOCOL[transport]
-        if protocol not in self._identity_cache:
-            from tests.factories.principal import PrincipalFactory
+    def _principal_token(self) -> str | None:
+        """The env principal's access token, or ``None`` when no such principal exists."""
+        if self.use_real_db:
+            if not self._session:
+                return None
+            from sqlalchemy import select
 
-            # In integration mode, commit factory data first so the token
-            # is visible to other sessions (e.g., get_principal_from_token
-            # in the MCP auth chain uses a separate get_db_session() call).
-            auth_token = None
-            principal_id = self._principal_id
-            if self.use_real_db:
-                self._commit_factory_data()
-                # _resolve_auth_token() returns None for two different reasons:
-                # (a) a real DB lookup ran and found no matching Principal row, or
-                # (b) self._session isn't bound yet (env constructed/used outside
-                # its `with` context). Only (a) is a genuine "principal doesn't
-                # exist" signal — gate on self._session directly so a session-
-                # timing case doesn't get misread as a missing-principal one.
-                if self._session:
-                    auth_token = self._resolve_auth_token()
-                    if auth_token is None:
-                        # No Principal row for this principal_id+tenant_id (never
-                        # created, or deleted after "authenticating") — mirror
-                        # production's resolve_identity() (src/core/resolved_identity.py:
-                        # 168-172), which nulls principal_id on a failed token->principal
-                        # lookup, so in-process transports agree with e2e_rest's real DB
-                        # lookup instead of diverging on the deleted-principal case
-                        # .
-                        principal_id = None
+            from src.core.database.models import Principal
 
-            self._identity_cache[protocol] = PrincipalFactory.make_identity(
-                principal_id=principal_id,
-                tenant_id=self._tenant_id,
-                protocol=protocol,
-                dry_run=self._dry_run,
-                auth_token=auth_token,
-                **self._tenant_overrides,
+            self._commit_factory_data()
+            return self._session.scalars(
+                select(Principal.access_token).filter_by(
+                    principal_id=self._principal_id,
+                    tenant_id=self._tenant_id,
+                )
+            ).first()
+        return self._unit_principal().access_token
+
+    def _unit_principal(self) -> Any:
+        """The Principal the factory BUILT for this env (unit mode: no row, no session)."""
+        from tests.factories.principal import PrincipalFactory
+
+        key = (self._principal_id, self._tenant_id)
+        if key not in self._unit_principals:
+            self._unit_principals[key] = PrincipalFactory.build(
+                principal_id=self._principal_id, tenant_id=self._tenant_id
             )
-        return self._identity_cache[protocol]
+        return self._unit_principals[key]
 
-    def invalid_token_identity(self) -> ResolvedIdentity:
-        """An identity carrying a token that matches no Principal row.
+    def _install_unit_resolver_substitutes(self) -> None:
+        """Unit mode: substitute the resolver's three database reads, at their defining modules.
 
-        Per-transport behavior is production's, and it now agrees across all
-        four wire transports: on an auth-REQUIRED tool the presented-but-
-        rejected credential is refused with AUTH_INVALID (terminal) everywhere —
-        A2A and MCP drive the real header→token→lookup chain, e2e_rest sends the
-        token over real HTTP, and REST leaves the production ``_require_auth_dep``
-        in place for this identity (``_configure_rest_auth``). On an auth-
-        OPTIONAL discovery tool it is treated as absent, also on every transport.
+        The resolver's own logic -- Bearer parse, tenant detection, the AUTH_MISSING /
+        AUTH_INVALID split, ``require_valid_token`` -- runs unmodified. Only the DATA is
+        substituted, here, once. Each target is the module that DEFINES the function, which
+        is what a function-local ``from x import y`` in production reads at call time:
+
+        - ``src.core.config_loader.tenant_id_for`` returns ``None``: no host rows, so the
+          ``x-adcp-tenant`` hint falls through to the literal id, as production does for an
+          unknown subdomain. Read by ``_detect_tenant``.
+        - ``src.core.auth_utils.get_principal_from_token`` answers the env principal for the
+          env principal's token, scoped to the env's tenant (or unscoped), and nothing for
+          anything else. Read by ``_resolve_identity``.
+        - ``src.core.config_loader.get_tenant_by_id`` serves ``TenantFactory.make_tenant``
+          with this env's overrides, so ``LazyTenantContext`` loads the same dict the env
+          used to hand over pre-built. Read by ``LazyTenantContext._resolve``.
+
+        Installed BEFORE ``EXTERNAL_PATCHES`` so an env that patches one of these itself
+        keeps its own answer. Not entered into ``self.mock``: that dict is the env's own
+        declared collaborators, the ones ``_configure_mocks`` wires; these are the harness's
+        stand-ins for the database and no test configures them. Released through the same
+        ``_guard`` registry as every patch, under ``resolver:`` labels.
         """
-        from tests.harness._identity import make_identity
+        from tests.factories import TenantFactory
 
-        return make_identity(
-            principal_id=None,
-            tenant_id=self._tenant_id,
-            auth_token="invalid-token-harness",
-            **self._tenant_overrides,
-        )
+        def _principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, Any]:
+            principal = self._unit_principal()
+            if token == principal.access_token and tenant_id in (None, self._tenant_id):
+                return principal.principal_id, None
+            return None, None
 
-    def anonymous_identity(self) -> ResolvedIdentity:
-        """Tenant-resolvable identity with NO credential and NO principal.
+        def _tenant_by_id(tenant_id: str) -> dict[str, Any]:
+            return TenantFactory.make_tenant(tenant_id=tenant_id, **self._tenant_overrides)
 
-        Models the production no-auth discovery call where the tenant still
-        resolves (Host header / subdomain) — distinct from identity=None,
-        which is the no-tenant case.
-        """
-        from tests.harness._identity import make_identity
-
-        return make_identity(
-            principal_id=None,
-            tenant_id=self._tenant_id,
-            auth_token=None,
-            **self._tenant_overrides,
-        )
-
-    def _resolve_auth_token(self) -> str | None:
-        """Look up the real access_token from the session-bound Principal.
-
-        Only called in integration mode where ``self._session`` is bound
-        to factory-created ORM models. Returns None if the principal
-        hasn't been created yet (identity built before Given steps run).
-        """
-        if not self._session:
-            return None
-        from sqlalchemy import select
-
-        from src.core.database.models import Principal
-
-        token = self._session.scalars(
-            select(Principal.access_token).filter_by(
-                principal_id=self._principal_id,
-                tenant_id=self._tenant_id,
-            )
-        ).first()
-        return token
+        for name, target, substitute in (
+            ("tenant_id_for", "src.core.config_loader.tenant_id_for", lambda **_kw: None),
+            ("get_principal_from_token", "src.core.auth_utils.get_principal_from_token", _principal_from_token),
+            ("get_tenant_by_id", "src.core.config_loader.get_tenant_by_id", _tenant_by_id),
+        ):
+            patcher = patch(target, side_effect=substitute)
+            patcher.start()
+            self._guard(f"resolver:{name}", patcher.stop)
 
     def switch_principal(self, principal_id: str) -> None:
-        """Re-point the env at *principal_id*, clearing cached identity.
+        """Re-point the env at *principal_id*.
 
-        Public accessor for the principal-switch mutation (mirrors
-        ``get_session()``): step functions must not reach into the private
-        ``_identity_cache`` / ``_principal_id``. Clearing the cache forces the
-        next ``identity`` / ``identity_for`` access to re-resolve from scratch —
-        picking up a principal row committed after the env was created (in
-        integration mode this re-runs the auth-token lookup).
+        Public accessor for the principal-switch mutation (mirrors ``get_session()``):
+        step functions must not reach into the private ``_principal_id``. The next
+        ``credential()`` reads the new principal's token at dispatch time.
         """
-        self._identity_cache.clear()
         self._principal_id = principal_id
 
     def switch_tenant(self, tenant_id: str) -> None:
-        """Re-point the env at *tenant_id*, clearing cached identity.
+        """Re-point the env at *tenant_id*.
 
-        Sibling of ``switch_principal``: step functions that seed a scenario
-        into its own fresh tenant (isolation in the shared e2e_rest live DB)
-        must not reach into the private ``_identity_cache`` / ``_tenant_id``.
-        Clearing the cache forces the next identity build to resolve the auth
-        token against the new tenant's principal rows.
+        Sibling of ``switch_principal``: step functions that seed a scenario into its own
+        fresh tenant (isolation in the shared e2e_rest live DB) must not reach into the
+        private ``_tenant_id``.
         """
-        self._identity_cache.clear()
         self._tenant_id = tenant_id
 
     @property
     def identity(self) -> ResolvedIdentity:
-        """Default identity (protocol='mcp'). Backward-compatible.
+        """The caller ``call_impl`` hands the implementation. FOR ``call_impl`` ONLY.
 
-        Supports direct override via ``env._identity = ...`` for integration
-        tests that create tenants in the DB and need LazyTenantContext.
+        A direct ``_impl`` call takes a ``ResolvedIdentity`` by definition; a wire leg has no
+        parameter to receive one, it presents ``credential()`` and the resolver builds the
+        identity. Supports direct override via ``env._identity = ...`` for integration tests
+        that create tenants in the DB and need a specific LazyTenantContext.
         """
-        # Backward compat: tests may set env._identity directly
         direct = self.__dict__.get("_identity")
         if direct is not None:
             return direct
-        from tests.harness.transport import Transport
+        from tests.factories.principal import PrincipalFactory
 
-        return self.identity_for(Transport.MCP)
+        return PrincipalFactory.make_identity(
+            principal_id=self._principal_id,
+            tenant_id=self._tenant_id,
+            protocol="mcp",
+            dry_run=self._dry_run,
+            **self._tenant_overrides,
+        )
 
     # -- Transport dispatch -------------------------------------------------
 
     def call_via(self, transport: Transport, **kwargs: Any) -> TransportResult:
         """Dispatch through *transport* and return normalized TransportResult.
 
-        Injects the correct identity for the transport into kwargs (unless
-        the caller explicitly provides one). Routes to the appropriate
-        dispatcher.
+        Presents this env's credential unless the caller passed ``credential=``
+        (``{}`` sends no headers at all). Routes to the appropriate dispatcher.
         """
         from tests.harness.dispatchers import DISPATCHERS
 
-        # Inject transport-correct identity
-        kwargs.setdefault("identity", self.identity_for(transport))
+        kwargs.setdefault("credential", self.credential())
 
         dispatcher = DISPATCHERS[transport]
         return dispatcher.dispatch(self, **kwargs)
@@ -726,8 +755,8 @@ class BaseTestEnv:
         from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
         payload = dict(kwargs)
-        identity = payload.pop("identity", NO_IDENTITY_OVERRIDE)
-        result = _dispatch_core(self, transport, tool, payload, identity)
+        credential = payload.pop("credential", NO_IDENTITY_OVERRIDE)
+        result = _dispatch_core(self, transport, tool, payload, credential)
         if result.error is not None:
             raise result.error
         wire = result.wire_response
@@ -756,42 +785,38 @@ class BaseTestEnv:
         exercises: message parsing → skill routing → ``serve`` → ``to_wire`` →
         Task/Artifact framing.
 
-        Identity is injected the way every transport's is: the boundary's resolver is
-        patched, and the handler reads only the credential off the call context.
+        The credential is presented where this transport reads headers: on the call
+        context, the way the SDK's own context builder places the request headers. The
+        handler reads only that; the real resolver answers.
 
         Args:
             skill_name: A2A skill name (e.g., "get_products").
             response_cls: Pydantic model class to parse artifact data into.
-            **kwargs: Skill parameters. ``identity`` is popped and used for
-                the identity mock; ``a2a_push_notification_config`` is popped
-                and sent as the protocol-level ``SendMessageConfiguration``
-                (see :func:`_a2a_send_message_configuration`) rather than as a
-                skill parameter; remaining kwargs become skill parameters.
+            **kwargs: Skill parameters. ``credential`` is popped and presented on the
+                call context; ``a2a_push_notification_config`` is popped and sent as
+                the protocol-level ``SendMessageConfiguration`` (see
+                :func:`_a2a_send_message_configuration`) rather than as a skill
+                parameter; remaining kwargs become skill parameters.
         """
         import asyncio
 
-        from a2a.server.routes.common import ServerCallContext
         from a2a.types import SendMessageRequest, Task
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE
         from tests.utils.a2a_helpers import create_a2a_message_with_skill, extract_data_from_artifact
 
         self._commit_factory_data()
 
-        # Pop identity — used for the handler mock, not sent as a skill parameter.
-        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
+        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
+        if credential is NO_IDENTITY_OVERRIDE:
+            credential = self.credential()
         # Pop the protocol-level push config — it belongs on SendMessageRequest.
         # configuration, one level above the skill parameters (see
         # _a2a_send_message_configuration).
         protocol_push_config = kwargs.pop("a2a_push_notification_config", None)
-        a2a_identity = self.identity_for(Transport.A2A) if identity is NO_IDENTITY_OVERRIDE else identity
-
-        # The real A2A handler writes audit logs which require the tenant to exist
-        # in the DB. Ensure the tenant record exists (idempotent) so audit logging
-        # doesn't fail with FK violations on discovery endpoints.
-        if self.use_real_db and a2a_identity and a2a_identity.tenant_id:
-            self._ensure_tenant_for_audit(a2a_identity.tenant_id)
+        server_context = _a2a_call_context(credential)
+        self._seed_ambient_tenant(credential)
 
         # Unpack req object into flat parameters if present.
         # A2A skills accept a flat parameter dict, not a request model.
@@ -803,46 +828,6 @@ class BaseTestEnv:
             parameters = dict(kwargs)
 
         handler = AdCPRequestHandler()
-
-        # Auth strategy mirrors _run_mcp_client. When the identity carries a real
-        # auth_token (integration mode), populate the AuthContext that the SDK
-        # call-context builder would have built from the wire and run the REAL
-        # _credential_of → serve chain (header → token → DB lookup →
-        # ResolvedIdentity). Only the transport's state injection is supplied here
-        # (the in-process equivalent of MCP's get_http_headers seam) — the auth
-        # chain itself is real. An identity WITHOUT a token (unit mode) is injected
-        # through the one seam that names the resolver, exactly as ``_run_mcp_client``
-        # injects it; this leg used to send an empty call context instead, so every
-        # token-less env authenticated on MCP and REST and was AUTH_MISSING on A2A.
-        # ``identity=None`` is neither: it means NO CREDENTIAL, and the real chain
-        # answers it.
-        auth_token = a2a_identity.auth_token if a2a_identity else None
-        inject_identity = a2a_identity is not None and not auth_token
-
-        if auth_token:
-            from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
-
-            headers = identity_credential_headers(a2a_identity, tenant="tenant_id")
-            server_context = ServerCallContext(
-                state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=auth_token, headers=headers)}
-            )
-        else:
-            server_context = ServerCallContext()
-
-        # Seed the ambient tenant ContextVar for production code that still reads it.
-        #
-        # ``getattr``, not attribute access: a scenario whose SUBJECT is tenant resolution
-        # dispatches a bare credential (a token/tenant pair), not a resolved identity, and
-        # must not have a tenant pushed here at all -- doing so would answer the question the
-        # scenario is asking, from the test's own belief rather than from the resolver.
-        #
-        # This block is the ambient channel salesagent-02rgd Phase 2 removes. Until then it
-        # stays for the readers that have not moved to identity.tenant.
-        ambient_tenant = getattr(a2a_identity, "tenant", None) if a2a_identity else None
-        if ambient_tenant is not None:
-            from src.core.config_loader import set_current_tenant
-
-            set_current_tenant(ambient_tenant)
 
         message = create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters)
         if protocol_push_config is None:
@@ -857,13 +842,7 @@ class BaseTestEnv:
             return await handler.on_message_send(params, server_context)
 
         try:
-            if inject_identity:
-                from tests.helpers.boundary_identity import resolved_as
-
-                with resolved_as(a2a_identity):
-                    task_result = asyncio.run(_call())
-            else:
-                task_result = asyncio.run(_call())
+            task_result = asyncio.run(_call())
         except Exception as exc:
             # The ORIGINAL exception propagates. It used to be translated into a
             # reconstructed AdCPSalesAgentError so callers could catch domain exceptions; the
@@ -940,19 +919,16 @@ class BaseTestEnv:
         Uses FastMCP's in-memory transport (FastMCPTransport) to go through the
         complete server path: middleware chain → TypeAdapter → tool function.
 
-        When the identity carries a real ``auth_token`` (integration mode),
-        patches ``get_http_headers`` so the full auth chain runs: header
-        extraction → tenant detection → token-to-principal DB lookup →
-        ResolvedIdentity from real data.
-
-        When no real token is available (unit mode), patches
-        ``resolve_identity_from_context`` directly.
+        The credential is presented where this transport reads headers:
+        ``get_http_headers`` is patched to return it, so the full chain runs on every
+        dispatch -- header extraction, tenant detection, token-to-principal lookup,
+        ResolvedIdentity built by the resolver.
 
         Args:
             tool_name: MCP tool name (e.g., "get_products").
             response_cls: Pydantic model class to parse structured_content into.
-            **kwargs: Tool arguments. ``identity`` is popped and used for the
-                auth mock; ``req`` is popped and its fields unpacked into the
+            **kwargs: Tool arguments. ``credential`` is popped and presented as the
+                request headers; ``req`` is popped and its fields unpacked into the
                 arguments dict.
         """
         import asyncio
@@ -961,13 +937,13 @@ class BaseTestEnv:
         from fastmcp import Client
 
         from src.core.main import mcp
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
         self._commit_factory_data()
 
-        # Pop identity — used for the auth mock, not sent as a tool argument.
-        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
-        mcp_identity = self.identity_for(Transport.MCP) if identity is NO_IDENTITY_OVERRIDE else identity
+        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
+        if credential is NO_IDENTITY_OVERRIDE:
+            credential = self.credential()
 
         # Unpack req object into flat arguments if present.
         # MCP tools accept individual params, not a request model.
@@ -993,50 +969,21 @@ class BaseTestEnv:
         else:
             arguments = dict(kwargs)
 
-        # Choose auth strategy based on whether we have a real DB token.
-        auth_token = mcp_identity.auth_token if mcp_identity else None
-
-        if auth_token:
-            # Real auth chain: header -> token -> DB lookup -> identity.
-            #
-            # ONE patch, at the source. This used to patch get_http_headers in two importing
-            # modules (transport_helpers and mcp_auth_middleware), and the comment explaining
-            # why conceded the hole: "if a third module imports get_http_headers without being
-            # patched, this won't catch it". Both of those modules have since stopped
-            # importing it -- mcp_auth_middleware no longer exists at all -- so the patches
-            # named nothing and raised AttributeError instead of failing usefully.
-            #
-            # src/core/main.py imports it from fastmcp.server.dependencies inside the call, so
-            # patching the DEFINING module is what a function-local import actually sees, and
-            # it covers any further importer for free.
-            headers = identity_credential_headers(mcp_identity, tenant="tenant_id")
-
-            async def _call():
-                with patch("fastmcp.server.dependencies.get_http_headers", return_value=headers) as patched:
-                    async with Client(mcp) as client:
-                        result = await client.call_tool(tool_name, arguments)
-                        assert patched.called, (
-                            f"Auth chain not exercised for {tool_name} — get_http_headers was never called"
-                        )
-                        return DeliverResult(
-                            payload=response_cls(**result.structured_content),
-                            wire_response=result.structured_content,
-                        )
-
-        else:
-            # Unit mode: inject identity directly, through the one seam that names the
-            # resolver (tests/helpers/boundary_identity.py). Identity is resolved in
-            # invoke_tool now, not in a per-transport middleware.
-            async def _call():
-                from tests.helpers.boundary_identity import resolved_as
-
-                with resolved_as(mcp_identity):
-                    async with Client(mcp) as client:
-                        result = await client.call_tool(tool_name, arguments)
-                        return DeliverResult(
-                            payload=response_cls(**result.structured_content),
-                            wire_response=result.structured_content,
-                        )
+        # ONE patch, at the source. src/core/main.py imports get_http_headers from
+        # fastmcp.server.dependencies inside the call, so patching the DEFINING module is
+        # what a function-local import actually sees, and it covers any further importer
+        # for free. Patching an importing module instead named nothing once already.
+        async def _call():
+            with patch("fastmcp.server.dependencies.get_http_headers", return_value=dict(credential)) as patched:
+                async with Client(mcp) as client:
+                    result = await client.call_tool(tool_name, arguments)
+                    assert patched.called, (
+                        f"Auth chain not exercised for {tool_name} — get_http_headers was never called"
+                    )
+                    return DeliverResult(
+                        payload=response_cls(**result.structured_content),
+                        wire_response=result.structured_content,
+                    )
 
         try:
             return asyncio.run(_call())
@@ -1046,130 +993,40 @@ class BaseTestEnv:
                 raise WireError(envelope) from exc
             raise
 
-    def _pop_rest_identity(self, kwargs: dict[str, Any]) -> Any:
-        """Pop ``identity`` from REST kwargs, defaulting to the REST identity.
+    def _pop_credential(self, kwargs: dict[str, Any]) -> dict[str, str]:
+        """Pop ``credential`` from dispatch kwargs, defaulting to this env's credential.
 
-        Identity handling (mirrors production auth middleware):
-        - identity is None → dep raises AUTH_REQUIRED (no token) with suggestion
-        - identity is ResolvedIdentity → dep returns it (valid token)
-        - identity absent → uses default self.identity_for(Transport.REST)
+        ``{}`` is a caller's explicit "no headers at all" and is returned as such; only
+        an ABSENT keyword falls back to ``credential()``.
         """
-        from tests.harness.transport import NO_IDENTITY_OVERRIDE, Transport
+        from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
-        identity = kwargs.pop("identity", NO_IDENTITY_OVERRIDE)
-        if identity is NO_IDENTITY_OVERRIDE:
-            identity = self.identity_for(Transport.REST)
-        return identity
-
-    def _prepare_rest_request(self, kwargs: dict[str, Any]) -> tuple[Any, Any]:
-        """Resolve identity, commit factory data, get the client, and install auth.
-
-        Single source of truth for the REST request preamble every dispatcher
-        shares: pops ``identity`` from *kwargs* (defaulting to the REST identity),
-        commits pending factory rows, creates/returns the TestClient, and installs
-        the per-request auth-dep override (which must run AFTER ``get_rest_client``).
-        Returns ``(client, resolved_identity)``; the caller builds the body from the
-        now-identity-free *kwargs* and issues the HTTP verb.
-        """
-        identity = self._pop_rest_identity(kwargs)
-        self._commit_factory_data()
-        client = self.get_rest_client()
-        self._configure_rest_auth(identity)
-        return client, identity
-
-    @staticmethod
-    def _presents_unresolvable_credential(identity: Any) -> bool:
-        """True when *identity* presented a token that resolved to no principal.
-
-        The discriminator production itself keys on: a credential WAS presented
-        (``auth_token``) but no principal came back. AdCP v3.1.1 splits the two
-        auth rejections on exactly this axis — absent credential -> AUTH_MISSING
-        (correctable), presented-but-rejected -> AUTH_INVALID (terminal) — so
-        the harness cannot collapse them the way it may collapse a valid token.
-        """
-        return bool(getattr(identity, "auth_token", None)) and not getattr(identity, "principal_id", None)
-
-    @classmethod
-    def _rest_request_headers(cls, identity: Any) -> dict[str, str]:
-        """Auth headers for a REST request — the same ones MCP and A2A send.
-
-        It used to return ``{}`` for a VALID identity, on the reasoning that the
-        dependency override supplied it so "its request needs no headers", and
-        send real headers only for a presented-but-unresolvable credential. That
-        made REST the one transport whose requests did not carry the credential
-        they were testing with: MCP calls ``identity_credential_headers`` unconditionally
-        (see ``_run_mcp_client``), and A2A puts it on the call context.
-
-        With identity resolved at the boundary there is no override to supply
-        anything, and no reason for the asymmetry: every transport now presents
-        the same credential the same way, and the production chain reads it off
-        the request on all three.
-        """
-        return identity_credential_headers(identity, tenant="tenant_id")
-
-    @classmethod
-    def _configure_rest_auth(cls, identity: Any) -> None:
-        """Install per-request FastAPI auth-dep overrides for the test app.
-
-        Single source of truth for the REST auth contract every dispatcher needs
-        (must run AFTER ``get_rest_client``). The ``_require_auth_dep`` override
-        is REMOVED — so the real production dependency runs and raises the real
-        error, rather than the harness hand-copying a raise that drifted from
-        production once already (#1417/cx41) — in the two cases where the
-        rejection itself is what is being graded:
-
-        - ``identity is None``: no credential at all -> real dep sees an empty
-          ``AuthContext`` -> AUTH_MISSING.
-        - ``identity`` presents an unresolvable credential: the request carries
-          the bogus token (``_rest_request_headers``) -> real dep runs
-          ``resolve_identity(require_valid_token=True)`` -> AUTH_INVALID.
-
-        The second case used to fall through to the override below, which
-        treats ANY non-None identity as an already-resolved valid token; REST
-        therefore answered AUTH_MISSING to a caller who had presented a
-        credential, diverging from A2A/MCP/e2e_rest, which all drive the real
-        chain (GH #1886).
-
-        ``_resolve_auth_dep`` (auth-OPTIONAL discovery routes) keeps returning
-        the identity in both cases: production returns an identity there too,
-        with ``principal_id`` None, which is exactly what these identities are.
-                NOTHING TO CONFIGURE ANY MORE. Identity is resolved at the boundary
-        (``src/core/tools/_boundary.invoke_tool``) from the credential the request
-        carries, so a REST route has no identity dependency to override -- and
-        in-process REST now drives the same real chain as A2A, MCP and e2e_rest
-        instead of modelling it. The credential still arrives the ordinary way, via
-        ``identity_credential_headers`` on the request (``Authorization: Bearer``).
-
-        That closes what this method's own history documents: the override treated
-        ANY non-None identity as an already-resolved valid token, so REST answered
-        AUTH_MISSING to a caller who HAD presented a credential while every other
-        transport answered AUTH_INVALID (GH #1886). A seam that can express an
-        identity the wire never carried is a seam that can disagree with the wire.
-        """
-        return
+        credential = kwargs.pop("credential", NO_IDENTITY_OVERRIDE)
+        return self.credential() if credential is NO_IDENTITY_OVERRIDE else dict(credential)
 
     def _run_rest_request(self, endpoint: str, **kwargs: Any) -> Any:
-        """Shared REST dispatch: configure auth → build body → POST → return Response.
+        """Shared REST dispatch: pop the credential -> commit -> build body -> POST.
 
-        Symmetric with ``_run_mcp_client``. Handles the full REST lifecycle:
-        1. Pop ``identity`` from kwargs and configure dep override for this request
-        2. Commit factory data
-        3. Build request body from remaining kwargs
-        4. POST via TestClient
-        5. Return raw httpx.Response
+        Symmetric with ``_run_mcp_client``. The credential rides the request as HTTP
+        headers, where the production middleware reads it, so in-process REST runs the
+        same chain as A2A, MCP and e2e_rest. There is no dependency override: a REST route
+        has no identity dependency, so nothing can express an identity the wire never
+        carried (GH #1886 was that seam disagreeing with the wire).
 
-        Envs whose route is not a body-carrying POST override this method and
-        reuse ``_pop_rest_identity`` / ``_configure_rest_auth``.
+        Envs whose route is not a body-carrying POST override this method and reuse
+        ``_pop_credential`` / ``get_rest_client``.
         """
-        client, identity = self._prepare_rest_request(kwargs)
+        credential = self._pop_credential(kwargs)
+        self._commit_factory_data()
+        client = self.get_rest_client()
         body = self.build_rest_body(**kwargs)
-        return client.post(endpoint, json=body, headers=self._rest_request_headers(identity))
+        return client.post(endpoint, json=body, headers=credential)
 
     def call_rest(self, **kwargs: Any) -> Any:
         """Call the REST endpoint and parse the response.
 
         Symmetric with ``call_impl``, ``call_a2a``, ``call_mcp``.
-        Pops identity, configures auth, POSTs, parses response.
+        Presents the credential, POSTs, parses response.
         Raises on HTTP errors (dispatcher catches and wraps in TransportResult).
         """
         endpoint = self.REST_ENDPOINT  # type: ignore[attr-defined]
@@ -1269,9 +1126,8 @@ class BaseTestEnv:
         Called from ``__enter__`` in e2e mode. Delegates to the idempotent
         ``setup_default_data`` (get-or-create) so it shares ONE seeding path and
         envs that also call ``setup_default_data()`` themselves don't
-        double-create. Seeds the SAME ``tenant_id`` / ``principal_id`` the env's
-        identity uses, so the token ``identity_for`` later resolves matches the
-        seeded row.
+        double-create. Seeds the SAME ``tenant_id`` / ``principal_id`` the env
+        presents, so the token ``credential()`` later reads is the seeded row's.
         """
         if not self._session:
             return
@@ -1281,6 +1137,30 @@ class BaseTestEnv:
         if setup is not None:
             setup()
             self._session.commit()
+
+    def _seed_ambient_tenant(self, credential: dict[str, str]) -> None:
+        """In-process A2A preamble: audit-log tenant row and the ambient tenant ContextVar.
+
+        Both are keyed on the tenant the credential ADDRESSES (``x-adcp-tenant``), which is
+        what the resolver will read; a credential addressing no tenant seeds nothing, so a
+        scenario whose subject is tenant resolution gets the resolver's answer and not the
+        harness's.
+
+        The real A2A handler writes audit logs that need the tenant FK, so the row is
+        created if absent (integration mode only). The ContextVar seed is the ambient
+        channel salesagent-02rgd Phase 2 removes; until then it stays for the readers that
+        have not moved to ``identity.tenant``. Not identity resolution: the resolver still
+        detects the tenant from the headers itself.
+        """
+        tenant_id = _addressed_tenant(credential)
+        if not tenant_id:
+            return
+        if self.use_real_db:
+            self._ensure_tenant_for_audit(tenant_id)
+        from src.core.config_loader import set_current_tenant
+        from src.core.tenant_context import LazyTenantContext
+
+        set_current_tenant(LazyTenantContext(tenant_id))
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).
@@ -1356,7 +1236,10 @@ class BaseTestEnv:
                     f._meta.sqlalchemy_session = self._session
                 self._guard("db_factories", self._unbind_factories)
 
-            # 2. Start patches
+            # 2. Start patches. Unit mode first substitutes the resolver's three database
+            #    reads, so the real chain runs over the in-process wire with no database.
+            if not self.use_real_db:
+                self._install_unit_resolver_substitutes()
             for name, target in self.EXTERNAL_PATCHES.items():
                 if name in self.ASYNC_PATCHES:
                     patcher = patch(target, new_callable=AsyncMock)
@@ -1513,7 +1396,6 @@ class BaseTestEnv:
         #    every patch, plus whatever the subclass hooks acquired.
         self._release_entered(errors)
         self.mock.clear()
-        self._identity_cache.clear()
 
         if errors:
             if len(errors) == 1:
@@ -1698,15 +1580,13 @@ class IntegrationEnv(BaseTestEnv):
             self._seed_named_account_ref(account)
 
     def configure_tenant_field(self, field: str, value: Any) -> None:
-        """Write a tenant-level config field for both auth paths.
+        """Write a tenant-level config field for both caller paths.
 
-        Updates the in-memory tenant overrides (mock identity path) AND the
-        DB Tenant row when the column exists (real MCP/A2A auth chain reads
-        the DB via config_loader). Clears the identity cache so the next
-        ``identity_for`` re-resolves with the new value.
+        Updates the in-memory tenant overrides (the ``identity`` a ``call_impl`` hands
+        over, and the unit-mode ``get_tenant_by_id`` substitute) AND the DB Tenant row
+        when the column exists (the wire legs' resolver reads the DB via config_loader).
         """
         self._tenant_overrides[field] = value
-        self._identity_cache.clear()
 
         if self._session:
             from src.core.database.models import Tenant
@@ -1760,17 +1640,13 @@ class IntegrationEnv(BaseTestEnv):
     def get_rest_client(self) -> Any:
         """Return the FastAPI TestClient. NO auth dependency override.
 
-        There is nothing left to override. REST routes take a ``GetAuthContext`` and the
-        identity is resolved once, inside ``invoke_tool``, from the credential on the
-        request -- so this used to install ``dependency_overrides`` for ``_require_auth_dep``
-        and ``_resolve_auth_dep``, and both of those are deleted.
-
-        Removing it is what makes a REST scenario grade resolution rather than assume it.
-        With the override in place every REST request ran as a pre-built identity handed in
-        by the test, so the header -> ``_detect_tenant`` -> tenant-scoped principal lookup
-        chain never executed and a scenario could not tell a correct resolution from a broken
-        one. The request now carries a real credential (``_rest_request_headers``) and the
-        server resolves it, the same way MCP and A2A already did.
+        There is nothing to override. The identity is resolved once, inside
+        ``invoke_tool``, from the credential on the request, so a REST route has no
+        identity dependency. With an override in place every REST request ran as a
+        pre-built identity handed in by the test, so the header -> ``_detect_tenant`` ->
+        tenant-scoped principal lookup chain never executed and a scenario could not tell a
+        correct resolution from a broken one. The request carries ``credential()`` as its
+        headers and the server resolves it, the same way MCP and A2A do.
         """
         if self._rest_client is None:
             from starlette.testclient import TestClient

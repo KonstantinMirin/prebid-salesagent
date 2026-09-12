@@ -35,10 +35,10 @@ from tests.unit._architecture_helpers import iter_call_expressions
 # under ``test_architecture_a2a_test_uses_factory``). Caps frozen at the
 # current state on substrate landing; can only shrink.
 RESOLVED_IDENTITY_PER_FILE_CAP: dict[str, int] = {
-    "tests/bdd/steps/domain/uc004_delivery.py": 2,
+    "tests/bdd/steps/domain/uc004_delivery.py": 0,
     "tests/bdd/steps/domain/uc011_accounts.py": 0,
     "tests/factories/principal.py": 1,
-    "tests/integration/conftest.py": 1,
+    "tests/integration/conftest.py": 0,
     "tests/integration/test_account_resolution_error_codes.py": 1,
     "tests/integration/test_get_products_anonymous_pricing.py": 1,
     "tests/integration/test_get_products_auth_obligations.py": 1,

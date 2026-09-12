@@ -464,7 +464,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Build REST request body from kwargs."""
-        kwargs.pop("identity", None)
         req = kwargs.pop("req", None)
         if req is not None:
             self._seed_named_account(req)

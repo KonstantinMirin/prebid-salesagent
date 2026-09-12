@@ -17,10 +17,10 @@ for the reason given below, because the wire format is identical either way — 
 DELIVER (how bytes reach the server) differs.
 
 DELIVER reuses the SAME env primitives ``_run_mcp_client`` /
-``_run_a2a_handler`` / ``_prepare_rest_request`` that the per-env dispatch
+``_run_a2a_handler`` / ``get_rest_client`` that the per-env dispatch
 methods already call — this is deliberate: those
-methods own the real auth-chain / factory-commit / FastMCP-middleware
-plumbing, and duplicating that here would violate this project's DRY
+methods own the real factory-commit / FastMCP-middleware plumbing, and
+duplicating that here would violate this project's DRY
 invariant for no benefit. ``client.py`` only adds the tool-name-generic
 glue around them; passing ``response_cls=dict`` gets a plain dict back
 from ``_run_mcp_client``/``_run_a2a_handler`` — UNWRAP (not DELIVER) then
@@ -29,16 +29,21 @@ parses that dict into ``tool_name``'s pinned SDK response model via
 need a ``response_cls`` parameter — see the "typed payload" docstring note
 on ``TransportResult.payload`` below for the no-pinned-model case.
 
+THE CREDENTIAL IS A HEADERS DICT, and every leg presents it where its transport
+reads headers: in-process REST sends it on the TestClient request, in-process A2A
+puts it on the call context, in-process MCP hands it to ``get_http_headers``, and
+the three E2E legs send it as real HTTP headers. ``env.credential()`` builds it
+(``tests/harness/_base.py``); a caller that passes ``credential=`` overrides it,
+and ``credential={}`` sends no headers at all. No leg carries an identity: the
+real resolver builds one from the headers on every dispatch.
+
 All three E2E transports are now implemented — ``_deliver_e2e_rest``,
 ``_deliver_e2e_mcp`` and ``_deliver_e2e_a2a`` below, each real HTTP through
 nginx to the live Docker stack. ``RestE2EDispatcher`` and
 ``A2AE2EDispatcher`` (``tests/harness/dispatchers.py``) delegate to the
 matching DELIVER function instead of duplicating it, so there is one
-implementation per transport, not two. Auth-header construction is shared
-across all three via ``identity_credential_headers`` (tests/helpers/credentials.py,
-this project's DRY
-invariant, CLAUDE.md) — WRAP/UNWRAP were already written per transport
-*family*, so each of these follow-ups only needed to add a
+implementation per transport, not two. WRAP/UNWRAP were already written per
+transport *family*, so each of these follow-ups only needed to add a
 DELIVER function; ADDRESS and WRAP needed no changes.
 
 Usage::
@@ -69,7 +74,6 @@ from tests.harness.transport import (
     _wire_envelope_from_exception,
     derive_error_status,
 )
-from tests.helpers.credentials import identity_credential_headers
 
 if TYPE_CHECKING:
     from tests.harness._base import BaseTestEnv
@@ -81,17 +85,22 @@ if TYPE_CHECKING:
 from tests.harness.address_table import NoAddressForTransport  # noqa: F401  (re-export)
 
 
-def _with_identity(payload: dict[str, Any], identity: Any) -> dict[str, Any]:
-    """Copy *payload* and, unless *identity* is the no-override sentinel, add it.
+def _with_credential(payload: dict[str, Any], credential: Any) -> dict[str, Any]:
+    """Copy *payload* and, unless *credential* is the no-override sentinel, add it.
 
-    Shared by all three WRAP-family functions below — the identity-forwarding
+    Shared by the in-process DELIVER functions below — the credential-forwarding
     rule is identical regardless of transport (MCP/A2A/REST-family), only the
-    DELIVER function that consumes the resulting kwargs differs.
+    env primitive that pops ``credential`` back out differs.
     """
     kwargs = dict(payload)
-    if identity is not NO_IDENTITY_OVERRIDE:
-        kwargs["identity"] = identity
+    if credential is not NO_IDENTITY_OVERRIDE:
+        kwargs["credential"] = credential
     return kwargs
+
+
+def _presented(env: BaseTestEnv, credential: Any) -> dict[str, str]:
+    """The headers an E2E leg sends: *credential*, or the env's own when none was passed."""
+    return env.credential() if credential is NO_IDENTITY_OVERRIDE else dict(credential)
 
 
 def flatten_payload(req: Any, **kwargs: Any) -> dict[str, Any]:
@@ -175,36 +184,35 @@ WRAP: dict[Transport, Callable[[ToolAddress, dict[str, Any]], Any]] = {
 #
 # In-process DELIVER reuses the env primitives named in the transport-family
 # table verbatim (``_run_mcp_client``, ``_run_a2a_handler``,
-# ``_prepare_rest_request``) — these already own auth-chain / factory-commit
-# / middleware plumbing; DELIVER only adds the tool-name-generic call shape.
+# ``get_rest_client``) — these already own factory-commit / middleware
+# plumbing; DELIVER only adds the tool-name-generic call shape.
 
 
-def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> DeliverResult:
-    kwargs = _with_identity(wrapped, identity)
+def _deliver_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any) -> DeliverResult:
+    kwargs = _with_credential(wrapped, credential)
     # response_cls=dict: _run_mcp_client ends with `response_cls(**structured_content)`;
     # `dict(**d)` is `d`, so this yields the raw structured_content dict instead of a
     # per-tool Pydantic model the client has no way to know generically.
     return env._run_mcp_client(address.name, dict, **kwargs)
 
 
-def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> DeliverResult:
-    kwargs = _with_identity(wrapped, identity)
+def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any) -> DeliverResult:
+    kwargs = _with_credential(wrapped, credential)
     return env._run_a2a_handler(address.name, dict, **kwargs)
 
 
-def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
-    kwargs = _with_identity({}, identity)
-    client, resolved_identity = env._prepare_rest_request(kwargs)
+def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any) -> Any:
+    headers = env._pop_credential(_with_credential({}, credential))
+    env._commit_factory_data()
+    client = env.get_rest_client()
     method = address.method or "post"
     # The credential rides the request, the same headers ``_run_rest_request`` sends: the
     # boundary resolves the caller from them, and a request without them is a request
-    # from nobody, answered AUTH_MISSING on a protected tool whatever identity the env holds.
-    return getattr(client, method)(
-        wrapped["url"], json=wrapped["body"], headers=env._rest_request_headers(resolved_identity)
-    )
+    # from nobody, answered AUTH_MISSING on a protected tool whatever principal the env names.
+    return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
-def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
+def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any) -> Any:
     """E2E_REST DELIVER: real HTTP through nginx to the live Docker stack.
 
     The single implementation of e2e_rest delivery (the wire-grading work)
@@ -229,15 +237,16 @@ def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str,
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
-    resolved_identity = env.identity_for(Transport.E2E_REST) if identity is NO_IDENTITY_OVERRIDE else identity
-    headers = {"Content-Type": "application/json", **identity_credential_headers(resolved_identity)}
+    headers = {"Content-Type": "application/json", **_presented(env, credential)}
     method = address.method or "post"
 
     with httpx.Client(base_url=env.e2e_config.base_url, timeout=30) as client:
         return getattr(client, method)(wrapped["url"], json=wrapped["body"], headers=headers)
 
 
-def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+def _deliver_e2e_mcp(
+    env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any
+) -> dict[str, Any]:
     """E2E MCP DELIVER: real HTTP via ``fastmcp.Client`` against the live Docker
     stack — the transport ``runStoryboard`` (the real AdCP conformance runner)
     actually speaks (``request_signing.transport = 'mcp'``, agent URLs ending
@@ -250,11 +259,9 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     ``WireError`` — only the transport under the FastMCP
     ``Client`` changes: a real ``StreamableHttpTransport`` against
     ``env.e2e_config.base_url`` instead of the in-memory ``mcp`` app object.
-    Auth flows as real HTTP headers (``identity_credential_headers``) instead of the
-    ``get_http_headers``/``resolve_identity_from_context`` patches
-    ``_run_mcp_client`` installs for in-process dispatch — there is a real
-    nginx -> ``UnifiedAuthMiddleware`` -> ``resolve_identity()`` chain running
-    on the live server, so nothing needs mocking here.
+    The credential flows as real HTTP headers instead of the ``get_http_headers``
+    patch ``_run_mcp_client`` installs for in-process dispatch — the live server
+    reads them off the wire itself, so nothing needs mocking here.
     """
     import asyncio
 
@@ -271,8 +278,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     # uncommitted factory rows in this test session would be invisible to it.
     env._commit_factory_data()
 
-    resolved_identity = env.identity_for(Transport.E2E_MCP) if identity is NO_IDENTITY_OVERRIDE else identity
-    headers = identity_credential_headers(resolved_identity)
+    headers = _presented(env, credential)
     url = f"{env.e2e_config.base_url}/mcp/"
 
     async def _call() -> DeliverResult:
@@ -301,11 +307,9 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 # in-process — only how it reaches the server
 # differs: a real ``POST /a2a`` JSON-RPC 2.0 request instead of a direct
 # ``AdCPRequestHandler().on_message_send()`` call. The route is mounted at
-# ``rpc_url="/a2a"`` by ``create_jsonrpc_routes`` (``src/app.py``), and
-# resolves identity through the SAME ``UnifiedAuthMiddleware`` REST uses
-# (``src/core/auth_middleware.py`` — x-adcp-auth / x-adcp-tenant / x-dry-run
-# headers), via ``AdCPCallContextBuilder`` (``src/a2a_server/
-# context_builder.py``). Push-notification injection
+# ``rpc_url="/a2a"`` by ``create_jsonrpc_routes`` (``src/app.py``), and the
+# live server resolves the credential off the request headers the same way
+# it does for REST. Push-notification injection
 # (``on_message_send``, ``adcp_a2a_server.py``) is out of scope —
 # see ``_wrap_a2a``'s docstring; this DELIVER function sends whatever
 # ``_wrap_a2a`` produced unchanged, same limitation.
@@ -353,7 +357,9 @@ def _artifact_data_from_json(artifact: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
-def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> dict[str, Any]:
+def _deliver_e2e_a2a(
+    env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], credential: Any
+) -> dict[str, Any]:
     """Real HTTP delivery: POST a JSON-RPC ``message/send`` request to the live
     A2A endpoint, then walk the same Task-state branches ``_run_a2a_handler``
     walks in-process (``tests/harness/_base.py``) — FAILED raises a
@@ -381,12 +387,10 @@ def _deliver_e2e_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
     if not env.e2e_config:
         raise RuntimeError("E2E dispatch requires env.e2e_config (pass e2e_config= to env)")
 
-    resolved_identity = env.identity_for(Transport.E2E_A2A) if identity is NO_IDENTITY_OVERRIDE else identity
-
     headers = {
         "Content-Type": "application/json",
         a2a_constants.VERSION_HEADER: a2a_constants.PROTOCOL_VERSION_CURRENT,
-        **identity_credential_headers(resolved_identity),
+        **_presented(env, credential),
     }
     rpc_body = _build_a2a_jsonrpc_body(address.name, wrapped)
 
@@ -651,7 +655,7 @@ def _dispatch_core(
     transport: Transport,
     tool_name: str,
     payload: dict[str, Any],
-    identity: Any = NO_IDENTITY_OVERRIDE,
+    credential: Any = NO_IDENTITY_OVERRIDE,
 ) -> TransportResult:
     """Address -> wrap -> deliver -> unwrap -> ``TransportResult``.
 
@@ -659,7 +663,10 @@ def _dispatch_core(
     below and every E2E dispatcher (``tests/harness/dispatchers.py``:
     ``McpE2EDispatcher``, ``A2AE2EDispatcher``) delegate here instead of each
     re-implementing ADDRESS/WRAP/DELIVER/UNWRAP or hand-rolling their own
-    identity/exception handling.
+    credential/exception handling.
+
+    *credential* is the headers dict the dispatch presents; the sentinel means
+    "the env's own", and ``{}`` means no headers at all.
 
     *payload* is always the flat AdCP request payload as a dict (the same
     shape ``req.model_dump(mode="json", exclude_none=True)`` already produces
@@ -689,7 +696,7 @@ def _dispatch_core(
     address = ADDRESS_TABLE.resolve(tool_name, transport)
     wrapped = WRAP[transport](address, payload)
     try:
-        raw = DELIVER[transport](env, address, wrapped, identity)
+        raw = DELIVER[transport](env, address, wrapped, credential)
     except NotImplementedError:
         # Missing delivery support — an E2E delivery gap (§7), an env that
         # doesn't implement REST (get_rest_client), or a MissingToolNameError
@@ -708,7 +715,7 @@ def _dispatch_core(
 class AdCPTestClient:
     """One client, all transports, in-process and e2e.
 
-    Constructed per-env — it needs the env's identity resolution + factory-
+    Constructed per-env — it needs the env's credential + factory-
     bound session + e2e_config, exactly what ``BaseTestEnv`` already carries.
     The address map it consults (``tests.harness.address_table.ADDRESS_TABLE``)
     IS a process-wide, lazily-built singleton (cheap: no I/O, just reads three
@@ -726,12 +733,12 @@ class AdCPTestClient:
         payload: dict[str, Any],
         transport: Transport,
         *,
-        identity: Any = NO_IDENTITY_OVERRIDE,
+        credential: Any = NO_IDENTITY_OVERRIDE,
     ) -> TransportResult:
         """Dispatch *tool* through *transport* — see ``_dispatch_core`` above
         for the full ADDRESS/WRAP/DELIVER/UNWRAP contract and the
         ``TransportResult.payload`` typed-payload caveat."""
-        return _dispatch_core(self._env, transport, tool, payload, identity)
+        return _dispatch_core(self._env, transport, tool, payload, credential)
 
 
 def unwrap_mcp_error(exc: Exception, transport: Transport = Transport.MCP) -> TransportResult:
@@ -825,7 +832,7 @@ def unwrap_a2a_error(exc: Exception, transport: Transport = Transport.A2A) -> Tr
 def unwrap_rest_error(exc: Exception, transport: Transport = Transport.REST) -> TransportResult:
     """THE REST DELIVER-exception unwrap — one definition, both dispatch paths.
 
-    Genuine exceptions only (e.g. ``_prepare_rest_request`` failing before an
+    Genuine exceptions only (e.g. ``get_rest_client`` failing before an
     HTTP call is even made) — ordinary 4xx/5xx responses do not raise and are
     handled by ``unwrap_rest_response`` instead, which derives the status from
     the real HTTP body. An exception here means no HTTP response body existed at

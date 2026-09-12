@@ -367,30 +367,32 @@ class TestDiscoveryEndpointsInvalidAuth:
         So the claim under test is the live one: a protected tool and a public tool produce
         DIFFERENT values, and each matches its own registry row.
         """
-        from types import MappingProxyType
-        from unittest.mock import patch
-
         from src.core.auth_context import AuthContext
+        from src.core.exceptions import AdcpFailure
         from src.core.schemas import GetProductsRequest, ListCreativesRequest
         from src.core.tools._boundary import invoke_tool
         from src.core.tools.registry import TOOLS
+        from tests.harness._base import BaseTestEnv
+        from tests.helpers.capture_wrapper_req import stub_impl
 
-        credential = AuthContext(auth_token=None, headers=MappingProxyType({}))
-
-        async def required_flag_for(tool_name, req):
-            identity = PrincipalFactory.make_identity(principal_id="p", tenant_id="t")
-            with patch("src.core.resolved_identity._resolve_identity", return_value=identity) as resolver:
+        # The value is observed on the WIRE rather than read off a patched resolver: an
+        # absent credential is refused (AUTH_MISSING) exactly when the boundary demanded one.
+        async def demanded_credential(tool_name, req):
+            with BaseTestEnv() as env, stub_impl(tool_name) as impl:
+                impl.return_value = MagicMock(model_dump=lambda **kw: {})
                 try:
-                    await invoke_tool(tool_name, req, credential, "rest")
-                except Exception:
-                    pass  # the implementation may fail without a database; resolution is the subject
-            assert resolver.called, f"{tool_name}: the boundary never resolved"
-            return resolver.call_args.kwargs["require_valid_token"]
+                    await invoke_tool(tool_name, req, AuthContext(headers=env.credential(token=None)), "rest")
+                except AdcpFailure as failure:
+                    assert failure.response.adcp_error is not None
+                    assert failure.response.adcp_error.code == "AUTH_MISSING", failure.response
+                    return True
+                assert impl.called, f"{tool_name}: the boundary neither refused nor dispatched"
+                return False
 
-        assert await required_flag_for("list_creatives", ListCreativesRequest()) is True, (
+        assert await demanded_credential("list_creatives", ListCreativesRequest()) is True, (
             "list_creatives declares auth='required'; the boundary must demand a valid credential"
         )
-        assert await required_flag_for("get_products", GetProductsRequest(brief="x")) is False, (
+        assert await demanded_credential("get_products", GetProductsRequest(brief="x")) is False, (
             "get_products declares auth='optional'; the boundary must not demand a credential"
         )
         assert TOOLS["list_creatives"].requires_credential() is True

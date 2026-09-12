@@ -308,8 +308,8 @@ class CapabilitiesEnv(IntegrationEnv):
         self.mock["tenant_config_uow"] = patcher.start()
         self._guard("patch:tenant_config_uow", patcher.stop)
 
-    # invalid_token_identity() / anonymous_identity() live on BaseTestEnv
-    # (tests/harness/_base.py) — every Env subclass inherits them.
+    # credential() lives on BaseTestEnv (tests/harness/_base.py) — every Env
+    # subclass inherits it; token=None and token=INVALID_TOKEN are its no-auth forms.
 
     # -- Transport verbs ------------------------------------------------------
 

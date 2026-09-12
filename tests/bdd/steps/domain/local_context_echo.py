@@ -161,9 +161,9 @@ def _send(ctx: dict, *, tool: str) -> None:
     "sends the get_products request" would dispatch get_media_buys and grade
     something other than what it reads as.
 
-    ``identity`` is forwarded only when a Given set it — ``given_buyer_no_auth``
-    writes ``ctx["identity"] = None`` for the token-less scenarios, and
-    ``None`` is a MEANINGFUL value there (dispatch with no credential), which
+    ``credential`` is forwarded only when a Given set it — ``given_buyer_no_auth``
+    writes a token-less ``ctx["credential"]`` for the token-less scenarios, and
+    an empty dict is a MEANINGFUL value there (dispatch with no headers), which
     is why the presence of the key decides rather than its truthiness.
     """
     env = ctx["env"]
@@ -176,8 +176,8 @@ def _send(ctx: dict, *, tool: str) -> None:
         "would dispatch the bare baseline and grade the seller's answer to nothing it claims to send"
     )
     payload = _FACTORY_BY_TOOL[tool].payload(**ctx[_OVERRIDES])
-    identity: Any = ctx["identity"] if "identity" in ctx else NO_IDENTITY_OVERRIDE
-    dispatch_request(ctx, identity=identity, **payload)
+    credential: Any = ctx["credential"] if "credential" in ctx else NO_IDENTITY_OVERRIDE
+    dispatch_request(ctx, credential=credential, **payload)
 
 
 @when("the Buyer Agent sends the get_products request")

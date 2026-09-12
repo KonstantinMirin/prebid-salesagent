@@ -168,21 +168,21 @@ TRANSPORT_PROTOCOL: dict[Transport, str] = {
 }
 
 
-# The ONE identity-argument omission sentinel for the whole dispatch core
-# (tests/harness/client.py, dispatchers.py, _base.py, _mixins.py — plus
-# tests/helpers/mcp_envelope_capture.py, which carries the same distinction
-# outside tests/harness/). Distinguishes "the caller did not pass identity="
-# (fall back to whatever default THAT call site uses — env.identity_for(),
-# self.identity, delegate-by-omission, PrincipalFactory.make_identity(), ...)
-# from an EXPLICIT identity=None (deliberately unauthenticated dispatch).
-# Previously reimplemented as a private object() in seven different function
-# bodies plus two other module-level sentinels (client.py, mcp_envelope_
-# capture.py) — this is the one shared object identity every comparison uses;
-# each call site keeps its OWN fallback logic when it detects the sentinel,
-# never folded into this constant. Scoped to the identity-argument omission
-# disease specifically — other object()-as-sentinel uses in tests/harness/
-# for unrelated fields (e.g. media_buy_create.py's OMIT_IDEMPOTENCY_KEY) are
-# a different sentinel family and are not consolidated here.
+# The ONE credential-argument omission sentinel for the whole dispatch core
+# (tests/harness/client.py, dispatchers.py, raw_wire.py, _base.py, _mixins.py).
+# Distinguishes "the caller did not pass credential=" (fall back to whatever
+# default THAT call site uses — env.credential(), self.identity for a direct
+# impl call, delegate-by-omission, ...) from an EXPLICIT credential={}
+# (deliberately no headers at all). The name is kept from the days the
+# argument was an identity: it is the same omission distinction, and the
+# structural guard (tests/unit/test_architecture_harness_identity_sentinel.py)
+# keys on it. Previously reimplemented as a private object() in seven
+# different function bodies — this is the one shared object identity every
+# comparison uses; each call site keeps its OWN fallback logic when it detects
+# the sentinel, never folded into this constant. Other object()-as-sentinel
+# uses in tests/harness/ for unrelated fields (e.g. media_buy_create.py's
+# OMIT_IDEMPOTENCY_KEY) are a different sentinel family and are not
+# consolidated here.
 NO_IDENTITY_OVERRIDE = object()
 
 

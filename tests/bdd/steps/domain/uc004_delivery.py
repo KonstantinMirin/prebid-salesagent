@@ -1097,23 +1097,16 @@ def when_request_end_only(ctx: dict, end: str) -> None:
 def when_request_delivery_default(ctx: dict) -> None:
     """Request delivery metrics (generic, uses ctx media_buys).
 
-    Respects ctx["principal_id"] override for scenarios like 'principal not found'.
+    Dispatches as the principal the env points at. A scenario that authenticated as a
+    named principal switched the env there already (``authenticate_env_as``), so the
+    credential presents that principal's token, and a principal with no row presents
+    none and is refused by the resolver.
     """
     media_buys = ctx.get("media_buys", {})
     mb_ids = list(media_buys.keys()) or None
     kwargs: dict = {}
     if mb_ids:
         kwargs["media_buy_ids"] = mb_ids
-    # Override identity if ctx has a custom principal_id (e.g. "unknown-buyer")
-    if "principal_id" in ctx:
-        from src.core.resolved_identity import ResolvedIdentity
-
-        env = ctx["env"]
-        kwargs["identity"] = ResolvedIdentity(
-            principal_id=ctx["principal_id"],
-            tenant_id=env._tenant_id,
-            protocol="impl",
-        )
     dispatch_request(ctx, **kwargs)
 
 
@@ -1122,19 +1115,11 @@ def when_request_no_auth(ctx: dict) -> None:
     """Request delivery metrics with missing principal (authenticated but no principal_id).
 
     The feature scenario 'Authentication error - missing principal' expects the
-    principal_id_missing error code, which requires identity to exist but have
-    no principal_id. identity=None would trigger a different error (VALIDATION_ERROR).
+    principal_id_missing error code: the tenant is addressed but no token is
+    presented, so no principal resolves.
     """
-    from src.core.resolved_identity import ResolvedIdentity
-
     ctx["has_auth"] = False
-    env = ctx["env"]
-    no_principal = ResolvedIdentity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-        protocol="mcp",
-    )
-    dispatch_request(ctx, identity=no_principal)
+    dispatch_request(ctx, credential=ctx["env"].credential(token=None))
 
 
 # ── Webhook When steps ─────────────────────────────────────────────

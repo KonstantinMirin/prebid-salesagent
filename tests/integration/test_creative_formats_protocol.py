@@ -12,14 +12,9 @@ Obligation IDs:
 
 from __future__ import annotations
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock
-
 import pytest
 from adcp.types import AssetContentType, ImageFormatAsset, VideoFormatAsset
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
-from fastmcp.server.context import Context
-from fastmcp.tools.tool import ToolResult
 
 from src.core.schemas import (
     Format,
@@ -187,101 +182,9 @@ class TestCombinedFilters:
         assert response.formats == []
 
 
-# ---------------------------------------------------------------------------
-# UC-005-MAIN-MCP-17: MCP ToolResult wrapping
-# ---------------------------------------------------------------------------
-
-
-class TestMcpToolResultWrapping:
-    """Covers: UC-005-MAIN-MCP-17 -- MCP response wraps response as ToolResult."""
-
-    def test_mcp_returns_tool_result_with_structured_content(self, integration_db):
-        """UC-005-MAIN-MCP-17: MCP wrapper returns ToolResult with structured content.
-
-        The MCP wrapper must return a ToolResult object whose
-        structured_content is the ListCreativeFormatsResponse data,
-        parseable as JSON.
-        """
-        from tests.helpers.capture_wrapper_req import mcp_tool
-
-        formats = [
-            _make_format("display_300", "Medium Rectangle"),
-            _make_format("video_15s", "Pre-roll 15s"),
-        ]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-            env._commit_factory_data()
-
-            from tests.harness.transport import Transport
-
-            mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=env.identity_for(Transport.MCP))
-
-            tool_result = asyncio.run(mcp_tool("list_creative_formats")(ctx=mock_ctx))
-
-        # Verify it is a ToolResult
-        assert isinstance(tool_result, ToolResult)
-
-        # Verify structured_content is present and is a dict-like object
-        sc = tool_result.structured_content
-        assert sc is not None
-
-        # Verify it can be parsed as ListCreativeFormatsResponse
-        parsed = ListCreativeFormatsResponse(**sc)
-        assert len(parsed.formats) == 2
-
-    def test_mcp_tool_result_content_is_text(self, integration_db):
-        """UC-005-MAIN-MCP-17: ToolResult.content contains displayable text."""
-        from tests.helpers.capture_wrapper_req import mcp_tool
-
-        formats = [_make_format("test_fmt", "Test Format")]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-            env._commit_factory_data()
-
-            from tests.harness.transport import Transport
-
-            mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=env.identity_for(Transport.MCP))
-
-            tool_result = asyncio.run(mcp_tool("list_creative_formats")(ctx=mock_ctx))
-
-        # content is a list of TextContent objects with displayable text
-        assert tool_result.content is not None
-        assert len(tool_result.content) > 0
-        # First content item has text
-        assert hasattr(tool_result.content[0], "text")
-        assert len(tool_result.content[0].text) > 0
-
-    def test_mcp_structured_content_includes_formats_array(self, integration_db):
-        """UC-005-MAIN-MCP-17: structured_content contains 'formats' key."""
-        from tests.helpers.capture_wrapper_req import mcp_tool
-
-        formats = [
-            _make_format("fmt_a", "Format A"),
-            _make_format("fmt_b", "Format B"),
-        ]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-            env._commit_factory_data()
-
-            from tests.harness.transport import Transport
-
-            mock_ctx = MagicMock(spec=Context)
-            mock_ctx.get_state = AsyncMock(return_value=env.identity_for(Transport.MCP))
-
-            tool_result = asyncio.run(mcp_tool("list_creative_formats")(ctx=mock_ctx))
-
-        sc = tool_result.structured_content
-        assert "formats" in sc
-        assert isinstance(sc["formats"], list)
-        assert len(sc["formats"]) == 2
+# UC-005-MAIN-MCP-17 (MCP ToolResult wrapping) is graded on the wire: every BR-UC-005
+# scenario parametrized over mcp reads the tool's structured_content through the
+# harness's MCP leg, so no direct-call test of the wrapper is kept here.
 
 
 # ---------------------------------------------------------------------------

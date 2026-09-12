@@ -876,29 +876,6 @@ def migration_db():
         pass
 
 
-@pytest.fixture
-def mock_identity(sample_tenant, sample_principal):
-    """Build a ResolvedIdentity from real test DB fixtures.
-
-    Use this with ``resolved_as(mock_identity)`` / ``resolves_to(mock_identity)`` from
-    ``tests.helpers.boundary_identity`` — that module owns where the resolver lives, so a
-    rename is one edit. Spelling the dotted path here is what put it in thirteen places.
-
-    Uses LazyTenantContext so the tenant dict is always read from the DB,
-    matching production behavior (where resolve_identity → LazyTenantContext
-    defers DB load until a field is accessed).
-    """
-    from src.core.resolved_identity import ResolvedIdentity
-    from src.core.tenant_context import LazyTenantContext
-
-    return ResolvedIdentity(
-        principal_id=sample_principal["principal_id"],
-        tenant_id=sample_tenant["tenant_id"],
-        tenant=LazyTenantContext(sample_tenant["tenant_id"]),
-        protocol="a2a",
-    )
-
-
 # ============================================================================
 # Pricing Helper Functions (merged from integration_v2)
 # ============================================================================

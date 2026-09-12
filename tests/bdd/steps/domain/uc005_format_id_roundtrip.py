@@ -78,9 +78,9 @@ def given_captured_format_id_from_get_products(ctx: dict) -> None:
         {"tenant_id": env._tenant_id},
         lambda: TenantFactory(tenant_id=env._tenant_id, ad_server="mock"),
     )
-    # Tenant.brand_manifest_policy defaults to "require_auth" — env.identity below
-    # needs a real Principal row or identity_for() nulls principal_id (no DB row),
-    # tripping the require_auth gate (salesagent-z9e0).
+    # Tenant.brand_manifest_policy defaults to "require_auth" — the credential the
+    # dispatch presents needs a real Principal row to read a token from, or it
+    # presents none and trips the require_auth gate (salesagent-z9e0).
     get_or_create(
         env,
         Principal,

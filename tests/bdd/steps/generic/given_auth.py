@@ -32,32 +32,32 @@ from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 def given_buyer_no_auth(ctx: dict) -> None:
     """Buyer has no authentication credentials at all.
 
-    ``identity=None`` plumbs through every dispatcher as a token-less request,
-    so the REAL transport auth gates run (A2A ``on_message_send`` no-token
-    gate, REST ``_require_auth_dep``, MCP boundary) — nothing is simulated
-    (#1417). ``dispatch_identity`` is the key the uc002 full-create
-    dispatch reads to override its default authenticated identity.
+    The credential presents no token and still addresses the env's tenant, so every
+    dispatcher sends a token-less request to a known seller and the REAL resolver
+    answers it (AUTH_MISSING on a protected tool) — nothing is simulated (#1417).
+    ``ctx["credential"]`` is the key the When steps read to override the env's own
+    authenticated credential.
     """
     ctx["has_auth"] = False
-    ctx["identity"] = None
-    ctx["dispatch_identity"] = None
+    ctx["credential"] = ctx["env"].credential(token=None)
 
 
 @given("no hostname-based tenant resolution is possible")
 def given_no_hostname_tenant(ctx: dict) -> None:
     """No tenant can be resolved from hostname.
 
-    In process there is no hostname to resolve from: the tenant reaches the tool
-    through the identity, so "no hostname resolution" holds exactly when the
-    request carries no identity — which the preceding "the Buyer has no
+    In process there is no hostname to resolve from: the tenant reaches the resolver
+    through the credential's ``x-adcp-tenant``, so "no hostname resolution" holds
+    exactly when the request carries no token — which the preceding "the Buyer has no
     authentication credentials" Given establishes. This step checks that pairing
     rather than setting a ``hostname_tenant`` key no step read; the sentence used
-    to hold whether or not the scenario had actually removed the identity.
+    to hold whether or not the scenario had actually removed the credential.
     """
-    assert ctx.get("identity") is None, (
+    credential = ctx.get("credential")
+    assert credential is not None and "Authorization" not in credential, (
         "Step claims no hostname-based tenant resolution is possible, but the "
-        "scenario still carries an identity that resolves one — the request would "
-        f"reach a tenant anyway: {ctx['identity']!r}"
+        "scenario still presents a credential that resolves one — the request would "
+        f"reach a principal anyway: {credential!r}"
     )
 
 
@@ -65,26 +65,22 @@ def given_no_hostname_tenant(ctx: dict) -> None:
 def given_no_tenant_resolved(ctx: dict) -> None:
     """No tenant can be resolved from any source — so there is no SELLER, not merely no buyer.
 
-    Expressed as an explicit tenant-less identity, not as ``identity=None``. ``None`` is what
-    "the Buyer has no authentication credentials" already means (20 feature lines), and that
-    is a different state: a buyer presenting nothing still reached a host, and the host is
-    what names the tenant. The capabilities request cannot name one --
+    Expressed as NO HEADERS AT ALL, not as a token-less credential. A token-less credential
+    is what "the Buyer has no authentication credentials" already means (20 feature lines),
+    and that is a different state: a buyer presenting nothing still reached a host, and the
+    host is what names the tenant. The capabilities request cannot name one --
     ``get-adcp-capabilities-request.json`` declares only ``protocols``, ``context`` and
     ``ext`` -- so the connection is the sole channel, and losing a credential does not lose
     the seller.
 
-    Both sentences used to set ``identity = None`` and therefore produced the identical
-    dispatch, which meant these scenarios were served WITH a tenant and graded the opposite of
-    what they say.
+    Both sentences used to produce the identical dispatch, which meant these scenarios were
+    served WITH a tenant and graded the opposite of what they say.
 
-    This is the state the boundary genuinely produces when ``_detect_tenant`` matches nothing:
-    no principal, no tenant_id, and hence no tenant context, since it builds the lazy one only
-    from an id it has.
+    An empty headers dict is what makes ``_detect_tenant`` match nothing, so the resolver
+    itself produces the state: no principal, no tenant_id, and hence no tenant context.
     """
-    from tests.factories.principal import PrincipalFactory
-
     ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(principal_id=None, tenant_id=None, tenant=None)
+    ctx["credential"] = {}
 
 
 # ── Sandbox / production account ─────────────────────────────────────

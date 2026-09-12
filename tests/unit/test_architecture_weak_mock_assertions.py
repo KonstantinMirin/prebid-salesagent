@@ -186,10 +186,6 @@ class TestNoWeakMockAssertions:
 # assert_called_once_with() or explicitly kept if only call count matters.
 # FIXME(#1370): each entry below should be reviewed and upgraded
 BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
-    ("tests/unit/test_a2a_auth_optional.py", "test_get_products_with_auth"),
-    ("tests/unit/test_a2a_auth_optional.py", "test_get_products_without_auth"),
-    ("tests/unit/test_a2a_auth_optional.py", "test_list_creative_formats_with_auth"),
-    ("tests/unit/test_a2a_auth_optional.py", "test_list_creative_formats_without_auth"),
     ("tests/unit/test_auth_setup_mode.py", "test_disable_setup_mode_succeeds_when_sso_enabled"),
     ("tests/unit/test_creative.py", "test_audit_log_sync_succeeds_without_principal_in_db"),
     ("tests/unit/test_creative_repository.py", "test_flushes_session"),

@@ -45,11 +45,6 @@ class TestAuthContextStateKey:
         source = (PROJECT_ROOT / "src" / "a2a_server" / "adcp_a2a_server.py").read_text()
         assert "AUTH_CONTEXT_STATE_KEY" in source, "adcp_a2a_server.py must use AUTH_CONTEXT_STATE_KEY constant"
 
-    def test_helpers_use_constant(self):
-        """a2a_helpers.py must import and use AUTH_CONTEXT_STATE_KEY."""
-        source = (PROJECT_ROOT / "tests" / "a2a_helpers.py").read_text()
-        assert "AUTH_CONTEXT_STATE_KEY" in source, "tests/a2a_helpers.py must use AUTH_CONTEXT_STATE_KEY constant"
-
 
 class TestNoRelativePathOpens:
     """Test files must not use relative open('src/...') paths."""

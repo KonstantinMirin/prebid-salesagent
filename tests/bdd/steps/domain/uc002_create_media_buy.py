@@ -233,23 +233,13 @@ def given_natural_key_partial_access(ctx: dict, total: int, accessible: int) -> 
 
 @given("the Buyer Agent's token resolves no principal")
 def given_unauthenticated_principal(ctx: dict) -> None:
-    """Force the dispatch identity to an unauthenticated one: a tenant is resolved
-    (from the host header, as MCP middleware does) but principal_id is None.
+    """Present no token while still addressing the tenant.
 
-    This is the exact shape an unauthenticated MCP caller presents — MCP resolves
-    a tenant from the host but no principal from a missing/invalid token, so account
-    resolution at the transport boundary runs with principal_id=None. A2A/REST raise
-    on the missing token before this point; forcing the identity here exercises the
-    shared ``enrich_identity_with_account`` boundary guard uniformly on every wire
-    transport. See #1417.
+    This is the exact shape an unauthenticated caller presents: the tenant resolves
+    from the request's tenant header and no principal resolves from the absent token.
+    The real resolver answers it on every wire transport alike. See #1417.
     """
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    ctx["dispatch_identity"] = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-    )
+    ctx["credential"] = ctx["env"].credential(token=None)
 
 
 @given(parsers.parse('the account "{account_id}" exists and is active'))
@@ -745,10 +735,10 @@ def _dispatch_full_create(ctx: dict) -> None:
     # cannot fail when the server stops rejecting the payload, because it never asked one.
     kwargs = ctx.get("request_kwargs", {})
 
-    # No-auth scenarios (#1417) stash an unauthenticated identity so the
-    # transport-boundary account-resolution guard is exercised on the wire.
-    if "dispatch_identity" in ctx:
-        dispatch_request(ctx, identity=ctx["dispatch_identity"], **kwargs)
+    # No-auth scenarios (#1417) stash a token-less credential so the
+    # resolver's refusal is exercised on the wire.
+    if "credential" in ctx:
+        dispatch_request(ctx, credential=ctx["credential"], **kwargs)
     else:
         dispatch_request(ctx, **kwargs)
 
@@ -1367,7 +1357,6 @@ def given_tenant_auto_approval(ctx: dict) -> None:
 
     tenant.human_review_required = False
     env._commit_factory_data()
-    env._identity_cache.clear()
     env._tenant_overrides["human_review_required"] = False
 
     adapter_mock = env.mock["adapter"].return_value

@@ -14,8 +14,6 @@ Enforced by ``.ast-grep/rules/test-credential-header-single-producer.yml``, whic
 
 from __future__ import annotations
 
-from typing import Any
-
 
 def credential_headers(*, token: str | None = None, tenant: str | None = None, dry_run: bool = False) -> dict[str, str]:
     """THE producer: the headers a test presents to this seller, from plain values.
@@ -26,20 +24,22 @@ def credential_headers(*, token: str | None = None, tenant: str | None = None, d
     which ``make quality-ci`` runs; graded by
     ``tests/unit/test_ast_grep_credential_header_ban.py``.
 
-    Production's ``UnifiedAuthMiddleware`` (``src/core/auth_middleware.py``) extracts
-    the credential from ``Authorization: Bearer`` for every transport, which is why one
-    function serves them all. The ``x-adcp-auth`` alias this used to send is not read:
-    pinned 3.1.1 ``L2/authentication.mdx:71`` says the credential MUST ride
-    ``Authorization`` and sellers MUST NOT require non-canonical aliases. A caller
-    sending the alias presents nothing the seam can see, which surfaces as AUTH_MISSING
-    rather than as a header error — 691 of 1013 failures on box run innet_100926_1008.
+    Production reads the credential from ``Authorization: Bearer`` on every transport,
+    which is why one function serves them all. The ``x-adcp-auth`` alias this used to
+    send is not read: pinned 3.1.1 ``L2/authentication.mdx:71`` says the credential MUST
+    ride ``Authorization`` and sellers MUST NOT require non-canonical aliases. A caller
+    sending the alias presents nothing the resolver can see, which surfaces as
+    AUTH_MISSING rather than as a header error.
 
     Each header is OMITTED when its value is absent, never sent empty: ``token=None``
-    dispatches unauthenticated, so the server's own middleware returns the real
-    401/``AUTH_MISSING`` rejection instead of one for a malformed credential.
+    dispatches unauthenticated, so the resolver returns the real AUTH_MISSING rejection
+    instead of one for a malformed credential.
 
-    ``tenant`` is the ``x-adcp-tenant`` value and is a parameter because the two modes
-    need different spellings — see :func:`identity_credential_headers`.
+    ``tenant`` is the ``x-adcp-tenant`` value: the tenant_id on every leg. ``_detect_tenant``
+    (``src/core/resolved_identity.py``) tries it as a subdomain first and then takes it
+    as the literal id, so the id resolves whether or not a subdomain row matches it.
+    ``BaseTestEnv.credential`` (``tests/harness/_base.py``) is the harness's call of this
+    function; a test outside the harness calls it directly.
     """
     headers: dict[str, str] = {}
     if token is not None:
@@ -50,35 +50,3 @@ def credential_headers(*, token: str | None = None, tenant: str | None = None, d
     if dry_run:
         headers["x-dry-run"] = "true"
     return headers
-
-
-def identity_credential_headers(identity: Any, *, tenant: str = "subdomain") -> dict[str, str]:
-    """:func:`credential_headers` over a resolved identity: the thin adapter.
-
-    ``tenant`` selects which spelling of the tenant goes on the wire, and the two are
-    NOT interchangeable. ``"subdomain"`` is right for e2e, where
-    ``_detect_tenant`` (``src/core/resolved_identity.py:107``) looks the subdomain up in
-    the live database — pinned by ``tests/unit/test_tenant_factory_subdomain.py``.
-    ``"tenant_id"`` is right in-process, where no such row exists and ``_detect_tenant``
-    falls through to treating the hint as the literal id; feeding it a hyphenated
-    subdomain there scopes the principal lookup to a tenant that does not exist.
-
-    ``identity=None`` means "dispatch without credentials" (explicit unauthenticated).
-    """
-    if identity is None:
-        return {}
-    if tenant == "subdomain":
-        row = getattr(identity, "tenant", None)
-        tenant_value = None
-        if row is not None:
-            tenant_value = row.get("subdomain") if isinstance(row, dict) else getattr(row, "subdomain", None)
-    elif tenant == "tenant_id":
-        tenant_value = getattr(identity, "tenant_id", None)
-    else:
-        raise ValueError(f"tenant must be 'subdomain' or 'tenant_id', got {tenant!r}")
-    tc = getattr(identity, "testing_context", None)
-    return credential_headers(
-        token=identity.auth_token,
-        tenant=tenant_value,
-        dry_run=bool(tc is not None and getattr(tc, "dry_run", False)),
-    )

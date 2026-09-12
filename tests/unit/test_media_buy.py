@@ -23,7 +23,6 @@ from unittest.mock import ANY, MagicMock, patch
 import pytest
 from pydantic import ValidationError
 
-from src.core.auth_context import AuthContext
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -41,7 +40,6 @@ from src.core.schemas import (
     AffectedPackage,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
-    CreateMediaBuyResult,
     CreateMediaBuySuccess,
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
@@ -58,7 +56,6 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.testing_hooks import AdCPTestContext
-from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories.media_buy import (
     default_request_packages,
@@ -69,8 +66,6 @@ from tests.factories.media_buy import (
 )
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
-from tests.helpers.boundary_identity import resolved_as
-from tests.helpers.envelope_assertions import raises_adcp
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -1385,150 +1380,10 @@ class TestIdempotencyKeyRequired:
         assert req.idempotency_key == "test-idem-key-0001"
 
 
-class TestCreateMediaBuyIdempotency:
-    """UC-002 idempotency: a replayed key returns the original media buy.
-
-    Dispatched through ``invoke_tool`` -- the boundary owns the probe and the cache write, so
-    calling the implementation directly would bypass the behavior these tests grade.
-
-    Per adcp 3.12, retrying with the same idempotency_key must return the original
-    media_buy_id without creating a duplicate ad-server booking.
-    Covers: UC-002-MAIN-IDEMPOTENCY
-    """
-
-    @pytest.mark.asyncio
-    async def test_idempotency_replay_returns_existing(self):
-        """Retry with the same key replays the cached success verbatim, marked replayed.
-
-        Covers: UC-002-MAIN-IDEMPOTENCY
-        """
-        from src.core.idempotency_canonical import canonical_request_hash
-
-        idem_key = "550e8400-e29b-41d4-a716-446655440000"
-        req = _make_request(idempotency_key=idem_key)
-        identity = _make_identity()
-
-        # What the first call cached: {status: <protocol>, response: <domain dump>}.
-        original = _make_success(media_buy_id="mb_original_123")
-        cached_attempt = MagicMock()
-        cached_attempt.response_envelope = {"status": "completed", "response": original.model_dump(mode="json")}
-        # Matching hash → a true replay (a mismatch would be IDEMPOTENCY_CONFLICT).
-        cached_attempt.payload_hash = canonical_request_hash(req)
-
-        mock_attempts = MagicMock()
-        mock_attempts.find_by_key.return_value = cached_attempt
-
-        mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.idempotency_attempts = mock_attempts
-
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-            # Account resolution is the boundary's OTHER database read, and it is not what
-            # these two grade; a pass-through keeps the probe the only DB call in play.
-            patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
-            # The boundary RESOLVES the identity now; it is not handed one. Substituting the
-            # resolver is how a test names the caller it wants.
-            resolved_as(identity),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            result = await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
-
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result, CreateMediaBuySuccess)
-        assert result.media_buy_id == "mb_original_123"
-        assert result.status == "completed"
-        assert result.replayed is True  # spec replay marker, injected at replay time (never stored)
-        mock_attempts.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            account_id=identity.account_id,
-            idempotency_key=idem_key,
-        )
-
-    @pytest.mark.asyncio
-    async def test_idempotency_new_key_proceeds(self):
-        """Different idempotency_key creates a new media buy (no match found).
-
-        Covers: UC-002-MAIN-IDEMPOTENCY
-        """
-
-        req = _make_request(idempotency_key="new-key-never-seen")
-        identity = _make_identity()
-
-        # Mock repo returns None (no match for this key)
-        mock_idem_repo = MagicMock()
-        mock_idem_repo.find_by_idempotency_key.return_value = None
-
-        # β success cache returns None (no cached success) → probe misses, flow proceeds
-        mock_idem_attempts_repo = MagicMock()
-        mock_idem_attempts_repo.find_by_key.return_value = None
-        mock_idem_attempts_repo.count_inserts_since.return_value = (0, None)
-        mock_idem_attempts_repo.count_active.return_value = (0, None)
-
-        mock_idem_uow = MagicMock()
-        mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
-        mock_idem_uow.__exit__ = MagicMock(return_value=None)
-        mock_idem_uow.media_buys = mock_idem_repo
-        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
-
-        # Validation UoW (for product lookup — will fail with no products)
-        session = MagicMock()
-        scalars_result = MagicMock()
-        scalars_result.all.return_value = []
-        scalars_result.first.return_value = None
-        session.scalars.return_value = scalars_result
-
-        mock_validation_uow = MagicMock()
-        mock_validation_uow.__enter__ = MagicMock(return_value=mock_validation_uow)
-        mock_validation_uow.__exit__ = MagicMock(return_value=None)
-        mock_validation_uow.session = session
-        mock_validation_uow.media_buys = MagicMock()
-        mock_validation_uow.media_buys.get_by_principal.return_value = []
-
-        # Two separate MediaBuyUoW calls: first for idempotency, second for validation
-        uow_instances = [mock_idem_uow, mock_validation_uow]
-
-        with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
-            patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
-            patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
-            resolved_as(identity),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            ctx_mgr = MagicMock()
-            ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
-            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
-            mock_ctx_mgr.return_value = ctx_mgr
-
-            # Idempotency probe miss → flow continues into product validation,
-            # which fails with the typed AdCPProductNotFoundError. Capture it so
-            # we can still assert the idempotency probe ran.
-            with raises_adcp(AdCPProductNotFoundError):
-                await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
-
-        # β idempotency probe ran (verbatim success cache), found nothing → proceeded
-        mock_idem_attempts_repo.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            account_id=identity.account_id,
-            idempotency_key="new-key-never-seen",
-        )
+# UC-002-MAIN-IDEMPOTENCY (a replayed key returns the original media buy; a new key
+# proceeds) is the boundary's behaviour and is graded on the wire by BR-UC-002's
+# "v3.1 idempotency_key replay returns existing media buy without re-execution" and its
+# sibling in-flight / expired / missing-key scenarios; no ``invoke_tool`` test is kept here.
 
 
 class TestCreateMediaBuyAdapterInteraction:
