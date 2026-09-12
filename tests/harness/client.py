@@ -194,9 +194,16 @@ def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
 
 def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
     kwargs = _with_identity({}, identity)
-    client, _resolved_identity = env._prepare_rest_request(kwargs)
+    client, resolved_identity = env._prepare_rest_request(kwargs)
     method = address.method or "post"
-    return getattr(client, method)(wrapped["url"], json=wrapped["body"])
+    # The credential rides the request, as on every other transport and as
+    # ``_run_rest_request`` sends it: identity is resolved at the boundary from what the
+    # request carries, so a request sent without it is refused AUTH_MISSING whatever
+    # identity this dispatch was handed -- which is what every client-path REST
+    # read-back used to get.
+    return getattr(client, method)(
+        wrapped["url"], json=wrapped["body"], headers=env._rest_request_headers(resolved_identity)
+    )
 
 
 def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
