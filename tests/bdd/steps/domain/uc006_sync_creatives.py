@@ -4532,13 +4532,17 @@ def given_creative_with_tracker_assets(ctx: dict, tracker_assets: str) -> None:
         assets={**assets, **build_assets(*specs)},
     )
     if refusals:
+        # The reason is a literal so the declaration stays auditable; which rule the row
+        # breaks is the row's own phrase, and ``refusals`` names it in the log below.
         creative_payload = malformed(
             "semantic",
             "the tracker asset is shaped correctly but its VALUE breaks a rule the pin states on "
-            "vast-tracker-asset.json / daast-tracker-asset.json: " + "; ".join(refusals),
+            "vast-tracker-asset.json / daast-tracker-asset.json: a non-TrackingEvents event, a "
+            "progress tracker without offset, or a DAAST target outside {linear, companion}",
             creative_payload,
             obligation=ErrorCode.INVALID_REQUEST,
         )
+        ctx["tracker_refusal"] = "; ".join(refusals)
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
