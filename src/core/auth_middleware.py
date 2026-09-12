@@ -53,49 +53,87 @@ def _challenge_for_code(code: str | None) -> str | None:
     return _CHALLENGE_BY_CODE.get(code or "")
 
 
+def _envelope_in_body(body: dict) -> dict | None:
+    """Shape 1: the envelope is the whole body -- REST."""
+    envelope = body.get("adcp_error")
+    return envelope if isinstance(envelope, dict) else None
+
+
+def _envelope_in_jsonrpc_error(body: dict) -> dict | None:
+    """Shape 2: nested under a JSON-RPC error's ``data``.
+
+    ``error`` is not always an object -- a bare JSON-RPC failure can carry a STRING there, and
+    the obvious ``(body.get("error") or {}).get("data")`` blows up on it, because a non-empty
+    string is truthy so the ``or {}`` never fires.
+    """
+    error = body.get("error")
+    data = error.get("data") if isinstance(error, dict) else None
+    envelope = data.get("adcp_error") if isinstance(data, dict) else None
+    return envelope if isinstance(envelope, dict) else None
+
+
+def _envelope_in_mcp_result(body: dict) -> dict | None:
+    """Shape 3: inside an MCP tool RESULT.
+
+    MCP does not report a tool failure as a JSON-RPC error: it answers ``result.content[].text``
+    with ``isError`` set, and that text is the envelope re-encoded as a JSON STRING. So the code
+    is two decodes deep, which is why a reader that knew only shapes 1 and 2 found nothing here.
+    """
+    result = body.get("result")
+    content = result.get("content") if isinstance(result, dict) else None
+    for part in content or []:
+        text = part.get("text") if isinstance(part, dict) else None
+        if not isinstance(text, str):
+            continue
+        try:
+            inner = json.loads(text)
+        except (ValueError, TypeError):
+            continue
+        candidate = inner.get("adcp_error") if isinstance(inner, dict) else None
+        if isinstance(candidate, dict):
+            return candidate
+    return None
+
+
+def _envelope_in_a2a_task(body: dict) -> dict | None:
+    """Shape 4: inside a FAILED A2A Task's artifact.
+
+    A2A reports a tool failure the way it reports a success -- a Task whose artifact DataPart
+    is the response body, with the Task state set to FAILED -- so the envelope sits at
+    ``result.task.artifacts[].parts[].data`` (native 1.0 wraps the Task under ``result.task``;
+    the unwrapped shape puts ``artifacts`` directly under ``result``). A refusal is an outcome
+    like any other, so this reader looks where every outcome lives.
+    """
+    result = body.get("result")
+    task = result.get("task") if isinstance(result, dict) else None
+    holder = task if isinstance(task, dict) else result
+    artifacts = holder.get("artifacts") if isinstance(holder, dict) else None
+    for artifact in artifacts or []:
+        parts = artifact.get("parts") if isinstance(artifact, dict) else None
+        for part in parts or []:
+            data = part.get("data") if isinstance(part, dict) else None
+            candidate = data.get("adcp_error") if isinstance(data, dict) else None
+            if isinstance(candidate, dict):
+                return candidate
+    return None
+
+
 def adcp_error_code_in(body: object) -> str | None:
     """The AdCP error code inside a two-layer envelope, or None if there isn't one.
 
-    Finds it whether the envelope is the whole body (REST, MCP tool payloads) or nested
-    under a JSON-RPC ``error.data`` (A2A). Every level is type-checked rather than assumed:
-    ``error`` is not always an object -- a bare JSON-RPC failure can carry a STRING there,
-    and the obvious ``(body.get("error") or {}).get("data")`` blows up on it, because a
-    non-empty string is truthy so the ``or {}`` never fires.
+    Finds it whether the envelope is the whole body (REST), nested under a JSON-RPC
+    ``error.data`` (A2A's transport-level errors), re-encoded inside an MCP tool result, or
+    carried by a failed A2A Task's artifact. One reader per container, tried in order, so a
+    new container is one more reader rather than another branch in a growing function.
     """
     if not isinstance(body, dict):
         return None
-
-    # 1. The envelope is the whole body -- REST.
-    envelope = body.get("adcp_error")
-
-    # 2. Nested under a JSON-RPC error's ``data`` -- A2A.
-    if not isinstance(envelope, dict):
-        error = body.get("error")
-        data = error.get("data") if isinstance(error, dict) else None
-        envelope = data.get("adcp_error") if isinstance(data, dict) else None
-
-    # 3. Inside an MCP tool RESULT. MCP does not report a tool failure as a JSON-RPC error:
-    #    it answers `result.content[].text` with isError set, and that text is the envelope
-    #    re-encoded as a JSON STRING. So the code is two decodes deep, which is why a reader
-    #    that knew only shapes 1 and 2 silently found nothing here.
-    if not isinstance(envelope, dict):
-        result = body.get("result")
-        content = result.get("content") if isinstance(result, dict) else None
-        for part in content or []:
-            text = part.get("text") if isinstance(part, dict) else None
-            if not isinstance(text, str):
-                continue
-            try:
-                inner = json.loads(text)
-            except (ValueError, TypeError):
-                continue
-            candidate = inner.get("adcp_error") if isinstance(inner, dict) else None
-            if isinstance(candidate, dict):
-                envelope = candidate
-                break
-
-    code = envelope.get("code") if isinstance(envelope, dict) else None
-    return code if isinstance(code, str) else None
+    for read in (_envelope_in_body, _envelope_in_jsonrpc_error, _envelope_in_mcp_result, _envelope_in_a2a_task):
+        envelope = read(body)
+        if envelope is not None:
+            code = envelope.get("code")
+            return code if isinstance(code, str) else None
+    return None
 
 
 def _is_json_response(message: Message) -> bool:

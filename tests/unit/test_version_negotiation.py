@@ -30,6 +30,7 @@ import re
 import pytest
 
 from src.core.schemas import GetAdcpCapabilitiesRequest
+from tests.helpers.envelope_assertions import raises_adcp
 
 
 class TestSupportedAdcpVersionsDerivation:
@@ -175,7 +176,7 @@ class TestBoundaryNegotiatesForEveryTool:
         # refused BEFORE anything about the caller matters. invoke_tool takes the credential
         # and the protocol now, not a pre-resolved identity: the boundary resolves its own,
         # and negotiation runs ahead of that.
-        with pytest.raises(AdCPVersionUnsupportedError):
+        with raises_adcp(AdCPVersionUnsupportedError):
             await invoke_tool("get_adcp_capabilities", req, AuthContext(), "mcp")
 
     async def test_capabilities_impl_no_longer_negotiates_on_its_own(self):

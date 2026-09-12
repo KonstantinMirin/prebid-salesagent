@@ -2,8 +2,8 @@
 
 Wire-shape decisions live at the transport boundary, not in ``_impl``. Tools and
 adapters that need to surface an error to the buyer MUST raise a typed
-``AdCPSalesAgentError`` subclass; the boundary translator runs
-``build_two_layer_error_envelope()`` once at the boundary.
+``AdCPSalesAgentError`` subclass; the boundary builds one ``AdcpErrorResponse``
+(``AdcpErrorResponse.of``) and serializes it with ``to_wire``.
 
 This guard counts ``Error(code=...)`` literal construction sites in
 ``src/core/tools/`` and ``src/adapters/`` per file, with a per-file CAP frozen

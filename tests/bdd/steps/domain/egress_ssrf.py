@@ -562,13 +562,9 @@ def then_refusal_is_the_credential_contract(ctx: dict) -> None:
     triple the preceding Then already pinned is deliberate: it comes from the
     same shared definition, so there is nothing for the two to disagree about.
 
-    The half this step adds, and the reason it is not decoration: the A2A
-    push-config surfaces funnel refusals through
-    ``_invalid_params_from_ssrf_error``, which manufactures
-    ``field="push_notification_config.url"`` plus the https/SSRF suggestion for
-    anything it does not recognize as an ``AdCPValidationError``. A credential
-    refusal that took that path would reach the buyer as "fix your URL" about a
-    URL that is fine. "It refused" is not enough; it has to refuse about the
+    The half this step adds, and the reason it is not decoration: a credential
+    refusal that reached the buyer as a URL refusal would say "fix your URL" about
+    a URL that is fine. "It refused" is not enough; it has to refuse about the
     right field, with the right advice.
     """
     from tests.helpers.webhook_credential_refusal import assert_credentials_refusal_envelope

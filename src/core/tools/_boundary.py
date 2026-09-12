@@ -10,19 +10,10 @@ implementation.
 Both are properties of the REQUEST rather than of the work. ``account`` names whose
 inventory the caller is acting on; ``idempotency_key`` says "if you have already done this,
 do not do it again". Neither is a step in creating a media buy or syncing a creative, and an
-implementation that performs them has to be TOLD it is being called by a buyer -- which is
-how the previous arrangement went wrong in three ways at once:
-
-* ``request_hash`` was computed by each transport and threaded down. The generated MCP
-  registration calls the implementation directly, so it stopped computing one, and replay
-  silently disabled itself on that transport. A value every caller must remember to supply
-  is a value some caller will forget.
-* the hash was taken over raw wire bytes when a transport threaded them and over the model
-  otherwise, making "the same request" a per-transport answer.
-* an in-process call -- ``create_media_buy`` uploading its inline creatives through
-  ``_sync_creatives_impl`` -- inherited the outer request's key and had to be kept out of
-  the cache by withholding the hash. Nothing internal passes through here, so that whole
-  category is gone rather than guarded.
+implementation that performs them has to be TOLD it is being called by a buyer. A value every
+caller must remember to supply is a value some caller will forget, and a hash taken over
+whatever each transport happened to hold makes "the same request" a per-transport answer.
+Nothing internal passes through here, so an in-process call never inherits a caller's key.
 
 ## The idempotency rule, entire
 
@@ -41,28 +32,41 @@ exists to fix. On top of that the spec's closed exclusion list is stripped
 ``push_notification_config.authentication.credentials``), so a key never hashes itself and a
 rotated webhook credential does not turn a retry into a conflict.
 
-Errors are never saved, and that is now a property of control flow rather than a check: every
-implementation RAISES on failure, and a raise never reaches the save. ``create_media_buy`` was
-the one exception -- it returned a result carrying ``status="failed"`` for an adapter rejection,
-which is why this module used to inspect the returned status before caching. It raises like
-everything else now, so a returned result IS a success and there is nothing left to inspect.
+Errors are never saved, and that is a property of control flow rather than a check: every
+implementation RAISES on failure, and a raise never reaches the save. A returned result IS a
+success.
 
 Idempotency is scoped to (agent, account, key) per the spec, with no tool dimension.
+
+## Failure
+
+A failure is a RESPONSE. ``core/protocol-envelope.json`` declares ``adcp_error``, ``context``
+and a required ``status`` on every response envelope, so what a transport writes for a refused
+request is the same kind of object it writes for a served one. ``failure_response`` builds it
+-- once, recording the fault first -- and ``_failed`` raises it as ``AdcpFailure``, the one
+exception a transport catches. A transport adds only its marker: an HTTP status, a
+``ToolError``, a Task state.
 """
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 import typing
 from collections.abc import Callable
-from typing import Any
+from typing import Any, NoReturn
+
+from adcp.types import ContextObject
+from pydantic import ValidationError
 
 from src.core.auth_context import AuthContext
+from src.core.exceptions import AdcpFailure, adcp_error_for
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import ResolvedIdentity, TransportProtocol
-from src.core.schemas._base import AdcpResponse, BuyerRequest
+from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
+from src.core.tool_error_logging import record_boundary_error
 from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
 
 logger = logging.getLogger(__name__)
@@ -155,6 +159,83 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     return identity.tenant_id, identity.principal_id, identity.account_id, key
 
 
+def failure_response(
+    protocol: TransportProtocol,
+    operation: str,
+    exc: Exception,
+    *,
+    echo: ContextObject | None = None,
+    identity: ResolvedIdentity | None = None,
+) -> AdcpErrorResponse:
+    """Record one failure and build the response that answers it. THE one failure builder.
+
+    A transport calls it with the three positional arguments, for a fault in its own container
+    handling raised outside ``serve``: that is protocol-level knowledge and nothing more. The
+    ``echo`` and the ``identity`` are the boundary's alone -- only ``serve`` holds a validated
+    request and a resolved caller -- so only ``_failed`` passes them.
+
+    The ORIGINAL exception goes to the recorder: the body carries no exception text (AdCP 3.1.1
+    transport-errors.mdx, Security Considerations), so the server-side record is the sole
+    answer to what broke. ``adcp_error_for`` types it -- an untyped ValueError is a
+    VALIDATION_ERROR, a PermissionError a PERMISSION_DENIED, anything else an INTERNAL_ERROR --
+    and that answer does not depend on which transport is asking.
+    """
+    record_boundary_error(protocol, operation, exc, identity=identity)
+    return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc)))
+
+
+def _failed(
+    protocol: TransportProtocol,
+    tool_name: str,
+    exc: Exception,
+    echo: ContextObject | None,
+    identity: ResolvedIdentity | None = None,
+) -> NoReturn:
+    """Leave the boundary with the failure response for ``exc``, scoped to the caller once resolved."""
+    raise AdcpFailure(failure_response(protocol, tool_name, exc, echo=echo, identity=identity)) from exc
+
+
+def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> BuyerRequest:
+    """Parse a buyer's payload into its tool's DTO. A rejection carries the buyer's context out.
+
+    THE one validation: every transport hands its payload here, so a malformed payload is
+    answered identically over MCP, A2A and REST.
+
+    The echo is read from the RAW payload, because this is the one outcome with no ``req`` to
+    read ``req.context`` off. Read by subscript and caught: a payload that is not a JSON object
+    has no ``context`` to echo, which is the same answer as an object that carries none, and
+    the DTO refuses the non-object shape itself. Coerced to ``ContextObject`` -- lossless, the
+    model declares no properties and allows extras -- so this path carries the same type
+    ``req.context`` is.
+    """
+    from src.core.tools.registry import TOOLS
+
+    try:
+        return TOOLS[tool_name].dto.model_validate(raw)
+    except Exception as exc:
+        try:
+            echo = ContextObject.model_validate(raw["context"])
+        except (TypeError, KeyError, IndexError, ValidationError):
+            echo = None
+        _failed(protocol, tool_name, exc, echo)
+
+
+async def serve(
+    tool_name: str,
+    raw: Any,
+    credential: AuthContext,
+    protocol: TransportProtocol,
+) -> AdcpResponse:
+    """Answer one buyer payload. THE transport entry.
+
+    Parses the payload and runs the tool. Either step can fail, and both failures leave the
+    same way -- as ``AdcpFailure`` carrying the response that says so -- so a transport wraps
+    ONE call in ONE ``try``. ``invoke_tool`` is the entry for a caller that already holds a
+    validated request.
+    """
+    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), credential, protocol)
+
+
 async def invoke_tool(
     tool_name: str,
     req: BuyerRequest,
@@ -167,112 +248,56 @@ async def invoke_tool(
     validated plus the credential the request arrived with; which function runs, and whether
     that credential must verify, are the registry's answers -- not the caller's.
 
-    IT TAKES A CREDENTIAL, NOT AN IDENTITY, AND THAT IS THE POINT. It used to accept an
-    already-resolved ``ResolvedIdentity``, so each transport resolved its own and read
-    ``ToolSpec.auth`` itself to decide how strictly. Four sites did that and they disagreed
-    twice -- A2A refusing a credential on a public task that MCP and REST served, and REST's
-    discovery dependency hardcoding ``require_valid_token=False`` where the others passed the
-    tool's declaration. A transport cannot disagree about a decision it no longer makes, and
-    with no identity parameter there is nowhere to put one.
-
-    ``protocol`` stays a per-transport argument: it labels the resulting identity, it does not
-    decide anything, so passing it reintroduces no per-transport branch.
+    IT TAKES A CREDENTIAL, NOT AN IDENTITY. Whether that credential must verify is the
+    registry row's declaration, read here, so no transport decides it. ``protocol`` labels the
+    resulting identity for the observability record and decides nothing.
     """
-    from starlette.concurrency import run_in_threadpool
-
     from src.core.resolved_identity import _resolve_identity
     from src.core.testing_hooks import AdCPTestContext
     from src.core.tools.registry import TOOLS
 
     spec = TOOLS[tool_name]
 
-    # In a worker thread because ``_resolve_identity`` is SYNC and hits the database twice
-    # (tenant detection, then the principal lookup). psycopg2 has no async path, so awaiting
-    # it directly would block the event loop for both round-trips -- which is what MCP and
-    # A2A did, while REST alone got the offload for free from FastAPI's sync-dependency
-    # handling. One await here gives all three the offload.
-    # The testing context rides the same headers, so it is resolved here too. Omitting it
-    # was a silent functional regression when resolution moved: thirteen readers under
-    # src/core/tools branch on ``identity.testing_context`` for dry-run and delivery
-    # simulation, and MCP and A2A used to carry it in from their own context objects. A
-    # boundary that resolves the caller must resolve the WHOLE caller, or every transport
-    # loses what the transports used to supply individually.
+    # The testing context rides the same headers: thirteen readers under src/core/tools branch
+    # on ``identity.testing_context`` for dry-run and delivery simulation, so a boundary that
+    # resolves the caller resolves the WHOLE caller.
     testing_context = AdCPTestContext.from_headers(dict(credential.headers))
 
-    identity = await run_in_threadpool(
-        _resolve_identity,
-        headers=dict(credential.headers),
-        auth_token=credential.auth_token,
-        require_valid_token=spec.requires_credential(),
-        protocol=protocol,
-        testing_context=testing_context,
-    )
+    # CAPTURED at entry and stamped on the way out, and that is the whole mechanism. The
+    # buyer's ``context`` is opaque data this seller carries and returns: validation does not
+    # touch it (``ContextObject`` declares no properties and allows extras, and
+    # ``deep_strip_to_schema`` passes a free-form container through whole), so ``req.context``
+    # IS what arrived. Nothing between here and the stamp may read it, pass it, or set it.
+    echo = req.get_context()
 
-    # Recording lives HERE because this is the only place holding all three things a record
-    # needs: the tool name, the resolved identity, and the exception. Each transport used to
-    # record for itself, and two of them RE-RESOLVED an identity purely to obtain the tenant
-    # and principal to scope it with -- REST from headers in its exception handler, MCP via
-    # tool_error_logging. That is the same defect as the auth decision, in the observability
-    # dimension: a value the caller already has, derived again somewhere else.
-    #
-    # TYPING lives here for the same reason recording does. ``adcp_error_for`` answers "what
-    # IS this failure" -- an untyped ValueError is a VALIDATION_ERROR, a PermissionError is a
-    # PERMISSION_DENIED, anything else is an INTERNAL_ERROR -- and that answer does not depend
-    # on who is asking. Three transports each reached it by their own route (MCP through
-    # ``_handle_tool_exception``, REST through registered exception handlers, A2A through
-    # ``_handle_explicit_skill`` AND ``_build_failed_skill_result``), which is four sites
-    # deciding one transport-agnostic question.
-    #
-    # What stays per-transport is RENDERING: a JSON-RPC error, an HTTP status, a ToolError.
-    # Those are genuinely different and belong where they are. A transport now receives an
-    # error whose identity is already settled and only has to write it down.
-    #
-    # The record is scoped with the TYPED error, so the code the buyer sees and the code the
-    # operator reads are the same object rather than two independent normalizations of one
-    # exception.
+    # In a worker thread because ``_resolve_identity`` is SYNC and hits the database twice
+    # (tenant detection, then the principal lookup); psycopg2 has no async path. Its own block,
+    # so ``identity`` is bound wherever it is read below.
     try:
-        return await _invoke_stamped(tool_name, spec.impl, req, identity)
-    except Exception as exc:
-        from src.core.exceptions import adcp_error_for
-        from src.core.tool_error_logging import record_boundary_error
-
-        # EVERY exception, including the catch-all to INTERNAL_ERROR. There is no escape
-        # hatch for "a transport's own error passing through", because no transport error can
-        # be here: an implementation raises AdCPSalesAgentError and nothing else
-        # (ruff-boundary.toml bans importing ToolError at all), fastmcp's ToolError is
-        # produced on the way OUT by tool_error_logging, and a2a's A2AError is raised by the
-        # A2A handler BEFORE dispatch. A version of this that made room for one anyway was
-        # accommodating a test fixture that injected a shape production forbids.
-        typed = adcp_error_for(exc)
-        # The ORIGINAL exception goes to the recorder, not the typed one. The recorder derives
-        # the code itself, and it logs with ``exc_info``, so handing it ``typed`` would erase
-        # the only place the fault's real identity is allowed to survive: the buyer-facing
-        # envelope deliberately carries no exception text (AdCP 3.1.1 transport-errors.mdx
-        # Security Considerations), which leaves the server-side record as the sole answer to
-        # "what actually broke". BR-SECURITY-001 pins exactly that, by exception TYPE rather
-        # than by a substring, and it is what caught this being passed the wrong way round.
-        record_boundary_error(
-            protocol,
-            tool_name,
-            exc,
-            tenant_id=identity.tenant_id,
-            principal_id=identity.principal_id,
+        identity = await asyncio.to_thread(
+            _resolve_identity,
+            headers=dict(credential.headers),
+            auth_token=credential.auth_token,
+            require_valid_token=spec.requires_credential(),
+            protocol=protocol,
+            testing_context=testing_context,
         )
-        # An already-typed error comes back as the SAME object, so the common path re-raises
-        # it with its traceback and its details intact.
-        if typed is not exc:
-            raise typed from exc
-        raise
+    except Exception as exc:
+        _failed(protocol, tool_name, exc, echo)
 
-    # No ``set_current_tenant`` anywhere on this path, deliberately. The tenant travels on
-    # ``identity.tenant`` as a LazyTenantContext: it holds ``tenant_id`` immediately and
-    # loads the row on first access to any other field, once, cached. Pushing it into a
-    # ContextVar would flatten it to a mutable dict -- ``set_current_tenant`` does
-    # ``dict(tenant_data)``, which ITERATES the lazy context and forces exactly the query the
-    # laziness exists to defer. ``require_tenant(identity)`` is the explicit path.
+    # EVERY exception, including the catch-all to INTERNAL_ERROR. No transport error can be
+    # here: an implementation raises AdCPSalesAgentError and nothing else (ruff-boundary.toml
+    # bans importing ToolError at all), and a2a's A2AError is raised by the A2A handler BEFORE
+    # dispatch. Recorded HERE because this is the only place holding all three things a record
+    # needs: the tool name, the resolved identity, and the exception.
+    try:
+        return await _invoke_stamped(echo, tool_name, spec.impl, req, identity)
+    except Exception as exc:
+        _failed(protocol, tool_name, exc, echo, identity)
 
 
 async def _invoke_stamped(
+    echo: ContextObject | None,
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
@@ -294,25 +319,24 @@ async def _invoke_stamped(
 
     The INBOUND half of that negotiation runs here too, and FIRST. A version pin is a property
     of the request in exactly the sense the account and the key are, so it belongs at the one
-    chokepoint rather than inside a tool -- and inside a tool is where it used to live, on
-    ``get_adcp_capabilities`` alone, which is the only tool a buyer pinning an unsupported
-    release could not reach normally. ``compliance/universal/error-compliance.yaml`` grades it
-    on ``get_products``. Running before the account is enriched and before the request is
+    chokepoint rather than inside a tool; ``compliance/universal/error-compliance.yaml`` grades
+    it on ``get_products``. Running before the account is enriched and before the request is
     hashed is deliberate: a rejected pin should not resolve an account, touch the replay cache,
-    or be answered from it. It raises, so it leaves without passing through ``_served``.
+    or be answered from it.
     """
     negotiate_adcp_version(req.get_adcp_version(), req.get_adcp_major_version())
-    return _served(await _invoke(tool_name, impl, req, identity))
+    return _served(echo, await _invoke(tool_name, impl, req, identity))
 
 
-def _served(response: AdcpResponse) -> AdcpResponse:
-    """Stamp the release this build served onto one response envelope.
+def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) -> Served:
+    """Stamp what the BOUNDARY owns onto one response envelope: the release, and the echo.
 
-    THE one assignment. Both of ``invoke``'s answers pass through it -- a fresh run and a
-    replayed one -- so a replay echoes the release that is serving it, which is what the
-    buyer's connection is actually speaking.
+    THE one assignment for both, on every outcome: a fresh run, a replayed one and a failure
+    all pass through it, so a replay echoes the release that is serving it and the context of
+    the caller being served, rather than the context of whichever request filled the cache.
     """
     response.adcp_version = SERVED_ADCP_VERSION
+    response.context = echo
     return response
 
 

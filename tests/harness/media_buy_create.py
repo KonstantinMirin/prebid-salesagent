@@ -439,7 +439,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         """Dispatch create_media_buy through the real A2A ``on_message_send`` pipeline.
 
         Delegates to the base ``_run_a2a_handler`` (drives ``on_message_send`` →
-        skill routing → ``_serialize_for_a2a`` → Task/Artifact DataPart, strips
+        skill routing → ``serve`` → ``to_wire`` → Task/Artifact DataPart, strips
         the A2A-envelope protocol fields, unwraps A2AError), reconstructing the
         ``CreateMediaBuyResult`` via ``parse_rest_response`` — the
         success|error union needs the ``media_buy_id`` discriminator plus the

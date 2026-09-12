@@ -112,7 +112,7 @@ class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every ca
     Usable as a context manager (``with stub_impl("get_products") as mock_impl:``) or as a
     decorator, where it injects the mock like ``patch`` does -- bottom decorator first::
 
-        @patch("src.core.resolved_identity.resolve_identity")
+        @resolves_to(some_identity)
         @stub_impl("get_products")
         def test_x(self, mock_impl, mock_resolve, ...):
 

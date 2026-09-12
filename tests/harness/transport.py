@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from src.core.resolved_identity import TransportProtocol
 from tests.helpers import pinned_schema
 
 
@@ -139,11 +140,18 @@ def _envelope_from_mcp_error(exc: Exception) -> dict[str, Any] | None:
 
 
 class Transport(StrEnum):
-    """Dispatch transports for behavioral tests."""
+    """Dispatch transports for behavioral tests.
 
-    A2A = "a2a"  # the A2A handler
-    REST = "rest"  # FastAPI TestClient → route → invoke_tool() → _impl()
-    MCP = "mcp"  # Mock Context → MCP wrapper → _impl()
+    The three PROTOCOL members take their values from ``TransportProtocol`` in ``src`` rather
+    than restating them, so what a transport is spelled as is declared once. A python enum
+    with members cannot be subclassed, which is why this is a separate class and not an
+    extension: the ``E2E_*`` members are test dispatch PATHS -- the same three protocols over
+    a real socket -- not protocols a buyer can speak, so they have no counterpart in ``src``.
+    """
+
+    A2A = TransportProtocol.A2A.value  # the A2A handler
+    REST = TransportProtocol.REST.value  # FastAPI TestClient → route → invoke_tool() → _impl()
+    MCP = TransportProtocol.MCP.value  # Mock Context → MCP wrapper → _impl()
     E2E_REST = "e2e_rest"  # Real HTTP via httpx → nginx → server
     E2E_MCP = "e2e_mcp"  # Real MCP via httpx → nginx → server (placeholder)
     E2E_A2A = "e2e_a2a"  # Real A2A via httpx → nginx → server (placeholder)
@@ -526,8 +534,8 @@ class TransportResult:
         access; the fix is to move the parsing here, not to allowlist the step.
 
         Reads ``errors[]``, falling back to the envelope-level ``adcp_error``
-        mirror, because ``build_two_layer_error_envelope`` emits both and an
-        emitter is free to carry only one.
+        mirror, because ``AdcpErrorResponse`` carries both and an emitter is
+        free to carry only one.
         """
         from tests.helpers import locate_envelope_errors
         from tests.helpers.pinned_schema import validator_for

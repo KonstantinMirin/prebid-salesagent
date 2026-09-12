@@ -59,6 +59,7 @@ from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
 __all__ = [
+    "CODE_BY_VALUE",
     "CODE_TABLE",
     "AppErrorCode",
     "CodeEntry",
@@ -460,3 +461,6 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
 
 #: Every code this seller can emit, mapped to what a buyer gets with it.
 CODE_TABLE: Final[Mapping[ErrorCodeT, CodeEntry]] = MappingProxyType(_build_code_table())
+
+#: The same vocabulary keyed by its wire string, for a reader holding a serialized code.
+CODE_BY_VALUE: Final[Mapping[str, ErrorCodeT]] = MappingProxyType({str(code): code for code in CODE_TABLE})

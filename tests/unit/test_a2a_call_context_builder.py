@@ -3,9 +3,8 @@
 Validates that:
 - AdCPCallContextBuilder exists and builds context from request.state.auth_context
 - A2AStarletteApplication is constructed with AdCPCallContextBuilder
-- Handler's _get_auth_token reads from ServerCallContext when context is provided
-- Handler's _resolve_a2a_identity reads headers from ServerCallContext when context is provided
-- ContextVar fallback still works when context is None (test path)
+- Handler's _credential_of reads the credential from ServerCallContext when one is provided,
+  and answers an empty credential without one
 
 """
 
@@ -100,24 +99,26 @@ class TestA2AAppUsesCustomContextBuilder:
 class TestHandlerReadsFromContext:
     """Verify handler methods prefer ServerCallContext over ContextVar."""
 
-    def test_get_auth_token_accepts_context_parameter(self):
-        """_get_auth_token must accept an optional context parameter."""
+    def test_credential_of_accepts_context_parameter(self):
+        """_credential_of must accept an optional context parameter."""
         import inspect
 
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
-        sig = inspect.signature(handler._get_auth_token)
+        sig = inspect.signature(handler._credential_of)
         params = list(sig.parameters.keys())
-        assert "context" in params, "_get_auth_token must accept a 'context' parameter to read from ServerCallContext"
+        assert "context" in params, "_credential_of must accept a 'context' parameter to read from ServerCallContext"
 
-    def test_get_auth_token_reads_from_context_when_provided(self):
-        """_get_auth_token should read from context.state when context is provided."""
+    def test_credential_of_reads_from_context_when_provided(self):
+        """_credential_of should read the credential from context.state when context is provided."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
         auth_ctx = AuthContext(auth_token="context-token", headers={"host": "test.example.com"})
         context = ServerCallContext(state={"auth_context": auth_ctx})
 
-        token = handler._get_auth_token(context=context)
-        assert token == "context-token", f"Expected 'context-token' from context.state, got {token!r}"
+        credential = handler._credential_of(context=context)
+        assert credential.auth_token == "context-token", (
+            f"Expected 'context-token' from context.state, got {credential!r}"
+        )

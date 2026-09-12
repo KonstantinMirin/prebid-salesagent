@@ -1894,7 +1894,7 @@ def _raise_degraded_replay_outcome(
 
     Reached only when this create lost the commit race for a key another request already
     booked (the ``MediaBuy.idempotency_key`` unique index fired). Replay itself is not this
-    function's job -- :func:`src.core.tools._boundary.invoke` probes the verbatim cache
+    function's job -- :func:`src.core.tools._boundary._invoke` probes the verbatim cache
     before any transport reaches this implementation, so a retry replays there. What is left
     is telling the buyer WHICH kind of loss this was. The lookup is account-scoped (the spec
     idempotency scope is agent + account + key).
@@ -2045,7 +2045,7 @@ async def _create_media_buy_impl(
     """Create a media buy with the specified parameters.
 
     ``req.idempotency_key`` arrives here but this function neither probes nor caches by it:
-    :func:`src.core.tools._boundary.invoke` replays a stored success and caches a fresh one
+    :func:`src.core.tools._boundary._invoke` replays a stored success and caches a fresh one
     around this call. What stays is the dup-booking backstop -- the ``media_buys`` unique
     index over (tenant, principal, account, key), whose ``IntegrityError`` only this
     function's transaction can see.

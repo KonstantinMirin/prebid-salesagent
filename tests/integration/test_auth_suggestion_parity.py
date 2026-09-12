@@ -19,16 +19,17 @@ present but its tenant unresolvable -> ``AUTH_INVALID`` (terminal).
 Wire-first per tests/CLAUDE.md § Error Verification Policy: the
 ``require_principal_id`` case drives the REAL A2A wire (it is the
 account-resolution boundary the PR newly routes onto); the remaining helpers
-are graded on the envelope the production boundary translator builds for
-their raise (``build_two_layer_error_envelope`` — the same builder every
-transport dispatcher calls).
+are graded on the envelope the production boundary builds for their raise: an
+``AdcpErrorResponse`` (via ``AdcpErrorResponse.of``) serialized with ``to_wire``,
+which ``envelope_for`` composes for a test that holds only the exception.
 """
 
 import pytest
 
-from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPSalesAgentError
 from tests.helpers import assert_envelope_shape
 from tests.helpers.credentials import credential_headers
+from tests.helpers.envelope_assertions import envelope_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -88,8 +89,8 @@ class TestAuthHelperFamilySuggestion:
     """The remaining AUTH_MISSING/AUTH_INVALID raise sites in src/core/auth.py carry a suggestion.
 
     Each case drives the production helper and asserts on the envelope the
-    production boundary translator builds for its raise — the same
-    ``build_two_layer_error_envelope`` every transport dispatcher calls.
+    production boundary builds for its raise — ``AdcpErrorResponse.of`` plus
+    ``to_wire``, composed by ``envelope_for``.
     """
 
     def test_resolve_principal_not_found_carries_suggestion(self, integration_db):
@@ -105,7 +106,7 @@ class TestAuthHelperFamilySuggestion:
             with pytest.raises(AdCPSalesAgentError) as exc_info:
                 resolve_principal_or_raise("nonexistent-principal", tenant_id="auth_sugg_t1")
 
-        _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_invalid_with_suggestion(envelope_for(exc_info.value))
 
     def test_require_tenant_no_identity_at_all_is_auth_missing(self):
         """No identity presented at all -> AUTH_MISSING (salesagent-otc5).
@@ -120,7 +121,7 @@ class TestAuthHelperFamilySuggestion:
         with pytest.raises(AdCPSalesAgentError) as exc_info:
             require_tenant(None)
 
-        _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_missing_with_suggestion(envelope_for(exc_info.value))
 
     def test_require_tenant_credential_presented_but_unresolvable_is_auth_invalid(self):
         """A token was presented but its tenant can't be resolved -> AUTH_INVALID (terminal) (salesagent-otc5).
@@ -140,7 +141,7 @@ class TestAuthHelperFamilySuggestion:
         with pytest.raises(AdCPSalesAgentError) as exc_info:
             require_tenant(identity)
 
-        _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_invalid_with_suggestion(envelope_for(exc_info.value))
 
     def test_require_tenant_no_credential_presented_is_auth_missing_even_with_identity(self):
         """An identity object exists (discovery endpoints always build one) but
@@ -159,7 +160,7 @@ class TestAuthHelperFamilySuggestion:
         with pytest.raises(AdCPSalesAgentError) as exc_info:
             require_tenant(identity)
 
-        _assert_auth_missing_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_missing_with_suggestion(envelope_for(exc_info.value))
 
     def test_invalid_token_carries_suggestion(self, integration_db):
         """A PRESENTED credential that resolves to nobody raises AUTH_INVALID with a suggestion.
@@ -186,4 +187,4 @@ class TestAuthHelperFamilySuggestion:
                     protocol="mcp",
                 )
 
-        _assert_auth_invalid_with_suggestion(build_two_layer_error_envelope(exc_info.value))
+        _assert_auth_invalid_with_suggestion(envelope_for(exc_info.value))

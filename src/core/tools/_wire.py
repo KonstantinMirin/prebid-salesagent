@@ -15,11 +15,8 @@ def to_wire(response: ProtocolEnvelope) -> dict[str, Any]:
     containers are the only thing that legitimately differs, because the transports really
     do have different envelopes. What goes INSIDE is the same bytes for all of them.
 
-    There is nothing per-transport to add here, and adding one would be the defect this
-    replaces. Each transport used to call ``model_dump(mode="json")`` itself and then reach
-    into the result: A2A stamped ``message`` and ``success`` into the payload, MCP put the
-    same ``message`` in a wrapper field, and REST emitted neither. A buyer therefore saw a
-    different document per transport for one response object.
+    There is nothing per-transport to add here: a transport that stamped its own key into the
+    body would make one response object into a different document per transport.
 
     Envelope fields need no help from this function. ``status``, ``task_id``, ``message``,
     ``replayed`` and the rest are declared on the response model, so they serialize like any
@@ -31,9 +28,8 @@ def to_wire(response: ProtocolEnvelope) -> dict[str, Any]:
     the wider bound and produce a body with no envelope at all -- the same reasoning that binds
     ``mcp_result`` to ``AdCPBaseModel`` rather than to ``BaseModel``.
 
-    ``adcp_version`` is one of those declared envelope fields and needs no help here either.
-    It is set on the MODEL at the boundary (``_boundary.invoke``), which is the response-side
-    mirror of where the request is read, and it serializes from there like ``status`` or
-    ``message``.
+    ``adcp_version`` and ``context`` are two of those declared envelope fields and need no help
+    here either. They are set on the MODEL at the boundary (``_boundary._served``), on every
+    outcome, and serialize from there like ``status`` or ``message``.
     """
     return response.model_dump(mode="json")

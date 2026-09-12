@@ -72,7 +72,7 @@ class A2ADispatcher:
     """Dispatch via ``handler.on_message_send`` — exercises the full A2A pipeline.
 
     ``env.deliver_a2a`` drives ``AdCPRequestHandler.on_message_send`` end-to-end
-    (message parsing → skill routing → handler dispatch → ``_serialize_for_a2a``
+    (message parsing → skill routing → ``serve`` → ``to_wire``
     → Task/Artifact framing). On a failed Task, the harness reconstructs the
     ``AdCPSalesAgentError`` from the artifact DataPart and stashes the real
     wire envelope on the exception — read off it by ``client.py``'s

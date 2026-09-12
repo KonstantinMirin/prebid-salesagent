@@ -42,10 +42,11 @@ from adcp.signing.digest import content_digest_matches
 from adcp.signing.keygen import generate_signing_keypair
 from adcp.webhook_auth import JwkSignerStrategy
 
-from src.core.exceptions import AdCPBlockedUrlError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.outbound_http import CounterpartyUrl
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 from tests.helpers.egress_hatches import egress_hatch_env
+from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import hangs_up, responds, sends_chunked_body
 
 # Both entry points get every case. Parametrising instead of duplicating the
@@ -693,8 +694,9 @@ def test_oversized_response_body_is_refused_and_not_retried(seam_call, monkeypat
 # 9. Error opacity, asserted on the wire envelope (spec point 6)
 #
 # The repo's error-verification policy makes the envelope the authority, not
-# `.message` — `details` rides to the buyer too, via
-# build_two_layer_error_envelope -> adcp_error(details=...).
+# `.message` — `details` rides to the buyer too: the boundary builds an
+# `AdcpErrorResponse` from the exception and `to_wire` serializes it, which is
+# what `envelope_for` does here.
 # ---------------------------------------------------------------------------
 
 
@@ -720,8 +722,8 @@ def test_blocked_envelope_hides_the_resolved_address_and_the_reason(seam_call, m
     reserved = assert_blocked(seam_call, "https://127.0.0.1/webhook")
     unresolvable = assert_blocked(seam_call, "https://no-such-host.invalid/webhook")
 
-    reserved_envelope = build_two_layer_error_envelope(reserved)
-    unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
+    reserved_envelope = envelope_for(reserved)
+    unresolvable_envelope = envelope_for(unresolvable)
 
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
     assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
@@ -781,8 +783,8 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
         seam_call, "https://no-such-host.invalid/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH)
     )
 
-    reserved_envelope = build_two_layer_error_envelope(reserved)
-    unresolvable_envelope = build_two_layer_error_envelope(unresolvable)
+    reserved_envelope = envelope_for(reserved)
+    unresolvable_envelope = envelope_for(unresolvable)
 
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable", field=_CALLER_FIELD_PATH)
     assert reserved_envelope == unresolvable_envelope, (
@@ -796,7 +798,7 @@ def test_carried_field_does_not_discriminate_the_refusal_cause(seam_call, monkey
     ):
         assert forbidden not in json.dumps(envelope), f"{forbidden!r} leaked into {envelope}"
 
-    fieldless = build_two_layer_error_envelope(assert_blocked(seam_call, "https://127.0.0.1/webhook"))
+    fieldless = envelope_for(assert_blocked(seam_call, "https://127.0.0.1/webhook"))
 
     assert "field" not in fieldless["adcp_error"], f"adcp_error carries a field key with no caller field: {fieldless}"
     assert "field" not in fieldless["errors"][0], f"errors[0] carries a field key with no caller field: {fieldless}"
@@ -837,7 +839,7 @@ def test_a_jsonpath_lite_field_is_carried(seam_call, monkeypatch):
     error = assert_blocked(seam_call, "https://127.0.0.1/webhook", provenance=CounterpartyUrl(field=_CALLER_FIELD_PATH))
 
     assert_envelope_shape(
-        build_two_layer_error_envelope(error),
+        envelope_for(error),
         "VALIDATION_ERROR",
         recovery="correctable",
         field=_CALLER_FIELD_PATH,
@@ -851,7 +853,7 @@ def test_delivery_failure_envelope_hides_the_origin_response(seam_call, monkeypa
     local_origin_tls.respond_with(503, body=b'{"detail": "LEAKED-ORIGIN-BODY-MARKER"}')
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 2, "last_status": 503}
@@ -874,7 +876,7 @@ def test_transport_failure_envelope_hides_the_httpx_error(seam_call, monkeypatch
         timeout=0.5,
         max_attempts=1,
     )
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
@@ -901,7 +903,7 @@ def test_disconnect_envelope_is_indistinguishable_from_a_timeout_envelope(seam_c
     local_origin_tls.close_without_responding()
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=1)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["errors"][0]["details"] == {"attempts": 1, "last_status": None}
@@ -1013,8 +1015,8 @@ def test_validate_url_refusal_envelope_hides_the_resolved_address_and_the_reason
     with pytest.raises(seam.OutboundRequestBlocked) as unresolvable_info:
         seam.validate_url("https://no-such-host.invalid/webhook")
 
-    reserved_envelope = build_two_layer_error_envelope(reserved_info.value)
-    unresolvable_envelope = build_two_layer_error_envelope(unresolvable_info.value)
+    reserved_envelope = envelope_for(reserved_info.value)
+    unresolvable_envelope = envelope_for(unresolvable_info.value)
 
     assert_envelope_shape(reserved_envelope, "VALIDATION_ERROR", recovery="correctable")
     assert_envelope_shape(unresolvable_envelope, "VALIDATION_ERROR", recovery="correctable")
@@ -1679,7 +1681,7 @@ def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeyp
     pin_jitter(monkeypatch, 0.0)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert_envelope_shape(envelope, "SERVICE_UNAVAILABLE", recovery="transient")
     assert envelope["adcp_error"].get("retry_after") == 30, f"adcp_error carries no top-level retry_after: {envelope}"
@@ -1693,9 +1695,10 @@ def test_retry_after_rides_the_envelope_top_level_not_details(seam_call, monkeyp
 def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch, local_origin_tls):
     """``_DETAIL_KEYS`` is a promise about the buyer-visible payload — asserted, not commented.
 
-    ``details`` rides to the buyer through ``build_two_layer_error_envelope``, so
-    the seam's rule is that nothing derived from the origin's response or from an
-    httpx error string may be added to it (spec point 6). That rule is a comment
+    ``details`` rides to the buyer on the ``AdcpErrorResponse`` the boundary builds
+    from the exception and serializes with ``to_wire``, so the seam's rule is that
+    nothing derived from the origin's response or from an httpx error string may
+    be added to it (spec point 6). That rule is a comment
     on a ClassVar referenced nowhere else, and the call sites migrating onto the
     seam lean on it — including this ticket's, which carries ``retry_after`` in
     ``AdCPSalesAgentError``'s own slot precisely so ``details`` does not grow.
@@ -1710,7 +1713,7 @@ def test_details_carries_exactly_the_declared_detail_keys(seam_call, monkeypatch
     pin_jitter(monkeypatch, 0.0)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     declared = _seam().OutboundDeliveryFailed._DETAIL_KEYS
     assert declared == ("attempts", "last_status"), (
@@ -1776,7 +1779,7 @@ def test_a_rate_limit_without_the_header_carries_no_retry_after(seam_call, monke
     pin_jitter(monkeypatch, 0.0)
 
     error = assert_delivery_failed(seam_call, f"{local_origin_tls.base_url}/webhook", max_attempts=2)
-    envelope = build_two_layer_error_envelope(error)
+    envelope = envelope_for(error)
 
     assert error.retry_after is None, f"a retry_after appeared with no Retry-After header: {error.retry_after!r}"
     assert "retry_after" not in envelope["errors"][0], f"errors[0] carries an invented retry_after: {envelope}"

@@ -23,7 +23,7 @@ NOT violations, deliberately:
 - ``except Exception: raise ValueError(...)`` — ``ValueError`` is an internal
   Python signal, not a buyer-facing contract verdict.
 - ``except Exception: raise AdCPAdapterError(...)`` (and
-  ``AdCPServiceUnavailableError``, ``_internal_error_for``, ...) — these types
+  ``AdCPServiceUnavailableError``, ...) — these types
   already mean "something outside this code broke", which is the honest reading
   of an unexpected exception. Broad catch, correct label.
 - ``except (SchemaError, KeyError): raise SomeValidationError(...)`` — a NAMED

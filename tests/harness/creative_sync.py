@@ -794,7 +794,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         every storyboard Then on this transport had nothing transport-observable
         to assert and fell back to reading an in-memory object. Delegating to the
         base ``_run_a2a_handler`` (message parse → skill routing →
-        ``_handle_sync_creatives_skill`` → ``_serialize_for_a2a`` →
+        ``serve`` → ``to_wire`` →
         Task/Artifact DataPart) makes the a2a seat grade the real handler,
         per-item failures included, instead of standing in for it.
 

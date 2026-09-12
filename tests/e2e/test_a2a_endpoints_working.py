@@ -431,10 +431,10 @@ class TestA2ARequestHandler:
 
     def test_auth_methods_exist(self):
         """Test that authentication-related methods exist."""
-        # ``_resolve_a2a_identity`` and ``_make_tool_context`` are gone by design: A2A neither
-        # resolves an identity nor builds a tool context. Reading the credential off the call
-        # context is the only auth-shaped thing it still does.
-        auth_methods = ["_get_auth_token"]
+        # A2A neither resolves an identity nor builds a tool context: identity is resolved
+        # inside ``serve``, once, for every transport. Reading the credential off the call
+        # context with ``_credential_of`` is the only auth-shaped thing the handler does.
+        auth_methods = ["_credential_of"]
 
         for method_name in auth_methods:
             assert hasattr(self.handler, method_name), f"Handler missing auth method: {method_name}"
@@ -446,11 +446,7 @@ class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""
 
     @pytest.mark.integration
-    @pytest.mark.xfail(
-        reason="v0.3 compat adapter maps A2AError to -32603; see #1670",
-        strict=True,
-    )
-    @pytest.mark.parametrize("method", ["tasks/get", "tasks/cancel"])
+    @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
     def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server):
         """The deliverable of the TaskNotFoundError change is what an A2A client
         SEES: JSON-RPC error code -32001. That code is not carried by the
@@ -464,26 +460,21 @@ class TestA2AServerIntegration:
         on the ad-hoc port — a skip under strict xfail is neither XFAIL nor XPASS,
         so the sole on-the-wire grade must never be allowed to no-op.
 
-        Parametrized over both methods this PR changed. `tasks/cancel` of an
-        unknown id went from a silent None to an error in this PR, so it needs the
-        same wire tripwire as `tasks/get` — otherwise only half the contract gets
-        locked in when #1670 lands.
+        Parametrized over both methods. `CancelTask` of an unknown id went from a silent
+        None to an error, so it needs the same wire tripwire as `GetTask` — otherwise
+        only half the contract is locked in.
 
-        STRICT xfail against #1670: the code is -32603 today, not the spec's
-        -32001 — see ``_get_task_or_raise`` (src/a2a_server/adcp_a2a_server.py) and
-        #1670 for the enable_v0_3_compat dispatch path that flattens it. Both
-        `tasks/get` and `tasks/cancel` reach that path, so both are -32603 today
-        whether they raise TaskNotFoundError or return None.
-
-        Strict on purpose: an a2a-sdk bump that closes the gap makes this XPASS,
-        which strict turns into a loud failure so the xfail is removed and -32001
-        is locked in. A non-strict xfail would let the fix land silently and rot
-        the marker — the same "green suite lies" shape the tripwire exists to
-        prevent.
+        GRADUATED from a strict xfail against #1670. The code WAS -32603, because the
+        v0.3 compat adapter ended in a bare `except Exception -> CoreInternalError` with
+        no `A2AError -> code` mapping, flattening every raised error. With that adapter
+        removed, requests dispatch through the SDK's own dispatcher, which performs the
+        mapping: both methods now answer the spec's -32001. Measured before the xfail was
+        deleted, not assumed from the marker going green.
         """
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": {"id": "task_does_not_exist"}},
+            headers={"A2A-Version": "1.0"},
             timeout=5,
         )
 
@@ -491,8 +482,7 @@ class TestA2AServerIntegration:
         data = response.json()
         assert "error" in data, f"unknown task id must produce a JSON-RPC error: {data}"
         assert data["error"]["code"] == -32001, (
-            f"A2A spec defines -32001 (TaskNotFoundError) for an unknown task id, got "
-            f"{data['error']['code']} — see #1670"
+            f"A2A spec defines -32001 (TaskNotFoundError) for an unknown task id, got {data['error']['code']}"
         )
 
     @pytest.mark.integration
@@ -529,7 +519,7 @@ class TestA2AServerIntegration:
         response = requests.post(
             f"{live_server['a2a']}/a2a",
             headers=credential_headers(token="invalid-token"),
-            json={"method": "message/send", "params": {}},
+            json={"method": "SendMessage", "params": {}},
             timeout=2,
         )
 
@@ -537,7 +527,7 @@ class TestA2AServerIntegration:
         assert response.status_code != 404, "Endpoint should exist"
 
         # Missing auth should also not be 404
-        response = requests.post(f"{live_server['a2a']}/a2a", json={"method": "message/send", "params": {}}, timeout=2)
+        response = requests.post(f"{live_server['a2a']}/a2a", json={"method": "SendMessage", "params": {}}, timeout=2)
         assert response.status_code != 404, "Endpoint should exist even without auth"
 
 

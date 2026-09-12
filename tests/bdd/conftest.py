@@ -85,6 +85,8 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
+    "tests.bdd.steps.domain.local_context_echo",
+    "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
@@ -4043,7 +4045,14 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # an excluded transport is exactly as ungraded as an xfail but invisible to both
 # escape-hatch detectors (GH #1892), whereas this keeps a real ``[a2a]`` test id
 # that ``--collect-only`` shows.
-_SINGLE_TRANSPORT_TAGS = {"a2a_untyped_ingest": "A2A"}
+_SINGLE_TRANSPORT_TAGS = {
+    "a2a_untyped_ingest": "A2A",
+    # local-pre-dispatch-refusals.feature: the refused shape is the transport's own frame,
+    # so each scenario names the one transport whose frame it sends.
+    "predispatch-rest": "REST",
+    "predispatch-a2a": "A2A",
+    "predispatch-mcp": "MCP",
+}
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
 # (UC-002 @account used to live here when it ran resolve_account() via IMPL on
@@ -5264,6 +5273,43 @@ _UC006_WIRED_SCENARIOS = frozenset(
 )
 
 ENV_ROUTES: list[EnvRoute] = [
+    # ── @ctxecho (local context-echo-on-every-outcome feature) ──────────────
+    # Same reason the @egress rows below are UNSCOPED `when` rows: these
+    # scenarios carry T-CTXECHO-* identity tags, not T-UC-<n>, so
+    # storyboard_spec.detect_uc returns None and no coarse bucket can claim
+    # them. Two rows because the feature grades two tools on purpose —
+    # get_products is auth-OPTIONAL (a token-less caller reaches the
+    # implementation), so the auth-rejection scenarios need a tool whose
+    # ToolSpec declares auth=required, and get_media_buys is the cheapest of
+    # those (a pure read, no adapter).
+    EnvRoute(
+        tag="ctxecho-products",
+        when=lambda m: "ctxecho-products" in m,
+        env_builder=_build_product_env,
+        # A tenant plus its principal, nothing else: get_products needs no
+        # account (the field is optional on get-products-request.json) and no
+        # Product row — an empty catalog is a valid SUCCESS, and the echo is
+        # what these scenarios read off it. Without the seed there is no
+        # Principal for identity_for() to resolve, so every scenario would
+        # dispatch unauthenticated and grade the wrong refusal.
+        seed=_seed_tenant_and_principal,
+    ),
+    EnvRoute(
+        tag="ctxecho-media-buys",
+        when=lambda m: "ctxecho-media-buys" in m,
+        env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @predispatch (local pre-dispatch-refusals feature) ──────────────────
+    # T-PREDISPATCH-* identity tags, so an UNSCOPED `when` row like the two above.
+    # Every routable document addresses get_products, and a tenant plus its
+    # principal is all a refusal made before any tool runs can need.
+    EnvRoute(
+        tag="predispatch",
+        when=lambda m: "predispatch" in m,
+        env_builder=_build_product_env,
+        seed=_seed_tenant_and_principal,
+    ),
     # ── @egress (local SSRF / webhook-credential refusal feature) ───────────
     # These scenarios carry T-EGRESS-* identity tags, NOT T-UC-<n>, so
     # storyboard_spec.detect_uc returns None for them and no coarse bucket can

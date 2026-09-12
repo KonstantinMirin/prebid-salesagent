@@ -290,14 +290,14 @@ class AdapterFailureDetails(EntityRefDetails, UpstreamCallDetails, ProblemsDetai
 _impl               raises AdCPError -- never ToolError, no transport imports
                             │
                             ▼
-boundary            build_two_layer_error_envelope(exc)
+boundary            failure_response(...) -> AdcpErrorResponse.of(exc), context stamped by _served, raised as AdcpFailure
                       code/message/suggestion/recovery  <- CODE_TABLE, by code
                       details                           <- _details_to_wire(exc.details)
                       issues                            <- [i.to_wire() for i in exc.issues]
                       field                             <- issues[0].pointer, translated
                             │
                             ▼
-wire                {"adcp_error": {...}, "errors": [{...}]}
+wire                to_wire(response): {"adcp_error": {...}, "errors": [{...}], "status": ...}
                             │
                             ▼
 BDD                 result.assert_wire_error(CODE, recovery=..., details={...})</div>

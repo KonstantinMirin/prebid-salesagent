@@ -75,12 +75,33 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # `idempotency_key` -- a field AdCP 3.1 puts on every task request and
 # compliance/universal/read-tool-idempotency.yaml requires sellers to TOLERATE.
 #
-# Port 8080, no proxy hop: nginx-development.conf is a pass-through that forwards `Host`
-# unchanged, so it changes nothing the storyboard grades, and the FastAPI process serves
-# /mcp/ and /a2a on 8080 directly (SKIP_NGINX is true on the service).
+# ONE ORIGIN, BOTH PROTOCOLS. Same host, same TLS front, same Host header, therefore the
+# same tenant resolution and the same published identity — differing only in the path,
+# which the protocols themselves fix. That sameness is the POINT of grading two surfaces:
+# what the axes are for is proving one deployment behaves the same either way, and two
+# axes on two origins compare nothing. A green A2A reached by dialing it differently from
+# MCP is a label, not evidence.
+#
+# The origin is `storyboard.adcp.test:8443`, behind `tls-proxy` (alias in
+# docker-compose.e2e.yml, SNI map in config/nginx/nginx-tls-test.conf.template) rather
+# than the service on plaintext :8080 — and A2A is why the scheme has to be real. A2A is
+# card-first: the runner reads the RPC endpoint off `/.well-known/agent-card.json` rather
+# than being told it, and `src/app.py`'s `get_protocol` renders **https** for any host
+# that is not loopback. Dialed plaintext, the card published
+# `https://adcp-server-storyboard:8080/a2a` — TLS to a plaintext port — so every
+# card-derived call failed with `fetch failed`: 25 checks on run sa-0c74d963, one of them
+# the capability probe the runner SELECTS storyboards from, which is why that axis
+# executed 25 storyboards where MCP executed 44 and passed 3 where MCP passed 33. The card
+# was right and the origin was wrong. This front forwards `Host` verbatim and sets
+# `X-Forwarded-Proto`, the signal `get_protocol` prefers, so what it publishes is what it
+# speaks.
+#
+# MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
+# that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
+# `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "http://adcp-server-storyboard:8080/mcp/",
-    "a2a": "http://adcp-server-storyboard:8080",
+    "mcp": "https://storyboard.adcp.test:8443/mcp/",
+    "a2a": "https://storyboard.adcp.test:8443",
 }
 
 # Env vars the storyboard-conformance job MAY set. The compliance/schema paths
@@ -125,6 +146,25 @@ def _summary_path(protocol: str) -> Path:
     summary, silently grading one protocol twice.
     """
     return _RUNNER_DIR / "results" / f"ci-summary-{protocol}.json"
+
+
+def _node_ca_env(agent_url: str) -> dict[str, str]:
+    """``NODE_EXTRA_CA_CERTS`` for an https agent, or nothing for plaintext.
+
+    The runner is Node, and the TLS front serves a leaf signed by the test CA that
+    ``scripts/dev/gen_test_tls.py`` generates. Node trusts its own bundle only, so
+    without this every https call fails the handshake — indistinguishable, in the
+    runner's output, from the plaintext-port failure this URL change fixes.
+
+    The path comes from ``E2E_CA_BUNDLE``, the variable compose already sets and tox
+    already passes through, with the same repo-relative fallback ``tests/e2e/conftest.py``
+    uses. Absent for an http URL: pointing Node at a CA it does not need would make a
+    missing bundle look like a passing configuration.
+    """
+    if not agent_url.startswith("https://"):
+        return {}
+    bundle = os.environ.get("E2E_CA_BUNDLE") or str(_REPO_ROOT / ".test-tls" / "ca.pem")
+    return {"NODE_EXTRA_CA_CERTS": bundle}
 
 
 def _webhook_port(protocol: str) -> str:
@@ -356,12 +396,10 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     * **Host-side**: runner and published ports share a network namespace, so the
       SDK's default loopback receiver already works. Returns no args at all.
 
-    ADCP_WEBHOOK_RECEIVER_HOST is NOT an upstream feature. The CLI has no
-    `--webhook-receiver-host`, so it cannot pass `host` through to
-    createWebhookReceiver() even though the library accepts it -- filed as
-    adcontextprotocol/adcp-client#2448 and bridged meanwhile by
-    tests/storyboard/runner/patches/ (version-keyed by patch-package), which adds the
-    env var the issue proposes. Delete both when the flag ships.
+    The bind address is passed as ``--webhook-receiver-host``, a first-class CLI flag.
+    It was bridged by a patch-package edit while the flag did not exist (filed as
+    adcontextprotocol/adcp-client#2448); the flag ships in the pinned SDK, so the patch
+    and the ADCP_WEBHOOK_RECEIVER_HOST env var it added are both gone.
     """
     callback_host = os.environ.get(_WEBHOOK_CALLBACK_HOST_ENV)
     if not callback_host:
@@ -375,8 +413,13 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
         port,
         "--webhook-receiver-public-url",
         f"http://{callback_host}:{port}/",
+        # Not loopback: the server is a DIFFERENT container and calls back to this
+        # runner's compose alias, so a receiver bound to 127.0.0.1 puts the delivery on
+        # the container's eth0 with nothing listening.
+        "--webhook-receiver-host",
+        "0.0.0.0",
     ]
-    return args, {"ADCP_WEBHOOK_RECEIVER_HOST": "0.0.0.0"}
+    return args, {}
 
 
 def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
@@ -414,6 +457,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     ]
     webhook_args, webhook_env = _webhook_receiver_args(protocol)
     cmd += webhook_args
+    tls_env = _node_ca_env(agent_url)
     # Grade only what THIS invocation measured. A summary left by an earlier run
     # would otherwise be read as if it were fresh whenever the runner dies before
     # writing one — inferred rather than measured, which is the Core Invariant.
@@ -430,7 +474,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         capture_output=True,
         text=True,
         timeout=700,
-        env={**os.environ, **webhook_env},
+        env={**os.environ, **webhook_env, **tls_env},
     )
     if not summary_path.exists():
         pytest.fail(
@@ -485,6 +529,39 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
+    """Copy the runner's summary into ``test-results/`` so it leaves the box.
+
+    The runner writes it under ``tests/storyboard/runner/results/``, which is gitignored
+    and outside the three paths a remote run pulls home (``test-results/``,
+    ``coverage.json``, ``htmlcov/`` — cassini's ``results.py``). So the one artifact
+    recording how many checks PASSED stayed on the runner box, and reading the score
+    meant an ssh. Published beside ``storyboard_collected.json``, which already rides
+    home this way.
+    """
+    dest = _REPO_ROOT / "test-results" / f"storyboard_summary_{protocol}.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(summary, indent=2, sort_keys=True))
+
+
+def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
+    """The runner's own verdict for *protocol*, as one line.
+
+    Printed because the pytest outcome line CANNOT carry it: only failures and skips
+    become test items, so a protocol passing 33 checks and one passing none produce the
+    same "0 passed" in the suite total. Every denominator is named together —
+    passed/failed/skipped/not_selected plus how many storyboards were EXECUTED, which is
+    what explains one axis grading fewer checks than its sibling.
+    """
+    return (
+        f"storyboard[{protocol}] {summary.get('overall_status')}: "
+        f"passed={summary.get('passed')} failed={summary.get('failed')} "
+        f"skipped={summary.get('skipped')} not_selected={summary.get('not_selected_count')} "
+        f"storyboards_executed={len(summary.get('storyboards_executed', []))} "
+        f"agent_url={summary.get('agent_url')}"
+    )
+
+
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
@@ -494,6 +571,8 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     are gradeable per-check here.
     """
     summary = _run_storyboard_runner(protocol)
+    _publish_summary(protocol, summary)
+    print(_scoreboard(protocol, summary))
     checks: list[dict[str, Any]] = []
     for f in summary["failures"]:
         checks.append(

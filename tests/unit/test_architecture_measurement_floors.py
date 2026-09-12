@@ -51,6 +51,12 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "codes-declared-code-reaches-buyer",
+        # The context echo, graded on every outcome across all four transports. Two routes
+        # because the scenarios need both a read tool and a write tool: a schema rejection and
+        # a seller's own refusal do not both reach the buyer from one tool.
+        "ctxecho-media-buys",
+        "ctxecho-products",
+        "predispatch",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

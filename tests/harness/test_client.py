@@ -313,14 +313,15 @@ class TestClientE2eRestDelivery:
     def test_e2e_rest_delivery_unauthenticated_omits_auth_header(self, monkeypatch):
         import httpx
 
-        from src.core.exceptions import AdCPAuthRequiredError, build_two_layer_error_envelope
+        from src.core.exceptions import AdCPAuthRequiredError
+        from tests.helpers.envelope_assertions import envelope_for
 
         # ADR-010: ``AdCPSalesAgentError.__init__`` is keyword-only and has no
         # ``message`` parameter — ``message``/``suggestion``/``recovery``/``status_code``
         # are read-only properties resolved from CODE_TABLE, and the authored
         # diagnostic sentence goes to ``internal_detail`` (server-side only, never
         # serialized onto the wire).
-        wire_body = build_two_layer_error_envelope(AdCPAuthRequiredError(internal_detail="no credentials"))
+        wire_body = envelope_for(AdCPAuthRequiredError(internal_detail="no credentials"))
         captured = {}
 
         class _FakeResponse:

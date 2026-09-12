@@ -63,6 +63,12 @@ dependencies = [
     "pyasn1>=0.6.4",  # GHSA-jr27-m4p2-rc6r; PYSEC-2026-3455/3456/3457
     "mako>=1.3.12",  # GHSA-2h4p-vjrc-8xpq (transitive via alembic)
     "click>=8.3.3",  # PYSEC-2026-2132 (transitive via flask/uvicorn)
+    # Transitive via pydantic-ai-slim -> genai-prices. 2.3.0 carries four advisories:
+    # httpcore2 GHSA-7mj9-2mp8-4m2p, httpx2 GHSA-h4x7-gw46-3wm6 / GHSA-pf96-p4fj-6566 /
+    # GHSA-8xx6-hgc6-gc2m. Floors are the highest fix version each names, so uv-secure
+    # (the security-audit gate) has nothing left to report.
+    "httpcore2>=2.10.0",  # GHSA-7mj9-2mp8-4m2p
+    "httpx2>=2.12.0",  # GHSA-h4x7-gw46-3wm6 + GHSA-pf96-p4fj-6566 + GHSA-8xx6-hgc6-gc2m
 ]
 
 

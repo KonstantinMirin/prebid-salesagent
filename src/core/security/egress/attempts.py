@@ -153,7 +153,7 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
     attempts: int
 
     # Only these two fields ride to the buyer. `details` is buyer-visible —
-    # build_two_layer_error_envelope passes it straight into the adcp_error
+    # ``AdcpErrorResponse.of`` passes it straight into the adcp_error
     # payload — so nothing derived from the origin's response or from the httpx
     # error string may be added here (spec point 6). Under ADR-010 that stopped
     # being a rule this comment asks the next author to remember: `details` is a

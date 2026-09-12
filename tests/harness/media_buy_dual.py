@@ -207,7 +207,7 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         return flat
 
     def _call_update_a2a(self, **kwargs: Any) -> DeliverResult:
-        # Drive the REAL on_message_send → _serialize_for_a2a → Task/Artifact
+        # Drive the REAL on_message_send → _dispatch_skill → to_wire → Task/Artifact
         # pipeline (mirrors MediaBuyCreateEnv.call_a2a), so _run_a2a_handler stashes
         # the true artifact DataPart as the wire_response. A prior version synthesized
         # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
@@ -228,11 +228,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
     def _call_update_mcp(self, **kwargs: Any) -> DeliverResult:
         # Drive the REAL FastMCP Client pipeline (mirrors MediaBuyCreateEnv.call_mcp) so the
         # structured_content — the real MCP wire body — is stashed as wire_response and the
-        # full middleware/auth chain runs. This subsumes the earlier mock-Context invocation
-        # through with_error_logging (#1417): the real pipeline applies the production
-        # boundary decorator via registration (src/core/main.py: mcp.tool()(with_error_logging(fn))),
-        # so a raised AdCPSalesAgentError still surfaces as the two-layer wire envelope captured as
-        # wire_error_envelope.
+        # full middleware/auth chain runs. The real pipeline reaches the production boundary
+        # through RegistryTool.run (src/core/main.py), which calls serve and raises
+        # AdCPToolError(to_wire(response)) on a failure, so a raised AdCPSalesAgentError
+        # surfaces as the two-layer wire envelope captured as wire_error_envelope.
         return self._run_mcp_client(
             "update_media_buy",
             lambda **data: self._parse_update_rest_response(data),

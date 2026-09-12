@@ -90,9 +90,9 @@ class MediaBuyListDispatchMixin:
         through. ``_run_mcp_client`` stashes ``structured_content``, the real MCP wire.
 
         The wrapper path is wrong for the error path too, and for two further
-        reasons. It calls the UNDECORATED module function, while
-        ``with_error_logging`` is applied at registration time
-        (``src/core/main.py``): through it no ``AdCPToolError`` is ever raised, so
+        reasons. It calls the module function directly, while a failure becomes an
+        ``AdCPToolError`` only in ``RegistryTool.run`` (``src/core/main.py``): through
+        it none is ever raised, so
         nothing is stashed and the dispatcher captures ``None`` for BOTH the error
         envelope and the success response — while this env goes on declaring
         ``has_wire=True``. And a raised ``AdCPSalesAgentError`` propagated raw out of

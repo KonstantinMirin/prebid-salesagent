@@ -58,8 +58,8 @@ def _buyer_facing_wire(exc: AdCPSalesAgentError) -> str:
     """Every field of *exc* a buyer can read, as one string to search.
 
     ``internal_detail`` is deliberately absent — it is non-wire by construction
-    (``build_two_layer_error_envelope`` never serializes it), which is exactly
-    the property these tests assert about the injected text.
+    (``AdcpErrorResponse.of`` never carries it), which is exactly the property
+    these tests assert about the injected text.
     """
     return json.dumps(
         {

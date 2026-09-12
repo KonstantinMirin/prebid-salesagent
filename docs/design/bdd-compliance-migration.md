@@ -74,8 +74,8 @@ the outcome the rule exists to prevent.
 
 A refusal carries no response document, so it is the path most easily left
 unchecked — and leaving it unchecked is how "the suite is schema-clean" comes
-to mean "the happy paths are". `build_two_layer_error_envelope` emits
-`{adcp_error, errors[], context}`, and every entry in `errors[]` is a
+to mean "the happy paths are". `AdcpErrorResponse.of` builds the failure response
+carrying `{adcp_error, errors[], context, status}`, and every entry in `errors[]` is a
 `core/error.json` object requiring `code` and `message`. The step grades them.
 
 The error line is tool-independent by design. The AdCP error vocabulary is

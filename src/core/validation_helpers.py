@@ -40,12 +40,12 @@ def adcp_validation_boundary(
     """Requalify the FIELD a Pydantic ``ValidationError`` reports, then translate it.
 
     NOT a translation seam. ``adcp_error_for`` is, and every transport boundary
-    already calls it: MCP through ``_translate_to_tool_error``, A2A through its skill
-    dispatcher, REST through ``@app.exception_handler(ValueError)`` (a pydantic
+    already calls it: MCP through ``RegistryTool.run``, A2A through ``_dispatch_skill``,
+    REST through ``@app.exception_handler(ValueError)`` (a pydantic
     ``ValidationError`` IS a ``ValueError``). A ``ValidationError`` raised anywhere
     inside a handler therefore reaches the buyer as INVALID_REQUEST with ``field``
-    and ``issues`` with no wrapper involved, on all three transports: each boundary
-    calls the one ``build_two_layer_error_envelope`` on the one typed exception.
+    and ``issues`` with no wrapper involved, on all three transports: the boundary
+    builds one ``AdcpErrorResponse`` from the one typed exception.
 
     Which is why this used to wrap 48 sites and now wraps 2. Forty-six of them passed
     NO arguments, and a bare block is exactly ``raise adcp_error_for(e, field=None)``

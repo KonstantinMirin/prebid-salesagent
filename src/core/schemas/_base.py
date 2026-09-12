@@ -728,6 +728,14 @@ class BuyerRequest:
         """The account this request names, or None when its schema declares no ``account``."""
         return self.__dict__.get("account")
 
+    def get_context(self) -> ContextObject | None:
+        """The buyer's opaque ``context``, or None when the request carried none.
+
+        Read by the boundary alone, which echoes it onto whatever leaves. Business logic may
+        call this too; nothing may set the field.
+        """
+        return self.__dict__.get("context")
+
     def get_idempotency_key(self) -> str | None:
         """The at-most-once key this request carries, or None when its schema declares none."""
         return self.__dict__.get("idempotency_key")
@@ -812,10 +820,10 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     correct and the codegen is not). Inheriting this base RESTORES that composition; it does not
     widen anything.
 
-    The boundary writes exactly two fields onto a response -- ``adcp_version`` in
-    ``_boundary._served`` and ``replayed`` in ``_boundary._deserializer_for`` -- and they come
-    from the two different bases above. Naming both here is what lets the boundary be typed
-    rather than cast.
+    The boundary writes exactly three fields onto a response -- ``adcp_version`` and
+    ``context`` in ``_boundary._served``, ``replayed`` in ``_boundary._deserializer_for`` --
+    and they come from the two different bases above. Naming both bases here is what lets the
+    boundary be typed rather than cast.
     """
 
     @classmethod
@@ -832,6 +840,79 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
         """
         adapter = _BRANCH_ADAPTERS.get(cls)
         return adapter.validate_python(data) if adapter is not None else cls.model_validate(data)
+
+
+class AdcpErrorResponse(AdcpResponse):
+    """What a FAILED tool call is: the response envelope, carrying the error.
+
+    AdCP models a failure as a response, not as a separate document.
+    ``core/protocol-envelope.json`` declares ``adcp_error``, ``context`` AND ``status`` on
+    every response envelope and lists ``status`` as required, so an error body is a response
+    body with the error fields filled in. This class is that body, declared once.
+
+    ``errors`` is declared HERE rather than on ``AdcpResponse`` because the pin puts it on
+    each tool's own schema (``media-buy/*-response.json``) and not on the envelope. One
+    subclass is the only place it can live without a per-tool copy, and a failure has no tool
+    payload to carry besides the error.
+
+    Why a class and not a dict: the hand-assembled dict this replaces could not carry
+    ``status``, and did not -- so every error body this seller emitted was invalid against
+    every pinned response schema, and nothing caught it, because the graded error checks
+    validate the error OBJECTS against ``core/error.json`` and never the envelope around them
+    (salesagent-3cs7o.4). A detached dict also has no ``context`` field, which is why the
+    buyer's context had to ride the exception and be hand-threaded to every raise site to get
+    there.
+    """
+
+    errors: list[_LibraryError] = Field(
+        default_factory=list, description="The failure, as the tool's schema declares it"
+    )
+
+    @property
+    def http_status(self) -> int:
+        """The HTTP status this failure is signalled with: its code's own, read from ``CODE_TABLE``.
+
+        The same lookup ``AdCPSalesAgentError.status_code`` performs, keyed here by the wire
+        string this response carries. Subscripted, so a code outside the vocabulary raises
+        rather than answering a status the table never declared.
+        """
+        from src.core.errors.codes import CODE_BY_VALUE, CODE_TABLE
+
+        if self.adcp_error is None:
+            raise ValueError("an error response carries its error in adcp_error")
+        return CODE_TABLE[CODE_BY_VALUE[self.adcp_error.code]].status
+
+    @classmethod
+    def of(cls, exc: "AdCPSalesAgentError") -> "AdcpErrorResponse":
+        """Build the failure response for one typed exception.
+
+        Carries the SAME error object at both levels the wire expects -- ``adcp_error`` on the
+        envelope and ``errors[0]`` -- because a receiver is free to read either. ``issues`` is
+        attached after the SDK helper runs: ``adcp_error()`` has no ``issues`` parameter and
+        its ``details`` is typed flat-scalars-only, so the array fits through neither.
+
+        What the BOUNDARY owns -- ``context`` and ``adcp_version`` -- is stamped by the
+        boundary (``_boundary._served``), on a failure exactly as on a success.
+        """
+        from adcp.server.helpers import adcp_error
+
+        from src.core.exceptions import _details_to_wire
+
+        error = _LibraryError.model_validate(
+            {
+                **adcp_error(
+                    exc.error_code,
+                    exc.message,
+                    recovery=exc.recovery,
+                    field=exc.field,
+                    suggestion=exc.suggestion,
+                    retry_after=exc.retry_after,
+                    details=_details_to_wire(exc.details),
+                )["errors"][0],
+                **({"issues": [issue.to_wire() for issue in exc.issues]} if exc.issues else {}),
+            }
+        )
+        return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error])
 
 
 class CreateMediaBuyResult(AdcpResponse):
@@ -2564,8 +2645,9 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
             #
             # WHY NOT THE TYPED ERROR: this validator runs inside pydantic, which FastMCP
             # drives through a TypeAdapter BEFORE the tool body. A typed error raised there
-            # never passes with_error_logging (the tool has not been entered) and is not a
-            # pydantic ValidationError either, so no converter on the MCP path picks it up --
+            # never reaches RegistryTool.run's AdcpFailure catch (the tool has not been
+            # entered) and is not a pydantic ValidationError either, so nothing on the MCP
+            # path converts it --
             # FastMCP masked it into a prose ToolError and the buyer received no envelope at
             # all: no code, no field, no suggestion. A pydantic error is the one shape every
             # boundary already converts.

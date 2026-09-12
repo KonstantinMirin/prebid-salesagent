@@ -17,23 +17,21 @@ from src.core.auth_context import AuthContext
 class TestNoContextVarFallbackInA2AHandler:
     """A2A handler methods must not fall back to ContextVar."""
 
-    def test_get_auth_token_returns_none_without_context(self):
-        """_get_auth_token(context=None) should return None, not read ContextVar."""
+    def test_credential_of_is_empty_without_context(self):
+        """_credential_of(context=None) answers an empty credential, not a ContextVar read."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
-        result = handler._get_auth_token(context=None)
-        assert result is None
+        assert handler._credential_of(context=None).auth_token is None
 
-    def test_get_auth_token_reads_from_explicit_context(self):
-        """_get_auth_token should read token from explicit ServerCallContext."""
+    def test_credential_of_reads_from_explicit_context(self):
+        """_credential_of should read the credential from the explicit ServerCallContext."""
         from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
 
         handler = AdCPRequestHandler()
         auth_ctx = AuthContext(auth_token="explicit-token", headers={"host": "test.example.com"})
         context = ServerCallContext(state={"auth_context": auth_ctx})
-        result = handler._get_auth_token(context=context)
-        assert result == "explicit-token"
+        assert handler._credential_of(context=context).auth_token == "explicit-token"
 
 
 class TestNoContextVarInMiddleware:

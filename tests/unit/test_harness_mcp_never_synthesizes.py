@@ -1,7 +1,7 @@
 """MCP must not offer a rebuilt copy of an envelope it already captures.
 
 ``synthesized_error_envelope`` is what production WOULD emit for an exception,
-recomputed by the harness from the same builder production uses. On IMPL that is
+recomputed by the harness from the same ``AdcpErrorResponse`` production builds. On IMPL that is
 honest: there is no wire by definition, so the synthesized value is the only view
 that exists and its name says so. On MCP there IS a wire, so the field is either
 redundant (the wire is present) or a mask (the wire was lost) -- and a mask is
@@ -19,9 +19,10 @@ import json
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPValidationError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPValidationError
 from tests.harness._base import WireError
 from tests.harness.dispatchers import A2ADispatcher, McpDispatcher, RestDispatcher
+from tests.helpers.envelope_assertions import envelope_for
 
 
 def _raising_env(exc: Exception):
@@ -99,7 +100,7 @@ class TestMcpDoesNotSynthesize:
         MCP's wire capture entirely dead. That is the exact defect pldmk.24
         fixed one commit ago, so it is the one this file must be able to see.
         """
-        envelope = build_two_layer_error_envelope(_an_error())
+        envelope = envelope_for(_an_error())
         result = McpDispatcher().dispatch(_raising_env(ToolError(json.dumps(envelope))))
 
         assert result.wire_error_envelope == envelope
@@ -120,7 +121,7 @@ class TestMcpDoesNotSynthesize:
         production cannot raise: the guard could not see the reader drifting off
         the real one, which is exactly the live regression it exists to catch.
         """
-        envelope = build_two_layer_error_envelope(_an_error())
+        envelope = envelope_for(_an_error())
 
         result = McpDispatcher().dispatch(_raising_env(WireError(envelope)))
 

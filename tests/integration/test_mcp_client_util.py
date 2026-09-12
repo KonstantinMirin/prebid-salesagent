@@ -27,7 +27,7 @@ skip_no_audience_agent = pytest.mark.skipif(
 )
 
 from src.core.errors.codes import CODE_TABLE
-from src.core.exceptions import AdCPSalesAgentError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPSalesAgentError
 from src.core.security import outbound_http as outbound_http_module
 from src.core.security.outbound_http import OutboundRequestBlocked
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
@@ -39,6 +39,7 @@ from src.core.utils.mcp_client import (
 )
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
 from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
+from tests.helpers.envelope_assertions import envelope_for
 
 # Reused rather than restated (precedent: tests/integration/test_vendor_egress.py):
 # the jitter pin, the escape-hatch setter and the backoff-base knob name are the
@@ -546,7 +547,7 @@ class TestExhaustedFailureReachesTheRegistryClassified:
             f"the pinned enumMetadata classifies SERVICE_UNAVAILABLE as {expected_recovery!r}, not 'transient' — "
             "the premise this assertion is built on no longer holds"
         )
-        envelope = build_two_layer_error_envelope(exc_info.value)
+        envelope = envelope_for(exc_info.value)
         assert_envelope_shape(
             envelope,
             "SERVICE_UNAVAILABLE",
@@ -692,7 +693,7 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
         # an ``OutboundRequestBlocked`` against an ``OperatorEndpoint``. Reaching
         # SERVICE_UNAVAILABLE/transient here means the refusal arrived at the
         # registry as ``MCPConnectionError`` — swallowed and relabelled by the seam.
-        envelope = build_two_layer_error_envelope(exc_info.value)
+        envelope = envelope_for(exc_info.value)
         assert_envelope_shape(
             envelope,
             "CONFIGURATION_ERROR",

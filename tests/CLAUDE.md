@@ -687,12 +687,12 @@ wire — and `None` on success. This is the canonical field for error verificati
 | Transport | `wire_error_envelope` source | Catches a regression in... |
 |-----------|------------------------------|---------------------------|
 | REST | HTTP response body (real wire) | exception handler + envelope serialization + HTTP framing |
-| MCP | JSON string in the raised `ToolError` (real wire) | `_handle_tool_exception` + `build_two_layer_error_envelope` |
-| A2A | Failed Task's artifact DataPart, carried on the raised `WireError` as `.envelope` (`tests/harness/_base.py`) | `on_message_send` + `_serialize_for_a2a` + envelope build |
+| MCP | JSON string in the raised `ToolError` (real wire) | `RegistryTool.run`'s `AdcpFailure` catch + `AdcpErrorResponse.of` + `to_wire` |
+| A2A | Failed Task's artifact DataPart, carried on the raised `WireError` as `.envelope` (`tests/harness/_base.py`) | `on_message_send` + `_dispatch_skill` + `AdcpErrorResponse.of` + `to_wire` |
 
 The synthesized envelope is DELETED. It exposed "what production WOULD emit
 at the boundary for this exception", which could not catch a regression in the
-production boundary translator: both sides called `build_two_layer_error_envelope`
+production boundary translator: both sides built the same `AdcpErrorResponse`
 over the same in-memory exception, so the value moved in lockstep with whatever
 the builder produced. A field that cannot fail is not a weak check, it is a
 zero-information one — and it was actively harmful, because it stood in for a

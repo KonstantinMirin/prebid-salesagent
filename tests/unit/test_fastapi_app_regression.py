@@ -44,12 +44,12 @@ class TestAsyncReceiveCallable:
         payload = {
             "jsonrpc": "2.0",
             "id": 42,
-            "method": "message/send",
+            "method": "SendMessage",
             "params": {
                 "message": {
                     "messageId": 12345,
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "test"}],
+                    "role": "ROLE_USER",
+                    "parts": [{"text": "test"}],
                 }
             },
         }
@@ -58,7 +58,7 @@ class TestAsyncReceiveCallable:
         response = client.post(
             "/a2a",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "A2A-Version": "1.0"},
         )
 
         # We don't care about the exact response (auth will fail),
@@ -73,12 +73,12 @@ class TestAsyncReceiveCallable:
 
         client = TestClient(app)
 
-        payload = {"jsonrpc": "2.0", "id": 99, "method": "message/send", "params": {}}
+        payload = {"jsonrpc": "2.0", "id": 99, "method": "SendMessage", "params": {}}
 
         response = client.post(
             "/a2a",
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers={"Content-Type": "application/json", "A2A-Version": "1.0"},
         )
 
         # Middleware should have converted id to "99" — verify no crash

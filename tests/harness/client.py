@@ -126,7 +126,7 @@ def _wrap_a2a(address: ToolAddress, payload: dict[str, Any]) -> dict[str, Any]:
     """A2A WRAP: no transformation — payload becomes the skill ``parameters`` dict.
 
     Limitation, A2A push-notification injection: production's
-    ``_handle_explicit_skill`` (``src/a2a_server/adcp_a2a_server.py:1491``)
+    ``on_message_send`` (``src/a2a_server/adcp_a2a_server.py``)
     injects ``push_notification_config`` from the A2A protocol-layer
     ``SendMessageConfiguration``, not from the skill ``parameters`` dict — a
     caller putting ``push_notification_config`` in *payload* here reaches the
@@ -308,7 +308,7 @@ def _deliver_e2e_mcp(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, 
 # (``src/core/auth_middleware.py`` — x-adcp-auth / x-adcp-tenant / x-dry-run
 # headers), via ``AdCPCallContextBuilder`` (``src/a2a_server/
 # context_builder.py``). Push-notification injection
-# (``_handle_explicit_skill``, ``adcp_a2a_server.py:1491``) is out of scope —
+# (``on_message_send``, ``adcp_a2a_server.py``) is out of scope —
 # see ``_wrap_a2a``'s docstring; this DELIVER function sends whatever
 # ``_wrap_a2a`` produced unchanged, same limitation.
 
@@ -761,7 +761,7 @@ def unwrap_mcp_error(exc: Exception, transport: Transport = Transport.MCP) -> Tr
     # verbatim, which _wire_envelope_from_exception reads back off ``.envelope``;
     # the raw-ToolError branch covers the rare case where a raw ToolError reached
     # here untouched (an env that dispatched through the production
-    # with_error_logging boundary). It is re-raised as the same WireError rather
+    # RegistryTool.run boundary). It is re-raised as the same WireError rather
     # than reconstructed into a production error class: the code -> class map is
     # deleted, and result.error then resolves to the real wire code instead of
     # "AdCPToolError" without any harness-side re-typing.

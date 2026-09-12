@@ -299,6 +299,7 @@ from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
 # not optional -- _register_tool refuses a tool without one.
 from mcp.types import ToolAnnotations
 
+from src.core.resolved_identity import TransportProtocol
 from src.core.schemas._base import AdcpResponse
 from src.core.tools._announced_shape import sdk_grounding
 from src.core.tools._boundary import _response_model_for
@@ -411,10 +412,9 @@ def _register_tool(tool_name: str, spec: Any) -> None:
 class RegistryTool(Tool):
     """One registry row, served over MCP.
 
-    ``run`` receives the buyer's argument object and validates it the way every other
-    transport does -- ``dto.model_validate(arguments)``, the same call REST makes at
-    api_v1.py and A2A makes at adcp_a2a_server.py. So the accepted-shape strip on
-    ``BuyerRequest`` decides what reaches an implementation here too.
+    ``run`` hands the buyer's argument object to ``serve``, the same entry REST and A2A use,
+    so the one validation and the accepted-shape strip on ``BuyerRequest`` decide what reaches
+    an implementation here too.
 
     A ``Tool`` subclass rather than a function, because FastMCP validates a FUNCTION tool
     against a TypeAdapter built from its annotations (``FunctionTool.run`` ->
@@ -430,28 +430,30 @@ class RegistryTool(Tool):
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
         from types import MappingProxyType
 
-        from fastmcp.server.dependencies import get_context, get_http_headers
+        from fastmcp.server.dependencies import get_http_headers
 
         from src.core.auth_context import AuthContext
-        from src.core.tool_error_logging import _handle_tool_exception
-        from src.core.tools._boundary import invoke_tool
+        from src.core.exceptions import AdcpFailure
+        from src.core.tool_error_logging import AdCPToolError
+        from src.core.tools._boundary import failure_response, serve
         from src.core.tools._mcp import mcp_result
+        from src.core.tools._wire import to_wire
 
-        spec = TOOLS[self.name]
-        ctx = get_context()
         try:
-            req = spec.dto.model_validate(arguments)
-            # The credential, not an identity. MCPAuthMiddleware used to resolve one and
-            # stash it on ctx state for this line to read; the boundary resolves now, so the
-            # middleware is gone and MCP enters through invoke_tool like A2A and REST rather
-            # than through the lower-level invoke() with spec.impl already selected.
+            # The credential, not an identity: the boundary resolves the caller.
             credential = AuthContext(headers=MappingProxyType(get_http_headers(include_all=True) or {}))
-            return mcp_result(await invoke_tool(self.name, req, credential, "mcp"))
+            return mcp_result(await serve(self.name, arguments, credential, TransportProtocol.MCP))
+        except AdcpFailure as failure:
+            response = failure.response
         except Exception as exc:
-            # Records to the activity feed and audit log, then raises AdCPToolError carrying
-            # the two-layer envelope. Validation raises inside the try because the buyer's
-            # error is as much a tool outcome as the implementation's.
-            _handle_tool_exception(spec.impl, exc, (ctx,), {})
+            # Raised OUTSIDE ``serve`` -- reading the headers, rendering the result -- so no
+            # caller was resolved and the record is unscoped. A tool's own failure never
+            # reaches here.
+            response = failure_response(TransportProtocol.MCP, self.name, exc)
+        # MCP's wire failure marker is a raised ToolError, and that marker is all this
+        # transport adds: the BODY is the response the boundary built, serialized by the same
+        # function the success path uses.
+        raise AdCPToolError(to_wire(response))
 
 
 for _tool_name, _spec in TOOLS.items():

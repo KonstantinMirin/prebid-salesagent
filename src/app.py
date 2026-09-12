@@ -12,6 +12,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import create_jsonrpc_routes
@@ -22,7 +23,6 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from fastmcp.exceptions import ToolError
 from fastmcp.utilities.lifespan import combine_lifespans
 from starlette.responses import Response
 from starlette.routing import Route
@@ -42,16 +42,13 @@ from src.core.auth_middleware import (
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
-from src.core.exceptions import (
-    AdCPInvalidRequestError,
-    AdCPSalesAgentError,
-    adcp_error_for,
-    build_two_layer_error_envelope,
-)
+from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
-from src.core.tool_error_logging import handle_tool_error, record_boundary_error
+from src.core.resolved_identity import TransportProtocol
+from src.core.tools._boundary import failure_response
+from src.core.tools._wire import to_wire
 from src.landing import generate_tenant_landing_page
 from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
@@ -145,11 +142,11 @@ app = FastAPI(
 # registry exists to prevent ("auth is a property of the tool, not of a transport ... what
 # makes 'MCP soft-returns where A2A hard-refuses' unrepresentable").
 #
-# So auth is decided where the tool IS known -- MCPAuthMiddleware.on_call_tool, which reads
-# context.message.name and passes ToolSpec.auth to resolve_identity, exactly as the A2A
-# dispatch and the REST dependency do. The RENDERING is app-wide: AuthChallengeResponder is
-# registered as middleware over the whole app (see the middleware stack below), so MCP, A2A
-# and REST are all answered by the same code and no transport can grow its own 401.
+# So auth is decided where the tool IS known -- inside ``serve``, which reads the registry
+# row's declaration for the named tool, the same way it does for A2A and REST. The RENDERING
+# is app-wide: AuthChallengeResponder is registered as middleware over the whole app (see the
+# middleware stack below), so MCP, A2A and REST are all answered by the same code and no
+# transport can grow its own 401.
 app.mount("/mcp", mcp_app)
 
 
@@ -158,104 +155,39 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 
-def _envelope_response(request: Request, exc: AdCPSalesAgentError, *, log_as: Exception | None = None) -> JSONResponse:
-    """Build a JSONResponse carrying the two-layer envelope for ``exc``.
+def _envelope_response(request: Request, exc: Exception) -> JSONResponse:
+    """Answer an exception raised OUTSIDE ``serve`` with the failure response, recorded unscoped.
 
-    Single source of truth for the REST envelope-response shape — used by
-    every exception handler so HTTP status, body envelope, wire codes,
-    and observability (logger + activity feed + audit log) are constructed
-    identically regardless of which exception type fired the handler.
+    Only faults that never reached the boundary arrive here -- an exception in a route that is
+    not a tool route -- so no caller was resolved and the record carries no tenant. The body
+    and the status are the same the boundary answers with; REST adds only the HTTP status.
 
-    Symmetric with the MCP and A2A boundaries: all three transports delegate
-    to ``record_boundary_error`` so log severity, activity-feed publishing,
-    and audit logging stay in lockstep — and all three now scope that record
-    with the identity their boundary ALREADY resolved, never by resolving
-    again. The REST route stashes it on ``request.state`` (src/routes/api_v1.py).
-    This used to call ``resolve_identity`` a second time, which meant a failed
-    REST auth cost two full resolutions and roughly eight DB session
-    acquisitions, the second set re-validating a credential that had just been
-    rejected. When auth failed the route never ran, so there is no identity and
-    the record is unscoped — exactly A2A's "unknown" on the same path.
-
-    ``log_as``: the object handed to ``record_boundary_error`` for logging,
-    defaulting to ``exc`` (existing behavior, unchanged for typed handlers).
-    The untyped-``Exception`` handler passes the ORIGINAL exception here
-    instead of the normalized ``exc`` — ``record_boundary_error`` logs
-    untyped errors (``not isinstance(error, AdCPSalesAgentError)``) at ERROR with
-    ``exc_info=True`` (full traceback), which on-call needs for a genuinely
-    unexpected failure; the normalized ``AdCPSalesAgentError`` alone (post prkv.8's
-    fix, just ``type(exc).__name__``) would silently drop both the traceback
-    and the original message from server-side logs, unlike the MCP/A2A
-    boundaries which always log the original exception.
+    No WWW-Authenticate here. A 401 MUST name a scheme the caller can authenticate with
+    (RFC 7235; graded by the storyboard's security_baseline), and AuthChallengeResponder
+    attaches it app-wide by reading the code off this very body.
     """
-    # No identity to read. It was published on request.state by a dependency wrapper that
-    # is gone: the boundary resolves and holds it, so scoping this record belongs with
-    # the recording move into _invoke (manifest A3). Until then the record is unscoped --
-    # the same "unknown" A2A already reports on its own error path.
-    identity = None
-    record_boundary_error(
-        "rest",
-        request.url.path,
-        log_as if log_as is not None else exc,
-        tenant_id=getattr(identity, "tenant_id", None) or "unknown",
-        principal_id=getattr(identity, "principal_id", None) or "unknown",
-    )
-    # No WWW-Authenticate here. A 401 MUST name a scheme the caller can authenticate with
-    # (RFC 7235; graded by the storyboard's security_baseline), and AuthChallengeResponder
-    # attaches it app-wide by reading the code off this very envelope. Setting it here too
-    # was the third copy of one rule -- REST's status happened to agree with MCP's and A2A's,
-    # which is not the same as being decided once.
-    return JSONResponse(
-        status_code=exc.status_code,
-        content=build_two_layer_error_envelope(exc),
-    )
+    response = failure_response(TransportProtocol.REST, request.url.path, exc)
+    return JSONResponse(status_code=response.http_status, content=to_wire(response))
 
 
 @app.exception_handler(AdCPSalesAgentError)
 async def adcp_error_handler(request: Request, exc: AdCPSalesAgentError) -> JSONResponse:
-    """Convert AdCP exceptions to the spec-compliant two-layer envelope.
-
-    Body shape::
-
-        {
-            "adcp_error": {"code": "...", "message": "...", ...},
-            "errors": [{"code": "...", "message": "...", ...}],
-            "context": {...},     # echoed when present
-        }
-
-    HTTP status comes from ``exc.status_code``; the matching MCP/A2A
-    transport markers (``isError: true`` / ``failed``) are set by their
-    own boundary translators. The code is carried verbatim -- the envelope
-    builder no longer translates it. Logging happens
-    in ``_envelope_response`` so all three handlers leave a uniform
-    breadcrumb.
-    """
+    """A typed error raised outside ``serve`` is answered with its failure response."""
     return _envelope_response(request, exc)
 
 
 @app.exception_handler(ValueError)
 async def value_error_handler(request: Request, exc: ValueError) -> JSONResponse:
-    """Cross-transport symmetry: REST hands a raw ``ValueError`` to ``adcp_error_for``.
+    """A raw ``ValueError`` is typed by ``adcp_error_for`` like on every other transport.
 
-    MCP's ``_translate_to_tool_error`` and A2A's skill dispatcher reach the SAME
-    function for the same exception, so there is one mapping and three routes to
-    it, not three translations. This docstring used to say the other two wrapped
-    raw ``ValueError`` in a "synthetic ``AdCPValidationError`` envelope", which
-    read as though each transport built its own answer. All three emit a
-    byte-identical envelope because all three call one
-    ``build_two_layer_error_envelope`` on one typed exception.
+    The mapping is type-keyed, and the order inside ``adcp_error_for`` is what makes a pydantic
+    ``ValidationError`` (a ``ValueError`` SUBCLASS, so it arrives at this handler) come out as
+    INVALID_REQUEST carrying ``field`` and ``issues`` rather than as a bare VALIDATION_ERROR.
 
-    The mapping is type-keyed, and the order inside ``adcp_error_for`` is what makes
-    a pydantic ``ValidationError`` (a ``ValueError`` SUBCLASS, so it arrives at this
-    handler) come out as INVALID_REQUEST carrying ``field`` and ``issues`` rather than
-    as a bare VALIDATION_ERROR. That is why request DTOs are constructed with no
-    wrapper around them: populate, validate, let it throw, and the boundary names the
-    error from the exception CLASS.
-
-    Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a
-    ValueError subclass) — that has its own handler below.
+    Does NOT catch FastAPI's ``RequestValidationError`` (separate class, not a ValueError
+    subclass) -- that has its own handler below.
     """
-    return _envelope_response(request, adcp_error_for(exc))
+    return _envelope_response(request, exc)
 
 
 def _jsonpath_lite(loc: list[str]) -> str:
@@ -333,61 +265,21 @@ async def request_validation_error_handler(request: Request, exc: RequestValidat
 
 @app.exception_handler(PermissionError)
 async def permission_error_handler(request: Request, exc: PermissionError) -> JSONResponse:
-    """Cross-transport symmetry: REST wraps raw ``PermissionError`` as PERMISSION_DENIED.
-
-    Mirror of the MCP / A2A boundaries which translate ``PermissionError`` to
-    a synthetic ``AdCPAuthorizationError`` envelope. Without this handler a
-    raw ``PermissionError`` on the REST path would render as a 500 server
-    error instead of the 403 authorization envelope every transport should
-    emit for the same condition.
-    """
-    return _envelope_response(request, adcp_error_for(exc))
+    """A raw ``PermissionError`` is PERMISSION_DENIED, the 403 every transport emits for it."""
+    return _envelope_response(request, exc)
 
 
 @app.exception_handler(Exception)
 async def untyped_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Cross-transport symmetry: REST catches arbitrary untyped exceptions too.
+    """An untyped exception is INTERNAL_ERROR in the same body, never Starlette's bare 500.
 
-    Mirror of the MCP (``_handle_tool_exception``) and A2A (``on_message_send``'s
-    ``except Exception`` fallthrough) boundaries, both of which already have a
-    catch-all so an unexpected/untyped exception still gets the AdCP two-layer
-    envelope instead of an unhandled 500. REST had no such handler — an
-    untyped exception fell through every typed handler above and reached
-    Starlette's default ``ServerErrorMiddleware`` response: not the two-layer
-    envelope the spec requires on every transport, and (with ``debug=True``,
-    not this app's default, but a real deployment misconfiguration risk) a raw
-    traceback in the response body — worse than the leak prkv.8 fixes in
-    ``adcp_error_for``.
-
-    Registration ORDER is irrelevant here, and it is worth being precise about
-    why: Starlette stores handlers in a dict keyed by exception CLASS and
-    resolves by walking ``type(exc).__mro__`` for the nearest registered
-    ancestor. So ``AdCPSalesAgentError``/``ValueError``/``RequestValidationError``/
-    ``PermissionError``/``ToolError`` keep their own handlers no matter where
-    this one sits (``ToolError``'s is in fact registered below it), and this
-    catches only what has no more specific handler. Do not "fix" this by moving
-    it last — that would imply an ordering guarantee that does not exist.
-    Verified: RuntimeError/KeyError resolve here; the five typed ones do not.
+    Registration ORDER is irrelevant: Starlette keys handlers by exception CLASS and resolves
+    by walking ``type(exc).__mro__`` for the nearest registered ancestor, so the typed handlers
+    above keep theirs wherever this one sits, and this catches only what has no more specific
+    handler. Starlette re-raises after a handler registered for ``Exception`` answers, so the
+    traceback also reaches the server log.
     """
-    return _envelope_response(request, adcp_error_for(exc), log_as=exc)
-
-
-@app.exception_handler(ToolError)
-async def tool_error_handler(request: Request, exc: ToolError) -> JSONResponse:
-    """Global ToolError handler — catches MCP boundary errors that reach REST.
-
-    The MCP boundary translator (``with_error_logging``) converts typed
-    AdCPErrors into ``AdCPToolError`` carrying a two-layer envelope and
-    ``status_code``. When MCP-wrapped tools are invoked from REST paths and
-    that envelope bubbles up, this handler forwards it unchanged — removing
-    the need for every REST route to duplicate a ``try/except ToolError``
-    block. Plain ``ToolError`` (no typed source) falls through
-    ``handle_tool_error``, which resolves its wire code against ``CODE_TABLE``
-    and takes the status from the same entry.
-
-    Matches subclasses, so ``AdCPToolError`` is caught here too.
-    """
-    return handle_tool_error(exc)
+    return _envelope_response(request, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -447,11 +339,23 @@ _agent_card = create_agent_card()
 _request_handler = AdCPRequestHandler()
 
 # Build A2A routes using a2a-sdk 1.0 route factories
+# NO v0.3 COMPATIBILITY. `enable_v0_3_compat` is deliberately not passed (it defaults
+# off), so `/a2a` speaks the native 1.0 surface only: `SendMessage` with an
+# `A2A-Version: 1.0` header, not the 0.3 `message/send` family.
+#
+# The shim was not merely redundant, it was destructive. The SDK dispatches to it by
+# METHOD NAME before any version check, and its catch-all
+# (a2a/compat/v0_3/jsonrpc_adapter.py) rebuilt every raised exception as
+# `CoreInternalError(message=str(e))` -- keeping the message string and discarding both
+# the error TYPE and its `data`. So the two-layer AdCP envelope this server attaches to
+# an auth refusal never reached the wire, `AuthChallengeResponder` found no code to read,
+# and an unauthenticated call got 200 instead of 401. On the native path the same refusal
+# arrives intact: JSON-RPC -32600, `data.adcp_error.code == AUTH_MISSING`, lifted to 401
+# with `WWW-Authenticate`.
 _a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
     context_builder=AdCPCallContextBuilder(),
-    enable_v0_3_compat=True,
 )
 # Rebuild each route with an integer-restoring wrapper around its endpoint --
 # mutating route.endpoint in place would not change dispatch, since Starlette
@@ -675,6 +579,26 @@ async def a2a_messageid_compatibility_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 
 app.include_router(api_v1_router)
+
+
+def _openapi_with_rest_components() -> dict[str, Any]:
+    """The generated OpenAPI document, with every REST request body's nested models resolvable.
+
+    The REST routes advertise their DTOs through ``openapi_extra`` with ``$ref``s aimed at
+    ``#/components/schemas/<Model>``; FastAPI only populates ``components/schemas`` for models
+    it validates itself, and it no longer validates those bodies (``serve`` does). So the
+    models the refs name are merged in here, once, from the same DTOs -- one declaration,
+    published in one place, resolvable from the document root.
+    """
+    from fastapi.openapi.utils import get_openapi
+
+    from src.routes.api_v1 import REST_COMPONENT_SCHEMAS
+
+    schema = get_openapi(title=app.title, version=app.version, description=app.description, routes=app.routes)
+    schema.setdefault("components", {}).setdefault("schemas", {}).update(REST_COMPONENT_SCHEMAS)
+    return schema
+
+
 app.include_router(health_router)
 app.include_router(health_debug_router)
 
@@ -751,3 +675,11 @@ app.router.routes.insert(0, Route("/", _handle_landing_page, methods=["GET"]))
 app.router.routes.insert(1, Route("/landing", _handle_landing_page, methods=["GET"]))
 
 logger.info("FastAPI app created: MCP at /mcp, A2A at /a2a, Admin at /admin")
+
+
+# Assembled LAST, after every route this module registers. ``get_openapi`` reads ``app.routes``
+# at the moment it is called, so assigning this ahead of a router drops that router's paths from
+# the document -- measured at 15 published against 23 eligible when it sat between two routers.
+# The A2A, landing and agent-card routes are plain Starlette ``Route``s, which FastAPI never
+# documents, so 23 ``APIRoute`` paths is the whole document and their absence is by design.
+app.openapi_schema = _openapi_with_rest_components()

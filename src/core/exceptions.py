@@ -14,9 +14,8 @@ import logging
 import math
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from adcp.server.helpers import adcp_error
 from adcp.types import ErrorCode
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, ErrorCodeT, Recovery
 from src.core.errors.details import (
@@ -42,6 +41,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from adcp.types import ContextObject
+
+    from src.core.schemas._base import AdcpErrorResponse
 
 logger = logging.getLogger(__name__)
 
@@ -93,49 +94,14 @@ logger = logging.getLogger(__name__)
 #     ``recovery``. Collapsing MEDIA_BUY_REJECTED to POLICY_VIOLATION destroyed
 #     information the spec says the buyer may consume.
 #   * ``wire_advisory()`` — the one constructor for an ``errors[]`` advisory, which
-#     derived recovery from the pin. ``build_error_object()`` below derives recovery
-#     AND message AND suggestion from the same pin, and takes the typed exception
-#     rather than a loose (code, message) pair, so a code and its details cannot
-#     be paired wrongly at the call site.
+#     derived recovery from the pin. ``AdcpErrorResponse.of`` derives recovery AND
+#     message AND suggestion from the same pin, and takes the typed exception rather
+#     than a loose (code, message) pair, so a code and its details cannot be paired
+#     wrongly at the call site.
 #
 # What DID come across from origin/main, because nothing here subsumed it:
 # ``RETRY_AFTER_MAX`` / :func:`clamp_retry_after` below, and the two-families
 # reading of :class:`AdCPConfigurationError`.
-
-
-def _serialize_context(
-    context: ContextObject | dict[str, Any] | None,
-) -> dict[str, Any] | None:
-    """Serialize an AdCP ContextObject (or dict) into a JSON-safe dict.
-
-    Single source of truth for context serialization, so the envelope builder and
-    every other reader emit byte-identical context payloads.
-
-    Behavior:
-        - ``None`` → ``None`` (caller decides whether to omit the key).
-        - ``dict`` → shallow copy. Prevents aliasing footguns when one
-          serialization layer mutates its copy and accidentally mutates
-          the source context still held on the exception.
-        - ``ContextObject`` → ``model_dump(mode="json", exclude_none=True)``.
-          ``mode="json"`` coerces datetimes/UUIDs/etc. to JSON-serializable
-          primitives; ``exclude_none=True`` matches the spec's emit-only-
-          populated-fields norm.
-        - anything else → log a warning and return ``None``. This is reached
-          from ``build_two_layer_error_envelope``, which runs inside exception
-          handlers — raising here would shadow the original exception and the
-          boundary translator would fail open with no envelope. A malformed
-          context drops to ``None`` instead.
-    """
-    if context is None:
-        return None
-    if isinstance(context, dict):
-        return dict(context)
-    if not isinstance(context, BaseModel):
-        logger.warning(
-            "_serialize_context expected dict or BaseModel, got %s; dropping context", type(context).__name__
-        )
-        return None
-    return context.model_dump(mode="json", exclude_none=True)
 
 
 # The pinned spec bounds retry_after: AdCP 3.1.1 ``core/error.json`` →
@@ -234,7 +200,7 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             request that produced them (spec 3.0.0 normative).
         internal_detail: Optional NON-WIRE diagnostic payload — the raw
             third-party exception (or free text) that caused this error.
-            NEVER serialized: ``build_two_layer_error_envelope`` ignores it. It
+            NEVER serialized: ``AdcpErrorResponse.of`` ignores it. It
             exists so a raise site has a sanctioned destination for text whose
             provenance we do not control, instead of interpolating it into
             ``message``.
@@ -360,17 +326,15 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         # The pin's MUST: when issues[] is present, `field` is populated from
         # issues[0].pointer, translated to the JSONPath-lite spelling. Derived
         # HERE rather than at the emit site, so every reader of the error sees one
-        # value -- the same reason _serialize_context lives in one place. An
-        # explicitly passed field wins, so a caller can still point at something
+        # value. An explicitly passed field wins, so a caller can still point at something
         # other than issues[0].
         if field is None and issues:
             field = pointer_to_field(issues[0].pointer)
         self.field = field
         self.retry_after = retry_after
         self.context = context
-        # NON-WIRE. Deliberately absent from
-        # build_two_layer_error_envelope(); emitted only to the server-side log
-        # by adcp_error_for(). Never add it to a serializer.
+        # NON-WIRE. Deliberately absent from ``AdcpErrorResponse.of``; emitted only
+        # to the server-side log by adcp_error_for(). Never add it to a serializer.
         self.internal_detail = internal_detail
         # args stays EMPTY: BaseException.__reduce__ replays ``cls(*args)``, and this
         # constructor takes none. ``__reduce__`` below replays the keyword form instead,
@@ -833,8 +797,8 @@ class AdCPUrlNotAllowedError(AdCPValidationError):
 # Each subclass pins its wire error_code to a CODE_TABLE entry (the pinned
 # enums/error-code.json plus this platform's own AppErrorCode members), so
 # raise sites can use semantic names (AdCPMediaBuyNotFoundError) instead of
-# constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary
-# translator runs build_two_layer_error_envelope() on the raised exception.
+# constructing Error(code="MEDIA_BUY_NOT_FOUND") inline. The boundary builds an
+# ``AdcpErrorResponse`` from the raised exception.
 
 
 class AdCPMediaBuyNotFoundError(AdCPNotFoundError[EntityRefDetails]):
@@ -1163,68 +1127,32 @@ class AdCPMediaBuyRejectedError(AdCPSalesAgentError[RejectionReasonDetails]):
     _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
 
 
-def build_error_object(exc: AdCPSalesAgentError) -> dict[str, Any]:
-    """The single per-error object for an advisory list (``errors[]`` entries).
+class AdcpFailure(Exception):
+    """A failed tool call, carrying the response that says so. THE edge exception.
 
-    Same derivation as ``build_two_layer_error_envelope``, which is the point: a second
-    place that turns a code into buyer-facing text will disagree with this one, and did —
-    a tools-layer copy keyed the message off the WIRE code while this keys it off the RAW
-    code, so 10 of 41 subclasses produced two different sentences for one failure.
+    One type, and its payload is an ``AdcpErrorResponse``. The boundary raises it; the three
+    transports catch it, serialize ``self.response`` and set their own wire failure marker --
+    an HTTP status, a ``ToolError``, a failed A2A Task state. That marker is the only part of
+    a refusal that is genuinely per-transport.
+
+    WHY AN EXCEPTION AND NOT A RETURN VALUE. A return can be ignored; a raise cannot. Business
+    logic across fourteen tools calls services that call services, and a caller that forgets to
+    check a returned failure proceeds on it silently. So the signal stays unignorable.
+
+    WHY IT CARRIES A RESPONSE. The thing a transport must write is a response --
+    ``core/protocol-envelope.json`` declares ``adcp_error``, ``context`` and a required
+    ``status`` on every response envelope -- so a transport handed a bare exception has to
+    build one, and three of them did, from a hand-assembled dict that could carry no ``status``.
+    Carrying the response means the conversion happens once, where the request's ``context`` is
+    still in hand.
+
+    Business logic keeps raising ``AdCPSalesAgentError`` subclasses and never sees this class:
+    the boundary is what turns one into the other.
     """
-    return dict(build_two_layer_error_envelope(exc)["errors"][0])
 
-
-def build_two_layer_error_envelope(exc: AdCPSalesAgentError) -> dict[str, Any]:
-    """Build the AdCP spec-compliant two-layer error envelope from an exception.
-
-    Wraps the stable ``adcp_error()`` SDK helper for the payload half
-    (``errors[]``), then mirrors the single error object at envelope level
-    as ``adcp_error`` so the storyboard runner can read either path. Echoes
-    ``exc.context`` when present.
-
-    Returns:
-        Plain dict with shape::
-
-            {
-                "adcp_error": {"code": "...", "message": "...", "recovery": "...", ...},
-                "errors": [{"code": "...", "message": "...", "recovery": "...", ...}],
-                "context": {...},     # only when exc.context is set
-            }
-
-    Both layers carry ``exc.error_code`` VERBATIM. There is no translation step: the
-    AdCP error vocabulary is OPEN (core/error.json -- ``error.code`` is a wire-typed
-    string, the published codes are documentary, senders MAY emit codes outside that
-    set, and receivers MUST decode an unknown code by reading ``error.recovery``), so
-    a platform code reaches the buyer as the raise site declared it.
-    """
-    payload = adcp_error(
-        exc.error_code,
-        exc.message,
-        recovery=exc.recovery,
-        field=exc.field,
-        suggestion=exc.suggestion,
-        retry_after=exc.retry_after,
-        details=_details_to_wire(exc.details),
-    )
-    # issues[] is injected into the payload BEFORE the mirror is copied below.
-    # It cannot ride adcp_error(): that helper has no `issues` parameter, and its
-    # `details` is typed flat-scalars-only, so the array fits through neither.
-    # Injecting after the copy would put issues on errors[0] and NOT on the
-    # envelope-level adcp_error -- the two-layer divergence the comment below
-    # exists to prevent.
-    if exc.issues:
-        payload["errors"][0]["issues"] = [issue.to_wire() for issue in exc.issues]
-    # Copy errors[0] for the envelope-level mirror so callers that mutate one
-    # layer don't accidentally mutate the other (aliasing footgun once both
-    # layers may be mutated independently).
-    envelope: dict[str, Any] = {
-        "adcp_error": dict(payload["errors"][0]),
-        "errors": payload["errors"],
-    }
-    serialized_context = _serialize_context(exc.context)
-    if serialized_context is not None:
-        envelope["context"] = serialized_context
-    return envelope
+    def __init__(self, response: AdcpErrorResponse) -> None:
+        super().__init__(response.adcp_error.message if response.adcp_error else "tool call failed")
+        self.response = response
 
 
 # Canonical buyer-facing suggestions from error-code.json enumMetadata (AdCP 3.1.1):

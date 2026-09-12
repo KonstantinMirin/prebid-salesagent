@@ -45,9 +45,9 @@ from src.core.exceptions import (
     AdCPAdapterResourceNotFoundError,
     AdCPAuthorizationError,
     AdCPRateLimitError,
-    build_two_layer_error_envelope,
 )
 from tests.harness.transport import Transport
+from tests.helpers.envelope_assertions import envelope_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -174,9 +174,9 @@ class TestNoUpstreamTextOnTheWire:
         fault = GoogleAdsServerFault(f"PermissionError.PERMISSION_DENIED [{secret}]")
 
         error = map_gam_exception(fault)
-        # The one writer of the wire envelope, so this is exactly the bytes the
-        # buyer receives -- not a reconstruction.
-        envelope = build_two_layer_error_envelope(error)
+        # Built the way the boundary builds it (AdcpErrorResponse.of + to_wire),
+        # so this is exactly the body the buyer receives -- not a reconstruction.
+        envelope = envelope_for(error)
         wire_text = str(envelope)
 
         assert secret not in wire_text, f"the upstream fault's text reached the wire envelope: {wire_text[:400]}"

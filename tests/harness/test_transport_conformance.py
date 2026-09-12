@@ -74,7 +74,7 @@ def _result(envelope: dict) -> TransportResult:
 class TestRequireSuggestionDemandsBothMirroredLayers:
     """``require_suggestion=True`` grades BOTH mirrored layers, by name (#1547 item 3).
 
-    ``build_two_layer_error_envelope`` (src/core/exceptions.py) emits the error
+    ``AdcpErrorResponse.of`` (src/core/schemas/_base.py) carries the error
     object twice — once as ``errors[0]``, once mirrored to the envelope-level
     ``adcp_error``. A buyer parsing either layer must find the same
     ``suggestion``. An either-layer check (``errors[0].get(...) or

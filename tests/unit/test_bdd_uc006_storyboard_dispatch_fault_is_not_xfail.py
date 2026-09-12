@@ -37,9 +37,10 @@ from typing import Any
 import pytest
 from _pytest.outcomes import Skipped, XFailed
 
-from src.core.exceptions import AdCPInternalError, build_two_layer_error_envelope
+from src.core.exceptions import AdCPInternalError
 from tests.bdd.steps.domain import uc006_storyboard_creative_sync as steps
 from tests.harness.wire_fixtures import wire_error_result
+from tests.helpers.envelope_assertions import envelope_for
 
 #: The scenario tags whose Then steps this module mutates. Both are deliberately
 #: UN-ledgered: a ledgered tag would xfail the scenario before the injected fault
@@ -65,12 +66,13 @@ _INJECTED_500 = AdCPInternalError(
 )
 
 #: The envelope a real boundary would have put on the wire for that exception —
-#: produced by the production builder rather than hand-authored, so the mutated
-#: steps read a genuine two-layer ``{"adcp_error": ..., "errors": [...]}`` body
-#: through ``locate_envelope_error``. A hand-rolled shape would resolve to ``None``
-#: there, and a step could then fail for the wrong reason (missing error region)
-#: instead of for the injected 500 this module is grading.
-_INJECTED_500_ENVELOPE: dict[str, Any] = build_two_layer_error_envelope(_INJECTED_500)
+#: produced by the production ``AdcpErrorResponse.of`` + ``to_wire`` pair rather than
+#: hand-authored, so the mutated steps read a genuine two-layer
+#: ``{"adcp_error": ..., "errors": [...]}`` body through ``locate_envelope_error``.
+#: A hand-rolled shape would resolve to ``None`` there, and a step could then fail
+#: for the wrong reason (missing error region) instead of for the injected 500 this
+#: module is grading.
+_INJECTED_500_ENVELOPE: dict[str, Any] = envelope_for(_INJECTED_500)
 
 
 class _NoSessionEnv:

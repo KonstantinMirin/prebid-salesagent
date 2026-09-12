@@ -17,14 +17,9 @@ the tree; the pointer was dangling, and the BDD scenarios above are what
 actually grades that surface today.
 
 The second assertion in :func:`assert_credentials_refusal_envelope` is not
-decoration. The A2A handler wraps its repository call in
-``except ValueError as e: raise _invalid_params_from_ssrf_error(e)``
-(``src/a2a_server/adcp_a2a_server.py``), and that helper hardcodes
-``field="push_notification_config.url"`` plus the https SSRF suggestion. A
-credential precondition that raises ``ValueError`` from inside the repository
-would therefore be re-enveloped as a URL problem — telling the buyer to fix a
-URL that is fine. "It refused" is not enough; it has to refuse about the right
-field.
+decoration. A refusal raised for the wrong reason would reach the buyer naming
+the wrong field -- telling them to fix a URL that is fine. "It refused" is not
+enough; it has to refuse about the right field.
 """
 
 from __future__ import annotations

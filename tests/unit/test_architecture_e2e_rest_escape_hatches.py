@@ -451,7 +451,17 @@ def test_exclusion_point_detector_ignores_an_unrelated_conditional() -> None:
 # is graded on ONE transport by design; adding an entry moves a scenario off
 # three transports, which is exactly the kind of narrowing that must not be
 # silent. Update IN THE SAME CHANGE and say why in the commit.
-EXPECTED_SINGLE_TRANSPORT_TAGS: dict[str, str] = {"a2a_untyped_ingest": "A2A"}
+EXPECTED_SINGLE_TRANSPORT_TAGS: dict[str, str] = {
+    "a2a_untyped_ingest": "A2A",
+    # local-pre-dispatch-refusals.feature grades refusals made BEFORE any tool runs: a body
+    # that is not a JSON object, a name the registry lacks, an A2A message naming no skill
+    # or two. The refused shape is the transport's own frame -- an HTTP body, a JSON-RPC
+    # message, an MCP arguments object -- so one sentence cannot mean the same bytes on all
+    # three, and each scenario names the one transport whose frame it sends.
+    "predispatch-rest": "REST",
+    "predispatch-a2a": "A2A",
+    "predispatch-mcp": "MCP",
+}
 
 
 def test_single_transport_tags_match_the_pin() -> None:

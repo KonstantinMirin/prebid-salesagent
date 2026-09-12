@@ -29,10 +29,25 @@ The helper catches TWO kinds of drift, not one:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
 
 from tests.helpers import pinned_schema
+
+
+def envelope_for(exc: Any) -> dict[str, Any]:
+    """The wire body a buyer receives for one typed exception, built the way the boundary builds it.
+
+    ``to_wire(AdcpErrorResponse.of(exc))`` -- the two production calls every transport makes on
+    a failure, composed here so a test that holds an exception and no wire can still assert on
+    the body. A test that HAS a wire asserts on it (``TransportResult.assert_wire_error``); this
+    is for the ones grading the envelope's own derivation from a code.
+    """
+    from src.core.schemas._base import AdcpErrorResponse
+    from src.core.tools._wire import to_wire
+
+    return to_wire(AdcpErrorResponse.of(exc))
 
 
 def locate_envelope_error(target: Any) -> dict[str, Any] | None:
@@ -339,3 +354,31 @@ def assert_envelope_shape(
     if message_substr is not None:
         actual = error.get("message", "")
         assert message_substr in actual, f"errors[0].message={actual!r} does not contain {message_substr!r}"
+
+
+@contextmanager
+def raises_adcp(expected: type[Exception] | str) -> Iterator[Any]:
+    """Assert the block raises ``AdcpFailure`` whose RESPONSE carries *expected*'s code.
+
+    The boundary answers every failure with a response and raises ``AdcpFailure`` carrying it,
+    so a caller no longer receives the typed exception the raise site built. What it receives
+    is the buyer-facing CODE, which is the obligation worth grading -- ``tests/CLAUDE.md``
+    § "Error verification policy" says exactly that: assert on the wire, not on a
+    reconstructed exception.
+
+    *expected* may be the typed exception CLASS, read for its declared code, so a test keeps
+    naming the refusal it means rather than a string literal that can drift from it.
+
+    Yields pytest's ``ExceptionInfo`` so a caller needing the failure itself can bind it with
+    ``as``.
+    """
+    import pytest
+
+    from src.core.exceptions import AdcpFailure
+
+    code = expected if isinstance(expected, str) else expected().error_code
+    with pytest.raises(AdcpFailure) as excinfo:
+        yield excinfo
+    response = excinfo.value.response
+    assert response.adcp_error is not None, f"AdcpFailure carried a response with no adcp_error: {response!r}"
+    assert response.adcp_error.code == code, f"adcp_error.code={response.adcp_error.code!r}, expected {code!r}"

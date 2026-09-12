@@ -46,11 +46,11 @@ from src.core.exceptions import (
     AdCPConfigurationError,
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
-    build_two_layer_error_envelope,
 )
 from src.core.signals_agent_registry import SignalsAgent, SignalsAgentRegistry
 from src.core.utils.mcp_client import MCPConnectionError
 from tests.helpers import assert_envelope_shape
+from tests.helpers.envelope_assertions import envelope_for
 from tests.helpers.local_http_origin import run_local_origin
 from tests.integration.property_list_helpers import allow_local_origin
 from tests.integration.test_outbound_http import fast_backoff
@@ -79,7 +79,7 @@ def _assert_wire_pair(exc: AdCPSalesAgentError, code: str, *, pinned_recovery: s
         f"the pinned enumMetadata classifies {code} as {expected!r}, not {pinned_recovery!r} — "
         "the premise this assertion is built on no longer holds"
     )
-    assert_envelope_shape(build_two_layer_error_envelope(exc), code, recovery=expected)
+    assert_envelope_shape(envelope_for(exc), code, recovery=expected)
 
 
 def _assert_terminal_by_code(exc: AdCPConfigurationError) -> None:
