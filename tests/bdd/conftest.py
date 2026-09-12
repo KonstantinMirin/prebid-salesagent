@@ -906,11 +906,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     #
     # strict=True is the consumer's default here, so a parked row that starts passing
     # becomes XPASS(strict) and fails -- the list cannot rot quietly.
+    # Graduated: the [rest-auto-approve] row. XPASS(strict) on REST in every box run from
+    # innet_110926_0843 through innet_120926_1631, while its a2a and mcp siblings were never
+    # parked and pass. The Then reads the creative's status and the absence of workflow
+    # steps back from the database after a success check, so the pass is not vacuous.
     (
         "T-UC-006-boundary-approval",
         {
             '-ai-powered-"ai-powered"-a review workflow should be created with AI review]',
-            '[rest-auto-approve-"auto-approve"-the creative status should be set to approved immediately]',
         },
         "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
     ),
