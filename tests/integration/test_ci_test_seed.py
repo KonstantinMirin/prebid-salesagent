@@ -31,21 +31,21 @@ def test_the_seeded_token_resolves_to_the_seeded_tenant(ci_test_principal):
     assert identity.tenant_id == ci_test_principal.tenant_id
 
 
-def test_the_tenant_carries_the_deps_a_product_needs(ci_test_principal):
+def test_the_tenant_carries_the_deps_a_product_needs(ci_test_principal, factory_session):
     """USD and ``all_inventory`` are prerequisites, not decoration.
 
     CLAUDE.md's setup order is Tenant -> CurrencyLimit (USD, required for budget
     validation) -> PropertyTag (``all_inventory``, required by ``property_tags``
     references). A seed missing either fails later in ways that read as a product bug.
+
+    Read through the tenant's own ORM relationships on the session the seed committed
+    to: the subject here is the seed, and a raw ``get_db_session()`` query in a test
+    body is what the repository-pattern guard refuses.
     """
-    from sqlalchemy import select
+    from src.core.database.models import Tenant
 
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import CurrencyLimit, PropertyTag
+    tenant = factory_session.get(Tenant, ci_test_principal.tenant_id)
 
-    with get_db_session() as session:
-        currencies = session.scalars(select(CurrencyLimit).filter_by(tenant_id=ci_test_principal.tenant_id)).all()
-        tags = session.scalars(select(PropertyTag).filter_by(tenant_id=ci_test_principal.tenant_id)).all()
-
-    assert [c.currency_code for c in currencies] == ["USD"]
-    assert [t.tag_id for t in tags] == ["all_inventory"]
+    assert tenant is not None
+    assert [c.currency_code for c in tenant.currency_limits] == ["USD"]
+    assert [t.tag_id for t in tenant.property_tags] == ["all_inventory"]
