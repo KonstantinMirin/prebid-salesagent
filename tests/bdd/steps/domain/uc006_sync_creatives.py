@@ -4533,7 +4533,7 @@ def given_creative_with_tracker_assets(ctx: dict, tracker_assets: str) -> None:
     )
     if refusals:
         # The reason is a literal so the declaration stays auditable; which rule the row
-        # breaks is the row's own phrase, and ``refusals`` names it in the log below.
+        # breaks is the row's own phrase.
         creative_payload = malformed(
             "semantic",
             "the tracker asset is shaped correctly but its VALUE breaks a rule the pin states on "
@@ -4542,7 +4542,6 @@ def given_creative_with_tracker_assets(ctx: dict, tracker_assets: str) -> None:
             creative_payload,
             obligation=ErrorCode.INVALID_REQUEST,
         )
-        ctx["tracker_refusal"] = "; ".join(refusals)
     ctx.setdefault("creatives", []).append(creative_payload)
 
 
