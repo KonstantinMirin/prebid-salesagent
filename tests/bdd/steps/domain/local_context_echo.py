@@ -5,19 +5,15 @@ seller carries the buyer's `context` object unchanged. The pinned authority and
 the upstream gap are stated in the feature file's header; this module is only
 the wiring.
 
-WHY THE PAYLOAD IS A RAW BAG AND NOT A REQUEST MODEL. Two of the six scenarios
-send a document the request model REFUSES, which a model-shaped channel cannot
-express — a model cannot be constructed from bytes it rejects. No second
-dispatch path is introduced for that: ``dispatch_request(ctx, **kwargs)``
-(``tests/bdd/steps/generic/_dispatch.py``) already takes a keyword BAG and hands
-it to ``env.call_via`` -> ``BaseTestEnv.deliver_*`` -> the one
-``AdCPTestClient`` core, which serializes whatever it was given. The malformed
-value survives to the wire by design: ``json_safe``
-(``tests/harness/_base.py``) states it — "a deliberately-malformed value still
-reaches the wire malformed, which is the entire point of dispatching raw". The
-precedent for grading a schema rejection this way is
-``local-constraint-relaxation-rejections.feature``, whose four scenarios send
-out-of-bounds documents through the same seam.
+THE DOCUMENT IS A FACTORY BASELINE, PERTURBED ONE FIELD AT A TIME. Each tool's
+request factory (``tests/factories/request.py``) builds the conformant baseline,
+and ``payload(**overrides)`` applies the scenario's perturbations AFTER the model
+dump, so a wrong-typed field or an omitted one reaches the wire as written -- a
+model could not be constructed from the bytes these scenarios send. The Givens
+accumulate overrides; the When builds the document from the factory the routing
+tag's tool names and hands it to ``dispatch_request(ctx, **payload)``
+(``tests/bdd/steps/generic/_dispatch.py``), the one keyword-bag seam every
+scenario dispatches through.
 
 ``tests/unit/test_architecture_harness_single_dispatch.py`` is not touched by
 any of this: what it bans is a per-env ``call_mcp``/``call_a2a`` override, a
@@ -36,13 +32,17 @@ from pytest_bdd import given, parsers, then, when
 from tests.bdd.steps._outcome_helpers import wire_dict, wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.mint import mint
+from tests.factories.request import OMIT, GetMediaBuysRequestFactory, GetProductsRequestFactory
 from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
-#: The ctx slot the Givens accumulate the outbound document into, and the When
-#: dispatches. Named rather than reusing a generic key so nothing else in the
-#: tree can write it: the whole point of these scenarios is that the bytes the
-#: buyer sent are the bytes the seller saw.
-_PAYLOAD = "ctxecho_payload"
+#: The ctx slot the Givens accumulate their perturbations into, applied over the
+#: factory baseline at the When. Named rather than reusing a generic key so
+#: nothing else in the tree can write it: the whole point of these scenarios is
+#: that the bytes the buyer sent are the bytes the seller saw.
+_OVERRIDES = "ctxecho_overrides"
+
+#: The factory for each tool a scenario can name; the routing tag decides the tool.
+_FACTORY_BY_TOOL = {"get_products": GetProductsRequestFactory, "get_media_buys": GetMediaBuysRequestFactory}
 
 #: The ctx slot holding the context object as SENT. The Then compares the wire
 #: against this, so a seller that returns a context of its own invention fails
@@ -78,26 +78,26 @@ def given_request_carries_context(ctx: dict) -> None:
         "trace": {"span": "outer", "depth": 1},
     }
     ctx[_SENT] = sent
-    ctx.setdefault(_PAYLOAD, {})["context"] = sent
+    ctx.setdefault(_OVERRIDES, {})["context"] = sent
 
 
 @given("the request names a brief the seller can answer")
 def given_answerable_brief(ctx: dict) -> None:
-    """Supply the one search criterion ``get_products`` requires of a caller."""
-    ctx.setdefault(_PAYLOAD, {})["brief"] = "video inventory for a national launch"
+    """The one search criterion ``get_products`` requires of a caller: the baseline's own brief."""
+    ctx.setdefault(_OVERRIDES, {})["brief"] = GetProductsRequestFactory.payload()["brief"]
 
 
 @given("the request names no search criterion at all")
 def given_no_search_criterion(ctx: dict) -> None:
     """Send neither brief, brand nor filters — a well-formed document the SELLER refuses.
 
-    Asserts the absence rather than trusting it: a sibling Given that added a
-    brief would silently turn this scenario into a success and the error
-    assertions would then grade nothing.
+    Asserts the absence on the BUILT document rather than trusting the overrides: a
+    sibling Given that added a brief would silently turn this scenario into a success
+    and the error assertions would then grade nothing.
     """
-    payload = ctx.setdefault(_PAYLOAD, {})
-    for criterion in ("brief", "brand", "filters"):
-        payload.pop(criterion, None)
+    overrides = ctx.setdefault(_OVERRIDES, {})
+    overrides.update(brief=OMIT, brand=OMIT, filters=OMIT)
+    payload = GetProductsRequestFactory.payload(**overrides)
     assert not any(k in payload for k in ("brief", "brand", "filters")), (
         f"the scenario claims no search criterion, but the request still carries one: {payload!r}"
     )
@@ -110,13 +110,13 @@ def given_brief_wrong_type(ctx: dict) -> None:
     Refused on the bytes' own merits, so the seller owes INVALID_REQUEST. The
     value reaches the wire unrepaired — that is the scenario's whole subject.
     """
-    ctx.setdefault(_PAYLOAD, {})["brief"] = 12345
+    ctx.setdefault(_OVERRIDES, {})["brief"] = 12345
 
 
 @given("the request carries media_buy_ids of the wrong JSON type")
 def given_media_buy_ids_wrong_type(ctx: dict) -> None:
     """A bare string where ``get-media-buys-request.json`` declares an array."""
-    ctx.setdefault(_PAYLOAD, {})["media_buy_ids"] = "mb_not_an_array"
+    ctx.setdefault(_OVERRIDES, {})["media_buy_ids"] = "mb_not_an_array"
 
 
 @given(parsers.parse('the request pins AdCP version "{version}"'))
@@ -129,7 +129,7 @@ def given_pins_adcp_version(ctx: dict, version: str) -> None:
     schema validation, or the scenario would grade the schema-rejection path
     twice under two names.
     """
-    ctx.setdefault(_PAYLOAD, {})["adcp_version"] = version
+    ctx.setdefault(_OVERRIDES, {})["adcp_version"] = version
 
 
 # ── When ─────────────────────────────────────────────────────────────
@@ -160,11 +160,11 @@ def _send(ctx: dict, *, tool: str) -> None:
         f"the scenario says it sends {tool!r}, but its routing tag selected "
         f"{type(env).__name__}, which dispatches {env.MCP_TOOL!r}"
     )
-    payload = ctx.get(_PAYLOAD)
-    assert payload, (
-        "no request document was accumulated — a Given must run before the When, or the "
-        "scenario would dispatch an empty bag and grade the seller's answer to nothing"
+    assert _OVERRIDES in ctx, (
+        "no perturbation was recorded — a Given must run before the When, or the scenario "
+        "would dispatch the bare baseline and grade the seller's answer to nothing it claims to send"
     )
+    payload = _FACTORY_BY_TOOL[tool].payload(**ctx[_OVERRIDES])
     identity: Any = ctx["identity"] if "identity" in ctx else NO_IDENTITY_OVERRIDE
     dispatch_request(ctx, identity=identity, **payload)
 

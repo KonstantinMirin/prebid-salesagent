@@ -85,6 +85,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
+    "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
@@ -4276,7 +4277,14 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # an excluded transport is exactly as ungraded as an xfail but invisible to both
 # escape-hatch detectors (GH #1892), whereas this keeps a real ``[a2a]`` test id
 # that ``--collect-only`` shows.
-_SINGLE_TRANSPORT_TAGS = {"a2a_untyped_ingest": "A2A"}
+_SINGLE_TRANSPORT_TAGS = {
+    "a2a_untyped_ingest": "A2A",
+    # local-pre-dispatch-refusals.feature: the refused shape is the transport's own frame,
+    # so each scenario names the one transport whose frame it sends.
+    "predispatch-rest": "REST",
+    "predispatch-a2a": "A2A",
+    "predispatch-mcp": "MCP",
+}
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
 # (UC-002 @account used to live here when it ran resolve_account() via IMPL on
@@ -5535,6 +5543,16 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="ctxecho-media-buys",
         when=lambda m: "ctxecho-media-buys" in m,
         env_builder=_build_media_buy_list_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @predispatch (local pre-dispatch-refusals feature) ──────────────────
+    # T-PREDISPATCH-* identity tags, so an UNSCOPED `when` row like the two above.
+    # Every routable document addresses get_products, and a tenant plus its
+    # principal is all a refusal made before any tool runs can need.
+    EnvRoute(
+        tag="predispatch",
+        when=lambda m: "predispatch" in m,
+        env_builder=_build_product_env,
         seed=_seed_tenant_and_principal,
     ),
     # ── @egress (local SSRF / webhook-credential refusal feature) ───────────

@@ -56,6 +56,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # a seller's own refusal do not both reach the buyer from one tool.
         "ctxecho-media-buys",
         "ctxecho-products",
+        "predispatch",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

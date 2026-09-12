@@ -263,6 +263,21 @@ def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwarg
     _populate_ctx_from_result(cast("WireCtx", ctx), result)
 
 
+def dispatch_raw_document(ctx: dict, document: Any, *, identity: Any = NO_IDENTITY_OVERRIDE) -> None:
+    """Dispatch a document the client cannot shape, through ``tests/harness/raw_wire.py``.
+
+    The same ctx contract as :func:`dispatch_request`, published through the same single
+    writer. The gate that grades a keyword bag against the pinned model does not run here:
+    there is no model for a document whose whole point is that no model accepts it, and the
+    seller's answer to it is what the scenario grades.
+    """
+    from tests.harness.raw_wire import dispatch_raw
+
+    env = ctx["env"]
+    transport = _as_transport(ctx, "dispatch_raw_document")
+    _populate_ctx_from_result(cast("WireCtx", ctx), dispatch_raw(env, transport, document, identity))
+
+
 def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identity: Any = NO_IDENTITY_OVERRIDE) -> None:
     """Dispatch through ``AdCPTestClient.call`` instead of ``env.call_via``.
 
