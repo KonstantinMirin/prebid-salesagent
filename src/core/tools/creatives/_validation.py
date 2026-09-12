@@ -8,7 +8,7 @@ from typing import Any
 from adcp.types import CreativeAsset
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
-from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
+from src.core.exceptions import AdCPFormatNotFoundError, AdCPValidationError
 from src.core.format_resolver import is_dialled_agent_url
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 
@@ -143,8 +143,9 @@ def _validate_creative_input(
             # ("Generic fallback for a referenced identifier ... that does not exist ...
             # Use when no resource-specific not-found code applies"); VALIDATION_ERROR is
             # for "invalid field values or business rules beyond schema validation", and
-            # a well-formed id that simply is not in the catalog is neither.
-            raise AdCPNotFoundError(
+            # a well-formed id that simply is not in the catalog is neither. The typed
+            # subclass says WHICH kind of reference failed; the wire code is the same.
+            raise AdCPFormatNotFoundError(
                 details=EntityRefDetails(format_id=format_id),
                 field="format_id",
             )

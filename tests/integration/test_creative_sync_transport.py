@@ -342,7 +342,7 @@ class TestSyncFormatValidationTransport:
         assert len(result.payload.creatives) == 1
         creative_result = result.payload.creatives[0]
         assert creative_result.action == "failed"
-        assert "VALIDATION_ERROR" in _error_codes(creative_result.errors)
+        assert "REFERENCE_NOT_FOUND" in _error_codes(creative_result.errors)
 
 
 @pytest.mark.requires_db

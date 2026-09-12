@@ -5427,13 +5427,12 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-ext-g",
         "T-UC-006-rule-035-inv2",
         # And the rest of that sweep: per-item CONFIGURATION_ERROR read on the entry
-        # (ext-i), pin-shaped format ids in place of the agent/... spellings the
-        # request schema refuses (ext-k, partition-assignment-fmt), strict
-        # PACKAGE_NOT_FOUND carrying which package (rule-033-inv2), and two Then bodies
-        # that read the wrong mock argument or a mock no env wires (rule-035-static,
-        # rule-037-inv4).
+        # (ext-i), the creative on the transport's own served format so only the
+        # product's declared set varies (partition-assignment-fmt, which also absorbed
+        # ext-k and rule-039-inv2), strict PACKAGE_NOT_FOUND carrying which package
+        # (rule-033-inv2), and two Then bodies that read the wrong mock argument or a
+        # mock no env wires (rule-035-static, rule-037-inv4).
         "T-UC-006-ext-i",
-        "T-UC-006-ext-k",
         "T-UC-006-partition-assignment-fmt",
         "T-UC-006-rule-033-inv2",
         "T-UC-006-rule-035-static",
@@ -5467,7 +5466,6 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-rule-038-inv5",
         "T-UC-006-rule-039-inv1",
         "T-UC-006-rule-039-inv1b",
-        "T-UC-006-rule-039-inv2",
         "T-UC-006-rule-039-inv3",
         "T-UC-006-rule-039-inv6",
         "T-UC-006-rule-040-inv1",

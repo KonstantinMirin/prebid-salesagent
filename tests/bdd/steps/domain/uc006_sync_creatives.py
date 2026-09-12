@@ -71,6 +71,11 @@ from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
 _E2E_AGENT_URL = "https://creative-agent.adcp.test:8443/api/creative-agent"
 # Real format that exists in Docker's creative agent catalog
 _E2E_FORMAT_ID = "display_300x250_image"
+# A creative agent that does not answer, on the wire: the TLS front's own name (so the
+# egress gate resolves it and lets the dial through) at a port nothing listens on. A
+# made-up host fails DNS inside the gate instead, which is a VALIDATION_ERROR on the
+# buyer's agent_url -- a different outcome from an agent that is down.
+_E2E_UNREACHABLE_AGENT_URL = "https://creative-agent.adcp.test:8444/api/creative-agent"
 
 
 def _format_payload(ctx: dict, env: object) -> tuple[str, str, dict]:
@@ -931,10 +936,14 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     """Create a media buy + package whose product matches the Gherkin setup phrase.
 
     Supported phrases (from the assignment_format partition scenario):
-      - ``product accepting banner_300x250`` — product format_ids matches creative
+      - ``product accepting the creative's format`` — product format_ids matches creative
       - ``product with empty format_ids`` — no restrictions
       - ``package with no product_id`` — format check skipped entirely
-      - ``product accepting only video_30s`` — format mismatch (different format)
+      - ``product accepting only a different format`` — format mismatch
+
+    The creative always carries the format its transport's agent serves (the rows used
+    to name a literal one, which the real e2e agent does not serve, so the "matches" rows
+    failed the creative before any assignment ran); only the product's set varies.
     """
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
@@ -953,8 +962,8 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     product = None
     package_config: dict = {"budget": 1000.0}
 
-    if product_setup == "product accepting banner_300x250":
-        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "banner_300x250"}])
+    if product_setup == "product accepting the creative's format":
+        product = ProductFactory(tenant=tenant, format_ids=[_scenario_format_entry(ctx, env)])
         package_config["product_id"] = product.product_id
     elif product_setup == "product with empty format_ids":
         product = ProductFactory(tenant=tenant, format_ids=[])
@@ -962,7 +971,9 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     elif product_setup == "package with no product_id":
         # Package has no product_id — format compatibility check is skipped.
         pass
-    elif product_setup == "product accepting only video_30s":
+    elif product_setup == "product accepting only a different format":
+        # Same agent, different id: identity is the (canonical agent_url, id) PAIR, so
+        # this is not a match (formerly graded on its own as BR-RULE-039 INV-2).
         product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "video_30s"}])
         package_config["product_id"] = product.product_id
     else:
@@ -2032,13 +2043,18 @@ def given_creative_with_unknown_format(ctx: dict) -> None:
 
     format_id = "nonexistent_format_999"
     creative_id = "creative-unknown-fmt-001"
+    # The transport's REAL agent, asked for an id it does not serve: on e2e_rest the
+    # Docker agent answers its catalog and the id is simply absent. A made-up agent host
+    # fails the egress gate's DNS lookup first, which is a VALIDATION_ERROR on agent_url
+    # -- a different defect from an unknown format.
+    _default_id, agent_url, _assets = _format_payload(ctx, env)
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name="Unknown Format Creative",
         # Well-formed but unknown: the pin ACCEPTS this id (it satisfies
         # FormatId.id's pattern), so the wrongness is a registry miss downstream
         # and there is nothing here to declare malformed.
-        format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        format_id={"id": format_id, "agent_url": agent_url},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -2063,10 +2079,13 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
 
     format_id, _, _ = _format_payload(ctx, env)
     creative_id = "creative-unreachable-001"
+    # In-process the mock below is what does not answer; on e2e_rest the wire itself
+    # must, so the creative names a resolvable agent at a closed port.
+    agent_url = _E2E_UNREACHABLE_AGENT_URL if is_e2e(ctx) else env.DEFAULT_AGENT_URL
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name="Unreachable Agent Creative",
-        format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        format_id={"id": format_id, "agent_url": agent_url},
     )
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
@@ -2239,53 +2258,6 @@ def _promote_creative_errors_to_ctx(ctx: dict, errs: list) -> None:
     if not errs:
         return
     ctx["error"] = errs[0]
-
-
-@given(parsers.parse('assignments to a package whose product only accepts "{accepted_format}"'))
-def given_assignments_to_package_only_accepts(ctx: dict, accepted_format: str) -> None:
-    """Create a package whose product format_ids contains exactly one format.
-
-    The Gherkin claim is "only accepts <format>", so the product's
-    ``format_ids`` is restricted to that single FormatId. Combined with a
-    creative payload whose format differs (set by the prior Given), this
-    drives the assignment-time format-compatibility check in
-    _assignments.py:120-141 to raise AdCPValidationError when
-    validation_mode is strict.
-    """
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    agent_url = ctx.get("creative_agent_url", env.DEFAULT_AGENT_URL)
-
-    # Use UUID-based IDs for e2e_rest to avoid collisions in shared Docker DB
-    extra_mb: dict = {}
-    extra_pkg: dict = {}
-    extra_prod: dict = {}
-    if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg["package_id"] = _e2e_unique_id("pkg")
-        extra_prod["product_id"] = _e2e_unique_id("prod")
-
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": accepted_format}],
-        **extra_prod,
-    )
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-        **extra_pkg,
-    )
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    ctx["product"] = product
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: [package.package_id]}
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -4409,47 +4381,6 @@ def then_creative_action_created_or_updated(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN / THEN steps — BR-RULE-039 INV-2 format match (hlmr)
 # ═══════════════════════════════════════════════════════════════════════
-
-
-@given(parsers.parse('a creative with format agent_url "{agent_url}" and format_id "{format_id}"'))
-def given_creative_with_agent_url_and_format(ctx: dict, agent_url: str, format_id: str) -> None:
-    """Set up a creative with a specific agent_url and format_id."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    creative_payload = CreativeAssetRequestFactory.payload(
-        creative_id="creative-fmt-match-001",
-        name="Format Match Creative",
-        format_id={"id": format_id, "agent_url": agent_url},
-    )
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = format_id
-    ctx["creative_agent_url"] = agent_url
-
-
-@given(parsers.parse('a product with format agent_url "{agent_url}" and format_id "{format_id}"'))
-def given_product_with_agent_url_and_format(ctx: dict, agent_url: str, format_id: str) -> None:
-    """Set up a product and package whose format_ids contain the specified agent_url + format_id."""
-    from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    product = ProductFactory(
-        tenant=tenant,
-        format_ids=[{"agent_url": agent_url, "id": format_id}],
-    )
-    media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(
-        media_buy=media_buy,
-        package_config={"product_id": product.product_id, "budget": 1000.0},
-    )
-    env._commit_factory_data()
-    ctx["media_buy"] = media_buy
-    ctx["package"] = package
-    ctx["product"] = product
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: [package.package_id]}
 
 
 @then(parsers.parse('the assignment should fail with "{error_code}"'))

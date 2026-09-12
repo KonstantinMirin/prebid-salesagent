@@ -332,38 +332,9 @@ Feature: BR-UC-006 Sync Creative Assets
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-k: VALIDATION_ERROR (strict) ---
-
-  @T-UC-006-ext-k @extension @ext-k @error
-  Scenario: Format mismatch — creative format incompatible with product
-    Given the Buyer is authenticated
-    And a creative with format_id "banner_300x250"
-    And assignments to a package whose product only accepts "video_pre_roll"
-    And validation_mode is "strict"
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives error spec
-    And the operation should fail with an assignment error
-    And the error code should be "VALIDATION_ERROR"
-    And the error should include a "suggestion" field
-    # POST-F2, POST-F3: WHICH format and product are incompatible travels
-    #   structurally, not in the sentence -- message and suggestion are functions
-    #   of the code (ADR-010), so "should contain 'not supported by product'" and
-    #   "'list_creative_formats'" graded a copy of CODE_TABLE's own text.
-    #
-    #   The code is VALIDATION_ERROR because 3.1.1 enums/error-code.json defines
-    #   it as "violates business rules beyond schema validation", and a format
-    #   outside the product's declared set is exactly that. CREATIVE_REJECTED
-    #   reads "Creative failed content policy review ... revise the creative per
-    #   the seller's advertising_policies" and shapes its details as
-    #   {policy_id, policy_url, reasons} (error-details/creative-rejected.json) --
-    #   a policy outcome this path never reaches. The creative is fine; the
-    #   ASSIGNMENT is what the product does not permit.
-    #
-    #   This line read CREATIVE_REJECTED until the pin was consulted, justified
-    #   in a comment by "that is what production raises". Production is the LAST
-    #   level of the authority order, not the first; #1417 picked the code from
-    #   the raise site and the raise site was wrong. Siblings @T-UC-006-rule-039-inv1b
-    #   and -inv2, and the :959 partition row, already said VALIDATION_ERROR --
-    #   one rule, three copies, and only the stale copy cited production.
+    # ext-k (creative format incompatible with the product, strict) is the
+    # format_mismatch row of @T-UC-006-partition-assignment-fmt -- one definition of
+    # the rule, and the pin reasoning for VALIDATION_ERROR lives there.
 
   @T-UC-006-rule-033-inv1 @invariant @BR-RULE-033
   Scenario: INV-1 — per-creative failure does not abort other creatives
@@ -755,17 +726,11 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response is compliant with the sync_creatives error spec
     And the assignment should fail with "VALIDATION_ERROR"
 
-  @T-UC-006-rule-039-inv2 @invariant @BR-RULE-039 @error
-  Scenario: INV-2 — match requires both normalized agent_url AND exact format_id
-    Given the Buyer is authenticated
-    And a creative with format agent_url "https://agent.example.com" and format_id "banner-300x250"
-    And a product with format agent_url "https://agent.example.com" and format_id "video-pre-roll"
-    And validation_mode is "strict"
-    When the Buyer Agent syncs the creative with assignments
-    Then the response is compliant with the sync_creatives error spec
-    And the assignment should fail with "VALIDATION_ERROR"
-    And the error should include a "suggestion" field
-    # Agent URL matches but format_id differs — partial match is not sufficient
+  # BR-RULE-039 INV-2 (same agent_url, different format_id is NOT a match) is the
+  # format_mismatch row of @T-UC-006-partition-assignment-fmt: the product there declares
+  # a different id at the creative's own agent. The scenario that stood here carried
+  # literal example.com URLs, which the Docker egress gate refuses at DNS, so on e2e_rest
+  # the creative failed on its agent_url before the rule was ever exercised.
 
   @T-UC-006-rule-039-inv3 @invariant @BR-RULE-039
   Scenario: INV-3 — empty product format_ids allows all formats
@@ -1040,7 +1005,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-partition-assignment-fmt @partition @assignment-format
   Scenario Outline: Assignment format compatibility — <partition>
     Given the Buyer is authenticated
-    And a creative with format_id "<creative_format>"
+    And a creative with a known format_id
     And assignments to a package with <product_setup>
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
@@ -1048,15 +1013,27 @@ Feature: BR-UC-006 Sync Creative Assets
     And <expected>
     # --- media_buy_status partitions ---
 
-    # Format ids are pin-shaped: core/format-id.json gives ``id`` the pattern
-    # ^[a-zA-Z0-9_-]+$, so the ``agent/...`` spellings these rows used to carry were a
-    # schema violation the request never got past.
+    # The creative carries the format its transport's agent serves; only the PRODUCT's
+    # declared set varies. The rows used to name a literal creative format, which the
+    # in-process mock accepted and the real e2e agent did not, so the "matches" rows
+    # failed the creative before any assignment ran.
+    #
+    # A mismatch is VALIDATION_ERROR: 3.1.1 enums/error-code.json defines it as
+    # "violates business rules beyond schema validation", and a format outside the
+    # product's declared set is exactly that. CREATIVE_REJECTED is "Creative failed
+    # content policy review" with {policy_id, policy_url, reasons} details -- a policy
+    # outcome this path never reaches; the creative is fine, the ASSIGNMENT is what the
+    # product does not permit. Which format and product are incompatible travels
+    # structurally, not in the sentence (ADR-010).
+    #
+    # format_mismatch is also BR-RULE-039 INV-2: identity is the (canonical agent_url,
+    # id) PAIR (core/format-id.json), so a different id at the same agent is no match.
     Examples: Format compatibility partitions
-      | partition       | creative_format  | product_setup                         | expected                                       |
-      | format_matches  | banner_300x250   | product accepting banner_300x250      | the assignment should be created successfully  |
-      | no_restrictions | banner_300x250   | product with empty format_ids         | the assignment should be created successfully  |
-      | no_product_id   | banner_300x250   | package with no product_id            | the assignment should be created successfully  |
-      | format_mismatch | banner_300x250   | product accepting only video_30s      | the error code should be "VALIDATION_ERROR"    |
+      | partition       | product_setup                              | expected                                       |
+      | format_matches  | product accepting the creative's format    | the assignment should be created successfully  |
+      | no_restrictions | product with empty format_ids              | the assignment should be created successfully  |
+      | no_product_id   | package with no product_id                 | the assignment should be created successfully  |
+      | format_mismatch | product accepting only a different format  | the error code should be "VALIDATION_ERROR"    |
 
   @T-UC-006-partition-mb-status @partition @media-buy-status
   Scenario Outline: Media buy status transition on assignment — <partition>
