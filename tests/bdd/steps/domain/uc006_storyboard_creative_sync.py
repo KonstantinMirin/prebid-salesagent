@@ -7,17 +7,16 @@ roundtrip). These scenarios previously auto-xfailed at
 ``StepDefinitionNotFoundError`` — every Given/When/Then below is new
 .
 
-Several exercise production behavior that genuinely does not exist yet:
-``check_provenance_required`` (src/core/tools/creatives/_validation.py) only
-ever emits a soft warning on missing/incomplete provenance — it never produces
-a per-creative ``action="failed"`` result or the spec's ``PROVENANCE_REQUIRED``
-/ ``PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`` / ``PROVENANCE_DISCLOSURE_MISSING``
-error codes.
-
-Those gaps are registered the ONE sanctioned way — a scenario/Examples-row tag
-in the ratcheted ledger (``_UC006_SPECGAP_XFAIL_TAGS``, tests/bdd/conftest.py)
-— and NEVER as a per-assertion escape hatch inside a step body. Every Then in
-this module asserts unconditionally: a dispatch error or a wrong value FAILS.
+The provenance scenarios grade ``check_provenance_policy``
+(src/core/tools/creatives/_validation.py): a creative that does not meet the
+product's provenance policy is a per-creative ``action="failed"`` result carrying
+the pin's ``PROVENANCE_REQUIRED`` / ``PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING`` /
+``PROVENANCE_DISCLOSURE_MISSING`` code (core/creative-policy.json makes the
+refusal a MUST). Every Then in this module asserts unconditionally: a dispatch
+error or a wrong value FAILS. A genuine production gap is registered the ONE
+sanctioned way — a scenario/Examples-row tag in the ratcheted ledger
+(``_UC006_SPECGAP_XFAIL_TAGS``, tests/bdd/conftest.py) — never as a
+per-assertion escape hatch inside a step body.
 An earlier revision inlined per-assertion xfails here, which meant a 401
 regression, a 500 and a timeout all came out green and indistinguishable from a
 real spec gap; a scenario-level tag cannot make that mistake because it names
@@ -65,25 +64,28 @@ from tests.factories.request import CreativeAssetRequestFactory
 def given_tenant_product_requires_digital_source_type(ctx: dict) -> None:
     """Product creative_policy nests provenance_requirements.require_digital_source_type.
 
-    Production's ``check_provenance_required`` (src/core/tools/creatives/
-    _validation.py) only reads the top-level ``provenance_required`` bool —
-    it never reads a nested ``provenance_requirements`` object. The policy is
-    stored verbatim on the product regardless, so a step ordering/shape bug
-    would surface as "provenance_requirements key present but unread", not
-    as a missing Given.
+    ``provenance_required`` rides along: core/creative-policy.json says the requirements
+    object "refines provenance_required" and, when that flag is false or absent,
+    "receivers MUST ignore it" -- a policy carrying only the refinement asks for nothing.
     """
     _setup_product_with_creative_policy(
         ctx,
-        creative_policy={"provenance_requirements": {"require_digital_source_type": True}},
+        creative_policy={
+            "provenance_required": True,
+            "provenance_requirements": {"require_digital_source_type": True},
+        },
     )
 
 
 @given("the tenant has a product with creative_policy.provenance_requirements.require_disclosure_metadata = true")
 def given_tenant_product_requires_disclosure_metadata(ctx: dict) -> None:
-    """Product creative_policy nests provenance_requirements.require_disclosure_metadata."""
+    """Product creative_policy nests provenance_requirements.require_disclosure_metadata (see above)."""
     _setup_product_with_creative_policy(
         ctx,
-        creative_policy={"provenance_requirements": {"require_disclosure_metadata": True}},
+        creative_policy={
+            "provenance_required": True,
+            "provenance_requirements": {"require_disclosure_metadata": True},
+        },
     )
 
 
@@ -117,7 +119,7 @@ def given_creative_provenance_lacks_disclosure(ctx: dict) -> None:
 def given_creative_submission_previously_failed(ctx: dict) -> None:
     """Narrative precondition for the corrected-resubmission scenario.
 
-    Production's provenance handling (``check_provenance_required``) does not
+    Production's provenance handling (``check_provenance_policy``) does not
     persist any prior-rejection state to replay — the subsequent "resubmits"
     Given builds the corrected payload fresh. This step only seeds
     tenant/principal so the storyboard's narrative sequencing (prior failure
@@ -388,11 +390,8 @@ def then_response_envelope_schema_valid(ctx: dict) -> None:
 def then_per_creative_result_reports_action(ctx: dict, action: str) -> None:
     """Assert the first per-creative result's action matches *action*.
 
-    Where production genuinely cannot reach the expected action (the
-    provenance-rejection scenarios: ``check_provenance_required`` only ever
-    emits a soft warning, never ``action="failed"`` with a structural
-    provenance code), this xfails with the observed action and
-    warnings/errors instead of asserting a false pass.
+    The message carries the observed action and its errors/warnings, so a wrong
+    action reads as what production actually answered.
     """
     first = _first_creative_result(ctx, f'a per-creative result with action="{action}"')
     actual = _action_str(first.action)

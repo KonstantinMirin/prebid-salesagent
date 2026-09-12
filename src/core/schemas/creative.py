@@ -555,7 +555,6 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # path above serializes a None default as the spec-invalid `null` (PR #1567 round-2 item 3).
     # Wire outcome per transport — both spec-valid: MCP emits [] (array); A2A/REST OMIT empty
     # lists via the model_dump strip below (byte-identical to the pre-6.6 wire).
-    # Writers still use the _append_warning guard in _sync.py.
     changes: list[str] = Field(
         default_factory=list, description="Field names that were modified (only populated when action='updated')"
     )

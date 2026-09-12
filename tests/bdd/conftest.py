@@ -2216,55 +2216,24 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # that has one (src/core/schemas/creative.py), so each per-creative entry
             # carries a creative-status member on the wire; the scenario grades live on
             # every transport.
-            # ── Storyboard provenance scenarios (#1858) ──────────────
-            # These carried per-assertion pytest.xfail() calls inside the step
-            # bodies, which turned ANY failure (a 401, a 500, a timeout) into a
-            # green "known gap". The gaps are real, so they are registered here
-            # the one sanctioned way — by scenario tag, strict=True — and the
-            # steps now assert unconditionally.
-            #
-            # Production defect: check_provenance_required
-            # (src/core/tools/creatives/_validation.py) only ever emits a soft
-            # WARNING on missing/incomplete provenance. It never produces a
-            # per-creative action="failed" nor the spec's PROVENANCE_REQUIRED /
-            # PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING / PROVENANCE_DISCLOSURE_MISSING
-            # error codes.
-            "T-UC-006-storyboard-provenance-required-rejection": (
-                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
-                "check_provenance_required emits a soft warning, never action='failed' with "
-                "PROVENANCE_REQUIRED"
-            ),
-            "T-UC-006-storyboard-provenance-digital-source-type-missing": (
-                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
-                "no action='failed' with PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING"
-            ),
-            "T-UC-006-storyboard-provenance-disclosure-missing": (
-                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
-                "no action='failed' with PROVENANCE_DISCLOSURE_MISSING"
-            ),
-            # Distinct defect, same family: the internal Creative.provenance model
-            # (src/core/schemas/creative.py) is structurally incompatible with the
-            # wire-level adcp.types Provenance it is converted from (disclosure: str
-            # vs a Disclosure object, human_oversight: bool vs an enum, verification:
-            # dict vs a list), so even a well-formed corrected resubmission is rejected.
-            "T-UC-006-storyboard-provenance-corrected-acceptance": (
-                "SPEC-PRODUCTION GAP: internal Creative.provenance is structurally incompatible "
-                "with the wire-level adcp.types Provenance shape, so a spec-compliant corrected "
-                "resubmission is not accepted"
-            ),
+            # Graduated: the four storyboard provenance scenarios (#1858). Production
+            # refuses a creative that does not meet the product's provenance policy with
+            # the pin's PROVENANCE_REQUIRED / _DIGITAL_SOURCE_TYPE_MISSING /
+            # _DISCLOSURE_MISSING codes (check_provenance_policy,
+            # src/core/tools/creatives/_validation.py) instead of appending a warning, and
+            # Creative.provenance inherits the pinned core/provenance.json shape, so the
+            # corrected resubmission is accepted.
             # Error-path scenarios: production returns plain-string errors[] instead of a
             # structured error. See _processing.py error handling paths. The ext-c/d/e/f/g
             # entries that stood here named codes the pinned enum does not define
             # (CREATIVE_VALIDATION_FAILED, CREATIVE_FORMAT_REQUIRED, CREATIVE_FORMAT_UNKNOWN,
             # CREATIVE_AGENT_UNREACHABLE); the scenarios were corrected to the pin and pass.
-            # INV-4 now reaches its AI-review assertion (the executor seam) and fails one
-            # line later: ai-powered mode sends the Slack notification during the sync
-            # instead of deferring it until the review completes. A diagnosed production
-            # gap; strict so it XPASSes the day the notification moves behind the review.
-            "T-UC-006-rule-037-inv4": (
-                "SPEC-PRODUCTION GAP: ai-powered mode sends Slack during the sync; "
-                "BR-RULE-037 INV-4 defers it until the AI review completes"
-            ),
+            # Graduated: T-UC-006-rule-037-inv4. The "Slack sent during the sync" it
+            # recorded was the seam, not production: the env replaced the notification
+            # function wholesale and the Then counted entries into it. The env runs the
+            # real function now, whose guard skips Slack for ai-powered, and the Then reads
+            # the Slack sender -- unused during the sync, with the review submitted to
+            # defer to.
             # Invariant scenarios: production behaviour diverges from spec
             # Graduated: the gap this named is closed. The entry said the scenario asserted
             # the non-canonical FORMAT_MISMATCH while production emitted CREATIVE_REJECTED.

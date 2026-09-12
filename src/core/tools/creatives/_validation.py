@@ -8,7 +8,14 @@ from typing import Any
 from adcp.types import CreativeAsset
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
-from src.core.exceptions import AdCPFormatNotFoundError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPFormatNotFoundError,
+    AdCPProvenanceDigitalSourceTypeMissingError,
+    AdCPProvenanceDisclosureMissingError,
+    AdCPProvenanceEmbeddedMissingError,
+    AdCPProvenanceRequiredError,
+    AdCPValidationError,
+)
 from src.core.format_resolver import is_dialled_agent_url
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 
@@ -157,35 +164,61 @@ def _validate_creative_input(
     return validated_creative
 
 
-def check_provenance_required(
+def _assets_carry_provenance(creative: Creative) -> bool:
+    """Whether any individual asset declares its own provenance object."""
+    for value in (creative.assets or {}).values():
+        for asset in value if isinstance(value, list) else [value]:
+            inner = getattr(asset, "root", asset)
+            if isinstance(inner, dict):
+                if inner.get("provenance") is not None:
+                    return True
+            elif getattr(inner, "provenance", None) is not None:
+                return True
+    return False
+
+
+def check_provenance_policy(
     creative: Creative,
     creative_policy: CreativePolicy | dict | None,
-) -> str | None:
-    """Check if provenance metadata is required but missing.
+) -> None:
+    """Refuse a creative that does not meet the product's provenance policy.
 
-    Args:
-        creative: Validated Creative schema object.
-        creative_policy: Product's creative policy (may be dict from DB).
+    core/creative-policy.json: ``provenance_required`` says provenance must be attached, and
+    ``provenance_requirements`` refines it -- "Sellers that publish a requirement here MUST
+    enforce it on creative submission: a sync_creatives request that omits a required field
+    is rejected with the corresponding PROVENANCE_* error code" -- while being ignored
+    unless ``provenance_required`` is true. enums/error-code.json: PROVENANCE_REQUIRED is
+    "no provenance object on the manifest, on the creative-asset, or on any individual
+    asset"; each *_MISSING code is "provenance is present, just missing this specific
+    field", inspected on the resolved provenance. All are correctable per-item failures,
+    naming in ``field`` the path inspected.
 
-    Returns:
-        Warning message if provenance is required but missing, None otherwise.
+    This used to append a warning and route the creative to review instead. BR-RULE-094's
+    "warning" reading lost to the pin, which defines the codes for exactly this refusal.
+    The resolved provenance inspected for the *_MISSING checks is the creative-level
+    object; a creative carrying provenance only on individual assets satisfies
+    ``provenance_required`` and is not inspected field by field here.
     """
     if creative_policy is None:
-        return None
+        return
+    policy = creative_policy if isinstance(creative_policy, dict) else creative_policy.model_dump(mode="json")
+    if not policy.get("provenance_required"):
+        return
 
-    # Handle both CreativePolicy model and dict from DB
-    if isinstance(creative_policy, dict):
-        provenance_required = creative_policy.get("provenance_required")
-    else:
-        provenance_required = creative_policy.provenance_required
+    details = EntityRefDetails(creative_id=creative.creative_id)
+    provenance = creative.provenance
+    if provenance is None:
+        if _assets_carry_provenance(creative):
+            return
+        raise AdCPProvenanceRequiredError(field="provenance", details=details)
 
-    if not provenance_required:
-        return None
-
-    if creative.provenance is None:
-        return (
-            "AI provenance metadata is required by product creative policy "
-            "but not provided. Creative flagged for review."
-        )
-
-    return None
+    requirements = policy.get("provenance_requirements") or {}
+    if requirements.get("require_digital_source_type") and provenance.digital_source_type is None:
+        raise AdCPProvenanceDigitalSourceTypeMissingError(field="provenance.digital_source_type", details=details)
+    if requirements.get("require_disclosure_metadata"):
+        disclosure = provenance.disclosure
+        required = getattr(disclosure, "required", None)
+        if required is None or (required is True and not getattr(disclosure, "jurisdictions", None)):
+            raise AdCPProvenanceDisclosureMissingError(field="provenance.disclosure", details=details)
+    if requirements.get("require_embedded_provenance") and not provenance.embedded_provenance:
+        raise AdCPProvenanceEmbeddedMissingError(field="provenance.embedded_provenance", details=details)

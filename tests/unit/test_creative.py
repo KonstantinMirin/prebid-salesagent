@@ -4783,80 +4783,9 @@ class TestCreativePolicyExtension:
         assert policy.provenance_required is True
 
 
-class TestProvenanceValidation:
-    """Provenance validation in sync_creatives flow."""
-
-    def test_check_provenance_required_missing_provenance(self):
-        """check_provenance_required returns warning when provenance is missing."""
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(provenance=None)
-        policy = {
-            "co_branding": "optional",
-            "landing_page": "any",
-            "templates_available": False,
-            "provenance_required": True,
-        }
-
-        warning = check_provenance_required(creative, policy)
-        assert warning is not None
-        assert "provenance metadata is required" in warning
-
-    def test_check_provenance_required_with_provenance(self):
-        """check_provenance_required returns None when provenance is present."""
-        from src.core.schemas import DigitalSourceType
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(
-            provenance={"digital_source_type": DigitalSourceType.digital_creation, "ai_tool": "DALL-E"}
-        )
-        policy = {
-            "co_branding": "optional",
-            "landing_page": "any",
-            "templates_available": False,
-            "provenance_required": True,
-        }
-
-        warning = check_provenance_required(creative, policy)
-        assert warning is None
-
-    def test_check_provenance_not_required(self):
-        """check_provenance_required returns None when provenance is not required."""
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(provenance=None)
-
-        # Policy without provenance_required
-        policy_none = {"co_branding": "optional", "landing_page": "any", "templates_available": False}
-        assert check_provenance_required(creative, policy_none) is None
-
-        # Policy with provenance_required=False
-        policy_false = {
-            "co_branding": "optional",
-            "landing_page": "any",
-            "templates_available": False,
-            "provenance_required": False,
-        }
-        assert check_provenance_required(creative, policy_false) is None
-
-        # No policy at all
-        assert check_provenance_required(creative, None) is None
-
-    def test_check_provenance_with_creative_policy_model(self):
-        """check_provenance_required works with CreativePolicy model (not just dict)."""
-        from src.core.schemas import CreativePolicy
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(provenance=None)
-        policy = CreativePolicy(
-            co_branding="optional",
-            landing_page="any",
-            templates_available=False,
-            provenance_required=True,
-        )
-        warning = check_provenance_required(creative, policy)
-        assert warning is not None
-        assert "provenance metadata is required" in warning
+# The provenance policy check is a per-item PROVENANCE_* refusal now (check_provenance_policy,
+# core/creative-policy.json), graded by the BDD provenance boundary and partition outlines
+# and the storyboard provenance scenarios on every transport.
 
 
 # ============================================================================

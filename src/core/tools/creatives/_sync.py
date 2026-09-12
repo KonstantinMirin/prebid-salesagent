@@ -24,20 +24,10 @@ from src.core.webhooks.registration import accept_push_notification_config
 
 from ._assignments import _process_assignments
 from ._processing import _create_new_creative, _failed_sync_result, _update_existing_creative
-from ._validation import _get_field, _validate_creative_input, check_provenance_required
+from ._validation import _get_field, _validate_creative_input, check_provenance_policy
 from ._workflow import _audit_log_sync, _create_sync_workflow_steps, _send_creative_notifications
 
 logger = logging.getLogger(__name__)
-
-
-def _append_warning(result: SyncCreativeResult, warning: str) -> None:
-    """Append a non-fatal warning to a sync result.
-
-    ``warnings`` is inherited from the adcp 6.6 parent with a ``None`` default (it was
-    formerly a local ``[]``-default override, PR #1567), so materialize the list
-    before appending rather than assuming a list is present.
-    """
-    result.warnings = (result.warnings or []) + [warning]
 
 
 def _with_creative(details: ValidationDetails | None, creative_id: str) -> ValidationDetails:
@@ -246,11 +236,12 @@ def sync_creatives(
                     results.append(_failed_sync_result(creative_id, typed))
                     continue  # Skip to next creative
 
-                # Check provenance requirement (EU AI Act Article 50)
-                provenance_warning = None
+                # The product's provenance policy (core/creative-policy.json, EU AI Act
+                # Article 50): a creative that does not meet it is a per-item PROVENANCE_*
+                # failure, caught below with every other correctable typed error. The first
+                # policy is the tenant-wide one.
                 if tenant_requires_provenance:
-                    # Use the first matching policy (tenant-wide enforcement)
-                    provenance_warning = check_provenance_required(validated_creative, provenance_policies[0])
+                    check_provenance_policy(validated_creative, provenance_policies[0])
 
                 # Savepoint per creative: isolates this row's writes AND the effects
                 # queued while processing it, so a creative that fails takes its
@@ -313,13 +304,6 @@ def sync_creatives(
                                 creative_info["ai_review_reason"] = existing_creative.data["ai_review"].get("reason")
                             creatives_needing_approval.append(creative_info)
 
-                        # Add provenance warning if applicable
-                        if provenance_warning and update_result.action != "failed":
-                            _append_warning(update_result, provenance_warning)
-                            # Flag for review when provenance is missing
-                            existing_creative.status = "pending_review"
-                            needs_approval = True
-
                         results.append(update_result)
 
                     else:
@@ -365,11 +349,6 @@ def sync_creatives(
                             # AI review reason will be added asynchronously when review completes
                             # No ai_result available yet in async mode
                             creatives_needing_approval.append(creative_info)
-
-                        # Add provenance warning if applicable
-                        if provenance_warning and create_result.action != "failed":
-                            _append_warning(create_result, provenance_warning)
-                            needs_approval = True
 
                         results.append(create_result)
 

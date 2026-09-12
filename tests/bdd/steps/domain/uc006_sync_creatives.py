@@ -2827,36 +2827,6 @@ def then_creative_processed_without_warning(ctx: dict) -> None:
     assert not provenance_warnings, f"Expected no provenance warnings, got: {provenance_warnings}"
 
 
-@then("a provenance warning should be generated")
-def then_provenance_warning_generated(ctx: dict) -> None:
-    """Assert the creative result contains a provenance-related warning (INV-1).
-
-    Uses direct attribute access on SyncCreativeResult (no getattr fallbacks).
-    Hard-asserts the warning exists — provenance enforcement is a spec requirement.
-    """
-    assert "error" not in ctx, (
-        f"Expected successful processing with provenance warning, but got error: {ctx.get('error')}"
-    )
-    resp = require_payload(ctx)
-    results = resp.creatives
-    assert results, "Expected creative results for provenance check, but response.creatives is empty"
-    first = results[0]
-    warnings = first.warnings or []
-    # Find the first provenance-related warning and assert on its content
-    provenance_warning = next(
-        (str(w) for w in warnings if "provenance" in str(w).lower()),
-        None,
-    )
-    assert provenance_warning is not None, (
-        "provenance_required=true with absent provenance should generate a warning "
-        f"containing 'provenance', but none found. All warnings: {warnings}"
-    )
-    # Verify the warning text is a meaningful message (not just the bare word)
-    assert len(provenance_warning) > len("provenance"), (
-        f"Provenance warning text too short to be meaningful: {provenance_warning!r}"
-    )
-
-
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN / WHEN / THEN steps — media buy status transitions (avw0 + amto)
 #   + ai-powered workflow (mah2) + workflow step attributes (nbfu)
@@ -3470,16 +3440,18 @@ def then_no_creative_persisted_for_tenant(ctx: dict) -> None:
 def then_slack_notification_deferred(ctx: dict) -> None:
     """Assert Slack notification was NOT sent immediately for ai-powered mode (INV-4).
 
-    In ai-powered mode, Slack notification is deferred until AI review completes.
-    This means send_notifications should NOT have been called during the sync.
-    The mock must exist (harness wires it) and must not have been called.
+    In ai-powered mode, Slack notification is deferred until AI review completes, so the
+    Slack sender (the env's ``slack_notifier`` seam) must not have been used during the
+    sync. Production enters the notification step for every creative needing approval
+    and decides inside it, so the step being entered is not the observable; the sender is.
     """
     _assert_success_response(ctx)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, "send_notifications mock must be wired in CreativeSyncEnv to verify Slack deferral"
-    assert mock_notify.call_count == 0, (
+    notifier = ctx["env"].mock.get("slack_notifier")
+    assert notifier is not None, "Harness must wire the slack_notifier mock to verify Slack deferral"
+    sent = notifier.return_value.notify_creative_pending.call_count
+    assert sent == 0, (
         f"ai-powered mode must defer Slack notification until AI review completes (INV-4), "
-        f"but send_notifications was called {mock_notify.call_count} time(s) during sync"
+        f"but the notifier was used {sent} time(s) during sync"
     )
     # DEFERRED is not NEVER. Asserting only "nothing was sent" is the body
     # ``then_no_slack_notification`` already has, and it passes just as happily when the
@@ -3948,38 +3920,6 @@ def then_no_provenance_warning(ctx: dict) -> None:
         warnings = r.warnings or []
         provenance_warnings = [w for w in warnings if "provenance" in str(w).lower()]
         assert not provenance_warnings, f"Expected no provenance warnings, got: {provenance_warnings}"
-
-
-@then("the creative should have a provenance warning")
-@then("the response should include a warning about missing provenance")
-@then("a warning should be appended about missing provenance")
-def then_creative_has_provenance_warning(ctx: dict) -> None:
-    """Assert the creative result contains a provenance-related warning."""
-    then_provenance_warning_generated(ctx)
-
-
-@then("the creative should be flagged for review")
-def then_creative_flagged_for_review(ctx: dict) -> None:
-    """Assert the creative status is 'pending_review' (flagged for review due to missing provenance)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"Expected creative flagged for review (status='pending_review'), got '{creative.status}'"
-    )
-
-
-@then("the creative should be processed (not rejected)")
-def then_creative_processed_not_rejected(ctx: dict) -> None:
-    """Assert the creative was processed (not rejected) -- non-blocking enforcement (INV-1)."""
-    assert "error" not in ctx, f"Expected creative to be processed (not rejected), but got error: {ctx.get('error')}"
-    resp = require_payload(ctx)
-    results = resp.creatives
-    assert results, "Expected creative results, but response.creatives is empty"
-    first = results[0]
-    action_str = _action_str(first.action)
-    assert action_str != "failed", (
-        f"Expected creative to be processed (not rejected), but action was 'failed'. Errors: {first.errors}"
-    )
 
 
 @then("no workflow steps should be created")

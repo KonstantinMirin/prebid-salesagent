@@ -260,64 +260,9 @@ class TestSyncAiReviewReasonOnUpdate:
         assert response.creatives[0].action == "updated"
 
 
-class TestSyncProvenanceWarningOnUpdate:
-    """Lines 306-309: provenance warning appended to update result."""
-
-    def test_provenance_warning_on_update(self, mock_format_spec):
-        """Lines 306-309: provenance_warning appended when check returns warning."""
-        from src.core.schemas import SyncCreativeResult
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=TENANT,
-        )
-
-        with _sync_patches()(mock_format_spec) as (mock_creative_repo, _):
-            mock_existing = MagicMock()
-            mock_existing.creative_id = "c1"
-            mock_existing.status = "approved"
-            mock_existing.data = {}
-
-            # get_provenance_policies returns a policy that requires provenance
-            mock_creative_repo.get_provenance_policies.return_value = [{"provenance_required": True}]
-
-            # get_by_id returns existing creative
-            mock_creative_repo.get_by_id.return_value = mock_existing
-
-            update_result = SyncCreativeResult(
-                creative_id="c1",
-                action=CreativeAction.updated,
-                internal_status="approved",
-                platform_id=None,
-                review_feedback=None,
-                assigned_to=None,
-                assignment_errors=None,
-                warnings=[],
-            )
-            with (
-                patch(
-                    "src.core.tools.creatives._sync._update_existing_creative",
-                    return_value=(update_result, False),
-                ),
-                patch(
-                    "src.core.tools.creatives._sync.check_provenance_required",
-                    return_value="AI provenance metadata is required",
-                ),
-                patch(
-                    "src.core.tools.creatives._sync._create_sync_workflow_steps",
-                ),
-                patch(
-                    "src.core.tools.creatives._sync._send_creative_notifications",
-                ),
-            ):
-                response = _sync_creatives_impl(
-                    req=sync_creatives_request(creatives=[_make_creative_dict()]), identity=identity
-                )
-
-        assert len(response.creatives) == 1
-        assert any("provenance" in w.lower() for w in response.creatives[0].warnings)
+# A creative missing provenance under a policy that requires it is a per-item
+# PROVENANCE_REQUIRED failure now (core/creative-policy.json), not an update with a
+# warning; the BDD provenance boundary and partition outlines grade it on every transport.
 
 
 class TestSyncMixedMessageSuffix:

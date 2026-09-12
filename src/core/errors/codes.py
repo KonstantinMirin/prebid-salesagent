@@ -387,6 +387,10 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.BUDGET_EXHAUSTED: 422,
         ErrorCode.BUDGET_TOO_LOW: 422,
         ErrorCode.CREATIVE_REJECTED: 422,
+        ErrorCode.PROVENANCE_REQUIRED: 422,
+        ErrorCode.PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING: 422,
+        ErrorCode.PROVENANCE_DISCLOSURE_MISSING: 422,
+        ErrorCode.PROVENANCE_EMBEDDED_MISSING: 422,
         ErrorCode.PRODUCT_UNAVAILABLE: 422,
         ErrorCode.UNSUPPORTED_FEATURE: 422,
         # 429 — correct, but too often.

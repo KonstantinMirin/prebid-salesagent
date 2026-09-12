@@ -100,17 +100,12 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-S3: Buyer knows successful assignments
     # POST-S4: Buyer knows about assignment errors
 
-  @T-UC-006-main-provenance-warning @main-flow
-  Scenario: Sync creatives — provenance warning when policy requires it
-    Given the Buyer is authenticated
-    And a product with creative_policy.provenance_required = true
-    And a creative with a known format_id but no provenance metadata
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should have action "created"
-    And the response should include a warning about missing provenance
-    And the creative should be flagged for review
-    # POST-S4: Buyer knows about provenance warning
+  # main-provenance-warning (POST-S4) said a creative missing provenance under a policy
+  # that requires it is created with a warning. The pin says otherwise: enums/error-code.json
+  # defines PROVENANCE_REQUIRED for exactly that submission and core/creative-policy.json
+  # makes the refusal a MUST, so the definition is
+  # @T-UC-006-storyboard-provenance-required-rejection and the "provenance absent + policy
+  # requires provenance" rows of the provenance boundary and partition outlines.
 
   # main-weight (assignment with an explicit weight, POST-S3) is the "weight = 50" row of
   # @T-UC-006-boundary-assignment-weight, which is the one definition of assignments[].weight.
@@ -813,16 +808,13 @@ Feature: BR-UC-006 Sync Creative Assets
     # observable on this tool, so the invariant is graded on the weights each entry keeps.
     # --- BR-RULE-094: Creative Provenance Policy Enforcement ---
 
-  @T-UC-006-rule-094-inv1 @invariant @BR-RULE-094
-  Scenario: INV-1 — provenance absent when required triggers warning
-    Given the Buyer is authenticated
-    And a product with creative_policy.provenance_required = true
-    And a creative with a known format_id but no provenance metadata
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should be processed (not rejected)
-    And a warning should be appended about missing provenance
-    And the creative should be flagged for review
+  # BR-RULE-094 INV-1 read "provenance absent when required triggers a warning". The pin
+  # outranks the rule: PROVENANCE_REQUIRED (enums/error-code.json) is the code for a
+  # creative with "no provenance object on the manifest, on the creative-asset, or on any
+  # individual asset" under a policy with provenance_required, and core/creative-policy.json
+  # makes the refusal a MUST. The invariant is
+  # @T-UC-006-storyboard-provenance-required-rejection and the matching boundary and
+  # partition rows.
 
   @T-UC-006-rule-094-inv2 @invariant @BR-RULE-094
   Scenario: INV-2 — provenance present when required passes normally
@@ -1040,7 +1032,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | provenance_present_required      | a creative with provenance metadata     | a product with creative_policy.provenance_required = true | the creative should be processed without warning |
       | provenance_present_not_required  | a creative with provenance metadata     | no product with provenance_required                       | the creative should be processed without warning |
       | provenance_absent_not_required   | a creative without provenance metadata  | no product with provenance_required                       | the creative should be processed without warning |
-      | provenance_absent_when_required  | a creative without provenance metadata  | a product with creative_policy.provenance_required = true | the creative should have a provenance warning    |
+      | provenance_absent_when_required  | a creative without provenance metadata  | a product with creative_policy.provenance_required = true | the creatives entry carries error code "PROVENANCE_REQUIRED" |
       | provenance_absent_not_required_explicitly | a creative without provenance metadata | a product with creative_policy.provenance_required = false | the creative should be processed without warning |
 
   @T-UC-006-partition-assignments-structure @partition @assignments-structure
@@ -1357,7 +1349,7 @@ Feature: BR-UC-006 Sync Creative Assets
     Examples:
       | boundary_point                                                 | provenance_state                       | policy_state                                               | expected                                          |
       | provenance present + policy requires provenance                | a creative with provenance metadata    | a product with creative_policy.provenance_required = true  | the creative should be processed without warning  |
-      | provenance absent + policy requires provenance                 | a creative without provenance metadata | a product with creative_policy.provenance_required = true  | a provenance warning should be generated          |
+      | provenance absent + policy requires provenance                 | a creative without provenance metadata | a product with creative_policy.provenance_required = true  | the creatives entry carries error code "PROVENANCE_REQUIRED" |
       | provenance present + no provenance policy                      | a creative with provenance metadata    | no product with provenance_required                        | the creative should be processed without warning  |
       | provenance absent + no provenance policy                       | a creative without provenance metadata | no product with provenance_required                        | the creative should be processed without warning  |
       | provenance absent + creative_policy is null                    | a creative without provenance metadata | a product with creative_policy = null                      | the creative should be processed without warning  |
@@ -1619,8 +1611,7 @@ Feature: BR-UC-006 Sync Creative Assets
     And the Buyer Agent resubmits with a complete disclosure block and an on-list verify_agent from the seller's accepted_verifiers
     When the Buyer Agent sends sync_creatives with the corrected manifest
     Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "created" or "updated"
-    And the per-creative result should NOT report action "failed"
+    And the per-creative result should report action "created"
     # provenance_enforcement Phase 6: the structural-rejection contract terminates in a
     # corrected acceptance. Buyer reads the rejection error codes from prior phases,
     # attaches a complete disclosure block, and represents an on-list verify_agent
