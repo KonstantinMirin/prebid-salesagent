@@ -856,25 +856,9 @@ Feature: BR-UC-006 Sync Creative Assets
     And the asset should have provenance "trained_algorithmic_media" (not inherited "digital_capture")
     And no field-level merging should occur
 
-  @T-UC-006-partition-validation-mode @partition @validation-mode
-  Scenario Outline: Validation mode behavior — <partition>
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And assignments to a non-existent package
-    And validation_mode is "<mode>"
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives spec
-    And the assignment result should be "<outcome>"
+  # The validation_mode partition (strict / lenient / an unknown value) is the row set of
+  # @T-UC-006-boundary-validation-mode, which also grades the default; one outline.
     # --- approval_mode partitions ---
-
-    Examples: Valid modes
-      | partition    | mode    | outcome                             |
-      | strict       | strict  | operation aborts with error          |
-      | lenient      | lenient | warning logged, processing continues |
-
-    Examples: Invalid modes
-      | partition      | mode     | outcome                              |
-      | unknown_value  | partial  | rejected with INVALID_REQUEST       |
 
   @T-UC-006-partition-approval-mode @partition @approval-mode
   Scenario Outline: Approval mode routing — <partition>
@@ -1210,7 +1194,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | not set (default strict) | not set    | the operation should abort with PACKAGE_NOT_FOUND        |
       | strict                   | "strict"   | the operation should abort with PACKAGE_NOT_FOUND        |
       | lenient                  | "lenient"  | the assignment should be skipped with a warning          |
-      | unknown value            | "partial"  | the system should reject with INVALID_REQUEST           |
+      | unknown value            | "partial"  | the error code should be "INVALID_REQUEST"               |
 
   @T-UC-006-boundary-format-id @boundary @format-id
   Scenario Outline: Format validation boundary — <boundary_point>
@@ -1244,7 +1228,7 @@ Feature: BR-UC-006 Sync Creative Assets
       | static creative (no output_format_ids) | a creative with a static format (no output_format_ids)                | the creative should be processed without generative build         |
       | generative with prompt from assets     | a creative with a generative format and prompt in assets              | the system should invoke generative build with the asset prompt   |
       | generative create, name fallback       | a new creative with a generative format and no prompt but a name      | the system should use the creative name as prompt fallback        |
-      | generative, no GEMINI_API_KEY          | a creative with a generative format but GEMINI_API_KEY not configured | the error should include "suggestion" field                       |
+      | generative, no GEMINI_API_KEY          | a creative with a generative format but GEMINI_API_KEY not configured | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 
   @T-UC-006-boundary-creative-scope @boundary @creative-scope
   Scenario Outline: Creative scope boundary — <boundary_point>
@@ -1370,8 +1354,8 @@ Feature: BR-UC-006 Sync Creative Assets
       | assignments absent                       | no assignments field                                             | no assignment processing should occur                          |
       | empty array []                           | an empty assignments array                                       | the error should be INVALID_REQUEST with suggestion          |
       | single entry (minItems boundary)         | an assignment with creative_id "c1" and package_id "p1"         | the assignment should be created successfully                  |
-      | entry missing creative_id                | an assignment entry with only package_id                         | the error should be INVALID_REQUEST            |
-      | entry missing package_id                 | an assignment entry with only creative_id                        | the error should be INVALID_REQUEST             |
+      | entry missing creative_id                | an assignment entry with only package_id                         | the error should be INVALID_REQUEST with suggestion |
+      | entry missing package_id                 | an assignment entry with only creative_id                        | the error should be INVALID_REQUEST with suggestion |
       | entry with weight = 0 (paused)           | an assignment with weight 0                                      | the assignment should be created as paused                     |
       | entry with placement_ids                 | an assignment with placement_ids ["slot_a"]                      | the assignment should include placement targeting              |
       | duplicate (creative_id, package_id) pair | two assignment entries with same creative_id and package_id      | the second should be an idempotent upsert                      |

@@ -550,6 +550,23 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         registry.get_format = AsyncMock(return_value=mock_format)
         return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
+    @realize_e2e(
+        e2e_unsupported(
+            "a live creative agent answers a preview request for itself; it cannot be told to answer "
+            "with no previews, which is the rejection this configures"
+        )
+    )
+    def configure_agent_no_preview(self, *, format_id: str) -> dict[str, str]:
+        """A served static format whose preview request the agent answers with nothing.
+
+        With no image or video asset on the creative there is then no media_url to fall
+        back on, which production classifies as CREATIVE_REJECTED with ``reasons``
+        (src/core/tools/creatives/_processing.py).
+        """
+        fmt = self.configure_agent_served_creative(generative=False, format_id=format_id)
+        self.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
+        return fmt
+
     def setup_generative_build(
         self,
         format_id: str = "display_gen",

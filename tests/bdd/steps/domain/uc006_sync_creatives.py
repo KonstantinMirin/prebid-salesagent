@@ -421,6 +421,10 @@ def when_sync_creative(ctx: dict) -> None:
     kwargs: dict = {"account": account_ref, "creatives": creatives}
     if "assignments" in ctx:
         kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
+    if "assignment_entries" in ctx:
+        # Raw entries, verbatim: the shape a scenario about the ARRAY itself (an entry
+        # missing one of its required fields) needs, which the ctx map cannot express.
+        kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
@@ -892,7 +896,7 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
     mappings = list(
         session.scalars(
             select(ObjectWorkflowMapping).filter_by(
-                workflow_step_id=steps[0].step_id,
+                step_id=steps[0].step_id,
             )
         ).all()
     )
@@ -903,18 +907,14 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
     mapped_ids = [m.object_id for m in mappings]
     assert creative_id in mapped_ids, f"INV-4: workflow step maps to {mapped_ids}, expected creative {creative_id}"
 
-    # Verify AI-specific evidence: the step or its config should carry
-    # an AI review indicator that would NOT be present in a human-only flow
-    step = steps[0]
-    step_config = getattr(step, "config", None) or {}
-    step_metadata = getattr(step, "metadata", None) or {}
-    has_ai_indicator = (
-        step_config.get("approval_mode") == "ai-powered"
-        or step_metadata.get("approval_mode") == "ai-powered"
-        or getattr(step, "approval_mode", None) == "ai-powered"
-    )
-    assert has_ai_indicator, (
-        f"SPEC-PRODUCTION GAP: workflow step exists and maps to creative, but does not carry an AI-specific indicator (approval_mode='ai-powered') to distinguish from human-review. Step config={step_config}, metadata={step_metadata}"
+    # The step records the approval mode that produced it in its request_data
+    # (src/core/tools/creatives/_workflow.py), which is what distinguishes an AI-review
+    # step from a human-only one. This used to poke ``step.metadata``, which on an ORM
+    # row is SQLAlchemy's MetaData, not a column.
+    recorded_mode = (steps[0].request_data or {}).get("approval_mode")
+    assert recorded_mode == "ai-powered", (
+        f"INV-4: the workflow step records approval_mode={recorded_mode!r}; expected 'ai-powered' "
+        f"(request_data={steps[0].request_data!r})"
     )
 
 
@@ -1510,16 +1510,12 @@ def given_assignment_with_ids(ctx: dict, creative_id: str, package_id: str) -> N
 
 @given("an assignment entry with only package_id")
 def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
-    """Attempt to submit an assignment missing creative_id.
+    """An assignments[] entry that omits creative_id.
 
-    Production takes ``assignments`` as ``dict[creative_id -> list[package_id]]``
-    and has no way to express an entry without a creative_id. The spec requires
-    error ``ASSIGNMENT_CREATIVE_ID_REQUIRED``. We mark this as a SPEC-PRODUCTION
-    GAP in the Then step.
+    sync-creatives-request.json requires creative_id and package_id on every entry, so
+    the request is refused as a schema violation. Sent as a raw entry: the ctx map is
+    keyed by creative_id and cannot leave it out.
     """
-    # Best-effort: encode the spec shape by using empty-string creative_id as
-    # the "missing" marker. Production will see an unknown creative and/or a
-    # package lookup but not raise the spec-required error code.
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     from tests.factories import MediaBuyFactory, MediaPackageFactory
@@ -1527,22 +1523,15 @@ def given_assignment_entry_missing_creative_id(ctx: dict) -> None:
     tenant = ctx["tenant"]
     principal = ctx["principal"]
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
-    package = MediaPackageFactory(media_buy=media_buy)
+    package = MediaPackageFactory(media_buy=media_buy, package_id=_e2e_unique_id("pkg"))
     env._commit_factory_data()
-    ctx["assignments"] = {"": [package.package_id]}
+    ctx["assignment_entries"] = [{"package_id": package.package_id}]
 
 
 @given("an assignment entry with only creative_id")
 def given_assignment_entry_missing_package_id(ctx: dict) -> None:
-    """Attempt to submit an assignment missing package_id.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
-    encode "creative_id without package_id" — an empty list means "no packages".
-    Spec requires error ``ASSIGNMENT_PACKAGE_ID_REQUIRED``. Marked as SPEC-
-    PRODUCTION GAP in the Then step.
-    """
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: []}
+    """An assignments[] entry that omits package_id (see the sibling above)."""
+    ctx["assignment_entries"] = [{"creative_id": latest_creative_id(ctx)}]
 
 
 @given("an assignment with weight 0")
@@ -2329,53 +2318,6 @@ def given_assignments_to_nonexistent_package(ctx: dict) -> None:
     ctx["assignments"] = {creative_id: ["pkg-nonexistent-lzhr-404"]}
 
 
-@then(parsers.parse('the assignment result should be "{outcome}"'))
-def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
-    """Assert validation-mode-dependent outcome for assignment processing.
-
-    Outcomes from the partition scenario:
-    - "operation aborts with error" -- strict mode: error raised for missing package
-    - "warning logged, processing continues" -- lenient mode: success despite missing package
-    - "rejected with VALIDATION_ERROR" -- invalid mode value: rejected at input validation
-
-    Hard assertions for all outcomes. No xfail escape hatches.
-    """
-
-    error = ctx.get("error")
-    resp = payload_or_none(ctx)
-
-    if outcome == "operation aborts with error":
-        assert error is not None, (
-            f"Strict mode with non-existent package should abort with error, but production succeeded. Response: {resp}"
-        )
-        # Was isinstance(error, (AdCPSalesAgentError, Exception)) -- VACUOUS, since every
-        # exception satisfies the second branch. Graded on the wire code instead
-        # .
-        result = ctx.get("result")
-        wire_code = result.wire_error_code() if result is not None else None
-        assert wire_code in _ASSIGNMENT_REJECTION_CODES, (
-            f"Expected a strict-mode abort on the wire, got {wire_code!r}. "
-            f"Expected one of {sorted(_ASSIGNMENT_REJECTION_CODES)}"
-        )
-    elif outcome == "warning logged, processing continues":
-        assert error is None, (
-            f"Lenient mode should log warning and continue, but production raised {type(error).__name__}: {error}"
-        )
-        assert resp is not None, "Expected a response in lenient mode"
-    elif outcome == "rejected with VALIDATION_ERROR":
-        assert error is not None, (
-            "Invalid validation_mode 'partial' should be rejected with VALIDATION_ERROR, "
-            f"but production accepted it. Response: {resp}"
-        )
-        actual_code, _ = _extract_error_code_and_suggestion(ctx, error)
-        assert actual_code == "VALIDATION_ERROR", (
-            f"Expected error_code 'VALIDATION_ERROR' for invalid validation_mode, "
-            f"got '{actual_code}' ({type(error).__name__}: {error})"
-        )
-    else:
-        raise ValueError(f"Unknown validation outcome: {outcome!r}")
-
-
 @then("the assignment processing should abort with an error")
 def then_assignment_processing_should_abort(ctx: dict) -> None:
     """Assert assignment processing aborted due to non-existent package (strict mode).
@@ -3018,6 +2960,10 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
     kwargs: dict = {"creatives": creatives}
     if "assignments" in ctx:
         kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
+    if "assignment_entries" in ctx:
+        # Raw entries, verbatim: the shape a scenario about the ARRAY itself (an entry
+        # missing one of its required fields) needs, which the ctx map cannot express.
+        kwargs["assignments"] = ctx["assignment_entries"]
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     dispatch_request(ctx, **kwargs)
@@ -4617,12 +4563,9 @@ def given_creative_no_preview_no_media_url(ctx: dict) -> None:
     carrying ``reasons`` (src/core/tools/creatives/_processing.py). The env method
     declares its own e2e unrealizability: a live agent cannot be told to answer nothing.
     """
-    from unittest.mock import AsyncMock
-
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    fmt = env.configure_agent_served_creative(generative=False, format_id=_scenario_format_id(ctx, env))
-    env.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
+    fmt = env.configure_agent_no_preview(format_id=_scenario_format_id(ctx, env))
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id="creative-no-preview-001",
         name="Nothing Renderable",
@@ -6041,12 +5984,16 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
         tenant=tenant,
         format_ids=[{"agent_url": agent_url, "id": format_id}],
     )
+    # Two DISTINCT packages: the factory's default package_id is one literal, so two
+    # rows built from it collapsed into one assignment.
     valid_pkg_1 = MediaPackageFactory(
         media_buy=media_buy,
+        package_id=_e2e_unique_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     valid_pkg_2 = MediaPackageFactory(
         media_buy=media_buy,
+        package_id=_e2e_unique_id("pkg"),
         package_config={"product_id": product.product_id, "budget": 1000.0},
     )
     env._commit_factory_data()

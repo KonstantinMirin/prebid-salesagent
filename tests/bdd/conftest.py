@@ -905,84 +905,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     #
     # strict=True is the consumer's default here, so a parked row that starts passing
     # becomes XPASS(strict) and fails -- the list cannot rot quietly.
-    (
-        "T-UC-006-boundary-approval",
-        {
-            '-ai-powered-"ai-powered"-a review workflow should be created with AI review-pending_review]',
-            # Graduated: the rest auto-approve row -- it had been XPASS(strict) on the box
-            # (innet_120926_1410 and earlier), a stale park rather than a failure.
-        },
-        "uc006 route partition: unverified: not one of the named test-side blockers",
-    ),
-    # T-UC-006-boundary-assignment-weight has no parked rows: assignments[].weight is
-    # carried per entry now (0 persists as paused, omitted as the equal-rotation default),
-    # and the out-of-range rows are the request schema's own INVALID_REQUEST.
-    (
-        "T-UC-006-boundary-assignments-structure",
-        {
-            "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
-            "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
-            # Graduated: the duplicate (creative_id, package_id) row on every transport.
-            # a2a/mcp answered INTERNAL_ERROR for it (a second insert of the same key);
-            # the assignment map is keyed by package now, so a repeated entry is one
-            # assignment, upserted once.
-        },
-        (
-            "uc006 route partition: no step definition for one of its steps; unverified: not one of the named test-side blockers"
-        ),
-    ),
-    (
-        "T-UC-006-boundary-generative",
-        {
-            '-generative, no GEMINI_API_KEY-a creative with a generative format but GEMINI_API_KEY not configured-the error should include "suggestion" field]',
-        },
-        "uc006 route partition: unverified: not one of the named test-side blockers",
-    ),
-    # T-UC-006-boundary-provenance has no parked rows: the "provenance present" rows sent
-    # fields core/provenance.json does not define and were refused at the request; the
-    # Given is pin-shaped now.
-    (
-        "T-UC-006-boundary-validation-mode",
-        {
-            '-unknown value-"partial"-the system should reject with INVALID_REQUEST]',
-        },
-        "uc006 route partition: no step definition for one of its steps",
-    ),
-    (
-        "T-UC-006-main-lenient-warnings",
-        {
-            "[rest]",
-            "[a2a]",
-            "[mcp]",
-        },
-        "uc006 route partition: unverified: not one of the named test-side "
-        "blockers -- PLUS [a2a]/[mcp], where sync_creatives answers INTERNAL_ERROR on the "
-        "wire. That was hidden by an inline `if error is not None: pytest.xfail(...)` inside "
-        "the step until that guard was removed. An INTERNAL_ERROR is a real defect, not "
-        "a spec gap; declared here so it XPASSes the day it is fixed rather than being "
-        "excused on every run.",
-    ),
-    (
-        "T-UC-006-partition-assignment-pkg",
-        {},
-        "uc006 route partition: ",
-    ),
-    (
-        "T-UC-006-partition-assignments-structure",
-        {
-            "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
-        },
-        "uc006 route partition: unverified: not one of the named test-side blockers",
-    ),
-    # T-UC-006-partition-provenance has no parked rows either: same pin-shaped Given as
-    # the boundary outline above.
-    (
-        "T-UC-006-partition-validation-mode",
-        {
-            "-unknown_value-partial-rejected with INVALID_REQUEST]",
-        },
-        "uc006 route partition: the Then step does not handle this row's outcome string",
-    ),
+    # No UC-006 rows are parked here any more. What stood here, and why each is live:
+    # boundary-approval's ai-powered row read a column the mapping table does not have
+    # (workflow_step_id); the assignments-structure "entry missing a field" rows now send
+    # the entry itself, which the request schema refuses; the generative no-GEMINI-key
+    # row reads CONFIGURATION_ERROR on the entry, as ext-i does; the validation_mode
+    # "partial" row names the code; main-lenient-warnings built its two valid packages
+    # from one factory-default id, so they collapsed into one assignment; and the
+    # assignment-weight / provenance rows are described where the Given changed.
     # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
     # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
     # build a success response and therefore validate assets against the pinned schema; the
@@ -5227,7 +5157,6 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-partition-generative",
         "T-UC-006-partition-idempotency-key",
         "T-UC-006-partition-provenance",
-        "T-UC-006-partition-validation-mode",
         "T-UC-006-boundary-assignment-format",
         "T-UC-006-boundary-assignment-package",
         "T-UC-006-boundary-creative-scope",
