@@ -536,6 +536,21 @@ def then_error_code(ctx: dict, code: str) -> None:
 # ── Suggestion field ─────────────────────────────────────────────────
 
 
+@then(parsers.parse("the HTTP status is {status:d}"))
+def then_http_status(ctx: dict, status: int) -> None:
+    """The HTTP status REST answered with, read off the transport envelope.
+
+    REST's wire failure marker is the status, so this is the one transport-specific
+    property a REST-tagged scenario grades; on a transport that has no HTTP status the
+    key is absent and the assertion fails, which is right -- the sentence has no meaning
+    there.
+    """
+    envelope = ctx["result"].envelope
+    assert envelope.get("status_code") == status, (
+        f"expected HTTP {status}, got {envelope.get('status_code')!r} ({envelope!r})"
+    )
+
+
 @then(parsers.parse('the error recovery should be "{recovery}"'))
 def then_error_recovery(ctx: dict, recovery: str) -> None:
     """Assert the error recovery hint on the WIRE. No reconstructed fallback.

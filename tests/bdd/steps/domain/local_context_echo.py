@@ -103,6 +103,17 @@ def given_no_search_criterion(ctx: dict) -> None:
     )
 
 
+@given("the request carries a context that is not an object")
+def given_context_not_an_object(ctx: dict) -> None:
+    """A string where ``core/context.json`` declares an object.
+
+    Deliberately does NOT record it under ``_SENT``: there is no object to echo, and
+    the scenario grades that the rejection goes out WITHOUT the key rather than with
+    something the seller invented.
+    """
+    ctx.setdefault(_OVERRIDES, {})["context"] = "not-an-object"
+
+
 @given("the request carries a brief of the wrong JSON type")
 def given_brief_wrong_type(ctx: dict) -> None:
     """An integer where ``get-products-request.json`` declares a string.
@@ -232,3 +243,15 @@ def then_error_echoes_context(ctx: dict) -> None:
     step pins the outcome the same way its success twin does.
     """
     _assert_echo(ctx, wire_error_dict(ctx), outcome="error")
+
+
+@then("the error response carries no context object")
+def then_error_carries_no_context(ctx: dict) -> None:
+    """The rejection went out WITHOUT the key: nothing echoed, nothing invented.
+
+    A context the seller could not model is dropped, not serialized as ``null`` and
+    not replaced by an object of the seller's own; the buyer's real fault is what the
+    body reports.
+    """
+    envelope = wire_error_dict(ctx)
+    assert "context" not in envelope, f"a context the seller could not model reached the wire: {envelope['context']!r}"

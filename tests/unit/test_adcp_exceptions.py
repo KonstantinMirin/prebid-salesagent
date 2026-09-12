@@ -30,10 +30,10 @@ nothing else in the suite exercises:
   arguments. A raise site does not choose a classification, it chooses a CLASS;
   the free kwargs let any call site pair any code with any text or recovery, and
   the wire carried the contradiction. Only ``status_code=`` has an equivalent
-  grader elsewhere
-  (``tests/unit/test_error_envelope.py::TestRestStatusIsTheCodesStatus``: the
-  status is the code's own, read off ``AdcpErrorResponse.http_status``), so the
-  other three are pinned here.
+  grader elsewhere (the REST-tagged scenarios of
+  ``tests/bdd/features/local-pre-dispatch-refusals.feature`` read the HTTP status
+  off the wire, and it is the code's own through ``AdcpErrorResponse.http_status``),
+  so the other three are pinned here.
 - The two dead A2A translation symbols staying dead. A2A has no translation of
   its own: ``_dispatch_skill`` in ``adcp_a2a_server.py`` serializes the
   boundary's ``AdcpErrorResponse`` with ``to_wire``; ``exceptions.py`` carried a
@@ -83,8 +83,8 @@ class TestTheRaiseSiteCannotAuthorTheCodesOwnValues:
     This is the one thing about those three names that is NOT a copy of
     ``CODE_TABLE``: the values live in the table and are graded there, but the
     *shape of the constructor* lives in ``src/core/exceptions.py`` and is graded
-    nowhere else. The sibling excision, ``status_code=``, is graded by
-    ``tests/unit/test_error_envelope.py::TestRestStatusIsTheCodesStatus`` and is
+    nowhere else. The sibling excision, ``status_code=``, is graded on the wire by
+    the REST-tagged scenarios of ``local-pre-dispatch-refusals.feature`` and is
     deliberately not restated here.
     """
 
@@ -145,8 +145,8 @@ class TestEveryEmittedCodeHasAnAuthoredStatus:
 
     The values are deliberately NOT transcribed here. They are authored in one
     place, and a second list of them would be a copy to keep in sync, not a
-    grader. Delivery of the value to the wire is graded by
-    ``tests/unit/test_error_envelope.py::TestRestStatusIsTheCodesStatus``.
+    grader. Delivery of the value to the wire is graded by the REST-tagged scenarios
+    of ``tests/bdd/features/local-pre-dispatch-refusals.feature``.
     """
 
     def test_no_class_falls_through_to_the_unclassified_default(self):

@@ -34,10 +34,12 @@
 # and those are exactly the outcomes where the seller drops it today. Reconcile
 # upstream in adcp-req, then retire this file for the regenerated scenarios.
 #
-# WHY THE MALFORMED FIELD IS NEVER `context` ITSELF. A non-object context is
-# refused by the request model, and the seller then has no object left to echo.
-# A scenario that malformed the context would grade a deliberately-absent echo
-# as a failure, so the malformation always lands on some OTHER declared field.
+# WHY THE MALFORMED FIELD IS (ALMOST) NEVER `context` ITSELF. A non-object
+# context is refused by the request model, and the seller then has no object
+# left to echo. The echo scenarios therefore malform some OTHER declared field.
+# The one scenario that malforms the context grades the complement: the
+# rejection goes out with NO context key, never one the seller invented, and
+# the buyer's real fault is not shadowed by the seller's inability to echo.
 Feature: The buyer's context object is echoed unchanged on every outcome (local)
 
   # ── get_products: an auth-optional read, reachable with a tenant alone ──
@@ -78,6 +80,19 @@ Feature: The buyer's context object is echoed unchanged on every outcome (local)
     And the response contains error code INVALID_REQUEST
     And the error recovery should be "correctable"
     And the error response echoes the buyer's context object unchanged
+
+  @T-CTXECHO-unmodellable-context @context-echo @error @ctxecho-products
+  Scenario: A context that is not an object is dropped from the rejection, not raised over
+    # pin: core/context.json is `{"type": "object", ...}`. A string there is
+    # refused as INVALID_REQUEST like any other schema violation, and there is
+    # nothing to echo: the response carries no context key at all.
+    Given the request names a brief the seller can answer
+    And the request carries a context that is not an object
+    When the Buyer Agent sends the get_products request
+    Then the response arrives
+    And the response contains error code INVALID_REQUEST
+    And the error recovery should be "correctable"
+    And the error response carries no context object
 
   @T-CTXECHO-version-rejection @context-echo @error @ctxecho-products
   Scenario: A version rejection echoes the buyer's context object unchanged

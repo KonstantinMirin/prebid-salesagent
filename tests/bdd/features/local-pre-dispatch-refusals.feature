@@ -42,11 +42,14 @@ Feature: A request that cannot reach a tool is refused where it fails (local)
 
   @T-PREDISPATCH-rest-not-json @predispatch @predispatch-rest @error
   Scenario: A REST body that is not JSON is refused as malformed
+    # The HTTP status is REST's own failure marker, and it is the code's own:
+    # INVALID_REQUEST is 400 in the repo's error table (src/core/errors/codes.py).
     Given the buyer sends bytes that are not JSON as the request body
     When the Buyer Agent sends the document as written
     Then the response arrives
     And the response contains error code INVALID_REQUEST
     And the error recovery should be "correctable"
+    And the HTTP status is 400
 
   @T-PREDISPATCH-rest-list-body @predispatch @predispatch-rest @error
   Scenario: A REST body that is a JSON list is refused as malformed
@@ -55,6 +58,7 @@ Feature: A request that cannot reach a tool is refused where it fails (local)
     Then the response arrives
     And the response contains error code INVALID_REQUEST
     And the error recovery should be "correctable"
+    And the HTTP status is 400
 
   @T-PREDISPATCH-a2a-list-input @predispatch @predispatch-a2a @error
   Scenario: An A2A skill input that is a JSON list is refused as malformed
