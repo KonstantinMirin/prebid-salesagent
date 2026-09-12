@@ -185,12 +185,15 @@ class TestWireResponseIsRealWire:
 _HARNESS_DIR = pathlib.Path(__file__).resolve().parents[1] / "harness"
 _DISPATCHERS_PY = _HARNESS_DIR / "dispatchers.py"
 _CLIENT_PY = _HARNESS_DIR / "client.py"
+_RAW_WIRE_PY = _HARNESS_DIR / "raw_wire.py"
 #: The dispatch seam — the modules that DECLARE wire-presence for a real
-#: delivery. It is two modules, not one: #1858 relocated the transport-generic
-#: UNWRAP bodies out of ``dispatchers.py`` into ``client.py``, which is how the
-#: table below silently stopped covering nine of its sites. Every construction
-#: in BOTH is graded per-site by ``EXPECTED_SITES``.
-_SEAM_MODULES = (_DISPATCHERS_PY, _CLIENT_PY)
+#: delivery. #1858 relocated the transport-generic UNWRAP bodies out of
+#: ``dispatchers.py`` into ``client.py``, which is how the table below silently
+#: stopped covering nine of its sites; ``raw_wire.py`` is the third member, the
+#: sender for a document the client cannot shape (a body that is not JSON, a name
+#: the registry lacks). Every construction in all three is graded per-site by
+#: ``EXPECTED_SITES``.
+_SEAM_MODULES = (_DISPATCHERS_PY, _CLIENT_PY, _RAW_WIRE_PY)
 _STEPS_DIR = pathlib.Path(__file__).resolve().parents[1] / "bdd" / "steps"
 _OUTCOME_HELPERS_PY = _STEPS_DIR / "_outcome_helpers.py"
 
@@ -315,6 +318,29 @@ class TestHasWireIsDeclaredAtEveryConstructionSite:
         ("client.py", "unwrap_rest_error", 0): (
             False,
             "REST DELIVER exception — no HTTP body existed at all, so nothing crossed the wire",
+        ),
+        # ── tests/harness/raw_wire.py — a document sent as written (REST goes through client.py) ──
+        ("raw_wire.py", "_protocol_refusal", 0): (
+            False,
+            "the transport's own refusal (JSON-RPC error, MCP ToolError with no envelope) — no AdCP body "
+            "came back, and on the in-process legs the refusal fires before any bytes move",
+        ),
+        ("raw_wire.py", "_a2a_task_result", 0): (
+            False,
+            "failed A2A Task — the error convention shared with unwrap_a2a_error; the envelope it recovered "
+            "is still the REAL artifact",
+        ),
+        ("raw_wire.py", "_a2a_task_result", 1): (
+            True,
+            "completed A2A Task — downstream of the artifact DataPart capture, as _unwrap_tool_success",
+        ),
+        ("raw_wire.py", "_mcp", 0): (
+            False,
+            "MCP ToolError carrying an envelope — the error convention shared with unwrap_mcp_error",
+        ),
+        ("raw_wire.py", "_mcp", 1): (
+            True,
+            "MCP success — downstream of the structured_content capture, as McpDispatcher.dispatch",
         ),
     }
 

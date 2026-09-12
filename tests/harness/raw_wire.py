@@ -148,7 +148,6 @@ def _protocol_refusal(transport: Transport, exc: Exception, **verdict: Any) -> T
 def _a2a_task_result(transport: Transport, failed: bool, bodies: list[dict[str, Any]]) -> TransportResult:
     from tests.harness._base import WireError, _wire_envelope
 
-    on_wire = transport is Transport.E2E_A2A
     if failed:
         wire = _wire_envelope(bodies[0]) if bodies else None
         return TransportResult(
@@ -158,7 +157,7 @@ def _a2a_task_result(transport: Transport, failed: bool, bodies: list[dict[str, 
             wire_error_envelope=wire,
         )
     return TransportResult(
-        has_wire=on_wire,
+        has_wire=True,
         envelope={"transport": transport.value, "status": "completed"},
         wire_response=bodies[0] if bodies else None,
     )
@@ -275,7 +274,7 @@ def _mcp(env: Any, document: RawDocument, identity: Any) -> TransportResult:
             )
         return _protocol_refusal(Transport.MCP, exc, mcp_tool_error=str(exc))
     return TransportResult(
-        has_wire=False,
+        has_wire=True,
         envelope={"transport": Transport.MCP.value, "status": "completed"},
         wire_response=result.structured_content,
     )
