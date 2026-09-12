@@ -181,7 +181,15 @@ fi
 RESULTS_DIR="test-results/innet_$(date -u +%d%m%y_%H%M)"
 # Kept in step with scripts/audit/compare_payloads.py's PAYLOAD_SUBDIR.
 PAYLOAD_SUBDIR="payloads"
+# Kept in step with scripts/audit/run_report.py's STORYBOARD_SUBDIR.
+STORYBOARD_SUBDIR="storyboard"
 mkdir -p "$RESULTS_DIR"
+# The storyboard suite publishes the runner's per-protocol summary to
+# test-results/storyboard_summary_<protocol>.json (tests/storyboard/test_storyboard_conformance.py,
+# _publish_summary) -- ONE path, overwritten by every run. Clear the previous run's copies
+# now, so that what is found after the suites ran is this run's or nothing: a storyboard
+# env that died before publishing must read as "no summary", not as last week's score.
+rm -f test-results/storyboard_summary_*.json
 
 dc() { docker compose -f "$COMPOSE_FILE" -p "$COMPOSE_PROJECT_NAME" --profile runner "$@"; }
 
@@ -608,6 +616,26 @@ for _suite in ${SUITES//,/ }; do
         _missing_reports="$_missing_reports ${_suite}(no-payload-artifact)"
     fi
 done
+
+# The storyboard runner's own summaries, one per protocol. They are the suite's SCORE:
+# the conformance suite materializes only failures and skips as pytest items, so
+# storyboard.json reads "0 passed" whatever the runner measured. Kept inside the run
+# directory (a subdirectory, for the same reason the payloads are) so the score has the
+# run's provenance instead of being overwritten at test-results/ by the next run.
+# scripts/audit/run_report.py reads them from here.
+case ",$SUITES," in
+    *,storyboard,*)
+        mkdir -p "$RESULTS_DIR/$STORYBOARD_SUBDIR"
+        for _protocol in mcp a2a; do
+            if [ -f "test-results/storyboard_summary_${_protocol}.json" ]; then
+                cp "test-results/storyboard_summary_${_protocol}.json" "$RESULTS_DIR/$STORYBOARD_SUBDIR/summary_${_protocol}.json" \
+                    || _missing_reports="$_missing_reports storyboard(summary-copy-failed-${_protocol})"
+            else
+                _missing_reports="$_missing_reports storyboard(no-runner-summary-${_protocol})"
+            fi
+        done
+        ;;
+esac
 
 if [ -n "$_missing_reports" ]; then
     echo "ERROR: no JSON report for suite(s):$_missing_reports" >&2
