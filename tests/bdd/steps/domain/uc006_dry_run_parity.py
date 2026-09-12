@@ -102,8 +102,9 @@ def _case_two_identical(ctx: dict):
     payload = [_creative(ctx, "dup_c1", "Dup Creative"), _creative(ctx, "dup_c1", "Dup Creative")]
 
     def expect(live: TransportResult) -> None:
-        # Live, entry 1 is created and flushed, so entry 2 resolves against it.
-        assert _actions(live) == ["created", "updated"], _actions(live)
+        # Live, entry 1 is created and flushed, so entry 2 resolves against it -- and
+        # since it carries the same data, it is "unchanged" (enums/creative-action.json).
+        assert _actions(live) == ["created", "unchanged"], _actions(live)
 
     return {"creatives": payload}, expect
 
@@ -126,7 +127,9 @@ def _case_third_entry(ctx: dict):
     ]
 
     def expect(live: TransportResult) -> None:
-        assert _actions(live) == ["created", "updated", "updated"], _actions(live)
+        # Entry 3 repeats entry 2's data, so it resolves to "unchanged" against the row
+        # entry 2 left -- a preview graded against entry 1's state would say "updated".
+        assert _actions(live) == ["created", "updated", "unchanged"], _actions(live)
 
     return {"creatives": payload}, expect
 

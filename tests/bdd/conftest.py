@@ -2332,11 +2332,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "SPEC-PRODUCTION GAP: ai-powered mode sends Slack during the sync; "
                 "BR-RULE-037 INV-4 defers it until the AI review completes"
             ),
-            # Creative unchanged: production returns action "updated" not "unchanged"
-            "T-UC-006-main-unchanged": (
-                "SPEC-PRODUCTION GAP: production returns action 'updated', "
-                "spec expects 'unchanged' when creative data is identical"
-            ),
             # Invariant scenarios: production behaviour diverges from spec
             # Graduated: the gap this named is closed. The entry said the scenario asserted
             # the non-canonical FORMAT_MISMATCH while production emitted CREATIVE_REJECTED.
@@ -2346,15 +2341,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # schema validation", and reserves CREATIVE_REJECTED for "Creative failed content
             # policy review". Verified: the scenario passes under --runxfail on a2a, the only
             # transport it routes to, and it is not listed in e2e_rest_known_failures.txt.
-            # FIXME(#TBD): inv5-lenient: lenient mode format mismatch doesn't populate assigned_to
-            # In lenient mode, the compatible package assignment should be created
-            # and incompatible reported in assignment_errors. Production skips both
-            # because the creative-not-found guard or format check logic prevents
-            # the compatible assignment from completing.
-            "T-UC-006-rule-039-inv5-lenient": (
-                "SPEC-PRODUCTION GAP: lenient format mismatch does not create "
-                "compatible assignment — assigned_to is empty (BR-RULE-039 INV-5)"
-            ),
             # T-UC-006-rule-037-inv5: e2e_rest only — handled below with transport check
             # Sandbox: sync_creatives does not set sandbox=true on response
             "T-UC-006-sandbox-happy": (
@@ -5310,12 +5296,11 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 #:
 #: The rest stay on the catch-all with their blockers named per bucket below. Adding
 #: an entry here GROWS the executing surface; it exempts nothing from grading.
-#: 27 UC-006 scenarios, blocker measured.
+#: 24 UC-006 scenarios, blocker measured.
 _UC006_NO_STEP_DEFINITION = frozenset(
     {
         "T-UC-006-boundary-creative-status",
         "T-UC-006-boundary-creative-status-response",
-        "T-UC-006-boundary-delete-missing",
         "T-UC-006-boundary-sandbox",
         "T-UC-006-creative-item-missing-content",
         "T-UC-006-creative-item-multi-asset",
@@ -5329,9 +5314,7 @@ _UC006_NO_STEP_DEFINITION = frozenset(
         "T-UC-006-error-details-creative-rejected",
         "T-UC-006-error-details-policy-violation",
         "T-UC-006-main-async-submitted",
-        "T-UC-006-main-delete-missing-conflict",
         "T-UC-006-partition-creative-status-terminal",
-        "T-UC-006-rule-039-inv5-lenient",
         "T-UC-006-rule-093-inv1",
         "T-UC-006-rule-093-inv3",
         "T-UC-006-sandbox-errors-no-flag",
@@ -5371,10 +5354,9 @@ _UC006_UNVERIFIED_FAILURE = frozenset(
     }
 )
 
-#: 3 UC-006 scenarios, blocker measured.
+#: 2 UC-006 scenarios, blocker measured.
 _UC006_OWN_XFAIL = frozenset(
     {
-        "T-UC-006-main-unchanged",
         "T-UC-006-main-weight",
         "T-UC-006-sandbox-validation",
     }
@@ -5456,6 +5438,14 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-rule-033-inv2",
         "T-UC-006-rule-035-static",
         "T-UC-006-rule-037-inv4",
+        # Steps written for the delete_missing scope outline, the delete_missing +
+        # creative_ids conflict (now refused by the request model, per the pin's own
+        # "Invalid when creative_ids is provided") and the lenient format mismatch;
+        # action "unchanged" reachable now that upsert fields are compared to the row.
+        "T-UC-006-boundary-delete-missing",
+        "T-UC-006-main-delete-missing-conflict",
+        "T-UC-006-rule-039-inv5-lenient",
+        "T-UC-006-main-unchanged",
         "T-UC-006-rule-033-inv1",
         "T-UC-006-rule-033-inv3",
         "T-UC-006-rule-033-inv4",

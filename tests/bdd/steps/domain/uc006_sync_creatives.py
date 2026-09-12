@@ -30,6 +30,7 @@ Three rules follow from its override contract (tests/factories/request.py):
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import ANY
 
 from pytest_bdd import given, parsers, then, when
@@ -43,6 +44,7 @@ from tests.bdd.steps.generic._account_resolution import (
     seed_natural_key_matches,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories import CreativeFactory
 from tests.factories.creative_asset import (
     assert_assets,
     build_assets,
@@ -405,6 +407,10 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["push_notification_config"] = ctx["push_notification_config"]
     if "dry_run" in ctx:
         kwargs["dry_run"] = ctx["dry_run"]
+    if "delete_missing" in ctx:
+        kwargs["delete_missing"] = ctx["delete_missing"]
+    if "creative_ids" in ctx:
+        kwargs["creative_ids"] = ctx["creative_ids"]
     if ctx.get("has_auth") is False:
         dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
     else:
@@ -1120,6 +1126,127 @@ def then_creatives_entry_reports_package_assignment_error(ctx: dict, creative_id
     )
     assert not entry.get("assigned_to"), (
         f"a creative that failed validation must not be assigned, but the entry carries assigned_to={entry.get('assigned_to')!r}"
+    )
+
+
+def _seed_absent_library_creative(ctx: dict) -> str:
+    """A creative already in the library that the request will NOT mention.
+
+    It is the observable subject of delete_missing: a full-library replace archives
+    it and reports ``deleted``; every other scope leaves it out of the response.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = ctx["creatives"][-1]["format_id"]
+    absent_id = "creative-absent-from-request-001"
+    CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=absent_id,
+        name="Absent From Request",
+        agent_url=fmt["agent_url"],
+        format=fmt["id"],
+    )
+    env._commit_factory_data()
+    ctx["absent_creative_id"] = absent_id
+    return absent_id
+
+
+def _scope_request(ctx: dict, *, delete_missing: bool | None, filtered: bool) -> None:
+    """One request creative plus an absent library creative, then the scope flags.
+
+    creative/sync-creatives-request.json: ``delete_missing`` archives creatives not in
+    this sync ("Invalid when creative_ids is provided"); ``creative_ids`` limits the
+    sync to those ids, minItems 1. The filtered scope names the request's own creative
+    and a second one that is deliberately NOT in the filter, so "scoped to the subset"
+    has something to leave out.
+    """
+    given_creative_with_format(ctx)
+    _seed_absent_library_creative(ctx)
+    if filtered:
+        env = ctx["env"]
+        format_id, agent_url, assets = _format_payload(ctx, env)
+        ctx["creatives"].append(
+            CreativeAssetRequestFactory.payload(
+                creative_id="creative-outside-filter-001",
+                name="Outside The Filter",
+                format_id={"id": format_id, "agent_url": agent_url},
+                assets=assets,
+            )
+        )
+        ctx["creative_ids"] = [ctx["creatives"][0]["creative_id"]]
+    if delete_missing is not None:
+        ctx["delete_missing"] = delete_missing
+
+
+_SCOPE_SETUPS: dict[str, dict[str, Any]] = {
+    "delete_missing true and no creative_ids filter": {"delete_missing": True, "filtered": False},
+    "delete_missing false and no creative_ids filter": {"delete_missing": False, "filtered": False},
+    "neither delete_missing nor creative_ids provided": {"delete_missing": None, "filtered": False},
+    "a creative_ids filter and no delete_missing flag": {"delete_missing": None, "filtered": True},
+    "delete_missing true together with a creative_ids filter": {"delete_missing": True, "filtered": True},
+}
+
+
+@given(parsers.parse("a sync request whose scope is {scope_setup}"))
+def given_sync_request_scope(ctx: dict, scope_setup: str) -> None:
+    _scope_request(ctx, **_SCOPE_SETUPS[scope_setup])
+
+
+@given("a sync request with both creative_ids filter and delete_missing set to true")
+def given_sync_request_delete_missing_with_filter(ctx: dict) -> None:
+    _scope_request(ctx, delete_missing=True, filtered=True)
+
+
+@then("the request should proceed as a full-library replace")
+def then_full_library_replace(ctx: dict) -> None:
+    """The creative the request did not mention comes back ``deleted``."""
+    entry = _wire_creatives_entry(ctx, ctx["absent_creative_id"])
+    assert entry.get("action") == "deleted", (
+        f"delete_missing without a filter archives the whole library's absentees; the absent "
+        f"creative's entry says {entry.get('action')!r}"
+    )
+
+
+@then("the request should proceed and leave absent creatives unchanged")
+def then_absent_creatives_untouched(ctx: dict) -> None:
+    """No entry for the creative the request did not mention, and nothing ``deleted``."""
+    entries = wire_field(ctx, "creatives")
+    ids = [entry.get("creative_id") for entry in entries]
+    assert ctx["absent_creative_id"] not in ids, (
+        f"without delete_missing the sync must not touch a creative it did not mention, but the "
+        f"response carries an entry for it: {ids}"
+    )
+    assert all(entry.get("action") != "deleted" for entry in entries), (
+        f"nothing may be archived without delete_missing, got actions {[e.get('action') for e in entries]}"
+    )
+
+
+@then("the request should proceed scoped to the filtered subset")
+def then_scoped_to_filter(ctx: dict) -> None:
+    """Only the filtered ids are processed: the unfiltered request creative is absent."""
+    ids = sorted(entry.get("creative_id") for entry in wire_field(ctx, "creatives"))
+    assert ids == sorted(ctx["creative_ids"]), (
+        f"creative_ids limits the sync to {ctx['creative_ids']}, but the response processed {ids}"
+    )
+
+
+@then("the incompatible package should be reported in assignment_errors")
+def then_incompatible_package_in_assignment_errors(ctx: dict) -> None:
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    incompatible = ctx["incompatible_package"].package_id
+    assert incompatible in (entry.get("assignment_errors") or {}), (
+        f"lenient mode records the format mismatch on the entry's assignment_errors keyed by "
+        f"{incompatible!r}, got {entry.get('assignment_errors')!r}"
+    )
+
+
+@then("processing should continue without aborting")
+def then_processing_continues(ctx: dict) -> None:
+    """Lenient mode: the request succeeds and the creative itself is synced."""
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("action") in ("created", "updated"), (
+        f"lenient mode must not abort on one failed assignment; the creative's entry says {entry.get('action')!r}"
     )
 
 
@@ -2458,31 +2585,16 @@ def given_creative_already_exists(ctx: dict) -> None:
 
 @given("the creative already exists with identical data")
 def given_creative_already_exists_identical(ctx: dict) -> None:
-    """Pre-seed the creative in the DB with data identical to the payload.
+    """The creative is already in the library EXACTLY as a sync of this payload leaves it.
 
-    Sync should detect no change and produce action="unchanged".
-    Same as ``given_creative_already_exists`` — the production code compares
-    payload vs DB row; identical data means action="unchanged".
+    "Identical data" is only identical if the row was written by the same path the
+    resync goes through: a factory row carrying the raw request dict differs from what
+    production stores (url/click_url/width/height/duration are derived from the
+    assets), so the resync reported those as changed and "unchanged" was unreachable
+    from this Given. Seeding by a first sync through the transport is what makes the
+    second one a true resync, on every transport.
     """
-    from tests.factories import CreativeFactory
-
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    principal = ctx["principal"]
-    creative_payload = ctx["creatives"][-1]
-    creative_id = creative_payload["creative_id"]
-    format_id = creative_payload["format_id"]["id"]
-    CreativeFactory(
-        tenant=tenant,
-        principal=principal,
-        creative_id=creative_id,
-        name=creative_payload["name"],
-        agent_url=env.DEFAULT_AGENT_URL,
-        format=format_id,
-        data=creative_payload,
-    )
-    env._commit_factory_data()
+    when_sync_creative(ctx)
 
 
 @given("a creative that does not exist in the library")
@@ -5506,18 +5618,16 @@ def given_assignments_two_packages_format_compat(ctx: dict) -> None:
     agent_url = ctx.get("creative_agent_url", env.DEFAULT_AGENT_URL)
     creative_format = _scenario_format_id(ctx, env)
 
-    # Use UUID-based IDs for e2e_rest to avoid collisions in shared Docker DB
-    extra_mb: dict = {}
-    extra_pkg_compat: dict = {}
-    extra_pkg_incompat: dict = {}
-    extra_prod_compat: dict = {}
-    extra_prod_incompat: dict = {}
-    if is_e2e(ctx):
-        extra_mb["media_buy_id"] = _e2e_unique_id("mb")
-        extra_pkg_compat["package_id"] = _e2e_unique_id("pkg")
-        extra_pkg_incompat["package_id"] = _e2e_unique_id("pkg")
-        extra_prod_compat["product_id"] = _e2e_unique_id("prod")
-        extra_prod_incompat["product_id"] = _e2e_unique_id("prod")
+    # Unique ids on every transport, the same way. The factory's default package_id is
+    # one constant, so leaving it to the factory gave both packages the same id: the
+    # assignment lookup then resolved both entries to whichever row won, and the
+    # "compatible" assignment was graded against the incompatible product. There is no
+    # reason to mint ids only for e2e_rest -- a fresh id is right everywhere.
+    extra_mb: dict = {"media_buy_id": _e2e_unique_id("mb")}
+    extra_pkg_compat: dict = {"package_id": _e2e_unique_id("pkg")}
+    extra_pkg_incompat: dict = {"package_id": _e2e_unique_id("pkg")}
+    extra_prod_compat: dict = {"product_id": _e2e_unique_id("prod")}
+    extra_prod_incompat: dict = {"product_id": _e2e_unique_id("prod")}
 
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", **extra_mb)
 

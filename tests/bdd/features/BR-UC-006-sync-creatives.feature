@@ -140,9 +140,9 @@ Feature: BR-UC-006 Sync Creative Assets
     And a sync request with both creative_ids filter and delete_missing set to true
     When the Buyer Agent syncs the creatives
     Then the response is compliant with the sync_creatives error spec
-    And the operation should fail with INVALID_REQUEST
+    And the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error should explain that delete_missing applies to the entire library scope, not a filtered subset
+    And the response error field is delete_missing
     # POST-F1/F2/F3: BR-12 — delete_missing + creative_ids are mutually exclusive
 
   @T-UC-006-ext-a @extension @ext-a @error
@@ -795,7 +795,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-rule-039-inv5-lenient @invariant @BR-RULE-039
   Scenario: INV-5 — format mismatch in lenient mode skips assignment
     Given the Buyer is authenticated
-    And a creative with format_id "agent/banner-300x250"
+    And a creative with format_id "banner_300x250"
     And assignments to two packages: one with compatible format and one incompatible
     And validation_mode is "lenient"
     When the Buyer Agent syncs the creative

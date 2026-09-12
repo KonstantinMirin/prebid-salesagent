@@ -435,6 +435,21 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
 
+    @model_validator(mode="after")
+    def _delete_missing_needs_the_whole_library(self):
+        """Refuse delete_missing together with creative_ids, as the pin says to.
+
+        creative/sync-creatives-request.json @ AdCP 3.1.1, ``delete_missing``: "Invalid
+        when creative_ids is provided -- delete_missing applies to the entire library
+        scope, not a filtered subset." A request that says both is malformed as a whole,
+        which is INVALID_REQUEST; nothing about it is a per-creative outcome.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+
+        if self.delete_missing and self.creative_ids:
+            raise AdCPInvalidRequestError(field="delete_missing")
+        return self
+
 
 class SyncSummary(SalesAgentBaseModel):
     """Summary of sync operation results."""

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
@@ -42,8 +42,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Fields a full upsert always rewrites, so they always count as changed.
-_ALWAYS_CHANGED = ("url", "click_url", "width", "height", "duration")
+#: Fields a full upsert rewrites on every update. They used to be reported as changed
+#: unconditionally, which made ``action: unchanged`` unreachable: a resync of identical
+#: data always listed all five. They are now compared against the row's prior values.
+_UPSERT_FIELDS = ("url", "click_url", "width", "height", "duration")
 
 
 @dataclass(frozen=True)
@@ -61,14 +63,19 @@ class PriorCreativeState:
     agent_url: str | None
     format: str | None
     format_parameters: dict | None
+    #: The upsert-rewritten data fields as the row held them, so an update can report
+    #: which of them it actually changed instead of listing all five every time.
+    upsert_fields: dict[str, Any]
 
     @classmethod
     def from_row(cls, existing_creative) -> PriorCreativeState:
+        row_data = existing_creative.data or {}
         return cls(
             name=existing_creative.name,
             agent_url=existing_creative.agent_url,
             format=existing_creative.format,
             format_parameters=existing_creative.format_parameters,
+            upsert_fields={key: row_data.get(key) for key in _UPSERT_FIELDS},
         )
 
 
@@ -102,28 +109,31 @@ def build_update_sync_result(
     creative: CreativeAsset,
     prior: PriorCreativeState,
     format_value,
+    data: Mapping[str, Any],
     agent_derived_changes: Sequence[str] = (),
     internal_status: str | None = None,
 ) -> SyncCreativeResult:
-    """The ONE place an ``updated`` sync result is built, for both branches.
+    """The ONE place an ``updated`` or ``unchanged`` sync result is built, for both branches.
 
-    Order is load-bearing: ``[name?, format?] + agent-derived + always-changed``
-    reproduces the live path's list byte for byte, duplicates included when the
-    creative agent returns a render (it appends url/width/height/duration that
-    ``_ALWAYS_CHANGED`` appends again). A preview cannot reproduce those
-    agent-derived entries — it makes no agent call — which is a known residual
-    divergence, not something to paper over here.
+    ``changes`` is ``[name?, format?] + agent-derived + the upsert fields whose value
+    differs from the row's``, each field once. The last group used to be all five
+    unconditionally, which made ``unchanged`` -- a member of the pinned
+    enums/creative-action.json -- unreachable: a resync of identical data always
+    reported five changed fields. Comparing against the row's prior values is what
+    lets identical data answer ``unchanged`` and a real change name the field.
 
     ``internal_status`` is absent for an in-request duplicate, which has no row to
     read a status from. The field is ``exclude=True``, so it never reaches the
     wire and its absence cannot make a preview diverge from a live run.
     """
-    changes = comparison_changes(creative, prior, format_value) + list(agent_derived_changes)
-    changes.extend(_ALWAYS_CHANGED)
+    changed_upsert_fields = [key for key in _UPSERT_FIELDS if data.get(key) != prior.upsert_fields.get(key)]
+    # dict.fromkeys: each field once, first occurrence's position kept.
+    changes = list(
+        dict.fromkeys(
+            [*comparison_changes(creative, prior, format_value), *agent_derived_changes, *changed_upsert_fields]
+        )
+    )
 
-    # Kept as an expression rather than a hardcoded "updated": _ALWAYS_CHANGED makes
-    # the empty case unreachable today, but that is a property of the full-upsert
-    # semantics, not something this builder should assume on its behalf.
     action: Literal["updated", "unchanged"] = "updated" if changes else "unchanged"
 
     return SyncCreativeResult(
@@ -655,6 +665,7 @@ def _update_existing_creative(
             creative=creative,
             prior=prior,
             format_value=format_value,
+            data=data,
             agent_derived_changes=changes,
             internal_status=existing_creative.status,
         ),
