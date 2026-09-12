@@ -2188,24 +2188,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # scenario names, so the route that parked it as "passes under a stale xfail" is
         # gone with the xfail and the scenario grades live with ext-a-empty.
 
-        # --- UC-006: INVALID_REQUEST validation xfails (production not implemented) ---
-        _UC006_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
-            (
-                "T-UC-006-partition-account",
-                {"missing_account", "invalid_oneOf_both"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
-            ),
-            (
-                "T-UC-006-boundary-account",
-                {"account field absent", "both account_id and brand"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
-            ),
-        ]
-        if any(t.startswith("T-UC-006") for t in marker_names):
-            for tag, substrings, reason in _UC006_VALIDATION_XFAIL:
-                if tag in marker_names and any(s in nodeid for s in substrings):
-                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-                    break
+        # Graduated: the UC-006 account rows that used to xfail as "INVALID_REQUEST
+        # validation not implemented". The schema always refused them; the harness did
+        # not send them -- a "not provided" account was replaced by the default one and
+        # the both-branches reference was dropped before dispatch. They go on the wire
+        # now (OMIT_ACCOUNT, and the oneOf violation verbatim) and the request model's
+        # refusal is what the rows grade.
 
         # --- UC-006: spec-production gaps surfaced by Wave 1B step implementations ---
         # Production uses generic error codes / plain-string errors where the spec

@@ -64,7 +64,7 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
-from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 
@@ -692,7 +692,12 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Injecting it there makes every direct-impl test resolve an account before reaching
         # its subject, so a scenario about an unknown tenant answers AdCPAuthorizationError
         # from account resolution instead of the auth rejection it grades.
-        if with_account and kwargs.get("account") is None:
+        # Same sentinel discipline as the key: a scenario about the field's ABSENCE says so
+        # with OMIT_ACCOUNT (the create harness's own), and the pin lists account in
+        # /required, so what it buys is a request the schema rejects, graded as such.
+        if kwargs.get("account") is OMIT_ACCOUNT:
+            kwargs.pop("account")
+        elif with_account and kwargs.get("account") is None:
             identity = kwargs.get("identity") or self.identity
             account_id = getattr(identity, "account_id", None)
             if not account_id:

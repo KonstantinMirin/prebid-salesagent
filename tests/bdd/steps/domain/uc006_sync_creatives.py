@@ -58,7 +58,7 @@ from tests.factories.malformed import malformed
 from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.creative_sync import creative_fingerprint
-from tests.harness.media_buy_create import OMIT_IDEMPOTENCY_KEY
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -277,15 +277,19 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     tenant, principal = ctx["tenant"], ctx["principal"]
 
     if account_setup == "not provided":
-        ctx["account_ref"] = None
+        # ABSENT on the wire, not defaulted: sync-creatives-request.json lists account in
+        # /required, so the request must genuinely omit it for the schema to refuse it.
+        # A None here used to be replaced by the harness's default account.
+        ctx["account_ref"] = OMIT_ACCOUNT
         return
 
     # Parse JSON account setup
     config = json.loads(account_setup)
 
-    # Check for invalid oneOf: both account_id and brand present
+    # Both branches of core/account-ref.json's oneOf at once: sent verbatim, so the
+    # request model's union refuses it (each branch forbids the other's fields).
     if "account_id" in config and "brand" in config:
-        ctx["account_ref"] = None
+        ctx["account_ref"] = config
         return
 
     if "account_id" in config:
