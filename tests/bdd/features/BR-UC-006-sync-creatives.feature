@@ -741,7 +741,7 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-rule-039-inv5-lenient @invariant @BR-RULE-039
   Scenario: INV-5 — format mismatch in lenient mode skips assignment
     Given the Buyer is authenticated
-    And a creative with format_id "banner_300x250"
+    And a creative with a known format_id
     And assignments to two packages: one with compatible format and one incompatible
     And validation_mode is "lenient"
     When the Buyer Agent syncs the creative

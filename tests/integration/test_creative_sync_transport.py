@@ -175,23 +175,25 @@ def _creative(creative_id: str = "c1", name: str = "Test", **overrides) -> dict:
 
 @pytest.mark.requires_db
 class TestSyncUpsertReturnsUpdatedTransport:
-    """Re-syncing an existing creative returns action="updated" with changes list.
+    """Re-syncing an existing creative with a changed field returns action="updated".
+
+    An identical re-sync is ``unchanged`` (enums/creative-action.json), so the second
+    sync changes the name -- the field the changes list then names.
 
     Covers: UC-006-MAIN-MCP-04
     """
 
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_upsert_existing_creative_reports_updated(self, integration_db, transport):
-        """Syncing a creative that already exists returns action=updated."""
+        """Syncing a creative that already exists, with a changed field, returns action=updated."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
 
             # First sync: create the creative (same transport as upsert)
-            creative_data = _creative(creative_id="c_upsert")
-            env.call_via(transport, creatives=[creative_data])
+            env.call_via(transport, creatives=[_creative(creative_id="c_upsert")])
 
-            # Second sync via parametrized transport: upsert
-            result = env.call_via(transport, creatives=[creative_data])
+            # Second sync via parametrized transport: upsert with a changed name
+            result = env.call_via(transport, creatives=[_creative(creative_id="c_upsert", name="Renamed")])
 
         assert result.is_success, f"Expected success but got error: {result.error}"
         assert_envelope(result, transport)

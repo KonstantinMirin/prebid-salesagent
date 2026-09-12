@@ -940,29 +940,6 @@ def then_workflow_step_for_seller(ctx: dict) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@given(parsers.parse('a creative with format_id "{creative_format}"'))
-def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None:
-    """Build a creative payload with the specific format_id string from the scenario row.
-
-    The ``creative_format`` is the spec-compliant fully-qualified format id
-    (e.g. ``banner_300x250``). It is wrapped in a FormatId dict using
-    the default agent_url so that production validation/lookup succeeds.
-    """
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    creative_id = "creative-fmt-partition-001"
-    # Recorded BEFORE the entry is built: _scenario_format_entry reads this key, and
-    # writing it afterwards meant every row synced the transport's default format
-    # while the product was seeded with the row's -- so the "matches" rows mismatched.
-    ctx["creative_format_id"] = creative_format
-    creative_payload = CreativeAssetRequestFactory.payload(
-        creative_id=creative_id,
-        name="Test Creative (format partition)",
-        format_id=_scenario_format_entry(ctx, env),
-    )
-    ctx.setdefault("creatives", []).append(creative_payload)
-
-
 @given(parsers.parse("assignments to a package with {product_setup}"))
 def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> None:
     """Create a media buy + package whose product matches the Gherkin setup phrase.
