@@ -180,6 +180,42 @@ def test_the_baseline_delta_names_fixed_regressed_new_and_gone_per_nodeid(tmp_pa
     assert "fixed        core/x/old" in text and "newly failing core/x/new" in text
 
 
+def test_failures_are_grouped_by_signature_with_instance_values_blanked(tmp_path: pathlib.Path) -> None:
+    """Two failures that differ only in a quoted name or a number share one group; a storyboard
+    check is grouped by the runner's reason, and its pytest twin is not counted a second time."""
+    run = _write_run(
+        tmp_path / "run",
+        {
+            "integration": {
+                "a.py::t1": (
+                    "failed",
+                    "E   TypeError: invoke_tool() missing 1 required positional argument: 'credential'",
+                ),
+                "a.py::t2": (
+                    "failed",
+                    "E   TypeError: invoke_tool() missing 2 required positional argument: 'protocol'",
+                ),
+                "b.py::t3": (
+                    "failed",
+                    "E   AssertionError: adcp_error.code='CREATIVE_NOT_FOUND', expected 'CREATIVE_REJECTED'",
+                ),
+            },
+            "storyboard": {
+                "test_storyboard_check[mcp::core::x::y]": ("failed", "E   assert 'fail' != 'fail'"),
+                "test_runner_sdk_pin.py::test_pin": ("failed", "E   assert '3.2.0-rc.1' == '3.1.1'"),
+            },
+        },
+        storyboard={"mcp": _summary(30, ["x/y"]), "a2a": _summary(30, ["x/y"])},
+    )
+    text = _render(run)
+    section = text.split("FAILURE GROUPS")[1].split("FAILURES (nodeid")[0]
+    assert "FAILURE GROUPS (by signature): 4" in text
+    assert "g00     2  integration  E   TypeError: invoke_tool() missing # required positional argument: …" in section
+    assert "storyboard-runner  storyboard validation: why" in section
+    assert "assert … != …" not in section, "the pytest twin of a runner check must not be a second group"
+    assert "test_runner_sdk_pin" in section
+
+
 def test_an_absent_run_directory_is_not_measured(tmp_path: pathlib.Path, capsys) -> None:
     assert main([str(tmp_path / "nowhere")]) == 2
     assert "NOT MEASURED" in capsys.readouterr().err

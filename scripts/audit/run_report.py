@@ -40,6 +40,7 @@ from __future__ import annotations
 import argparse
 import collections
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -91,6 +92,67 @@ def _last_line(reason: str) -> str:
     lines = [line for line in reason.strip().splitlines() if line.strip()]
     asserted = [line for line in lines if line.startswith("E ")]
     return (asserted or lines)[-1].strip()[:140] if lines else ""
+
+
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+_NUMBER = re.compile(r"\b\d+\b")
+_HEX = re.compile(r"\b[0-9a-f]{8,}\b")
+
+
+def signature(reason: str) -> str:
+    """The failure line with its instance-specific parts blanked: quoted strings, numbers, hashes.
+
+    Two failures with the same signature almost always share one cause -- a renamed
+    symbol, an added positional argument, a code the pin spells differently -- so the
+    signature is the grouping key for triage. It is deliberately coarse; a group that
+    turns out to hold two causes is split by whoever reads it, which is cheaper than
+    reading 160 tracebacks one by one.
+    """
+    line = _last_line(reason)
+    line = _QUOTED.sub("…", line)
+    line = _HEX.sub("#", line)
+    return _NUMBER.sub("#", line)
+
+
+def failure_groups(run: Run, storyboard: dict[str, dict]) -> list[dict]:
+    """Every failing node of *run*, grouped by signature, largest group first.
+
+    Storyboard checks come from the runner summaries, not from the pytest items, and
+    are grouped by their own reason (kind + text) with the protocols that fail them.
+    """
+    by_sig: dict[str, dict] = {}
+    for suite, tests in run.items():
+        for nodeid, (outcome, reason) in tests.items():
+            if outcome not in ("failed", "error"):
+                continue
+            if suite == "storyboard" and storyboard and "test_storyboard_check[" in nodeid:
+                # The same check, once per protocol, is already a runner failure below;
+                # its pytest item says only "assert 'fail' != 'fail'" and would double-count.
+                continue
+            g = by_sig.setdefault(signature(reason), {"signature": signature(reason), "nodeids": [], "sample": reason})
+            g["nodeids"].append(f"{suite}::{nodeid}")
+    for protocol, s in storyboard.items():
+        for check, f in failing_checks(s).items():
+            key = f"storyboard {f.get('reason_kind')}: {_NUMBER.sub('#', str(f.get('reason', ''))[:140])}"
+            g = by_sig.setdefault(key, {"signature": key, "nodeids": [], "sample": str(f.get("reason", ""))})
+            g["nodeids"].append(f"storyboard-runner::{protocol}::{check}")
+    groups = sorted(by_sig.values(), key=lambda g: (-len(g["nodeids"]), g["signature"]))
+    for index, g in enumerate(groups):
+        g["id"] = f"g{index:02d}"
+        g["count"] = len(g["nodeids"])
+        g["suites"] = sorted({n.split("::")[0] for n in g["nodeids"]})
+        g["files"] = dict(collections.Counter(n.split("::")[1] for n in g["nodeids"]))
+    return groups
+
+
+def groups_section(groups: list[dict], limit: int, out) -> None:
+    print(f"\nFAILURE GROUPS (by signature): {len(groups)}", file=out)
+    for g in groups[:limit]:
+        print(f"\n  {g['id']}  {g['count']:>4}  {'/'.join(g['suites'])}  {g['signature']}", file=out)
+        for f, c in sorted(g["files"].items(), key=lambda kv: -kv[1])[:6]:
+            print(f"        {c:>4}  {f}", file=out)
+    if len(groups) > limit:
+        print(f"\n  ... {len(groups) - limit} more groups", file=out)
 
 
 # ── sections ─────────────────────────────────────────────────────────────────
@@ -210,12 +272,19 @@ def baseline_section(
                 print(f"    newly failing {check}", file=out)
 
 
-def report(run_dir: Path, baselines: dict[str, Path], limit: int, out=sys.stdout) -> None:
+def report(
+    run_dir: Path, baselines: dict[str, Path], limit: int, out=sys.stdout, groups_json: Path | None = None
+) -> None:
     run = read_run(run_dir)
     run_sb = read_storyboard(run_dir)
     print(f"RUN {run_dir}", file=out)
     suite_table(run, out)
     storyboard_section(run_sb, out)
+    groups = failure_groups(run, run_sb)
+    groups_section(groups, limit, out)
+    if groups_json is not None:
+        groups_json.write_text(json.dumps(groups, indent=1))
+        print(f"\n  groups written to {groups_json}", file=out)
     failure_details(run, limit, out)
     for label, path in baselines.items():
         baseline_section(label, read_run(path), read_storyboard(path), run, run_sb, limit, out)
@@ -233,9 +302,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("run", type=Path)
     parser.add_argument("--baseline", action="append", type=_parse_baseline, default=[], metavar="LABEL=DIR")
     parser.add_argument("--details", type=int, default=60, help="rows listed per section (default 60)")
+    parser.add_argument("--groups-json", type=Path, default=None, help="also write the failure groups as JSON here")
     args = parser.parse_args(argv)
     try:
-        report(args.run, dict(args.baseline), args.details)
+        report(args.run, dict(args.baseline), args.details, groups_json=args.groups_json)
     except FileNotFoundError as exc:
         print(f"NOT MEASURED: {exc}", file=sys.stderr)
         return 2
