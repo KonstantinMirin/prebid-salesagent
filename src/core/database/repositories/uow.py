@@ -315,12 +315,16 @@ class CreativeUoW(BaseUoW):
     # may legally write it rather than a bare attribute assignment.
     media_buys: MediaBuyRepository | None
     workflows: WorkflowRepository | None
+    # The account the sync request names (required by the pin) decides whether the
+    # response is flagged as sandbox; read through the same transaction.
+    accounts: AccountRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.creatives = CreativeRepository(self._session, self._tenant_id)
         self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
+        self.accounts = AccountRepository(self._session, self._tenant_id)
         # Approval workflow steps are written by the same request that writes
         # the creatives they approve, so they must join the same transaction:
         # a preview's rollback has to discard them too, and the approval
@@ -333,6 +337,7 @@ class CreativeUoW(BaseUoW):
         self.assignments = None
         self.media_buys = None
         self.workflows = None
+        self.accounts = None
 
 
 class AdminCreativeUoW(BaseUoW):

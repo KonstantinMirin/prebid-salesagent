@@ -179,7 +179,17 @@ def sync_creatives(
     with ExitStack() as stack:
         uow = stack.enter_context(CreativeUoW(tenant["tenant_id"], dry_run=dry_run))
         assert uow.creatives is not None
+        assert uow.accounts is not None
         creative_repo = uow.creatives
+
+        # sync-creatives-response.json (SyncCreativesSuccess.sandbox): "When true, this
+        # response contains simulated data from sandbox mode"; core/account.json: a sandbox
+        # account is one with "no real platform calls, no real spend". The account the
+        # request names (required by the pin, resolved at the boundary) is what says so.
+        # Set only when true and omitted otherwise: the error shape forbids the field, and
+        # a production account's response simply has none.
+        account = uow.accounts.get_by_id(identity.account_id) if identity.account_id else None
+        sandbox = True if account is not None and account.sandbox else None
 
         # Check if any product in this tenant requires AI provenance metadata
         provenance_policies = creative_repo.get_provenance_policies()
@@ -536,6 +546,7 @@ def sync_creatives(
     response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
+        sandbox=sandbox,
         context=req.context,
         message=message,
     )

@@ -41,7 +41,10 @@ Generative creative usage::
 Available mocks via env.mock:
     "registry"            -- get_creative_agent_registry (lazy import in _sync.py)
     "run_async"           -- run_async_in_sync_context (module-level import in _sync.py)
-    "send_notifications"  -- _send_creative_notifications (from _workflow)
+    "send_notifications"  -- _send_creative_notifications (from _workflow); runs the REAL
+                             function by default, so its webhook/approval-mode guard is graded
+    "slack_notifier"      -- get_slack_notifier (src.services.slack_notifier), the Slack sender
+                             that function reaches: "was Slack sent" is read off this mock
     "audit_log"           -- _audit_log_sync (from _workflow)
     "config"              -- get_config (lazy import in _processing.py)
     "ai_review_executor"  -- _ai_review_executor (lazy import in _processing.py, ai-powered branch)
@@ -146,6 +149,11 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
         "run_async": "src.core.tools.creatives._sync.run_async_in_sync_context",
         "send_notifications": "src.core.tools.creatives._sync._send_creative_notifications",
+        # The Slack sender _send_creative_notifications reaches (a call-time import from
+        # src.services.slack_notifier). Patching it lets the real notification function
+        # run -- its "only require-human, only with a webhook" guard is what BR-RULE-037
+        # INV-2/INV-6 grade -- while nothing is posted anywhere.
+        "slack_notifier": "src.services.slack_notifier.get_slack_notifier",
         "audit_log": "src.core.tools.creatives._sync._audit_log_sync",
         "config": "src.core.config.get_config",
         # The ai-powered branch of _processing.py hands a job to a real
@@ -202,12 +210,18 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # run_async: execute the coroutine synchronously (return empty list)
         self.mock["run_async"].side_effect = lambda coro: []
 
-        # Notifications: no-op. The ordering observer is NOT installed here --
-        # it is a side_effect, and installing it by default would make every
-        # existing "was Slack called" scenario pay for two extra pooled-connection
-        # reads. observe_effects_at_notification() opts a scenario in, and returns
-        # None so those "was it called" assertions keep reading the same value.
-        self.mock["send_notifications"].return_value = None
+        # Notifications: the REAL _send_creative_notifications runs behind this mock, so
+        # the mock still records that the notification step was entered (INV-3 asserts
+        # its arguments) while the function's own guard decides whether Slack is
+        # reached -- readable off mock["slack_notifier"]. A bare no-op here made
+        # "no Slack sent without a webhook" (INV-6) ungradeable: the guard lives inside
+        # the function the no-op replaced. The ordering observer is NOT installed here --
+        # it is a side_effect, and installing it by default would make every existing
+        # "was Slack called" scenario pay for two extra pooled-connection reads.
+        # observe_effects_at_notification() opts a scenario in.
+        from src.core.tools.creatives._workflow import _send_creative_notifications
+
+        self.mock["send_notifications"].side_effect = _send_creative_notifications
         self.workflow_rows_at_notification = None
         self.assignment_count_at_notification = None
 

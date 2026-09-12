@@ -275,7 +275,7 @@ class TestSyncCreativesResponseShape:
         assert c["action"] == "created"
 
     def test_sync_response_internal_fields_excluded(self):
-        """Internal fields (status, review_feedback) are excluded."""
+        """Internal fields (internal_status, review_feedback) are excluded; spec status is derived."""
         from adcp.types import CreativeAction
 
         from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
@@ -290,7 +290,7 @@ class TestSyncCreativesResponseShape:
         data = resp.model_dump(mode="json")
 
         c = data["creatives"][0]
-        assert "status" not in c, "Internal 'status' field should be excluded"
+        assert c["status"] == "approved", "The spec per-creative status is the row's review state"
         assert "internal_status" not in c, "Internal 'internal_status' field should be excluded"
         assert "review_feedback" not in c, "Internal 'review_feedback' field should be excluded"
 

@@ -112,27 +112,13 @@ Feature: BR-UC-006 Sync Creative Assets
     And the creative should be flagged for review
     # POST-S4: Buyer knows about provenance warning
 
-  @T-UC-006-main-weight @main-flow
-  Scenario: Sync creatives — assignment with explicit weight
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And an assignment with package_id "pkg-1" and weight 50
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the assignment should be created with the specified weight
-    # POST-S3: Buyer knows assignment details including weight
+  # main-weight (assignment with an explicit weight, POST-S3) is the "weight = 50" row of
+  # @T-UC-006-boundary-assignment-weight, which is the one definition of assignments[].weight.
 
-  @T-UC-006-main-async-submitted @main-flow @async
-  Scenario: Sync creatives — async submitted task envelope
-    Given the Buyer is authenticated
-    And a batch sync that the Seller cannot confirm within the request window
-    When the Buyer Agent syncs the creatives
-    Then the response is compliant with the sync_creatives submitted spec
-    And the response should have status "submitted" with a task_id
-    And the response should not include a creatives array
-    And the Buyer can poll tasks/get with the task_id to retrieve per-item results
-    # POST-S1/S2: per-item results land on the task completion artifact, not this envelope
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+  # main-async-submitted (the submitted task envelope) is not graded: sync-creatives-
+  # response.json makes it one of three shapes a seller MAY answer with, and this seller
+  # processes every sync synchronously -- the shape is never produced, so no request can
+  # drive it. See the note on @T-UC-006-boundary-sandbox.
 
   @T-UC-006-main-delete-missing-conflict @main-flow @error
   Scenario: Sync creatives — delete_missing rejected when creative_ids filter provided
@@ -808,35 +794,23 @@ Feature: BR-UC-006 Sync Creative Assets
     And the media buy status should transition to "pending_creatives"
     # --- BR-RULE-093: Assignment Weight and Delivery Semantics ---
 
-  @T-UC-006-rule-093-inv1 @invariant @BR-RULE-093
-  Scenario: INV-1 — weight 0 means paused (assigned but no delivery)
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And an assignment with package_id "pkg-1" and weight 0
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the assignment should be created with weight 0
-    And the creative should be assigned but paused (no delivery)
-
-  @T-UC-006-rule-093-inv2 @invariant @BR-RULE-093
-  Scenario: INV-2 — weight omitted means equal rotation
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And an assignment with package_id "pkg-1" and no weight specified
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the assignment should be created
-    And the creative should receive equal rotation with other unweighted creatives
+  # BR-RULE-093 INV-1 (weight 0 is assigned but paused) and INV-2 (weight omitted is equal
+  # rotation) are the "weight = 0" and "weight absent" rows of
+  # @T-UC-006-boundary-assignment-weight -- one definition of assignments[].weight.
 
   @T-UC-006-rule-093-inv3 @invariant @BR-RULE-093
-  Scenario: INV-3 — proportional delivery with different weights
+  Scenario: INV-3 — each assignment keeps its own weight for proportional delivery
     Given the Buyer is authenticated
     And creative "creative-A" assigned to "pkg-1" with weight 80
     And creative "creative-B" assigned to "pkg-1" with weight 20
     When the Buyer Agent syncs the creatives
     Then the response is compliant with the sync_creatives success spec
-    And creative-A should receive proportionally more delivery than creative-B
-    And the delivery ratio should reflect the weight ratio (80:20)
+    And the assignment of "creative-A" to "pkg-1" should carry weight 80
+    And the assignment of "creative-B" to "pkg-1" should carry weight 20
+    # assignments[].weight: "When multiple creatives are assigned to the same package,
+    # weights determine impression distribution proportionally" (sync-creatives-request.json).
+    # The persisted weights are what the ad server rotates on; delivery itself is not
+    # observable on this tool, so the invariant is graded on the weights each entry keeps.
     # --- BR-RULE-094: Creative Provenance Policy Enforcement ---
 
   @T-UC-006-rule-094-inv1 @invariant @BR-RULE-094
@@ -1093,27 +1067,9 @@ Feature: BR-UC-006 Sync Creative Assets
       | missing_creative_id  | an assignment entry missing creative_id         | the error should be INVALID_REQUEST with suggestion  |
       | missing_package_id   | an assignment entry missing package_id          | the error should be INVALID_REQUEST with suggestion   |
 
-  @T-UC-006-partition-assignment-weight @partition @assignment-weight
-  Scenario Outline: Assignment weight validation — <partition>
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And an assignment with package_id "pkg-1" and weight <weight>
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives spec
-    And <outcome>
+  # The assignment-weight partition (absent / 50 / 0 / 100 / -1 / 101) is a subset of the
+  # rows of @T-UC-006-boundary-assignment-weight; one outline grades the field.
     # --- authentication partitions ---
-
-    Examples: Valid weights
-      | partition            | weight | outcome                                          |
-      | weight_absent        |        | the assignment should use equal rotation          |
-      | weight_typical       | 50     | the assignment should be created with weight 50   |
-      | weight_boundary_min  | 0      | the assignment should be created as paused        |
-      | weight_boundary_max  | 100    | the assignment should be created with weight 100  |
-
-    Examples: Invalid weights
-      | partition          | weight | outcome                                                                     |
-      | weight_below_min   | -1     | the error should be INVALID_REQUEST with suggestion         |
-      | weight_above_max   | 101    | the error should be INVALID_REQUEST with suggestion         |
 
   @T-UC-006-partition-auth @partition @authentication
   Scenario Outline: Authentication partition - <partition>
@@ -1230,14 +1186,21 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
     And <expected>
+    And the per-creative result should carry advisory status "<status>"
     # --- validation_mode boundaries ---
 
+    # The status column is sync-creatives-response.json's per-creative advisory
+    # status -- "sellers with async review return processing or pending_review; sellers
+    # with synchronous review MAY return a terminal value (approved, rejected)" -- as
+    # this seller's review lifecycle produces it for each approval mode. The former
+    # per-creative-status boundary outline named values no sync request can drive
+    # (archived; a CreativeAction in the status slot), so its live rows live here.
     Examples:
-      | boundary_point   | mode             | expected                                                   |
-      | not set (null)   | not configured   | the creative should use require-human as default           |
-      | auto-approve     | "auto-approve"   | the creative status should be set to approved immediately  |
-      | require-human    | "require-human"  | a review workflow should be created with Slack notification |
-      | ai-powered       | "ai-powered"     | a review workflow should be created with AI review         |
+      | boundary_point   | mode             | expected                                                   | status         |
+      | not set (null)   | not configured   | the creative should use require-human as default           | pending_review |
+      | auto-approve     | "auto-approve"   | the creative status should be set to approved immediately  | approved       |
+      | require-human    | "require-human"  | a review workflow should be created with Slack notification | pending_review |
+      | ai-powered       | "ai-powered"     | a review workflow should be created with AI review         | pending_review |
 
   @T-UC-006-boundary-validation-mode @boundary @validation-mode
   Scenario Outline: Validation mode boundary — <boundary_point>
@@ -1353,10 +1316,15 @@ Feature: BR-UC-006 Sync Creative Assets
     # buyer can see of "the check was skipped" is that the assignment was created. The
     # cell used to say "the format check should be skipped entirely", bound to a step
     # whose body was byte-identical to the created-successfully one.
+    #
+    # The "format matches after URL normalization" row (product agent_url with a trailing
+    # slash) is gone: core/format-id.json's canonicalization collapses a trailing slash
+    # only on an EMPTY path (step 5) and preserves it on any other, so the row held on the
+    # in-process root-path agent and failed on the real e2e agent, whose path is not
+    # empty. The axis the algorithm does collapse, host case, is BR-RULE-039 INV-1.
     Examples:
       | boundary_point                              | assignment_state                                                     | expected                                              |
       | format matches (exact)                      | an assignment to a package whose product accepts this format         | the assignment should be created successfully         |
-      | format matches after URL normalization      | an assignment to a package whose product format has trailing slash   | the assignment should match after URL normalization   |
       | no product format restrictions              | assignments to a package whose product has empty format_ids        | the assignment should be created (all formats allowed)|
       | no product_id on package                    | an assignment to a package with no product_id                        | the assignment should be created successfully         |
       | format mismatch                             | an assignment to a package whose product does not accept this format | the error should include "suggestion" field           |
@@ -1426,11 +1394,17 @@ Feature: BR-UC-006 Sync Creative Assets
     And <expected>
     # --- account boundaries ---
 
+    # The one definition of assignments[].weight (sync-creatives-request.json): "Relative
+    # delivery weight (0-100) ... When omitted, the creative receives equal rotation with
+    # other unweighted creatives. A weight of 0 means the creative is assigned but paused
+    # (receives no delivery)." Out-of-range values violate the schema's minimum/maximum, so
+    # they are INVALID_REQUEST at the request. The former partition outline, main-weight and
+    # BR-RULE-093 INV-1/INV-2 were these rows written again.
     Examples:
       | boundary_point                     | weight_value | expected                                                                     |
       | weight absent (field omitted)      |              | the assignment should use equal rotation                                     |
       | weight = -1 (min - 1)              | -1           | the error should be INVALID_REQUEST with suggestion          |
-      | weight = 0 (min, inclusive — paused)| 0            | the assignment should be created as paused (no delivery)                     |
+      | weight = 0 (min, inclusive — paused)| 0            | the assignment should be created as paused                                   |
       | weight = 1 (min + 1)               | 1            | the assignment should be created with weight 1                               |
       | weight = 50 (typical)              | 50           | the assignment should be created with weight 50                              |
       | weight = 99 (max - 1)              | 99           | the assignment should be created with weight 99                              |
@@ -1486,336 +1460,117 @@ Feature: BR-UC-006 Sync Creative Assets
       | boundary_point                          | scope_setup                                              | expected                                            |
       | delete_missing=true AND creative_ids present | delete_missing true together with a creative_ids filter | the error should be INVALID_REQUEST with suggestion |
 
-  @T-UC-006-boundary-creative-status @boundary @creative-status @response-shape @v3-1
-  Scenario Outline: Per-creative advisory status value boundary — <boundary_point>
-    Given the Buyer is authenticated
-    And a creative whose sync resolves to a non-terminal per-creative action "<action>" carrying advisory status <status_value>
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives spec
-    And <expected>
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-    Examples: Valid CreativeStatus members
-      | boundary_point                          | action    | status_value     | expected                                                           |
-      | processing (first enum member)          | created   | "processing"     | the per-creative result should carry advisory status "processing"  |
-      | archived (last enum member)             | updated   | "archived"       | the per-creative result should carry advisory status "archived"    |
-      | approved (review-lifecycle member)      | unchanged | "approved"       | the per-creative result should carry advisory status "approved"    |
-
-    Examples: Invalid status value (not a CreativeStatus member)
-      | boundary_point                              | action  | status_value | expected                                                        |
-      | deleted (a CreativeAction, not a status)    | created | "deleted"    | the per-creative result should be rejected as schema-invalid    |
-
-  @T-UC-006-boundary-creative-status-response @boundary @creative-status @response-shape @v3-1
-  Scenario Outline: Per-creative status omission on terminal action — <boundary_point>
-    Given the Buyer is authenticated
-    And a creative whose sync resolves to <result_shape>
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives spec
-    And <expected>
-
-    Examples: Valid response shape
-      | boundary_point                                                 | result_shape                            | expected                                                            |
-      | action='deleted' with status omitted (sync-creatives-response) | per-creative action "deleted" with no status field | the per-creative result should be accepted with the status omitted |
-
-    Examples: Invalid response shape
-      | boundary_point                                                           | result_shape                                       | expected                                                |
-      | action='failed' with status='rejected' present (sync-creatives-response) | per-creative action "failed" carrying status "rejected" | the per-creative result shape should be rejected as schema-invalid |
-
-  @T-UC-006-sandbox-happy @invariant @br-rule-209 @sandbox
-  Scenario: Sandbox account sync creatives produces simulated results with sandbox flag
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And the request targets a sandbox account
-    When the Buyer Agent sends a sync_creatives request
-    Then the response is compliant with the sync_creatives success spec
-    And the response status should be "completed"
-    And the response should include sandbox equals true
-    And no real ad platform creative uploads should have been made
-    And no real billing records should have been created
-    # BR-RULE-209 INV-1: inputs validated same as production
-    # BR-RULE-209 INV-2: real ad platform calls suppressed
-    # BR-RULE-209 INV-3: real billing suppressed
-    # BR-RULE-209 INV-4: response includes sandbox: true
-
-  @T-UC-006-sandbox-production @invariant @br-rule-209 @sandbox
-  Scenario: Production account sync creatives response does not include sandbox flag
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And the request targets a production account
-    When the Buyer Agent sends a sync_creatives request
-    Then the response is compliant with the sync_creatives success spec
-    And the response status should be "completed"
-    And the response should not include a sandbox field
-    # BR-RULE-209 INV-5: production account -> sandbox absent
-
-  @T-UC-006-sandbox-validation @invariant @br-rule-209 @sandbox
-  Scenario: Sandbox account with invalid creative returns real validation error
-    Given the Buyer is authenticated
-    And a creative with an invalid format_id
-    And the request targets a sandbox account
-    When the Buyer Agent sends a sync_creatives request
-    Then the response is compliant with the sync_creatives error spec
-    And the response should indicate a validation error
-    And the error should be a real validation error, not simulated
-    And the error should include a suggestion for how to fix the issue
-    # BR-RULE-209 INV-7: sandbox validation errors are real
-    # POST-F3: suggestion field present
-
-  @T-UC-006-sandbox-submitted-no-flag @invariant @br-rule-209 @sandbox @async @v3-1
-  Scenario: Sandbox account async submitted sync_creatives envelope omits the sandbox flag
-    Given the Buyer is authenticated
-    And the request targets a sandbox account
-    And a batch sync that the Seller cannot confirm within the request window
-    When the Buyer Agent sends a sync_creatives request
-    Then the response is compliant with the sync_creatives submitted spec
-    And the response should have status "submitted" with a task_id
-    And the response should not include a sandbox field
-    # BR-RULE-209 INV-11: sandbox permitted only on the synchronous success shape;
-    # forbidden on the async submitted envelope (no sandbox property) — a queued
-    # sandbox sync has produced no simulated result yet to flag
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-sandbox-errors-no-flag @invariant @br-rule-209 @sandbox @error @v3-1
-  Scenario: Sandbox account terminal-failure sync_creatives response omits the sandbox flag
-    Given the Buyer is authenticated
-    And the request targets a sandbox account
-    And a sync request that fails operation-level validation
-    When the Buyer Agent sends a sync_creatives request
-    Then the response is compliant with the sync_creatives error spec
-    And the response should indicate a validation error
-    And the response should not include a sandbox field
-    And the error should include a "suggestion" field
-    # BR-RULE-209 INV-11: sandbox forbidden on the terminal-failure errors shape
-    # (not.anyOf required:[sandbox]) — the failure carries the real error only
-    # POST-F3: suggestion field present even on the sandbox error shape
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+  # The per-creative advisory status is graded where a request can drive it: the status
+  # column of @T-UC-006-boundary-approval (which review state each approval mode reports)
+  # and @T-UC-006-partition-creative-status-terminal (omitted on failed/deleted). Two outlines
+  # that stood here asked the seller to emit values no sync request reaches -- "archived"
+  # (sync_creatives has no archive input in the pin) and a CreativeAction in the status slot
+  # -- or graded the seller's own response against the schema, which "the response is
+  # compliant with the sync_creatives spec" already does on every scenario.
 
   @T-UC-006-boundary-sandbox @boundary @sandbox @v3-1
   Scenario Outline: Sandbox flag response-shape boundary — <boundary_point>
     Given the Buyer is authenticated
-    And a creative with a known format_id
+    And <creative>
     And <account_kind>
-    When the Buyer Agent sends a <response_shape>
+    When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
     And <expected>
+    # sync-creatives-response.json: SyncCreativesSuccess carries ``sandbox`` ("When true,
+    # this response contains simulated data from sandbox mode"); SyncCreativesError
+    # forbids it (not.anyOf required:[sandbox]). core/account.json: a sandbox account
+    # means "no real platform calls, no real spend". BR-RULE-209 INV-1 (inputs validated
+    # the same as production), INV-4 (sandbox: true on the success shape), INV-5 (absent
+    # for a production account), INV-7 (a sandbox account's invalid input is a REAL
+    # rejection), INV-11 (forbidden on the errors shape). The one definition: the
+    # sandbox-happy / -production / -validation / -errors-no-flag scenarios were these
+    # rows written four times. The submitted-envelope rows (and the -submitted-no-flag
+    # and main-async-submitted scenarios) are gone: this seller processes every sync
+    # synchronously, so the pin's third shape is never produced and cannot be graded.
+    # sync_creatives makes no ad-platform call and bills nothing on any account, so
+    # INV-2/INV-3 have no observable here beyond the flag itself.
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
     Examples: Synchronous success shape (sandbox permitted)
-      | boundary_point                                            | account_kind                                       | response_shape                                    | expected                                                |
-      | sandbox: true in response (sandbox account)               | the request targets a sandbox account              | sync_creatives request that completes synchronously | the response should include sandbox equals true       |
-      | sandbox: true on sync_creatives synchronous success shape | the request targets a sandbox account              | sync_creatives request that completes synchronously | the response should include sandbox equals true       |
-      | sandbox absent in response (production account)           | the request targets a production account           | sync_creatives request that completes synchronously | the response should not include a sandbox field       |
-      | sandbox: false in response (explicit production)          | the request targets an explicit production account | sync_creatives request that completes synchronously | the response sandbox field, if present, should be false |
+      | boundary_point                      | creative                          | account_kind                             | expected                                        |
+      | sandbox: true (sandbox account)     | a creative with a known format_id | the request targets a sandbox account    | the response should include sandbox equals true |
+      | sandbox absent (production account) | a creative with a known format_id | the request targets a production account | the response should not include a sandbox field |
 
-    Examples: Non-success shapes (sandbox forbidden)
-      | boundary_point                                                    | account_kind                          | response_shape                                       | expected                                        |
-      | sandbox present on sync_creatives submitted task envelope         | the request targets a sandbox account | sync_creatives request that is queued as submitted   | the response should not include a sandbox field |
-      | sandbox present on sync_creatives terminal-failure (errors) shape | the request targets a sandbox account | sync_creatives request that fails operation validation | the response should not include a sandbox field |
+    Examples: Terminal-failure shape (sandbox forbidden)
+      | boundary_point                                    | creative                             | account_kind                          | expected                                   |
+      | real rejection, no sandbox flag (sandbox account) | a creative with an invalid format_id | the request targets a sandbox account | the error code should be "INVALID_REQUEST" |
 
   @T-UC-006-partition-creative-status-terminal @partition @creative-status @v3-1
-  Scenario Outline: Per-creative result omits advisory status on a terminal action — <partition>
+  Scenario Outline: Per-creative result omits advisory status on a terminal action — <action>
     Given the Buyer is authenticated
-    And a creative whose sync resolves to per-creative action "<action>"
-    When the Buyer Agent syncs the creative
+    And <setup>
+    When the Buyer Agent syncs the creatives
     Then the response is compliant with the sync_creatives spec
-    And the per-creative result should report action "<action>"
-    And the per-creative result should omit the status field
-    # creative_status (v3.1): status is advisory review-lifecycle (not a spend gate)
-    # and MUST be omitted when per-creative action ∈ {failed, deleted}
-    # (schema allOf if/then). BR-RULE-037 governs status/approval routing.
+    And the creatives entry for "<creative_id>" has action "<action>"
+    And the creatives entry for "<creative_id>" omits the "status" field
+    # sync-creatives-response.json: status "MUST be omitted when action is failed or deleted
+    # (the creative has no meaningful review state -- failure details belong in the errors
+    # array; deleted creatives are gone from the library)", enforced by the per-item allOf
+    # if/then. BR-RULE-037 governs status/approval routing. A failed action is reached
+    # through a format no agent serves; a deleted one through a full-library replace.
 
     Examples: Terminal actions
-      | partition                     | action  |
-      | omitted_on_failed_or_deleted  | failed  |
-      | omitted_on_failed_or_deleted  | deleted |
+      | action  | setup                                                                        | creative_id                      |
+      | failed  | a creative with an unknown format_id                                         | creative-unknown-fmt-001         |
+      | deleted | a sync request whose scope is delete_missing true and no creative_ids filter | creative-absent-from-request-001 |
 
-  @T-UC-006-creative-item-multi-asset @v3-1 @creative-item
-  Scenario: Sync creative with multi-asset composition (carousel) succeeds
+  # The six CreativeItem / CreativeVariable scenarios that stood here graded a shape the
+  # sync request does not carry: at 3.1.1, core/creative-item.json and
+  # core/creative-variable.json are referenced only by creative/list-creatives-response.json
+  # (the library READ), never by core/creative-asset.json, whose ``assets`` slots take the
+  # assets/asset-union members. Nothing a sync_creatives request can send reaches them.
+
+  @T-UC-006-partition-tracker-assets @partition @v3-1 @vast-tracker @daast-tracker
+  Scenario Outline: Decomposed VAST and DAAST tracker assets — <partition>
     Given the Buyer is authenticated
-    And a creative with a known format_id that requires a multi-asset composition
-    And the creative's assets include CreativeItems with asset_kind "media" and asset_kind "text"
-    And each CreativeItem carries asset_type, asset_id, and the discriminator-required content field
+    And a creative with a known format_id whose assets carry <tracker_assets>
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include the creative with action "created"
-    And every CreativeItem should be persisted under the parent creative
-    # POST-S1: multi-asset composite sync succeeds
-    # POST-S2: action = created
+    Then the response is compliant with the sync_creatives spec
+    And <expected>
+    # core/assets/vast-tracker-asset.json and daast-tracker-asset.json (asset-union members
+    # the request's ``assets`` slots accept): one tracker URL per TrackingEvents event. The
+    # event MUST NOT be impression ("model as a url asset with url_type tracker_pixel"),
+    # clickTracking, customClick, error or a ViewableImpression child; ``offset`` is
+    # "Required when vast_event is progress"; DAAST ``target`` is linear or companion
+    # ("DAAST has no NonLinearAds element"). A refused tracker is a schema violation,
+    # so the whole request is INVALID_REQUEST (as ext-c). Accepted trackers are stored
+    # as sent, for the sales agent to assemble into TrackingEvents at serve time.
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
 
-  @T-UC-006-creative-item-text-array @v3-1 @creative-item
-  Scenario: CreativeItem text content accepts array for A/B variants
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And a CreativeItem with asset_kind "text" whose content is an array of strings
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include the creative with action "created"
-    And all text variants should be retained on the CreativeItem
-    # POST-S2: array-shaped text content preserved (A/B variant support)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    Examples: Accepted trackers, persisted as sent
+      | partition            | tracker_assets                                               | expected                                                      |
+      | vast_start_complete  | a VAST tracker for "start" and a VAST tracker for "complete"   | the creative should be created with its tracker assets stored |
+      | daast_start_complete | a DAAST tracker for "start" and a DAAST tracker for "complete" | the creative should be created with its tracker assets stored |
+      | vast_progress_offset | a VAST tracker for "progress" at offset "00:00:05"             | the creative should be created with its tracker assets stored |
 
-  @T-UC-006-creative-item-missing-content @v3-1 @creative-item @ext-c
-  Scenario: CreativeItem missing discriminator-required field is rejected
-    Given the Buyer is authenticated
-    And a creative whose assets contain a CreativeItem with asset_kind "media" but no content_uri
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error should be a schema validation error
-    And the error should identify the missing content_uri field on the CreativeItem
-    And the error should include a "suggestion" field
-    # POST-F2: discriminator violation surfaced
-    # POST-F3: field path points the buyer at the offending CreativeItem
-
-  @T-UC-006-creative-variable-declared @v3-1 @creative-variable @dco
-  Scenario: Sync creative that declares DCO variables persists every variable slot
-    Given the Buyer is authenticated
-    And a creative with a known format_id
-    And the creative declares CreativeVariables with variable_id, name, and variable_type set
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include the creative with action "created"
-    And every declared CreativeVariable should be persisted on the creative
-    # POST-S1: DCO-aware creative sync succeeds
-    # POST-S2: variables retained for serve-time substitution
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-creative-variable-required-flag @v3-1 @creative-variable @dco
-  Scenario: CreativeVariable required flag is preserved on persisted creative
-    Given the Buyer is authenticated
-    And a creative that declares a CreativeVariable with required true and a default_value
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include the creative with action "created"
-    And the persisted CreativeVariable should retain its required flag and default_value
-    # POST-S2: serve-time semantics (required, default_value) preserved
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-creative-variable-invalid-type @v3-1 @creative-variable @dco @ext-c
-  Scenario: CreativeVariable with unsupported variable_type is rejected
-    Given the Buyer is authenticated
-    And a creative that declares a CreativeVariable whose variable_type is not in the v3.1 enum
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error should be a schema validation error
-    And the error should identify the offending variable_type value
-    And the error should include a "suggestion" field
-    # POST-F2: enum violation surfaced
-    # POST-F3: field path points at variable_type
-
-  @T-UC-006-vast-tracker-asset @v3-1 @vast-tracker
-  Scenario: Sync video creative with decomposed VAST trackers succeeds
-    Given the Buyer is authenticated
-    And a video creative with a known format_id
-    And the creative's assets include a VAST tracker with vast_event "start" and a tracker URL
-    And the creative's assets include a VAST tracker with vast_event "complete" and a tracker URL
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include the creative with action "created"
-    And every VAST tracker asset should be persisted with its vast_event and url
-    # POST-S1: decomposed VAST trackers accepted
-    # POST-S2: trackers retained for serve-time TrackingEvents assembly
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-vast-tracker-progress-requires-offset @v3-1 @vast-tracker @ext-c
-  Scenario: VAST tracker with vast_event "progress" without offset is rejected
-    Given the Buyer is authenticated
-    And a video creative with a known format_id
-    And a VAST tracker asset with vast_event "progress" but no offset field
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error should be a schema validation error
-    And the error should identify the missing offset field
-    And the error should include a "suggestion" field
-    # POST-F2: conditional-required violation surfaced
-    # POST-F3: field path points at offset
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-vast-tracker-forbidden-event @v3-1 @vast-tracker @ext-c
-  Scenario: VAST tracker with forbidden vast_event "impression" is rejected
-    Given the Buyer is authenticated
-    And a video creative with a known format_id
-    And a VAST tracker asset whose vast_event is "impression"
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error should be a schema validation error
-    And the error should explain that impression URLs belong on a url asset with url_type "tracker_pixel"
-    And the error should include a "suggestion" field
-    # POST-F2: VAST modeling rule enforced (impression -> url asset, not vast_tracker)
-    # POST-F3: suggestion points buyer at the correct asset type
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-daast-tracker-asset @v3-1 @daast-tracker
-  Scenario: Sync audio creative with decomposed DAAST trackers succeeds
-    Given the Buyer is authenticated
-    And an audio creative with a known format_id
-    And the creative's assets include a DAAST tracker with daast_event "start" and a tracker URL
-    And the creative's assets include a DAAST tracker with daast_event "complete" and a tracker URL
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the response should include the creative with action "created"
-    And every DAAST tracker asset should be persisted with its daast_event and url
-    # POST-S1: decomposed DAAST trackers accepted
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-daast-tracker-no-non-linear-target @v3-1 @daast-tracker @ext-c
-  Scenario: DAAST tracker with target "non_linear" is rejected
-    Given the Buyer is authenticated
-    And an audio creative with a known format_id
-    And a DAAST tracker asset whose target is "non_linear"
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error should be a schema validation error
-    And the error should explain that DAAST has no non_linear element
-    And the error should include a "suggestion" field
-    # POST-F2: DAAST target enum (linear|companion) enforced
-    # POST-F3: suggestion points buyer at the valid DAAST target set
-
-  @T-UC-006-error-details-conflict @v3-1 @error-details @conflict
-  Scenario: CONFLICT error returns version details so buyer can re-read and retry
-    Given the Buyer is authenticated
-    And a creative whose creative_id collides with a concurrently-updated server-side creative
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error code should be "CONFLICT"
-    And the error details should include resource_id, expected_version, and current_version
-    And the error should include a suggestion to re-read the resource and retry
-    # POST-F2: machine-readable version info returned
-    # POST-F3: recovery path is explicit (re-read + retry)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
-
-  @T-UC-006-error-details-policy-violation @v3-1 @error-details @policy-violation
-  Scenario: POLICY_VIOLATION error returns policy reference and violated rules
-    Given the Buyer is authenticated
-    And a creative whose content breaches a referenced governance policy
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error code should be "POLICY_VIOLATION"
-    And the error details should include policy_id and a non-empty violated_rules array
-    And the error details should include a policy_url where the full policy can be reviewed
-    # POST-F2: policy reference is structured, not free text
-    # POST-F3: buyer can fetch policy text and revise
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/sync-creatives-request.json
+    Examples: Refused trackers
+      | partition               | tracker_assets                                     | expected                                   |
+      | vast_impression         | a VAST tracker for "impression"                    | the error code should be "INVALID_REQUEST" |
+      | vast_progress_no_offset | a VAST tracker for "progress" without an offset    | the error code should be "INVALID_REQUEST" |
+      | daast_non_linear_target | a DAAST tracker for "start" targeting "non_linear" | the error code should be "INVALID_REQUEST" |
 
   @T-UC-006-error-details-creative-rejected @v3-1 @error-details @creative-rejected
-  Scenario: CREATIVE_REJECTED error returns policy reference and rejection reasons
+  Scenario: CREATIVE_REJECTED carries the rejection reasons the buyer can act on
     Given the Buyer is authenticated
-    And a creative that is rejected by the Seller's review workflow
+    And a creative with a known format_id whose agent returns no preview and that carries no media url
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
-    And the per-creative result should report action "failed"
-    And the error code should be "CREATIVE_REJECTED"
-    And the error details should include policy_id and a non-empty reasons array
-    And the error details should include a policy_url where the full policy can be reviewed
-    # POST-F2: rejection rationale is structured
-    # POST-F3: buyer knows what to revise
+    And the creatives entry for "creative-no-preview-001" has action "failed"
+    And the creatives entry for "creative-no-preview-001" carries error code "CREATIVE_REJECTED"
+    And the creatives entry for "creative-no-preview-001" carries a non-empty "reasons" error detail
+    # error-details/creative-rejected.json: the RECOMMENDED details shape for
+    # CREATIVE_REJECTED is {policy_id, policy_url, reasons}, ``reasons`` being "Specific
+    # reasons the creative was rejected". This seller's synchronous rejection is the
+    # creative agent answering with no preview for a creative that has no media_url to
+    # fall back on -- a technical rejection, not a policy one -- so it carries reasons and
+    # no policy reference. The CONFLICT and POLICY_VIOLATION scenarios that stood beside
+    # this one named paths sync_creatives does not have (no creative versioning; content
+    # policy is applied to media buys), so no request could drive them.
 
   @T-UC-006-storyboard-provenance-required-rejection @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @provenance @rejection
   Scenario: PROVENANCE_REQUIRED -- provenance object absent on creative under a policy that requires it
@@ -1940,13 +1695,21 @@ Feature: BR-UC-006 Sync Creative Assets
 
   @T-UC-006-storyboard-creative-reception-stateful-render @uc006-storyboard-routing @schema-v3.1 @v3-1 @stateful-push @creative-reception
   Scenario: Stateful sales agent accepts pushed creatives and exposes them via per-creative status transitions
-    Given the Buyer Agent pushes creative assets to a stateful sales agent
+    Given the Buyer is authenticated
+    And a creative with a known format_id
     When the Buyer Agent sends sync_creatives
     Then the response is compliant with the sync_creatives success spec
-    And the seller should validate the creatives against its format specifications
-    And the per-creative result should carry a status drawn from creative-status enum
-    And the per-creative status may be "approved", "pending_review", or "rejected"
-    And platform-assigned IDs should be returned when applicable
+    And every per-creative result should expose a status field
+    And every status value should be drawn from the creative-status enum
+    And the per-creative result should carry advisory status "pending_review"
+    # A pushed creative is accepted into the library and its per-creative ``status`` is
+    # where it sits in review (sync-creatives-response.json). This seller reviews
+    # asynchronously by default (require-human), so the status after the sync is
+    # pending_review; the synchronous-review value is the auto-approve row of
+    # @T-UC-006-boundary-approval. Validation against the format specification is
+    # graded by the format-validation partition (an unserved format is a failed entry),
+    # and platform_id is "only present when applicable" -- this seller assigns none at
+    # sync time, so there is nothing to grade on it here.
     # creative_reception storyboard: a sales agent (publisher, retail media network)
     # accepts pushed creative assets, validates them against format specs, stores them,
     # and exposes per-creative status (approved, pending_review, rejected). Distinct

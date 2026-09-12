@@ -908,45 +908,27 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-006-boundary-approval",
         {
-            '-ai-powered-"ai-powered"-a review workflow should be created with AI review]',
-            '[rest-auto-approve-"auto-approve"-the creative status should be set to approved immediately]',
+            '-ai-powered-"ai-powered"-a review workflow should be created with AI review-pending_review]',
+            # Graduated: the rest auto-approve row -- it had been XPASS(strict) on the box
+            # (innet_120926_1410 and earlier), a stale park rather than a failure.
         },
         "uc006 route partition: unverified: not one of the named test-side blockers",
     ),
-    (
-        "T-UC-006-boundary-assignment-weight",
-        {
-            "-weight = -1 (min - 1)--1-the error should be INVALID_REQUEST with suggestion]",
-            "-weight = 101 (max + 1)-101-the error should be INVALID_REQUEST with suggestion]",
-            # --- per-assignment fields, a DIFFERENT blocker ---
-            "-weight = 0 (min, inclusive \\u2014 paused)-0-the assignment should be created as paused (no delivery)]",
-            "-weight = 1 (min + 1)-1-the assignment should be created with weight 1]",
-            "-weight = 50 (typical)-50-the assignment should be created with weight 50]",
-            "-weight = 99 (max - 1)-99-the assignment should be created with weight 99]",
-        },
-        (
-            "uc006 route partition: unverified: not one of the named test-side blockers"
-            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
-        ),
-    ),
+    # T-UC-006-boundary-assignment-weight has no parked rows: assignments[].weight is
+    # carried per entry now (0 persists as paused, omitted as the equal-rotation default),
+    # and the out-of-range rows are the request schema's own INVALID_REQUEST.
     (
         "T-UC-006-boundary-assignments-structure",
         {
             "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
             "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
-            "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
-            # a2a/mcp answer INTERNAL_ERROR for the idempotent-upsert row. Hidden until
-            # the inline `if error is not None: xfail` guarding it was removed;
-            # a wire INTERNAL_ERROR is a defect, and this row makes it visible and XPASSable.
-            "[a2a-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
-            "[mcp-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
-            # --- per-assignment fields, a DIFFERENT blocker ---
-            '-entry with placement_ids-an assignment with placement_ids ["slot_a"]-the assignment should include placement targeting]',
-            "-entry with weight = 0 (paused)-an assignment with weight 0-the assignment should be created as paused]",
+            # Graduated: the duplicate (creative_id, package_id) row on every transport.
+            # a2a/mcp answered INTERNAL_ERROR for it (a second insert of the same key);
+            # the assignment map is keyed by package now, so a repeated entry is one
+            # assignment, upserted once.
         },
         (
             "uc006 route partition: no step definition for one of its steps; unverified: not one of the named test-side blockers"
-            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
         ),
     ),
     (
@@ -956,14 +938,9 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         },
         "uc006 route partition: unverified: not one of the named test-side blockers",
     ),
-    (
-        "T-UC-006-boundary-provenance",
-        {
-            "-provenance present + no provenance policy-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
-            "-provenance present + policy requires provenance-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
-        },
-        "uc006 route partition: the dispatched payload is refused by the malformation gate and undeclared",
-    ),
+    # T-UC-006-boundary-provenance has no parked rows: the "provenance present" rows sent
+    # fields core/provenance.json does not define and were refused at the request; the
+    # Given is pin-shaped now.
     (
         "T-UC-006-boundary-validation-mode",
         {
@@ -991,40 +968,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         "uc006 route partition: ",
     ),
     (
-        "T-UC-006-partition-assignment-weight",
-        {
-            "-weight_above_max-101-the error should be INVALID_REQUEST with suggestion]",
-            "-weight_below_min--1-the error should be INVALID_REQUEST with suggestion]",
-            # --- per-assignment fields, a DIFFERENT blocker ---
-            "-weight_boundary_min-0-the assignment should be created as paused]",
-            "-weight_typical-50-the assignment should be created with weight 50]",
-        },
-        (
-            "uc006 route partition: unverified: not one of the named test-side blockers"
-            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
-        ),
-    ),
-    (
         "T-UC-006-partition-assignments-structure",
         {
             "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
-            '-with_placement_targeting-an assignment with creative_id "c1", package_id "p1", and placement_ids ["slot_a"]-the assignment should be created with placement targeting]',
-            # --- per-assignment fields, a DIFFERENT blocker ---
-            '-with_weight-an assignment with creative_id "c1", package_id "p1", and weight 50-the assignment should be created with weight 50]',
         },
-        (
-            "uc006 route partition: unverified: not one of the named test-side blockers"
-            " PLUS the per-assignment-field rows above, which are a different blocker: the pinned 3.1 sync-creatives-request.json defines assignments[].weight (0-100; 0 means assigned but PAUSED) and assignments[].placement_ids, and production normalises assignments to dict[creative_id -> list[package_id]] with weight hard-coded to 100, so neither field survives. Stated here rather than in 27 conditional pytest.xfail calls inside the steps, which were keyed on the outcome and so could not fail in either direction; strict=True makes these XPASS loudly when production implements it."
-        ),
+        "uc006 route partition: unverified: not one of the named test-side blockers",
     ),
-    (
-        "T-UC-006-partition-provenance",
-        {
-            "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
-            "-provenance_present_required-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
-        },
-        "uc006 route partition: the dispatched payload is refused by the malformation gate and undeclared",
-    ),
+    # T-UC-006-partition-provenance has no parked rows either: same pin-shaped Given as
+    # the boundary outline above.
     (
         "T-UC-006-partition-validation-mode",
         {
@@ -2232,14 +2183,10 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # pre-existing, not introduced by graduating this route; strengthening it to
         # a wire-envelope + error-code assertion is tracked separately.
 
-        # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
-        _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}
-        if marker_names & _UC006_AUTH_XFAIL:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="AUTH_REQUIRED error code not implemented (returns VALIDATION_ERROR)", strict=True
-                )
-            )
+        # Graduated: T-UC-006-ext-a. The strict xfail here said production answered
+        # VALIDATION_ERROR for a missing principal; it answers AUTH_MISSING, which the
+        # scenario names, so the route that parked it as "passes under a stale xfail" is
+        # gone with the xfail and the scenario grades live with ext-a-empty.
 
         # --- UC-006: INVALID_REQUEST validation xfails (production not implemented) ---
         _UC006_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
@@ -2264,25 +2211,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # Production uses generic error codes / plain-string errors where the spec
         # demands specific codes and structured AdCPSalesAgentError with suggestion fields.
         _UC006_SPECGAP_XFAIL_TAGS: dict[str, str] = {
-            # Split out of @T-UC-006-storyboard-multi-format-sync.
-            # While the status obligation shared a scenario with the action
-            # obligations, its xfail ABORTED the scenario and the sibling
-            # action-value assertion never ran on any transport. It now owns a
-            # scenario, so the action half runs LIVE and this half is ledgered.
-            # Production defect: SyncCreativeResult deliberately never populates
-            # the inherited spec `status` (src/core/schemas/creative.py) — it
-            # stays None on the wire rather than carrying a creative-status enum.
-            # e2e_rest decision (owed explicitly by the lane's design): NO
-            # e2e_rest_known_failures.txt entry is required. These tag markers are
-            # applied here in pytest_collection_modifyitems with no transport
-            # gate, so they cover the e2e_rest param identically to a2a/mcp/rest.
-            # Routing the gap through the tag ledger therefore registers it once
-            # and grows NO ratchet — which is the whole point of preferring it to
-            # a per-nodeid entry.
-            "T-UC-006-storyboard-multi-format-sync-status": (
-                "SPEC-PRODUCTION GAP: SyncCreativeResult.status is never populated by production; "
-                "every per-creative status is None on the wire, not a creative-status enum value"
-            ),
+            # Graduated: T-UC-006-storyboard-multi-format-sync-status. SyncCreativeResult
+            # now derives the spec `status` from the row's review state on every action
+            # that has one (src/core/schemas/creative.py), so each per-creative entry
+            # carries a creative-status member on the wire; the scenario grades live on
+            # every transport.
             # ── Storyboard provenance scenarios (#1858) ──────────────
             # These carried per-assertion pytest.xfail() calls inside the step
             # bodies, which turned ANY failure (a 401, a 500, a timeout) into a
@@ -2342,16 +2275,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # policy review". Verified: the scenario passes under --runxfail on a2a, the only
             # transport it routes to, and it is not listed in e2e_rest_known_failures.txt.
             # T-UC-006-rule-037-inv5: e2e_rest only — handled below with transport check
-            # Sandbox: sync_creatives does not set sandbox=true on response
-            "T-UC-006-sandbox-happy": (
-                "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
-                "response for sandbox accounts (BR-RULE-209 INV-4)"
-            ),
-            # Sandbox: invalid format_id does not trigger validation error at _impl level
-            "T-UC-006-sandbox-validation": (
-                "SPEC-PRODUCTION GAP: production does not validate format_id pattern "
-                "at _impl level — invalid format_id processed without error (BR-RULE-209 INV-7)"
-            ),
+            # Graduated: the sandbox flag. sync_creatives reads the account the request
+            # names and sets sandbox=true on the success shape for a sandbox account;
+            # the sandbox scenarios are the rows of @T-UC-006-boundary-sandbox now.
         }
         for tag, reason in _UC006_SPECGAP_XFAIL_TAGS.items():
             if tag in marker_names:
@@ -5296,82 +5222,35 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 #:
 #: The rest stay on the catch-all with their blockers named per bucket below. Adding
 #: an entry here GROWS the executing surface; it exempts nothing from grading.
-#: 24 UC-006 scenarios, blocker measured.
-_UC006_NO_STEP_DEFINITION = frozenset(
-    {
-        "T-UC-006-boundary-creative-status",
-        "T-UC-006-boundary-creative-status-response",
-        "T-UC-006-boundary-sandbox",
-        "T-UC-006-creative-item-missing-content",
-        "T-UC-006-creative-item-multi-asset",
-        "T-UC-006-creative-item-text-array",
-        "T-UC-006-creative-variable-declared",
-        "T-UC-006-creative-variable-invalid-type",
-        "T-UC-006-creative-variable-required-flag",
-        "T-UC-006-daast-tracker-asset",
-        "T-UC-006-daast-tracker-no-non-linear-target",
-        "T-UC-006-error-details-conflict",
-        "T-UC-006-error-details-creative-rejected",
-        "T-UC-006-error-details-policy-violation",
-        "T-UC-006-main-async-submitted",
-        "T-UC-006-partition-creative-status-terminal",
-        "T-UC-006-rule-093-inv1",
-        "T-UC-006-rule-093-inv3",
-        "T-UC-006-sandbox-errors-no-flag",
-        "T-UC-006-sandbox-happy",
-        "T-UC-006-sandbox-submitted-no-flag",
-        "T-UC-006-vast-tracker-asset",
-        "T-UC-006-vast-tracker-forbidden-event",
-        "T-UC-006-vast-tracker-progress-requires-offset",
-    }
-)
+#: Empty: every UC-006 scenario parked here has either been corrected to the pin and
+#: wired (assignment weight, per-creative status, the sandbox flag, tracker assets,
+#: CREATIVE_REJECTED details) or deleted as ungrounded in the sync request's pin
+#: (CreativeItem / CreativeVariable, the submitted envelope, CONFLICT, POLICY_VIOLATION).
+_UC006_NO_STEP_DEFINITION: frozenset[str] = frozenset()
 
-#: 1 UC-006 scenario, blocker measured.
-_UC006_STALE_XFAIL = frozenset(
-    {
-        "T-UC-006-ext-a",
-    }
-)
-
-#: 1 UC-006 scenario, blocker measured.
-_UC006_UNDECLARED_MALFORMATION = frozenset(
-    {
-        "T-UC-006-rule-094-inv2",
-    }
-)
+#: Empty: rule-094-inv2, the one scenario parked here, sent a provenance object with
+#: fields core/provenance.json does not define; the Given is pin-shaped now.
+_UC006_UNDECLARED_MALFORMATION: frozenset[str] = frozenset()
 
 #: Empty: the one scenario parked here (rule-037-inv4) reads the AI-review executor
 #: seam the env has carried since the local dry-run features needed it.
 _UC006_MISSING_HARNESS_SEAM: frozenset[str] = frozenset()
 
-#: 1 UC-006 scenario, blocker measured: inv6 asserts that Slack is NOT sent when no
-#: webhook is configured, but the env mocks _send_creative_notifications itself, and
-#: that guard lives INSIDE the mocked function -- the seam is one level too shallow
-#: to grade it. Re-seam on the Slack sender, then wire.
-_UC006_UNVERIFIED_FAILURE = frozenset(
-    {
-        "T-UC-006-rule-037-inv6",
-    }
-)
+#: Empty: rule-037-inv6 (no Slack without a webhook) was parked here because the env
+#: replaced _send_creative_notifications wholesale and the guard lives inside it. The
+#: env now runs the real function and mocks the Slack sender it reaches, so the
+#: scenario reads the sender and grades live.
+_UC006_UNVERIFIED_FAILURE: frozenset[str] = frozenset()
 
-#: 2 UC-006 scenarios, blocker measured.
-_UC006_OWN_XFAIL = frozenset(
-    {
-        "T-UC-006-main-weight",
-        "T-UC-006-sandbox-validation",
-    }
-)
+#: Empty: main-weight and sandbox-validation, the two scenarios parked here, are rows of
+#: the boundary outlines that grade assignments[].weight and the sandbox flag now.
+_UC006_OWN_XFAIL: frozenset[str] = frozenset()
 
 _UC006_WIRED_SCENARIOS = frozenset(
     {
-        # NOT here, and not parked either: T-UC-006-boundary-format-id and
-        # T-UC-006-ext-a PASS once wired, and a pre-existing strict xfail then turns
-        # that pass into XPASS(strict) -- a FAILURE. For boundary-format-id it is
-        # _UC006_VALIDATION_XFAIL's "SPEC-PRODUCTION GAP: _SyntheticError lacks
-        # suggestion field"; production emits the field now, so the reason is stale.
-        # A stale xfail is graduated one scenario at a time
-        # (.claude/rules/workflows/xpass-graduation.md), never parked under a second
-        # marker -- parking a passing row is how a route silences working behaviour.
+        # ext-a: the AUTH_MISSING refusal of a request with no principal, graded live
+        # with ext-a-empty now that the stale "answers VALIDATION_ERROR" xfail is gone.
+        "T-UC-006-ext-a",
         # The 15 Scenario Outlines whose Examples rows disagree: wired here so their
         # passing rows execute, with the non-passing rows parked per row in
         # _SELECTIVE_XFAIL. A route cannot express row-level disagreement.
@@ -5383,8 +5262,10 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-boundary-validation-mode",
         "T-UC-006-main-lenient-warnings",
         "T-UC-006-partition-assignment-pkg",
-        "T-UC-006-partition-assignment-weight",
         "T-UC-006-partition-assignments-structure",
+        # The per-creative status is omitted on failed/deleted actions: graded on the
+        # unknown-format and full-library-replace rows through the entry selectors.
+        "T-UC-006-partition-creative-status-terminal",
         "T-UC-006-partition-format-id",
         "T-UC-006-partition-generative",
         "T-UC-006-partition-idempotency-key",
@@ -5472,12 +5353,27 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-rule-040-inv2",
         "T-UC-006-rule-040-inv3",
         "T-UC-006-rule-040-inv4",
-        "T-UC-006-rule-093-inv2",
+        # assignments[].weight is carried per entry now, so the two-creative INV-3 grades
+        # each persisted weight; INV-1/INV-2 became boundary-assignment-weight rows.
+        "T-UC-006-rule-093-inv3",
+        # The env runs the real notification function and mocks the Slack sender it
+        # reaches, so "no Slack without a webhook" is read off the sender.
+        "T-UC-006-rule-037-inv6",
         "T-UC-006-rule-094-inv1",
+        # A pin-shaped provenance object (digital_source_type, ai_tool, disclosure).
+        "T-UC-006-rule-094-inv2",
         "T-UC-006-rule-094-inv3",
         "T-UC-006-rule-094-inv4",
         "T-UC-006-rule-094-inv5",
-        "T-UC-006-sandbox-production",
+        # The sandbox flag on the success shape, absent for a production account and on
+        # the errors shape: the request names the seeded account, production reads it.
+        "T-UC-006-boundary-sandbox",
+        # Tracker assets: accepted ones stored as sent, the pin's refused events and the
+        # missing progress offset INVALID_REQUEST through the accepted shape's validator.
+        "T-UC-006-partition-tracker-assets",
+        # CREATIVE_REJECTED with reasons, driven through the no-preview / no-media_url
+        # rejection production already makes.
+        "T-UC-006-error-details-creative-rejected",
     }
 )
 
@@ -5731,14 +5627,6 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
         xfail_reason=(
             "UC-006 not wired: no step definition for one of its steps, so it grades nothing (tests/bdd/dormant_scenarios.txt names the blocking sentence per scenario)"
-        ),
-    ),
-    EnvRoute(
-        tag="uc006-graduation",
-        when=_uc("UC-006", lambda m, s=_UC006_STALE_XFAIL: bool(m & s)),
-        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
-        xfail_reason=(
-            "UC-006 not wired: it PASSES, and a pre-existing strict xfail turns that into XPASS(strict). The reason is stale and graduates one scenario at a time (.claude/rules/workflows/xpass-graduation.md), never by parking a passing row"
         ),
     ),
     EnvRoute(

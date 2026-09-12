@@ -259,8 +259,6 @@ T-UC-005-v31-asset-registry-no-variant-siblings :: when the Buyer Agent sends a 
 # T-UC-005-v31-payload-vs-requirements-separation  (test_uc005_discover_creative_formats.py)
 T-UC-005-v31-payload-vs-requirements-separation :: given the seller catalog has a format with a required image asset capped at <n> MB
 
-# T-UC-006-storyboard-creative-reception-stateful-render  (test_uc006_sync_creatives.py)
-T-UC-006-storyboard-creative-reception-stateful-render :: given the Buyer Agent pushes creative assets to a stateful sales agent
 
 # T-UC-006-storyboard-provenance-claim-contradicted  (test_uc006_sync_creatives.py)
 T-UC-006-storyboard-provenance-claim-contradicted :: given the Buyer Agent submits a creative claiming digital_source_type "<>"

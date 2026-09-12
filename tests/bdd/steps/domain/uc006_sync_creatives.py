@@ -30,6 +30,7 @@ Three rules follow from its override contract (tests/factories/request.py):
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from unittest.mock import ANY
 
@@ -47,6 +48,7 @@ from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory
 from tests.factories.creative_asset import (
     assert_assets,
+    asset_spec,
     build_assets,
     image_spec,
     text_spec,
@@ -206,7 +208,9 @@ def _e2e_unique_id(prefix: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _assignments_for_the_wire(assignments: dict[str, list[str]]) -> list[dict[str, str]]:
+def _assignments_for_the_wire(
+    assignments: dict[str, list[str]], terms: dict[tuple[str, str], dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
     """The ctx map, as the AdCP 3.1 assignments ARRAY the transports accept.
 
     The scenarios build (and two steps READ) assignments as the 2.5 map
@@ -218,12 +222,21 @@ def _assignments_for_the_wire(assignments: dict[str, list[str]]) -> list[dict[st
 
     Translated ONCE here rather than rewriting ~40 setup sites: the ctx shape stays map-like
     for the two steps that index into it, and only the wire form changes.
+
+    ``terms`` carries the pin's optional per-entry fields (``weight``, ``placement_ids``)
+    keyed by (creative_id, package_id) -- ``ctx["assignment_terms"]``, written by the Givens
+    that ask for them through :func:`_ask_assignment_terms`.
     """
     return [
-        {"creative_id": creative_id, "package_id": package_id}
+        {"creative_id": creative_id, "package_id": package_id, **(terms or {}).get((creative_id, package_id), {})}
         for creative_id, package_ids in assignments.items()
         for package_id in package_ids
     ]
+
+
+def _ask_assignment_terms(ctx: dict, creative_id: str, package_id: str, **terms: Any) -> None:
+    """Record the optional per-entry fields one (creative, package) assignment should carry."""
+    ctx.setdefault("assignment_terms", {}).setdefault((creative_id, package_id), {}).update(terms)
 
 
 @given("a creative with a known format_id")
@@ -403,7 +416,7 @@ def when_sync_creative(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     kwargs: dict = {"account": account_ref, "creatives": creatives}
     if "assignments" in ctx:
-        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"])
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     if "idempotency_key" in ctx:
@@ -790,6 +803,21 @@ def then_creative_use_require_human_default(ctx: dict) -> None:
         f"INV-1: Default approval mode should produce 'pending_review' status, got '{creative.status}'"
     )
     _assert_workflow_steps(ctx["env"], expect_present=True)
+
+
+@then(parsers.parse('the per-creative result should carry advisory status "{status}"'))
+def then_per_creative_result_carries_status(ctx: dict, status: str) -> None:
+    """The scenario's creative entry carries *status* on the wire.
+
+    sync-creatives-response.json: the per-creative ``status`` is the "advisory
+    review-lifecycle state of the creative after this sync", drawn from CreativeStatus;
+    "sellers with async review return processing or pending_review; sellers with
+    synchronous review MAY return a terminal value (approved, rejected)".
+    """
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("status") == status, (
+        f"Expected advisory status {status!r} on the wire, got {entry.get('status')!r}"
+    )
 
 
 @then("the creative status should be set to approved immediately")
@@ -1538,12 +1566,7 @@ def given_assignment_entry_missing_package_id(ctx: dict) -> None:
 
 @given("an assignment with weight 0")
 def given_assignment_with_weight_zero(ctx: dict) -> None:
-    """Spec: weight=0 → paused assignment. Production currently hard-codes weight=100.
-
-    There is no way to express per-assignment weight in the current
-    ``dict[creative_id -> list[package_id]]`` shape, so this is a SPEC-PRODUCTION
-    GAP in the Then step.
-    """
+    """assignments[].weight 0: "assigned but paused (receives no delivery)" (the pin)."""
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
@@ -1561,15 +1584,12 @@ def given_assignment_with_weight_zero(ctx: dict) -> None:
     ctx["package"] = package
     creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
+    _ask_assignment_terms(ctx, creative_id, package.package_id, weight=0)
 
 
 @given('an assignment with placement_ids ["slot_a"]')
 def given_assignment_with_placement_ids(ctx: dict) -> None:
-    """Spec: assignments carry placement_ids for sub-package targeting.
-
-    Production's ``dict[creative_id -> list[package_id]]`` shape does not
-    include placement_ids. SPEC-PRODUCTION GAP in the Then step.
-    """
+    """assignments[].placement_ids: "Restrict this creative to specific placements" (the pin)."""
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
     env = ctx["env"]
@@ -1587,6 +1607,7 @@ def given_assignment_with_placement_ids(ctx: dict) -> None:
     ctx["package"] = package
     creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
+    _ask_assignment_terms(ctx, creative_id, package.package_id, placement_ids=["slot_a"])
 
 
 # --- 5o9e: assignment-basic Given steps (package_id+weight, multi-package, duplicate, missing fields) ---
@@ -1638,31 +1659,15 @@ def _setup_assignment_package(
 def given_assignment_with_package_and_weight(ctx: dict, package_id: str, weight: str) -> None:
     """Set up an assignment with a specific package_id and optional weight.
 
-    Handles both ``weight 50`` (explicit int) and ``weight `` (empty = absent).
-    Production's ``dict[creative_id -> list[package_id]]`` shape has no way to
-    express per-assignment weight, so we store the requested weight in
-    ``ctx["assignment_requested_weight"]`` for the Then step to xfail on.
+    Handles both ``weight 50`` (explicit int) and ``weight `` (empty = the field omitted,
+    which the pin defines as equal rotation).
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
     creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {creative_id: [package.package_id]}
     weight_stripped = weight.strip()
     if weight_stripped:
-        ctx["assignment_requested_weight"] = int(weight_stripped)
-    else:
-        ctx["assignment_requested_weight"] = None  # absent → equal rotation
-
-
-@given(parsers.parse('an assignment with package_id "{package_id}" and no weight specified'))
-def given_assignment_with_package_no_weight(ctx: dict, package_id: str) -> None:
-    """Set up an assignment with no weight (spec: equal rotation default).
-
-    Production hard-codes weight=100 so this is a SPEC-PRODUCTION GAP in Then.
-    """
-    _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
-    creative_id = latest_creative_id(ctx)
-    ctx["assignments"] = {creative_id: [package.package_id]}
-    ctx["assignment_requested_weight"] = None  # absent → equal rotation
+        _ask_assignment_terms(ctx, creative_id, package.package_id, weight=int(weight_stripped))
 
 
 @given("assignments mapping the creative to valid package_ids")
@@ -1748,12 +1753,11 @@ def given_assignment_with_ids_and_weight(ctx: dict, creative_id: str, package_id
     """Set up an assignment with explicit creative_id, package_id, and weight.
 
     The ``creative_id`` label is symbolic (scenario outline placeholder).
-    Production cannot express per-assignment weight — SPEC-PRODUCTION GAP.
     """
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
     real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
-    ctx["assignment_requested_weight"] = weight
+    _ask_assignment_terms(ctx, real_creative_id, package.package_id, weight=weight)
 
 
 @given(
@@ -1762,13 +1766,11 @@ def given_assignment_with_ids_and_weight(ctx: dict, creative_id: str, package_id
     )
 )
 def given_assignment_with_ids_and_placement(ctx: dict, creative_id: str, package_id: str, placement_ids: str) -> None:
-    """Set up an assignment with explicit creative_id, package_id, and placement_ids.
-
-    Production's dict shape has no way to express placement_ids — SPEC-PRODUCTION GAP.
-    """
+    """Set up an assignment with explicit creative_id, package_id, and placement_ids."""
     _media_buy, package = _setup_assignment_package(ctx, package_id=package_id)
     real_creative_id = latest_creative_id(ctx)
     ctx["assignments"] = {real_creative_id: [package.package_id]}
+    _ask_assignment_terms(ctx, real_creative_id, package.package_id, placement_ids=json.loads(placement_ids))
 
 
 @given("an assignment entry missing creative_id")
@@ -1854,38 +1856,9 @@ def then_both_assignments_created(ctx: dict) -> None:
 
 @then(parsers.parse("the assignment should be created with weight {weight:d}"))
 def then_assignment_created_with_weight(ctx: dict, weight: int) -> None:
-    """Assert the assignment was created with the specified weight.
-
-    Production hard-codes weight=100 on all new assignments and has no API
-    surface for per-entry weight. SPEC-PRODUCTION GAP when weight != 100.
-    """
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-    # Production hard-codes weight=100 — verify the weight in the DB
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
-        # loudly if production implements it; this step now ASSERTS instead of excusing itself.
-        assert assignment.weight == weight, (
-            f"Expected assignment weight {weight}, got {assignment.weight} "
-            f"(creative={creative_id}, package={expected_pkg})"
-        )
+    """The persisted assignment carries the weight the entry asked for (assignments[].weight)."""
+    assignment = _get_assignment_from_db(ctx)
+    assert assignment.weight == weight, f"Expected assignment weight {weight}, got {assignment.weight}"
 
 
 @then("the existing assignment should be updated")
@@ -2007,15 +1980,8 @@ def then_no_assignment_processing(ctx: dict) -> None:
 
 @then("the assignment should be created as paused")
 def then_assignment_created_as_paused(ctx: dict) -> None:
-    """Spec: weight=0 assignment is paused (weight persisted as 0).
-
-    Production hard-codes weight=100 on all new assignments and has no API
-    surface for per-entry weight. SPEC-PRODUCTION GAP on weight only.
-    """
+    """assignments[].weight 0 is "assigned but paused (receives no delivery)": persisted as 0."""
     assignment = _get_assignment_from_db(ctx)
-    # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-    # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
-    # loudly if production implements it; this step now ASSERTS instead of excusing itself.
     assert assignment.weight == 0, (
         f"weight=0 means assigned but PAUSED (pinned 3.1 assignments[].weight); got {assignment.weight}"
     )
@@ -2168,19 +2134,11 @@ def then_rejected_with_auth_code(ctx: dict, expected_code: str) -> None:
 
 @then("the assignment should include placement targeting")
 def then_assignment_includes_placement(ctx: dict) -> None:
-    """Spec: assignments carry placement_ids for sub-package targeting.
-
-    Production's assignments shape has no placement_ids field and the
-    CreativeAssignment ORM model does not persist per-assignment placement ids.
-    SPEC-PRODUCTION GAP on placement_ids only.
-    """
+    """assignments[].placement_ids restricts the creative to those placements: persisted as sent."""
     assignment = _get_assignment_from_db(ctx)
     creative_id = latest_creative_id(ctx)
     expected_pkg = ctx["package"].package_id
-    # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].placement_ids, production
-    # does not carry it. Declared ONCE in _SELECTIVE_XFAIL so it
-    # XPASSes loudly if production implements it; this step now ASSERTS.
-    placement_ids = getattr(assignment, "placement_ids", None)
+    placement_ids = assignment.placement_ids
     assert placement_ids, (
         "assignments[].placement_ids restricts a creative to specific placements within the "
         f"package; the stored assignment carries {placement_ids!r} "
@@ -2743,13 +2701,20 @@ def _build_creative_payload(ctx: dict, *, provenance: dict | None = None) -> dic
 
 @given("a creative with provenance metadata")
 def given_creative_with_provenance(ctx: dict) -> None:
-    """Set up a creative that includes AI provenance/disclosure metadata."""
+    """Set up a creative that includes AI provenance/disclosure metadata.
+
+    Shaped by core/provenance.json: ``digital_source_type`` is an IPTC enum member,
+    ``ai_tool`` an object naming the tool, ``disclosure`` an object with the declared
+    ``required`` claim. The scalar ``source`` / ``model`` / ``disclosure`` string this
+    used to send are not pin fields, so the request was refused before provenance
+    handling ran and the scenario graded the refusal instead of the policy.
+    """
     _build_creative_payload(
         ctx,
         provenance={
-            "source": "ai-generated",
-            "model": "stable-diffusion-xl",
-            "disclosure": "This creative was generated using AI.",
+            "digital_source_type": "trained_algorithmic_media",
+            "ai_tool": {"name": "Stable Diffusion XL"},
+            "disclosure": {"required": True},
         },
     )
 
@@ -3101,7 +3066,7 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
     creatives = ctx.get("creatives", [])
     kwargs: dict = {"creatives": creatives}
     if "assignments" in ctx:
-        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"])
+        kwargs["assignments"] = _assignments_for_the_wire(ctx["assignments"], ctx.get("assignment_terms"))
     if "validation_mode" in ctx:
         kwargs["validation_mode"] = ctx["validation_mode"]
     dispatch_request(ctx, **kwargs)
@@ -3721,21 +3686,6 @@ def given_assignment_product_accepts_format(ctx: dict) -> None:
     )
 
 
-@given("an assignment to a package whose product format has trailing slash")
-def given_assignment_product_trailing_slash(ctx: dict) -> None:
-    """Create a package whose product format agent_url has a trailing slash.
-
-    Production's normalize_url() strips trailing '/' before comparison,
-    so this should still match the creative's agent_url.
-    """
-    format_id = ctx["creative_format_id"]
-    agent_url_with_slash = ctx["creative_agent_url"] + "/"
-    _setup_assignment_package_for_format(
-        ctx,
-        product_format_ids=[{"agent_url": agent_url_with_slash, "id": format_id}],
-    )
-
-
 @given("an assignment to a package with no product_id")
 def given_assignment_package_no_product_id(ctx: dict) -> None:
     """Create a package with no product_id in its config.
@@ -3760,19 +3710,6 @@ def given_assignment_product_rejects_format(ctx: dict) -> None:
     ctx["validation_mode"] = "strict"
 
 
-@then("the assignment should match after URL normalization")
-def then_assignment_matches_after_normalization(ctx: dict) -> None:
-    """Assert the assignment succeeded despite the product URL having a trailing slash.
-
-    Production's normalize_url() strips trailing '/' from both URLs before
-    comparison, so the assignment should be created.
-    """
-    assert "error" not in ctx, f"Expected success (URL normalization) but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to after URL normalization, got {assigned}"
-
-
 @then("the assignment should be created (all formats allowed)")
 def then_assignment_created_all_formats(ctx: dict) -> None:
     """Assert the assignment succeeded because the product has no format restrictions.
@@ -3786,30 +3723,6 @@ def then_assignment_created_all_formats(ctx: dict) -> None:
 
 
 # --- yqpf: format compatibility — format_id key variants + URL normalization (BR-RULE-039) ---
-
-
-@given(parsers.parse('a creative with format agent_url "{agent_url}"'))
-def given_creative_with_format_agent_url(ctx: dict, agent_url: str) -> None:
-    """Set up a creative payload with a specific agent_url and default format_id.
-
-    For URL normalization testing: the agent_url may have trailing slash or /mcp
-    that production should normalize before comparison.
-    """
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    format_id = _scenario_format_id(ctx, env)
-    creative_id = "creative-url-norm-001"
-    creative_payload = CreativeAssetRequestFactory.payload(
-        creative_id=creative_id,
-        name="URL Normalization Creative",
-        # The un-normalised agent_url from the scenario row is the subject here, and
-        # payload() overrides reach the wire verbatim — build() would route it
-        # through the model and normalise away the very thing under test.
-        format_id={"id": format_id, "agent_url": agent_url},
-    )
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = format_id
-    ctx["creative_agent_url"] = agent_url
 
 
 def _product_format_at_respelled_agent(ctx: dict, respell) -> None:
@@ -4080,16 +3993,16 @@ def then_no_workflow_steps(ctx: dict) -> None:
 def then_no_slack_notification(ctx: dict) -> None:
     """Assert no Slack notification was sent (INV-2/INV-6).
 
-    The harness must wire the send_notifications mock so absence of the
-    notification seam is detectable. A missing mock is a harness setup error.
+    Read off the Slack sender itself (the env's ``slack_notifier`` seam), not off the
+    notification step: production enters ``_send_creative_notifications`` for every
+    creative needing approval and decides INSIDE it -- require-human only, webhook
+    configured only -- whether Slack is reached. A missing seam is a harness setup error.
     """
     _assert_success_response(ctx)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, "Harness must wire send_notifications mock to verify no-notification invariant"
-    assert mock_notify.call_count == 0, (
-        f"Expected no Slack notification but send_notifications was called "
-        f"{mock_notify.call_count} time(s). See BR-RULE-037 INV-6."
-    )
+    notifier = ctx["env"].mock.get("slack_notifier")
+    assert notifier is not None, "Harness must wire the slack_notifier mock to verify the no-notification invariant"
+    sent = notifier.return_value.notify_creative_pending.call_count
+    assert sent == 0, f"Expected no Slack notification but the notifier was used {sent} time(s). See BR-RULE-037 INV-6."
 
 
 @then("a Slack notification should be sent immediately")
@@ -4682,6 +4595,118 @@ def given_creative_with_no_format_id(ctx: dict) -> None:
             format_id=OMIT,
         ),
         obligation=ErrorCode.INVALID_REQUEST,
+    )
+    ctx.setdefault("creatives", []).append(creative_payload)
+
+
+#: vast-tracker-asset.json / daast-tracker-asset.json ``not: {enum: [...]}`` -- the events a
+#: tracker asset refuses because they belong to another VAST/DAAST element.
+_NON_TRACKING_EVENTS = frozenset(
+    {
+        "impression",
+        "clickTracking",
+        "customClick",
+        "error",
+        "viewable",
+        "notViewable",
+        "viewUndetermined",
+        "measurableImpression",
+        "viewableImpression",
+    }
+)
+
+_TRACKER_PHRASE = re.compile(
+    r'a (?P<kind>VAST|DAAST) tracker for "(?P<event>\w+)"'
+    r'(?: at offset "(?P<offset>[^"]+)")?(?P<no_offset> without an offset)?(?: targeting "(?P<target>\w+)")?$'
+)
+
+
+@given(parsers.parse("a creative with a known format_id whose assets carry {tracker_assets}"))
+def given_creative_with_tracker_assets(ctx: dict, tracker_assets: str) -> None:
+    """A creative on the transport's served format whose assets carry decomposed trackers.
+
+    ``tracker_assets`` is one or more ``a VAST tracker for "<event>"`` phrases joined by
+    " and ", each optionally ``at offset "<offset>"``, ``without an offset`` or
+    ``targeting "<target>"`` -- the fields core/assets/vast-tracker-asset.json and
+    daast-tracker-asset.json define. The specs are kept for the persisted-assets Then.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    format_id, agent_url, assets = _format_payload(ctx, env)
+    specs = []
+    refusals: list[str] = []
+    for phrase in tracker_assets.split(" and "):
+        match = _TRACKER_PHRASE.fullmatch(phrase.strip())
+        assert match, f"unrecognised tracker phrase {phrase!r}"
+        kind, event = match["kind"].lower(), match["event"]
+        fields: dict[str, Any] = {
+            f"{kind}_event": event,
+            "url": f"https://tracking.example.com/{kind}/{event}",
+        }
+        if match["offset"]:
+            fields["offset"] = match["offset"]
+        if match["target"]:
+            fields["target"] = match["target"]
+        specs.append(asset_spec(f"{kind}_{event}_tracker", f"{kind}_tracker", **fields))
+        # The pin's refusals, named so the payload can DECLARE itself malformed: the
+        # non-TrackingEvents events, a progress tracker with no offset, a DAAST target
+        # outside {linear, companion}.
+        if event in _NON_TRACKING_EVENTS:
+            refusals.append(f"{kind}_event {event!r} belongs to another {kind.upper()} element")
+        if event == "progress" and not match["offset"]:
+            refusals.append("offset is required when the event is progress")
+        if match["target"] and match["target"] not in ("linear", "companion"):
+            refusals.append(f"DAAST target {match['target']!r} is not linear or companion")
+    ctx["tracker_specs"] = specs
+    creative_payload: dict[str, Any] = CreativeAssetRequestFactory.payload(
+        creative_id="creative-trackers-001",
+        name="Creative With Trackers",
+        format_id={"id": format_id, "agent_url": agent_url},
+        assets={**assets, **build_assets(*specs)},
+    )
+    if refusals:
+        creative_payload = malformed(
+            "semantic",
+            "the tracker asset is shaped correctly but its VALUE breaks a rule the pin states on "
+            "vast-tracker-asset.json / daast-tracker-asset.json: " + "; ".join(refusals),
+            creative_payload,
+            obligation=ErrorCode.INVALID_REQUEST,
+        )
+    ctx.setdefault("creatives", []).append(creative_payload)
+
+
+@then("the creative should be created with its tracker assets stored")
+def then_creative_created_with_trackers_stored(ctx: dict) -> None:
+    """The entry reports ``created`` and the library row keeps every tracker as sent."""
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("action") == "created", f"Expected action 'created', got {entry.get('action')!r}"
+    _xfail_if_e2e(ctx)
+    assert_assets(_stored_assets_for_last_creative(ctx), *ctx["tracker_specs"])
+
+
+@given("a creative with a known format_id whose agent returns no preview and that carries no media url")
+def given_creative_no_preview_no_media_url(ctx: dict) -> None:
+    """A text-only creative on a format the agent serves, answered with zero previews.
+
+    The format must be one the agent SERVES (``configure_agent_served_creative``): a
+    format absent from the agent's catalogue never reaches the preview step at all. The
+    agent then answers the preview with nothing, and with no image or video asset there
+    is no media_url to fall back on -- which production classifies as CREATIVE_REJECTED
+    carrying ``reasons`` (src/core/tools/creatives/_processing.py). The env method
+    declares its own e2e unrealizability: a live agent cannot be told to answer nothing.
+    """
+    from unittest.mock import AsyncMock
+
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    fmt = env.configure_agent_served_creative(generative=False, format_id=_scenario_format_id(ctx, env))
+    env.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
+    creative_payload = CreativeAssetRequestFactory.payload(
+        creative_id="creative-no-preview-001",
+        name="Nothing Renderable",
+        format_id={"id": fmt["id"], "agent_url": fmt["agent_url"]},
+        assets=build_assets(text_spec("headline", content="Nothing renderable here")),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
 
@@ -6116,39 +6141,13 @@ def given_assignments_three_packages_mixed(ctx: dict) -> None:
 
 @then("the assignment should use equal rotation")
 def then_assignment_equal_rotation(ctx: dict) -> None:
-    """Assert the assignment uses equal rotation (weight omitted/absent).
+    """weight omitted: "the creative receives equal rotation with other unweighted creatives".
 
-    Spec: when weight is absent, the creative receives equal rotation with
-    other unweighted creatives. Production hard-codes weight=100, which is
-    functionally "full weight" — the concept of equal rotation doesn't
-    apply when there's only one assignment. SPEC-PRODUCTION GAP if production
-    doesn't support the equal-rotation semantic.
+    Every unweighted assignment is persisted with the same default, 100 -- one value for
+    all of them is what equal rotation means, so the default is what this reads.
     """
-    assert "error" not in ctx, f"Expected assignment with equal rotation, but production raised: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    # Verify weight in DB — canonical equal-rotation default is null or 100
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        assert assignment.weight is None or assignment.weight == 100, (
-            f"Equal rotation requires canonical default weight (None or 100), "
-            f"got weight={assignment.weight} for creative={creative_id}"
-        )
+    assignment = _get_assignment_from_db(ctx)
+    assert assignment.weight == 100, f"Expected the equal-rotation default weight 100, got {assignment.weight}"
 
 
 @then("the assignment should be created")
@@ -6166,40 +6165,11 @@ def then_assignment_created_bare(ctx: dict) -> None:
 
 @then("the assignment should be created with placement targeting")
 def then_assignment_created_with_placement(ctx: dict) -> None:
-    """Assert the assignment was created with placement targeting.
-
-    Verifies:
-    1. The package was assigned to the creative (response check)
-    2. A CreativeAssignment row exists in the DB
-    3. The persisted placement_ids contains the expected placement
-    """
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    # Verify placement_ids in the DB
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        assert assignment.placement_ids is not None, (
-            f"Expected placement_ids to be set, got None for assignment {assignment.assignment_id}"
-        )
-        assert "slot_a" in assignment.placement_ids, (
-            f"Expected 'slot_a' in placement_ids, got {assignment.placement_ids}"
-        )
+    """The persisted assignment carries the placement_ids the entry asked for."""
+    assignment = _get_assignment_from_db(ctx)
+    assert assignment.placement_ids == ["slot_a"], (
+        f"Expected placement_ids ['slot_a'], got {assignment.placement_ids} for assignment {assignment.assignment_id}"
+    )
 
 
 @then("the second should be an idempotent upsert")
@@ -6291,46 +6261,6 @@ def then_response_includes_creative_with_assignment_results(ctx: dict) -> None:
     assigned = first.assigned_to or []
     # The response should include assignment results (assigned_to list)
     assert assigned, f"POST-S3: Expected non-empty assigned_to on SyncCreativeResult, got assigned_to={assigned}"
-
-
-@then("the assignment should be created with the specified weight")
-def then_assignment_created_with_specified_weight(ctx: dict) -> None:
-    """Assert the assignment was created with the weight specified in the Given step.
-
-    Reads the requested weight from ctx["assignment_requested_weight"] (set by
-    the ``an assignment with package_id "..." and weight N`` Given step).
-    Production hard-codes weight=100 — SPEC-PRODUCTION GAP when weight != 100.
-    """
-    assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    requested_weight = ctx.get("assignment_requested_weight")
-    if requested_weight is None:
-        return  # No specific weight to check
-
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight, production
-        # hard-codes 100. Declared ONCE in _SELECTIVE_XFAIL so it XPASSes
-        # loudly if production implements it; this step now ASSERTS instead of excusing itself.
-        assert assignment.weight == requested_weight, (
-            f"Expected assignment weight {requested_weight}, got {assignment.weight}"
-        )
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6510,45 +6440,6 @@ def then_assignment_skipped_with_warning(ctx: dict) -> None:
                 assert assignment_errors[pkg_id], (
                     f"assignment_errors[{pkg_id!r}] should have a non-empty message, got {assignment_errors[pkg_id]!r}"
                 )
-
-
-@then("the creative should receive equal rotation with other unweighted creatives")
-def then_creative_equal_rotation_with_unweighted(ctx: dict) -> None:
-    """Assert the unweighted assignment carries the canonical equal-rotation default.
-
-    Spec (BR-RULE-093 INV-2): when weight is omitted, creatives receive
-    equal rotation. Production hard-codes weight=100, which is the canonical
-    equal-rotation default.
-
-    Hard-asserts the weight is either None or 100. No vacuous cross-assignment
-    uniqueness check -- the scenario creates a single assignment so comparing
-    a one-element set proves nothing.
-    """
-    from sqlalchemy import select
-
-    from src.core.database.models import CreativeAssignment
-
-    assert "error" not in ctx, f"Expected assignment with equal rotation, but production raised: {ctx.get('error')}"
-    assigned = _get_creative_assigned_to(ctx)
-    expected_pkg = ctx["package"].package_id
-    assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
-
-    tenant_id = ctx["tenant"].tenant_id
-    creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
-        assignment = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id=creative_id,
-                package_id=expected_pkg,
-            )
-        ).first()
-        assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={expected_pkg}"
-        # Hard-assert the canonical equal-rotation default (null or 100)
-        assert assignment.weight is None or assignment.weight == 100, (
-            f"Equal rotation requires canonical default weight (None or 100), "
-            f"got weight={assignment.weight} for creative={creative_id}"
-        )
 
 
 @then("the assignment results should list the assigned packages")
@@ -6828,10 +6719,7 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
     """Set up a creative payload with an assignment to a package at a given weight.
 
     Builds the creative payload (if not already present for this creative_id)
-    and adds an assignment entry with the specified weight. The assignment is
-    stored in ctx["assignments"] as the dict shape that _sync_creatives_impl
-    expects, and the weight is tracked in ctx["assignment_weights"] for Then
-    step assertions.
+    and adds an assignment entry with the specified weight.
     """
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
@@ -6866,15 +6754,12 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
         env._commit_factory_data()
         packages[package_id] = package
 
-    # Add the assignment mapping (creative_id -> [package_id])
+    # Add the assignment mapping (creative_id -> [package_id]) and its weight
     assignments = ctx.setdefault("assignments", {})
     assignments.setdefault(creative_id, [])
     if package_id not in assignments[creative_id]:
         assignments[creative_id].append(package_id)
-
-    # Track weights for Then step assertions
-    weights = ctx.setdefault("assignment_weights", {})
-    weights[creative_id] = weight
+    _ask_assignment_terms(ctx, creative_id, package_id, weight=weight)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -6882,69 +6767,31 @@ def given_creative_assigned_to_package_with_weight(ctx: dict, creative_id: str, 
 # ═══════════════════════════════════════════════════════════════════════
 
 
-@then("creative-A should receive proportionally more delivery than creative-B")
-def then_creative_a_more_delivery_than_b(ctx: dict) -> None:
-    """Assert creative-A (higher weight) has more delivery weight than creative-B.
+@then(parsers.parse('the assignment of "{creative_id}" to "{package_id}" should carry weight {weight:d}'))
+def then_assignment_of_creative_carries_weight(ctx: dict, creative_id: str, package_id: str, weight: int) -> None:
+    """assignments[].weight is per entry: two creatives on one package each keep their own.
 
-    Spec (BR-RULE-093 INV-3): When two creatives are assigned to the same
-    package with different weights (e.g. 80 vs 20), the higher-weighted
-    creative should receive proportionally more delivery.
-
-    We verify this by reading the CreativeAssignment rows from the DB and
-    comparing their weight values. Production currently hard-codes weight=100
-    for all assignments, so a SPEC-PRODUCTION GAP is expected.
+    "When multiple creatives are assigned to the same package, weights determine
+    impression distribution proportionally" (the pin). The persisted weights are what
+    the ad server rotates on; delivery itself is not observable on this tool.
     """
     from sqlalchemy import select
 
     from src.core.database.models import CreativeAssignment
 
+    _assert_success_response(ctx)
     _xfail_if_e2e(ctx)
-
-    # No excuse for a raised error: a dispatch that fails is the failure this scenario
-    # exists to catch. The xfail that stood here was conditional on the outcome, so the
-    # step could not fail in the one direction that matters.
-    error = ctx.get("error")
-    assert error is None, f"expected proportional delivery, but production raised {type(error).__name__}: {error}"
-
-    # Retrieve requested weights from the Given step
-    assignment_weights = ctx.get("assignment_weights", {})
-    assert "creative-A" in assignment_weights, "Given step did not set weight for creative-A"
-    assert "creative-B" in assignment_weights, "Given step did not set weight for creative-B"
-    weight_a_requested = assignment_weights["creative-A"]
-    weight_b_requested = assignment_weights["creative-B"]
-    assert weight_a_requested > weight_b_requested, (
-        f"Test precondition: creative-A weight ({weight_a_requested}) must exceed "
-        f"creative-B weight ({weight_b_requested})"
-    )
-
-    # Read actual weights from DB
-    tenant_id = ctx["tenant"].tenant_id
     with db_session(ctx) as session:
-        assignment_a = session.scalars(
+        assignment = session.scalars(
             select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id="creative-A",
+                tenant_id=ctx["tenant"].tenant_id,
+                creative_id=creative_id,
+                package_id=package_id,
             )
         ).first()
-        assignment_b = session.scalars(
-            select(CreativeAssignment).filter_by(
-                tenant_id=tenant_id,
-                creative_id="creative-B",
-            )
-        ).first()
-
-    assert assignment_a is not None, "No CreativeAssignment found for creative-A"
-    assert assignment_b is not None, "No CreativeAssignment found for creative-B"
-
-    # Compare actual DB weights: creative-A should have strictly more weight.
-    # GAP: the pinned 3.1 sync-creatives-request.json defines assignments[].weight as
-    # "Relative delivery weight (0-100) ... weights determine impression distribution
-    # proportionally"; production hard-codes 100, so the ordering cannot hold. Declared
-    # ONCE in _SELECTIVE_XFAIL so it XPASSes loudly if production
-    # implements it; this step now ASSERTS instead of excusing itself.
-    assert assignment_a.weight > assignment_b.weight, (
-        f"requested creative-A={weight_a_requested} > creative-B={weight_b_requested}, "
-        f"but stored creative-A.weight={assignment_a.weight}, creative-B.weight={assignment_b.weight}"
+    assert assignment is not None, f"No CreativeAssignment found for creative={creative_id}, package={package_id}"
+    assert assignment.weight == weight, (
+        f"Expected assignment weight {weight} for creative={creative_id}, package={package_id}, got {assignment.weight}"
     )
 
 

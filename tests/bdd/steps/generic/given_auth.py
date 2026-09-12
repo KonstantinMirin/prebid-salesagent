@@ -96,18 +96,22 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     Writes the Account and AgentAccountAccess rows and commits them, so the
     identity resolves to an account carrying that flag.
 
-    Seeds rather than setting a request field because the scenarios using this
-    Given do not send one; the account reaches the tool through the principal.
-    A scenario that means "send account X on the request" wants a different
-    Given — ``account`` IS a request field (optional on get_media_buys and
-    get_products, REQUIRED on create_media_buy and update_media_buy).
+    Seeds the row AND names it as the request's account (``ctx["account_ref"]``), for
+    the When steps that carry one: ``account`` is a request field -- optional on
+    get_media_buys and get_products, REQUIRED on create_media_buy, update_media_buy and
+    sync_creatives -- and a request that named some other account would grade that
+    account's flag, not this one's. Tools whose When sends no account still reach it
+    through the principal's access grant.
     """
+    from adcp.types import AccountReference, AccountReferenceById
+
     from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
     env = ctx["env"]
     account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
     AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()
+    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account.account_id))
     ctx.setdefault("tenant_id", "sandbox_tenant" if sandbox else "prod_tenant")
 
 

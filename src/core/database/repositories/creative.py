@@ -450,6 +450,7 @@ class CreativeAssignmentRepository:
         creative_id: str,
         principal_id: str,
         weight: int = 100,
+        placement_ids: list[str] | None = None,
     ) -> CreativeAssignment:
         """Create a new assignment within this tenant.
 
@@ -467,6 +468,7 @@ class CreativeAssignmentRepository:
             creative_id=creative_id,
             principal_id=principal_id,
             weight=weight,
+            placement_ids=placement_ids,
             created_at=datetime.now(UTC),
         )
         self._session.add(assignment)

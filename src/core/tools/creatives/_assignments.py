@@ -34,8 +34,17 @@ def _resolve_creative_for_assignment(assignment_repo, creative_id: str, principa
     return assignment_repo.get_creative_by_id(creative_id, principal_id)
 
 
-def _normalise_assignments(entries: list[Any]) -> dict[str, list[str]]:
-    """The AdCP 3.1 assignment ARRAY, as the internal ``{creative_id: [package_ids]}`` map.
+#: What one assignment entry asks for beyond naming the package: the pinned
+#: sync-creatives-request.json's optional ``assignments[].weight`` and
+#: ``assignments[].placement_ids``, ``None`` when the entry omits them.
+AssignmentTerms = tuple[float | None, list[str] | None]
+
+#: ``{creative_id: {package_id: (weight, placement_ids)}}`` -- the internal shape.
+AssignmentMap = dict[str, dict[str, AssignmentTerms]]
+
+
+def _normalise_assignments(entries: list[Any]) -> AssignmentMap:
+    """The AdCP 3.1 assignment ARRAY, as the internal ``{creative_id: {package_id: terms}}`` map.
 
     Entries arrive TYPED (adcp ``Assignment``) from every transport whose shape is derived
     from the DTO, and as raw dicts from callers that build the list by hand. Both must work.
@@ -46,17 +55,24 @@ def _normalise_assignments(entries: list[Any]) -> dict[str, list[str]]:
     line, behind a response that looked like a clean sync. Adopting the DTO at the boundary is
     precisely what turned those dicts into models, so the failure arrived with the
     announcement work rather than with any edit here.
+
+    The map used to be ``{creative_id: [package_ids]}``, which is where ``weight`` and
+    ``placement_ids`` were dropped: the pin defines both per entry, and a map of ids has
+    nowhere to carry them. Keying the terms by package keeps them with the entry they came on.
     """
-    coerced: dict[str, list[str]] = {}
+    coerced: AssignmentMap = {}
     dropped = 0
     for entry in entries:
         if isinstance(entry, dict):
             creative_id, package_id = entry.get("creative_id"), entry.get("package_id")
+            weight, placement_ids = entry.get("weight"), entry.get("placement_ids")
         else:
             creative_id = getattr(entry, "creative_id", None)
             package_id = getattr(entry, "package_id", None)
+            weight = getattr(entry, "weight", None)
+            placement_ids = getattr(entry, "placement_ids", None)
         if creative_id and package_id:
-            coerced.setdefault(creative_id, []).append(package_id)
+            coerced.setdefault(creative_id, {})[package_id] = (weight, placement_ids)
         else:
             dropped += 1
     if dropped:
@@ -109,11 +125,17 @@ def _process_assignments(
     packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
 
-    # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
-    # normalise to dict form {creative_id: [package_ids]} for internal processing.
+    # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
+    # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
+    # for internal processing. A caller still handing over the older {creative_id:
+    # [package_ids]} map asks for the default terms on every entry.
     if assignments and isinstance(assignments, list):
         coerced = _normalise_assignments(assignments)
         assignments = coerced if coerced else None
+    elif assignments and isinstance(assignments, dict):
+        assignments = {
+            creative_id: dict.fromkeys(package_ids, (None, None)) for creative_id, package_ids in assignments.items()
+        }
 
     # Creatives whose sync failed were never persisted; we must not attempt to
     # assign them (the creative_assignments FK would crash the request). Their
@@ -130,7 +152,8 @@ def _process_assignments(
             assert uow.assignments is not None
             assignment_repo = uow.assignments
 
-            for creative_id, package_ids in assignments.items():
+            for creative_id, terms_by_package in assignments.items():
+                package_ids = list(terms_by_package)
                 # Initialize tracking for this creative
                 if creative_id not in assignments_by_creative:
                     assignments_by_creative[creative_id] = []
@@ -185,7 +208,7 @@ def _process_assignments(
                     logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
                     continue
 
-                for package_id in package_ids:
+                for package_id, (requested_weight, placement_ids) in terms_by_package.items():
                     # Find which media buy this package belongs to
                     pkg_result = assignment_repo.find_package_with_media_buy(package_id)
 
@@ -288,10 +311,21 @@ def _process_assignments(
                         principal_id=principal_id,
                     )
 
+                    # The pinned sync-creatives-request.json: weight is "Relative delivery
+                    # weight (0-100) ... When omitted, the creative receives equal rotation
+                    # with other unweighted creatives. A weight of 0 means the creative is
+                    # assigned but paused"; placement_ids "Restrict this creative to specific
+                    # placements within the package. When omitted, the creative is eligible
+                    # for all placements." Omitted weight is the column default, 100 -- the
+                    # same value every unweighted creative gets, which IS equal rotation.
+                    # The pin types weight as a number; the column is an integer, as it is
+                    # for the update_media_buy writer of the same column.
+                    weight = 100 if requested_weight is None else int(requested_weight)
                     if existing_assignment:
-                        # Assignment already exists - update weight if needed
-                        if existing_assignment.weight != 100:
-                            existing_assignment.weight = 100
+                        # Assignment already exists - carry this request's terms onto it
+                        if existing_assignment.weight != weight or existing_assignment.placement_ids != placement_ids:
+                            existing_assignment.weight = weight
+                            existing_assignment.placement_ids = placement_ids
                             logger.info(
                                 log_safe(
                                     f"Updated existing assignment: creative={creative_id}, "
@@ -306,6 +340,8 @@ def _process_assignments(
                             package_id=actual_package_id,
                             creative_id=creative_id,
                             principal_id=principal_id,
+                            weight=weight,
+                            placement_ids=placement_ids,
                         )
                         logger.info(
                             log_safe(

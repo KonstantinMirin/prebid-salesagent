@@ -480,11 +480,9 @@ def then_every_result_exposes_action(ctx: dict) -> None:
 def then_every_result_exposes_status(ctx: dict) -> None:
     """Assert every per-creative result carries a non-None status field.
 
-    The other half of the decomposition above, and a KNOWN production gap:
-    per ``SyncCreativeResult``'s own docstring (src/core/schemas/creative.py)
-    the inherited spec ``status`` field is deliberately never populated ("we
-    inherit but do NOT populate the spec `status`: it stays None"). Registered
-    as a ledger tag on its own scenario, so this asserts unconditionally.
+    The other half of the decomposition above. A synced creative has a review state
+    (this seller has a review lifecycle), and sync-creatives-response.json makes the
+    per-creative ``status`` that state's advisory mirror.
     """
     resp = _require_response(ctx, "per-creative results exposing a status")
     assert resp.creatives, "Expected at least one per-creative result"
@@ -503,20 +501,18 @@ def then_every_action_value_in_set(ctx: dict, a1: str, a2: str, a3: str) -> None
 
 @then("every status value should be drawn from the creative-status enum")
 def then_every_status_in_creative_status_enum(ctx: dict) -> None:
-    """Assert every per-creative status (where present) is a valid creative-status value.
+    """Assert every per-creative status is a member of the pinned creative-status enum.
 
-    Production never populates ``status`` (see ``then_every_result_exposes_action_and_status``'s
-    docstring) — every value observed here is None, so this xfails with the
-    same SPEC-PRODUCTION GAP rather than asserting a vacuous "all zero
-    populated values are valid" pass.
+    sync-creatives-response.json: "Values come from CreativeStatus only (processing,
+    pending_review, approved, suspended, rejected, archived) -- never from CreativeAction."
     """
     from adcp.types.generated_poc.enums.creative_status import CreativeStatus
 
     resp = _require_response(ctx, "every status drawn from the creative-status enum")
     statuses = [result.status for result in resp.creatives]
-    assert not all(s is None for s in statuses), (
-        "every per-creative status is None — cannot grade enum membership against an always-None field"
-    )
+    members = {member.value for member in CreativeStatus}
+    outside = [s for s in statuses if (s.value if hasattr(s, "value") else s) not in members]
+    assert not outside, f"per-creative statuses {outside!r} are not CreativeStatus members ({sorted(members)})"
     valid = {member.value for member in CreativeStatus}
     assert all(s in valid for s in statuses if s is not None), f"Expected every status in {valid}, got {statuses}"
 

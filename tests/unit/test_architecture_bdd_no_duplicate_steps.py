@@ -80,7 +80,7 @@ _DUPLICATE_THRESHOLD = 2
 # instead of a merge. The cluster's other groups were resolved on the
 # Gherkin side: two dead sentences swept to their canonical twin, one row corrected to the
 # pin, so nothing here to lower for them.
-_DUPLICATE_GROUP_BASELINE = 25
+_DUPLICATE_GROUP_BASELINE = 24
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).

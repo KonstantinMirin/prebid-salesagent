@@ -283,11 +283,11 @@ class TestSyncCreativeResultSchema:
     """
 
     def test_excludes_internal_fields(self):
-        """model_dump() must NOT include status or review_feedback.
+        """model_dump() must NOT include internal_status or review_feedback.
 
-        Spec: CONFIRMED -- sync-creatives-response.json per-creative result
-        does NOT include 'status' or 'review_feedback' fields.
-        Required fields are only creative_id + action.
+        sync-creatives-response.json's per-creative result carries the spec ``status``
+        (the advisory review-lifecycle state, a creative-status member) and nothing
+        internal; required fields are only creative_id + action.
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-08
         """
         result = SyncCreativeResult(
@@ -296,8 +296,8 @@ class TestSyncCreativeResultSchema:
             internal_status="approved",
             review_feedback="Looks good",
         )
-        data = result.model_dump()
-        assert "status" not in data
+        data = result.model_dump(mode="json")
+        assert data["status"] == "approved"
         assert "internal_status" not in data
         assert "review_feedback" not in data
         assert data["creative_id"] == "c_1"

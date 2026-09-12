@@ -1514,3 +1514,39 @@ def then_selected_entry_action(ctx: dict, collection: str, entry_id: str, action
     index = _entry_index_for(ctx, collection, entry_id)
     actual = wire_field(ctx, collection)[index].get("action")
     assert actual == action, f"Expected action {action!r} on the {collection} entry for {entry_id!r}, got {actual!r}"
+
+
+@then(
+    parsers.re(
+        r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" carries a non-empty "(?P<key>\w+)" error detail$'
+    )
+)
+def then_selected_entry_error_detail(ctx: dict, collection: str, entry_id: str, key: str) -> None:
+    """One error on the selected entry carries a non-empty *key* under ``details`` (core/error.json).
+
+    ``details`` is "Additional task-specific error details"; the pin's error-details/*.json
+    files give each code its RECOMMENDED keys (creative-rejected: ``reasons``), so the grade
+    is presence with content, not an exact shape.
+    """
+    index = _entry_index_for(ctx, collection, entry_id)
+    errors = wire_entry_errors(ctx, collection, index=index)
+    assert errors, f"the {collection} entry for {entry_id!r} carries an EMPTY errors[], so it reports no failure"
+    details = [(e.get("details") if isinstance(e, dict) else getattr(e, "details", None)) or {} for e in errors]
+    assert any(d.get(key) for d in details), (
+        f"Expected a non-empty {key!r} under details on the {collection} entry for {entry_id!r}, got {details}"
+    )
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" omits the "(?P<field>\w+)" field$'))
+def then_selected_entry_omits_field(ctx: dict, collection: str, entry_id: str, field: str) -> None:
+    """The *collection* entry selected by its id has no *field* key on the wire at all.
+
+    Key ABSENCE, not a null value: a schema that says a field MUST be omitted (the
+    per-creative ``status`` on a failed or deleted action) is violated by ``"status": null``
+    just as much as by a value, so the wire dict is read for the key itself.
+    """
+    index = _entry_index_for(ctx, collection, entry_id)
+    entry = wire_field(ctx, collection)[index]
+    assert field not in entry, (
+        f"Expected the {collection} entry for {entry_id!r} to omit {field!r}, but it carries {entry.get(field)!r}"
+    )
