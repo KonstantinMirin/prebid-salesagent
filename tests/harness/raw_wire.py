@@ -186,7 +186,15 @@ def _a2a(env: Any, document: RawDocument, identity: Any) -> TransportResult:
 
     request = SendMessageRequest(message=_a2a_message(document))
     try:
-        task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
+        if resolved is not None and not token:
+            # A token-less identity is injected through the resolver seam, as the harness's
+            # own A2A leg does; ``identity=None`` means no credential and runs the real chain.
+            from tests.helpers.boundary_identity import resolved_as
+
+            with resolved_as(resolved):
+                task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
+        else:
+            task = asyncio.run(AdCPRequestHandler().on_message_send(request, context))
     except A2AError as exc:
         # The code the JSON-RPC layer would write for this class, read from the SDK's own
         # table rather than restated here.

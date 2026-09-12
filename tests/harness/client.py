@@ -194,9 +194,14 @@ def _deliver_a2a(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any]
 
 def _deliver_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:
     kwargs = _with_identity({}, identity)
-    client, _resolved_identity = env._prepare_rest_request(kwargs)
+    client, resolved_identity = env._prepare_rest_request(kwargs)
     method = address.method or "post"
-    return getattr(client, method)(wrapped["url"], json=wrapped["body"])
+    # The credential rides the request, the same headers ``_run_rest_request`` sends: the
+    # boundary resolves the caller from them, and a request without them is a request
+    # from nobody, answered AUTH_MISSING on a protected tool whatever identity the env holds.
+    return getattr(client, method)(
+        wrapped["url"], json=wrapped["body"], headers=env._rest_request_headers(resolved_identity)
+    )
 
 
 def _deliver_e2e_rest(env: BaseTestEnv, address: ToolAddress, wrapped: dict[str, Any], identity: Any) -> Any:

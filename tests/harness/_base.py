@@ -810,9 +810,14 @@ class BaseTestEnv:
         # _credential_of → serve chain (header → token → DB lookup →
         # ResolvedIdentity). Only the transport's state injection is supplied here
         # (the in-process equivalent of MCP's get_http_headers seam) — the auth
-        # chain itself is real. When no real token exists (unit mode), inject the
-        # identity directly via the single mock point (unchanged behavior).
+        # chain itself is real. An identity WITHOUT a token (unit mode) is injected
+        # through the one seam that names the resolver, exactly as ``_run_mcp_client``
+        # injects it; this leg used to send an empty call context instead, so every
+        # token-less env authenticated on MCP and REST and was AUTH_MISSING on A2A.
+        # ``identity=None`` is neither: it means NO CREDENTIAL, and the real chain
+        # answers it.
         auth_token = a2a_identity.auth_token if a2a_identity else None
+        inject_identity = a2a_identity is not None and not auth_token
 
         if auth_token:
             from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
@@ -852,7 +857,13 @@ class BaseTestEnv:
             return await handler.on_message_send(params, server_context)
 
         try:
-            task_result = asyncio.run(_call())
+            if inject_identity:
+                from tests.helpers.boundary_identity import resolved_as
+
+                with resolved_as(a2a_identity):
+                    task_result = asyncio.run(_call())
+            else:
+                task_result = asyncio.run(_call())
         except Exception as exc:
             # The ORIGINAL exception propagates. It used to be translated into a
             # reconstructed AdCPSalesAgentError so callers could catch domain exceptions; the
