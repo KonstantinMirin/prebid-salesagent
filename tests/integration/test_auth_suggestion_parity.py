@@ -182,7 +182,7 @@ class TestAuthHelperFamilySuggestion:
 
             with pytest.raises(AdCPSalesAgentError) as exc_info:
                 _resolve_identity(
-                    headers=credential_headers(token="not-a-real-token", tenant="auth_sugg_t2"),
+                    credential_headers(token="not-a-real-token", tenant="auth_sugg_t2"),
                     require_valid_token=True,
                     protocol="mcp",
                 )

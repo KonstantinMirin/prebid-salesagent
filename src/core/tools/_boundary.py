@@ -54,13 +54,12 @@ import asyncio
 import inspect
 import logging
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, NoReturn
 
 from adcp.types import ContextObject
 from pydantic import ValidationError
 
-from src.core.auth_context import AuthContext
 from src.core.exceptions import AdcpFailure, adcp_error_for
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
@@ -223,7 +222,7 @@ def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> 
 async def serve(
     tool_name: str,
     raw: Any,
-    credential: AuthContext,
+    headers: Mapping[str, str],
     protocol: TransportProtocol,
 ) -> AdcpResponse:
     """Answer one buyer payload. THE transport entry.
@@ -233,35 +232,30 @@ async def serve(
     ONE call in ONE ``try``. ``invoke_tool`` is the entry for a caller that already holds a
     validated request.
     """
-    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), credential, protocol)
+    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol)
 
 
 async def invoke_tool(
     tool_name: str,
     req: BuyerRequest,
-    credential: AuthContext,
+    headers: Mapping[str, str],
     protocol: TransportProtocol,
 ) -> AdcpResponse:
-    """Run the registry's tool named ``tool_name``, for the caller holding *credential*.
+    """Run the registry's tool named ``tool_name``, for the caller the request *headers* present.
 
     The form every transport calls. A transport names the TOOL and hands over the request it
-    validated plus the credential the request arrived with; which function runs, and whether
-    that credential must verify, are the registry's answers -- not the caller's.
+    validated plus the headers the request arrived with; which function runs, and whether the
+    credential in those headers must verify, are the registry's answers -- not the caller's.
 
-    IT TAKES A CREDENTIAL, NOT AN IDENTITY. Whether that credential must verify is the
-    registry row's declaration, read here, so no transport decides it. ``protocol`` labels the
-    resulting identity for the observability record and decides nothing.
+    IT TAKES HEADERS, NOT AN IDENTITY. Nothing here reads them: the resolver is their one
+    reader, and it is handed the registry row's declaration of whether the credential must
+    verify, so no transport decides it. ``protocol`` labels the resulting identity for the
+    observability record and decides nothing.
     """
     from src.core.resolved_identity import _resolve_identity
-    from src.core.testing_hooks import AdCPTestContext
     from src.core.tools.registry import TOOLS
 
     spec = TOOLS[tool_name]
-
-    # The testing context rides the same headers: thirteen readers under src/core/tools branch
-    # on ``identity.testing_context`` for dry-run and delivery simulation, so a boundary that
-    # resolves the caller resolves the WHOLE caller.
-    testing_context = AdCPTestContext.from_headers(dict(credential.headers))
 
     # CAPTURED at entry and stamped on the way out, and that is the whole mechanism. The
     # buyer's ``context`` is opaque data this seller carries and returns: validation does not
@@ -276,11 +270,9 @@ async def invoke_tool(
     try:
         identity = await asyncio.to_thread(
             _resolve_identity,
-            headers=dict(credential.headers),
-            auth_token=credential.auth_token,
+            headers,
             require_valid_token=spec.requires_credential(),
             protocol=protocol,
-            testing_context=testing_context,
         )
     except Exception as exc:
         _failed(protocol, tool_name, exc, echo)

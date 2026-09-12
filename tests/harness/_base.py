@@ -263,17 +263,14 @@ def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
 def _a2a_call_context(credential: dict[str, str]) -> Any:
     """The ``ServerCallContext`` an in-process A2A dispatch presents *credential* on.
 
-    Carries the request headers the way the wire does, so ``AdCPRequestHandler`` reads the
-    credential off its call context and the real resolver parses it. ``auth_token`` is
-    left ``None`` on purpose: the resolver re-parses the Bearer value from the headers
-    when nothing pre-parsed it, so the chain that runs is the same one a request over
-    HTTP runs. Shared by the harness's A2A leg and the raw-wire A2A sender.
+    Carries the request headers where the SDK's own ``DefaultServerCallContextBuilder``
+    places them, ``state["headers"]``, so ``AdCPRequestHandler`` reads them off its call
+    context and the real resolver parses the credential exactly as it does for a request
+    over HTTP. Shared by the harness's A2A leg and the raw-wire A2A sender.
     """
     from a2a.server.routes.common import ServerCallContext
 
-    from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
-
-    return ServerCallContext(state={AUTH_CONTEXT_STATE_KEY: AuthContext(auth_token=None, headers=dict(credential))})
+    return ServerCallContext(state={"headers": dict(credential)})
 
 
 def _addressed_tenant(credential: dict[str, str]) -> str | None:

@@ -23,7 +23,8 @@ def test_the_seeded_token_resolves_to_the_seeded_tenant(ci_test_principal):
     from tests.helpers.credentials import credential_headers
 
     identity = _resolve_identity(
-        headers=credential_headers(token=ci_test_principal.access_token),
+        credential_headers(token=ci_test_principal.access_token),
+        require_valid_token=True,
         protocol="a2a",
     )
 

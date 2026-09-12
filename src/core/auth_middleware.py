@@ -1,24 +1,21 @@
-"""Pure ASGI middleware for unified authentication token extraction.
+"""The one renderer of a refused credential as HTTP: ``AuthChallengeResponder``.
 
-Replaces the fragile 3-middleware chain (auth_context_middleware +
-a2a_auth_middleware + ordering dependency) with a single middleware that:
-- Extracts token from the Authorization: Bearer header
-- Writes to scope["state"] (backs request.state)
+It reads nothing off the request and resolves nothing. Each transport hands its request
+headers to the boundary, whose resolver is the one reader of a credential; this module
+lifts the AdCP auth code out of a FINISHED JSON body onto the status line and attaches the
+``WWW-Authenticate`` challenge beside it.
 
-This is a pure ASGI class, NOT BaseHTTPMiddleware, avoiding ContextVar
-propagation bugs (Starlette issue #1729).
+A pure ASGI class, not ``BaseHTTPMiddleware``, which loses ContextVar writes across the
+request (Starlette issue #1729).
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
-
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 
 logger = logging.getLogger(__name__)
 
@@ -159,8 +156,7 @@ class AuthChallengeResponder:
     places to edit and two places to forget.
 
     It is mounted app-wide rather than around one transport, so a NEW transport gets the
-    same 401 for free and cannot render its own. ``tests/unit/test_architecture_single_auth_challenge_renderer.py``
-    fails the build if a second site starts emitting ``WWW-Authenticate``.
+    same 401 for free and cannot render its own.
 
     It buffers, and it must: the ASGI ``http.response.start`` message carries the status and
     arrives BEFORE the body, so the status has to be held until the body has been seen. That
@@ -170,13 +166,13 @@ class AuthChallengeResponder:
     made.
 
     It knows nothing about tools, and that is the point. Which tool was called, and whether
-    that tool requires a caller, is decided where the name is actually available -- the MCP
-    tool middleware, the A2A skill dispatch, the REST dependency -- each reading
-    ``ToolSpec.auth`` and handing it to ``resolve_identity``. A middleware cannot know it
-    (the name is in the body) and must not guess it: a version of this that parsed the
-    JSON-RPC body to find out was re-implementing the transport's own parsing and reading
-    the registry a second time, which is the drift building-tools.md says the single
-    declaration exists to prevent. This reads a CODE off a finished response; nothing more.
+    that tool requires a caller, is decided where the name is actually available -- the
+    boundary, which reads ``ToolSpec.requires_credential()`` and hands it to the resolver.
+    A middleware cannot know it (the name is in the body) and must not guess it: a version
+    of this that parsed the JSON-RPC body to find out was re-implementing the transport's
+    own parsing and reading the registry a second time, which is the drift
+    building-tools.md says the single declaration exists to prevent. This reads a CODE off
+    a finished response; nothing more.
     """
 
     def __init__(self, app: ASGIApp) -> None:
@@ -239,57 +235,3 @@ async def _flush(send: Send, start: Message | None, body: bytes) -> None:
     start["headers"] = headers
     await send(start)
     await send({"type": "http.response.body", "body": body})
-
-
-class UnifiedAuthMiddleware:
-    """Pure ASGI middleware that extracts auth token and populates AuthContext.
-
-    Sets AuthContext in scope["state"]["auth_context"], which backs
-    request.state for FastAPI routes and is read by AdCPCallContextBuilder
-    for A2A.
-    """
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        # Extract headers from ASGI scope
-        headers: dict[str, str] = {}
-        for raw_name, raw_value in scope.get("headers", []):
-            name = raw_name.decode("latin-1").lower()
-            value = raw_value.decode("latin-1")
-            headers[name] = value
-
-        # Token extraction: ``Authorization: Bearer`` only, case-insensitive per RFC 7235
-        # §2.1.
-        #
-        # The ``x-adcp-auth`` alias is GONE. Pinned 3.1.1
-        # L2/authentication.mdx:71 -- "The credential MUST be carried in the
-        # ``Authorization`` request header. Sellers MUST NOT require non-canonical aliases
-        # (e.g. ``x-adcp-auth``, which appeared in some early MCP-only deployments)" -- and
-        # :153 says it "is not recognized on the A2A surface" at all. Accepting it was
-        # optional ("a seller MAY accept such an alias as a transitional input"), so not
-        # accepting it is the compliant end state rather than a deviation.
-        #
-        # A caller that still sends only ``x-adcp-auth`` now presents NOTHING this seam can
-        # see, which is the correct reading: on a protected tool that is AUTH_MISSING
-        # (correctable -- send credentials and retry), never AUTH_INVALID, because nothing
-        # was presented to reject. Telling such a buyer their token is invalid would be a
-        # false diagnosis of a header problem. The pinned spec anticipates exactly this
-        # migration at :157.
-        token: str | None = None
-        auth_header = headers.get("authorization", "").strip()
-        if auth_header.lower().startswith("bearer "):
-            potential = auth_header[7:].strip()
-            token = potential or None
-
-        auth_ctx = AuthContext(auth_token=token, headers=MappingProxyType(headers))
-
-        scope.setdefault("state", {})
-        scope["state"][AUTH_CONTEXT_STATE_KEY] = auth_ctx
-
-        await self.app(scope, receive, send)

@@ -428,11 +428,8 @@ class RegistryTool(Tool):
     """
 
     async def run(self, arguments: dict[str, Any]) -> ToolResult:
-        from types import MappingProxyType
-
         from fastmcp.server.dependencies import get_http_headers
 
-        from src.core.auth_context import AuthContext
         from src.core.exceptions import AdcpFailure
         from src.core.tool_error_logging import AdCPToolError
         from src.core.tools._boundary import failure_response, serve
@@ -440,9 +437,11 @@ class RegistryTool(Tool):
         from src.core.tools._wire import to_wire
 
         try:
-            # The credential, not an identity: the boundary resolves the caller.
-            credential = AuthContext(headers=MappingProxyType(get_http_headers(include_all=True) or {}))
-            return mcp_result(await serve(self.name, arguments, credential, TransportProtocol.MCP))
+            # The request headers, not an identity: the boundary resolves the caller. Outside
+            # an HTTP request ``get_http_headers`` returns ``{}``, a request presenting
+            # nothing, which the resolver answers AUTH_MISSING on a protected tool.
+            headers = get_http_headers(include_all=True)
+            return mcp_result(await serve(self.name, arguments, headers, TransportProtocol.MCP))
         except AdcpFailure as failure:
             response = failure.response
         except Exception as exc:

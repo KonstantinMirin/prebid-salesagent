@@ -45,7 +45,9 @@ def test_a_token_alone_discovers_its_own_tenant(integration_db):
         env.get_session()  # commit factory data so the resolver's own session sees it
 
         # No Host, no x-adcp-tenant: nothing in the request names a seller.
-        identity = _resolve_identity(headers=credential_headers(token="global_principal_token"), protocol="mcp")
+        identity = _resolve_identity(
+            credential_headers(token="global_principal_token"), require_valid_token=True, protocol="mcp"
+        )
 
     assert identity.principal_id == "principal_global"
     assert identity.tenant_id == "tenant_global", (
@@ -72,7 +74,8 @@ def test_an_admin_token_resolves_the_tenant_its_subdomain_names(integration_db):
         env.get_session()
 
         identity = _resolve_identity(
-            headers=credential_headers(token="admin_test_admin_token", tenant="admin-test"),
+            credential_headers(token="admin_test_admin_token", tenant="admin-test"),
+            require_valid_token=True,
             protocol="mcp",
         )
 

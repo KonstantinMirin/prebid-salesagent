@@ -85,10 +85,10 @@ select = ["TID251"]
 # was answered 200 there and 401 everywhere else. Neither was caught by a test; both were
 # found by driving the wire.
 #
-# The primary defence is that there is nothing to call: invoke_tool takes an AuthContext and
-# no identity, so a transport has nowhere to put one it resolved. These bans are the backstop
-# for the NAMES, so the property survives someone reaching for them again.
-"src.core.resolved_identity._resolve_identity".msg = "Identity is resolved once, in src/core/tools/_boundary.invoke_tool. A transport hands over an AuthContext; it does not resolve (salesagent-02rgd)."
+# The primary defence is that there is nothing to call: invoke_tool takes the request headers
+# and no identity, so a transport has nowhere to put one it resolved. These bans are the
+# backstop for the NAMES, so the property survives someone reaching for them again.
+"src.core.resolved_identity._resolve_identity".msg = "Identity is resolved once, in src/core/tools/_boundary.invoke_tool. A transport hands over its request headers; it does not resolve (salesagent-02rgd)."
 "src.core.tools._boundary._resolve_identity".msg = "Identity is resolved once, in invoke_tool. Do not re-export or re-import the resolver (salesagent-02rgd)."
 "src.core.tools._boundary._invoke_stamped".msg = "invoke_tool is the only door: it reads the registry row for both the implementation and the auth declaration. _invoke_stamped takes an already-chosen impl and an already-resolved identity -- which is how a transport used to select both (salesagent-02rgd)."
 

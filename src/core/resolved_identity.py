@@ -7,6 +7,7 @@ This eliminates isinstance checks and auth extraction inside business logic.
 """
 
 import logging
+from collections.abc import Mapping
 from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
@@ -78,8 +79,8 @@ class ResolvedIdentity(BaseModel):
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 
-def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
-    """Extract auth token from headers.
+def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
+    """The Bearer value in ``Authorization``, or None when nothing was presented.
 
     ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is gone: pinned 3.1.1
     L2/authentication.mdx:71 says the credential MUST be carried in ``Authorization`` and
@@ -90,20 +91,14 @@ def _extract_auth_token(headers: dict) -> tuple[str | None, str | None]:
     A caller sending only the alias therefore presents nothing, which is the right reading:
     a protected tool answers AUTH_MISSING (nothing was presented to reject), never
     AUTH_INVALID.
-
-    Returns:
-        (token, source) tuple — source is "Authorization: Bearer" or None
     """
     authorization = _get_header_case_insensitive(headers, "Authorization")
     if authorization and authorization.lower().startswith("bearer "):
-        potential_token = authorization[7:].strip()
-        if potential_token:
-            return potential_token, "Authorization: Bearer"
-
-    return None, None
+        return authorization[7:].strip() or None
+    return None
 
 
-def _detect_tenant(headers: dict) -> str | None:
+def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     """The tenant_id this request names, by four header strategies. NO row is loaded.
 
     Identification only. The token check is scoped by tenant_id, so which tenant cannot be
@@ -150,11 +145,10 @@ def _detect_tenant(headers: dict) -> str | None:
 
 
 def _resolve_identity(
-    headers: dict,
-    auth_token: str | None = None,
-    protocol: TransportProtocol = TransportProtocol.MCP,
-    require_valid_token: bool = True,
-    testing_context: AdCPTestContext | None = None,
+    headers: Mapping[str, str],
+    *,
+    require_valid_token: bool,
+    protocol: TransportProtocol,
 ) -> ResolvedIdentity:
     """Resolve identity from request headers. PRIVATE to the boundary.
 
@@ -166,14 +160,17 @@ def _resolve_identity(
     ``ruff-boundary.toml`` bans importing it outside the boundary, so the privacy is enforced
     at lint time rather than by convention.
 
+    It reads the headers ONCE and does everything identity-shaped: the Bearer value, the
+    tenant, the principal, and the testing context. No parameter accepts a pre-parsed token
+    or a pre-built testing context, so a second reader of the headers has nothing to feed
+    into this one.
+
     Args:
-        headers: HTTP request headers dict
-        auth_token: Pre-extracted auth token (if already parsed by transport).
-                   If None, will extract from headers.
-        protocol: Which transport is calling ("mcp", "a2a", "rest")
-        require_valid_token: If True, raises AdCPAuthenticationError for invalid tokens.
-                           If False, treats invalid tokens like missing (for discovery).
-        testing_context: Pre-extracted testing context, if available.
+        headers: The request headers, as the transport's framework exposes them.
+        require_valid_token: The TOOL's declaration (``ToolSpec.requires_credential()``).
+            If True, a missing or rejected credential raises. If False, a rejected
+            credential is treated like a missing one (discovery).
+        protocol: Which transport is calling; a label for the observability record.
 
     Returns:
         ResolvedIdentity with all fields resolved
@@ -195,9 +192,8 @@ def _resolve_identity(
     # Import here to avoid circular dependency (auth_utils imports from database)
     from src.core.auth_utils import get_principal_from_token
 
-    # Step 1: Extract auth token if not pre-provided
-    if auth_token is None:
-        auth_token, _ = _extract_auth_token(headers)
+    # Step 1: the Bearer value, parsed here and nowhere else.
+    auth_token = _extract_auth_token(headers)
 
     # Step 2: NO credential presented, on a surface that requires one.
     #
@@ -256,6 +252,11 @@ def _resolve_identity(
     # whether or not anything read a field off it, and LazyTenantContext was dead weight
     # everywhere except the ToolContext path.
     tenant_model: LazyTenantContext | None = LazyTenantContext(tenant_id) if tenant_id else None
+
+    # Step 5: the testing context rides the same headers. Thirteen readers under
+    # src/core/tools branch on ``identity.testing_context`` for dry-run and delivery
+    # simulation, so the one place that resolves the caller resolves the WHOLE caller.
+    testing_context = AdCPTestContext.from_headers(dict(headers))
 
     return ResolvedIdentity(
         principal_id=principal_id,

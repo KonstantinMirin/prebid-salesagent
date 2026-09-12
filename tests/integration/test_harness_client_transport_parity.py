@@ -458,7 +458,7 @@ class TestEnvVsClientEquivalenceE2E:
     ...)`` and ``AdCPTestClient(env).call(..., T)`` must dispatch the same
     production code and agree byte-for-byte on the wire — but every hop is
     real: real ``httpx``/``fastmcp.Client``/A2A JSON-RPC request, a real
-    ``UnifiedAuthMiddleware`` auth chain, a real live-server response. Before
+    resolver reading the request headers, a real live-server response. Before
     this, ``Transport.E2E_MCP``/``Transport.E2E_A2A`` had ZERO callers
     anywhere against a live stack (confirmed: every existing reference is
     either the in-process E2E_REST-only BDD ledger or a mocked-httpx unit

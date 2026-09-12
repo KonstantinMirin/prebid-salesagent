@@ -38,7 +38,6 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
         The push_notification_config value received by _impl, or None if _impl
         was not called.
     """
-    from src.core.auth_context import AuthContext
     from src.core.schemas import CreateMediaBuyResult
     from src.core.tools._boundary import invoke_tool
     from tests.harness._base import BaseTestEnv
@@ -74,7 +73,7 @@ async def capture_a2a_forwarded_pnc(pnc: Any) -> Any:
                 account=req_dict.get("account"),
                 push_notification_config=pnc,
             ),
-            AuthContext(headers=env.credential()),
+            env.credential(),
             "a2a",
         )
 

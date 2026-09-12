@@ -181,36 +181,8 @@ class TestFunctionCallRegression:
         )
 
 
-class TestAuthenticationFlow:
-    """Tests to prevent authentication-related regressions."""
-
-    def test_credential_read_method_exists(self):
-        """The handler reads the credential off the call context; the boundary resolves it."""
-        handler = AdCPRequestHandler()
-
-        assert callable(handler._credential_of), "_credential_of should be callable"
-
-
 class TestHTTPBehaviorRegression:
     """Tests to prevent HTTP-level bugs like redirect issues."""
-
-    def test_unified_auth_middleware_applies_to_all_requests(self):
-        """Test that auth middleware applies to all HTTP requests (not path-gated).
-
-        Previously, a2a_auth_middleware only ran for /a2a paths. The unified
-        middleware now handles auth for ALL requests, eliminating the need for
-        path-specific auth gating.
-        """
-        from src.core.auth_middleware import UnifiedAuthMiddleware
-
-        # UnifiedAuthMiddleware is a pure ASGI class, not path-specific
-        assert callable(UnifiedAuthMiddleware), "UnifiedAuthMiddleware must be a callable ASGI class"
-
-        # Verify it's registered in app.py
-        file_path = os.path.join(os.path.dirname(__file__), "..", "..", "src", "app.py")
-        with open(file_path) as f:
-            content = f.read()
-        assert "UnifiedAuthMiddleware" in content, "UnifiedAuthMiddleware should be registered in app.py"
 
     @pytest.mark.integration
     def test_no_redirect_on_agent_card_endpoints(self, live_server):

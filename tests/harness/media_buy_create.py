@@ -398,10 +398,11 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         because production genuinely has an in-process caller there -- this tool's own inline
         creative upload.
         """
+        from src.core.resolved_identity import TransportProtocol
         from src.core.tools._boundary import invoke_tool
 
         self._commit_factory_data()
-        identity = kwargs.pop("identity", self.identity)
+        credential = kwargs.pop("credential", self.credential())
 
         # Build request from kwargs if not provided directly
         req = kwargs.pop("req", None)
@@ -410,7 +411,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         else:
             self._seed_named_account(req)
 
-        return asyncio.run(invoke_tool("create_media_buy", req, identity))
+        return asyncio.run(invoke_tool("create_media_buy", req, credential, TransportProtocol.MCP))
 
     def _flatten_request(self, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Convert a ``req=`` kwarg into the flat parameter dict the wrappers take.

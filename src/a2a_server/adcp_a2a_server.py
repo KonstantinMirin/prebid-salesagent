@@ -7,7 +7,7 @@ Supports both standard A2A message format and JSON-RPC 2.0.
 import json
 import logging
 import uuid
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 
 # Import core functions for direct calls (raw functions without FastMCP decorators)
 from typing import Any
@@ -50,7 +50,6 @@ from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
 from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
-from src.core.auth_context import AUTH_CONTEXT_STATE_KEY, AuthContext
 from src.core.domain_config import get_a2a_server_url
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
@@ -185,15 +184,16 @@ class AdCPRequestHandler(RequestHandler):
         # to the sender, so it must carry the gate's receipt.
         logger.info("AdCP Request Handler initialized for direct function calls")
 
-    def _credential_of(self, context: ServerCallContext | None = None) -> AuthContext:
-        """The AuthContext UnifiedAuthMiddleware parked on the call context.
+    def _headers_of(self, context: ServerCallContext) -> Mapping[str, str]:
+        """The request headers the SDK's context builder placed on the call context.
 
-        Empty when there is no context -- the SDK calls a handler directly that way in tests,
-        and "no context" means "no credential presented", which is the correct reading.
+        A subscript with no default. ``DefaultServerCallContextBuilder`` puts
+        ``dict(request.headers)`` on ``state["headers"]`` for every HTTP request, so a
+        context without them was never built from a request. That is a wiring fault: the
+        ``KeyError`` reaches ``on_message_send``'s outer ``except`` as INTERNAL_ERROR rather
+        than being read as an anonymous buyer.
         """
-        if context is None:
-            return AuthContext()
-        return context.state.get(AUTH_CONTEXT_STATE_KEY) or AuthContext()
+        return context.state["headers"]
 
     async def on_message_send(
         self,
@@ -252,9 +252,9 @@ class AdCPRequestHandler(RequestHandler):
         self.tasks[task_id] = task
 
         try:
-            # The CREDENTIAL, not an identity: the boundary resolves the caller once and reads
-            # the row's auth declaration itself. A2A holds no identity of its own.
-            credential = self._credential_of(context)
+            # The request HEADERS, not an identity: the boundary resolves the caller once and
+            # reads the row's auth declaration itself. A2A holds no identity of its own.
+            headers = self._headers_of(context)
 
             # No ``except`` around this. A refused credential, a malformed payload and a failing
             # tool all leave ``serve`` as ``AdcpFailure``, which ``_dispatch_skill`` serializes
@@ -263,7 +263,7 @@ class AdCPRequestHandler(RequestHandler):
             # JSON-RPC layer. AuthChallengeResponder reads a refused credential off the artifact
             # (``adcp_error_code_in``, shape 4), so the 401 handshake needs no branch here keyed
             # on an error class.
-            result = await self._dispatch_skill(skill, parameters, credential)
+            result = await self._dispatch_skill(skill, parameters, headers)
 
             # Per AdCP spec, an async operation returns a Task with status=submitted and no
             # artifacts. The SAME read the final state uses, so the two cannot disagree.
@@ -299,8 +299,8 @@ class AdCPRequestHandler(RequestHandler):
         except A2AError:
             raise
         except Exception as e:
-            # Raised before any tool ran -- reading the credential, framing the answer -- so no
-            # caller was resolved and the record is unscoped. Answered as the JSON-RPC error the
+            # Raised before any tool ran -- reading the headers off the context, framing the
+            # answer -- so no caller was resolved and the record is unscoped. Answered as the JSON-RPC error the
             # SDK's dispatcher serializes structurally, with the failure response in ``data``:
             # a non-``A2AError`` would be flattened to a bare InternalError with no body.
             response = failure_response(TransportProtocol.A2A, "message_processing", e)
@@ -449,7 +449,7 @@ class AdCPRequestHandler(RequestHandler):
         """Handle 'GetExtendedAgentCard' method."""
         raise UnsupportedOperationError(message="Extended agent card not supported")
 
-    async def _dispatch_skill(self, skill_name: str, parameters: Any, credential: AuthContext) -> dict[str, Any]:
+    async def _dispatch_skill(self, skill_name: str, parameters: Any, headers: Mapping[str, str]) -> dict[str, Any]:
         """Run one skill through ``serve`` and return the body the artifact DataPart carries.
 
         The whole of A2A's request path. A row with ``a2a=True`` IS dispatchable: the registry
@@ -466,7 +466,7 @@ class AdCPRequestHandler(RequestHandler):
             available_skills = [name for name, spec in TOOLS.items() if spec.a2a]
             raise MethodNotFoundError(message=f"Unknown skill '{skill_name}'. Available skills: {available_skills}")
         try:
-            response = await serve(skill_name, parameters, credential, TransportProtocol.A2A)
+            response = await serve(skill_name, parameters, headers, TransportProtocol.A2A)
         except AdcpFailure as failure:
             # A2A's wire failure marker is the Task STATE, set by the caller from the
             # response's own ``status``. This transport adds nothing to the BODY.
