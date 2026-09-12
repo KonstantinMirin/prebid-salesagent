@@ -18,10 +18,9 @@
 # live outcome is the non-vacuity control: a preview that matches a live run which
 # did nothing has matched nothing.
 #
-# These cases came from tests/integration/test_creative_sync_behavioral.py's
-# TestDryRunPreviewMatchesLiveRun and TestDryRunMode, which compared _impl's
-# returned DTOs in two separate tenants. On the wire the comparison is the buyer's:
-# the document the preview returned against the document the live run returned.
+# These cases replaced integration tests that compared _impl's returned DTOs across
+# two separate tenants. On the wire the comparison is the buyer's: the document the
+# preview returned against the document the live run returned.
 #
 # The conformance storyboard cannot grade this: `dry_run` appears nowhere in
 # dist/compliance/3.1.1. BR-UC-006-sync-creatives.feature carries no dry_run

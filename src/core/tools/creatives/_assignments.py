@@ -207,7 +207,12 @@ def _process_assignments(
                             # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
                             # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
                             # via the wire-safe translation and lose buyer-facing specificity.
-                            raise AdCPPackageNotFoundError()
+                            # WHICH package travels in details: a sync may name many, and the
+                            # message is a function of the code, so without this the buyer
+                            # learns that a package was not found and not which one.
+                            raise AdCPPackageNotFoundError(
+                                details=EntityRefDetails(creative_id=creative_id, package_id=package_id)
+                            )
                         else:
                             logger.warning(log_safe(f"Package not found during assignment: {package_id}, skipping"))
                             continue

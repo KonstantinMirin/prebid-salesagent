@@ -7,8 +7,8 @@ from typing import Any
 
 from adcp.types import CreativeAsset
 
-from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.errors.details import EntityRefDetails, ValidationDetails
+from src.core.exceptions import AdCPNotFoundError, AdCPValidationError
 from src.core.format_resolver import is_dialled_agent_url
 from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
 
@@ -138,8 +138,14 @@ def _validate_creative_input(
             agent_url, format_id, provenance=CounterpartyUrl(field=f"creatives[{index}].format_id.agent_url")
         )
         if not format_spec:
-            raise AdCPValidationError(
-                details=ValidationDetails(format_id=format_id, agent_url=agent_url),
+            # A format_id no agent serves is a REFERENCE that does not resolve, and the
+            # pinned enums/error-code.json routes exactly that to REFERENCE_NOT_FOUND
+            # ("Generic fallback for a referenced identifier ... that does not exist ...
+            # Use when no resource-specific not-found code applies"); VALIDATION_ERROR is
+            # for "invalid field values or business rules beyond schema validation", and
+            # a well-formed id that simply is not in the catalog is neither.
+            raise AdCPNotFoundError(
+                details=EntityRefDetails(format_id=format_id),
                 field="format_id",
             )
         # TODO(#767): Call validate_creative when available in creative agent spec

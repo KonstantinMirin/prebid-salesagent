@@ -998,7 +998,6 @@ EXPECTED_ENV_MOCK_REACHES: frozenset[tuple[str, str]] = frozenset(
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "_assert_generative_build"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "_assert_standard_processing"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_agent_is_reachable"),
-        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_agent_no_preview_urls"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_with_unknown_format"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_with_unreachable_agent"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_creative_has_generated_content"),

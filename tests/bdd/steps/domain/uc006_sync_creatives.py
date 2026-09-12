@@ -32,7 +32,6 @@ from __future__ import annotations
 import json
 from unittest.mock import ANY
 
-import pytest
 from pytest_bdd import given, parsers, then, when
 
 from src.core.errors.codes import ErrorCode
@@ -135,7 +134,7 @@ def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
     ``(agent_url, id)`` -- ``format_id_identity`` in src/core/schemas/_base.py treats it that
     way -- so switching the id while leaving the agent_url pinned to the in-process default
     produces a row claiming the real catalog format at an agent that does not serve it, which
-    resolves to nothing. That is the same defect as salesagent-6mm5z with the halves swapped,
+    resolves to nothing. That is the same defect with the halves swapped,
     and it is easy to introduce while fixing the original: the id is the visible half.
 
     The id honours ``ctx["creative_format_id"]`` when a Given set one, because a scenario
@@ -149,14 +148,14 @@ def _scenario_format_entry(ctx: dict, env: object) -> dict[str, str]:
 def _creative_format_id_entry(ctx: dict, env: object) -> dict[str, str]:
     """The ``format_id`` object a creative payload carries, for the current transport.
 
-    The creative-side twin of :func:`_product_format_entry`. Both read the same switch, which
-    is the whole point: a creative and the product it is checked against must name the same
-    format on every transport, and they only did in-process by coincidence
-    (salesagent-6mm5z).
+     The creative-side twin of :func:`_product_format_entry`. Both read the same switch, which
+     is the whole point: a creative and the product it is checked against must name the same
+     format on every transport, and they only did in-process by coincidence
+    .
 
-    Returns only the identity. Callers that also need the matching ASSETS -- the two formats
-    have different asset ids, so a switched format with unswitched assets fails just as
-    surely -- take them from :func:`_format_payload` directly.
+     Returns only the identity. Callers that also need the matching ASSETS -- the two formats
+     have different asset ids, so a switched format with unswitched assets fails just as
+     surely -- take them from :func:`_format_payload` directly.
     """
     format_id, agent_url, _assets = _format_payload(ctx, env)
     return {"id": format_id, "agent_url": agent_url}
@@ -167,7 +166,7 @@ def _scenario_format_id(ctx: dict, env: object) -> str:
 
     ``ctx["creative_format_id"]`` is this module's carrier for "the format under test" -- 30
     steps write it and several read it back. The reads used to default to the literal
-    ``"display_300x250"``, which is the quiet half of salesagent-6mm5z: a scenario that never
+    ``"display_300x250"``, which is the quiet half of the same defect: a scenario that never
     wrote the key got the IN-PROCESS format on every transport, including e2e_rest where the
     creative it is compared against had switched to ``display_300x250_image``.
 
@@ -551,7 +550,7 @@ def _extract_error_code_and_suggestion(ctx: dict, error: object) -> tuple[str | 
 
     * a request-level rejection -> read ``errors[0]`` off the captured envelope.
       This used to read ``error.error_code`` off an exception the harness rebuilt
-      from those same bytes; with the reconstruction gone (salesagent-3dawm.15) that
+      from those same bytes; with the reconstruction gone that
       object is a ``WireError`` carrying the envelope, and reading it by attribute
       returns None.
     * a per-creative outcome from a PARTIAL SUCCESS -> an ``adcp.types.Error`` in
@@ -903,19 +902,22 @@ def given_creative_with_specific_format(ctx: dict, creative_format: str) -> None
     """Build a creative payload with the specific format_id string from the scenario row.
 
     The ``creative_format`` is the spec-compliant fully-qualified format id
-    (e.g. ``agent/banner-300x250``). It is wrapped in a FormatId dict using
+    (e.g. ``banner_300x250``). It is wrapped in a FormatId dict using
     the default agent_url so that production validation/lookup succeeds.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
     creative_id = "creative-fmt-partition-001"
+    # Recorded BEFORE the entry is built: _scenario_format_entry reads this key, and
+    # writing it afterwards meant every row synced the transport's default format
+    # while the product was seeded with the row's -- so the "matches" rows mismatched.
+    ctx["creative_format_id"] = creative_format
     creative_payload = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name="Test Creative (format partition)",
         format_id=_scenario_format_entry(ctx, env),
     )
     ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = creative_format
 
 
 @given(parsers.parse("assignments to a package with {product_setup}"))
@@ -923,10 +925,10 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     """Create a media buy + package whose product matches the Gherkin setup phrase.
 
     Supported phrases (from the assignment_format partition scenario):
-      - ``product accepting agent/banner-300x250`` — product format_ids matches creative
+      - ``product accepting banner_300x250`` — product format_ids matches creative
       - ``product with empty format_ids`` — no restrictions
       - ``package with no product_id`` — format check skipped entirely
-      - ``product accepting only agent/video-30s`` — format mismatch (different format)
+      - ``product accepting only video_30s`` — format mismatch (different format)
     """
     from tests.factories import MediaBuyFactory, MediaPackageFactory, ProductFactory
 
@@ -934,15 +936,19 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     ensure_tenant_principal(ctx, env)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    agent_url = env.DEFAULT_AGENT_URL
+    # The product declares its formats on the SAME agent the creative names, on every
+    # transport: e2e_rest's creative is served by the Docker agent, not the in-process
+    # default, and a product pinned to the default url would mismatch there on the rows
+    # that say the formats match.
+    agent_url = _scenario_format_entry(ctx, env)["agent_url"]
 
     # Create media buy for the package to belong to.
     media_buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active")
     product = None
     package_config: dict = {"budget": 1000.0}
 
-    if product_setup == "product accepting agent/banner-300x250":
-        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "agent/banner-300x250"}])
+    if product_setup == "product accepting banner_300x250":
+        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "banner_300x250"}])
         package_config["product_id"] = product.product_id
     elif product_setup == "product with empty format_ids":
         product = ProductFactory(tenant=tenant, format_ids=[])
@@ -950,8 +956,8 @@ def given_assignments_to_package_with_setup(ctx: dict, product_setup: str) -> No
     elif product_setup == "package with no product_id":
         # Package has no product_id — format compatibility check is skipped.
         pass
-    elif product_setup == "product accepting only agent/video-30s":
-        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "agent/video-30s"}])
+    elif product_setup == "product accepting only video_30s":
+        product = ProductFactory(tenant=tenant, format_ids=[{"agent_url": agent_url, "id": "video_30s"}])
         package_config["product_id"] = product.product_id
     else:
         raise ValueError(f"Unknown product_setup phrase: {product_setup!r}")
@@ -1685,113 +1691,6 @@ def _get_assignment_from_db(ctx: dict) -> object:
         return assignment
 
 
-def _assert_per_creative_failure(ctx: dict, expected_code: str) -> None:
-    """Assert a per-creative failure with the expected error code.
-
-    Checks SyncCreativeResult.action=="failed" first, then falls back to ctx["error"].
-
-    Reads the per-creative entry's CODE. Production emits these entries typed
-    (src/core/tools/creatives/_processing.py builds each with build_error_object), so the
-    code is present and does not need to be inferred from the message — inferring it was
-    the defect: a keyword ladder over prose, whose verdict then drove an xfail.
-    """
-
-    resp = payload_or_none(ctx)
-    error = ctx.get("error")
-    if resp is not None:
-        results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-        for r in results:
-            action_str = str(getattr(getattr(r, "action", None), "value", getattr(r, "action", None)))
-            if action_str == "failed":
-                errs = getattr(r, "errors", None) or []
-                if errs:
-                    actual = getattr(errs[0], "code", None) or getattr(errs[0], "error_code", None)
-                    assert actual == expected_code, (
-                        f"expected {expected_code} on the per-creative entry, got wire code {actual!r}: {errs[0]!r}"
-                    )
-                    return
-    # Request-level rejection: read the WIRE code, not the class of a rebuilt
-    # exception (salesagent-3dawm.18). The per-creative branch above already reads
-    # the payload's errors[] entry, which is the correct layer for a per-record
-    # outcome; this is the correct layer for a whole-request failure.
-    result = ctx.get("result")
-    wire_code = result.wire_error_code() if result is not None else None
-    if wire_code is not None:
-        assert wire_code == expected_code, f"expected {expected_code} on the wire, got {wire_code!r}"
-        return
-    assert error is None, (
-        f"SPEC-PRODUCTION GAP: expected {expected_code} on the wire, but the request failed before reaching it: {type(error).__name__}: {error}"
-    )
-    pytest.xfail(f"SPEC-PRODUCTION GAP: expected {expected_code} but no error occurred. Response: {resp}")
-
-
-@then(parsers.parse('the result should be "{outcome}"'))
-def then_uc006_result_should_be(ctx: dict, outcome: str) -> None:
-    """Assert outcome for UC-006 assignment-format partition scenarios.
-
-    Known outcomes: ``assignment created`` (success + assigned_to populated)
-    and ``FORMAT_MISMATCH`` (AdCPValidationError).
-
-    SPEC-PRODUCTION GAP (all rows): The spec format ids ``agent/banner-300x250``
-    and ``agent/video-30s`` use ``/`` to separate agent namespace from format
-    name. Production's FormatId.id field enforces pattern ``^[a-zA-Z0-9_-]+$``
-    (no ``/`` allowed), so Creative validation fails before any assignment
-    processing. The failed creative has no DB row, yet assignment processing
-    still fires and raises sqlalchemy ForeignKeyViolation. This is a pydantic-
-    schema / production limitation, not a behavioral defect in assignment logic.
-    """
-
-    # Common pre-check: spec format ids with '/' cannot round-trip through
-    # production's FormatId pattern. Surface as SPEC-PRODUCTION GAP.
-    err = ctx.get("error")
-    # MCP's TypeAdapter rejects the format_id at the transport boundary (before
-    # reaching _impl) with a pattern-mismatch ToolError — same underlying gap.
-
-    if outcome == "assignment created":
-        assert err is None, f"Expected 'assignment created' but got {type(err).__name__}: {err}"
-        assigned = _get_creative_assigned_to(ctx)
-        expected_pkg_id = ctx["package"].package_id
-        assert expected_pkg_id in assigned, f"Expected package {expected_pkg_id!r} in assigned_to but got {assigned}"
-    elif outcome == "FORMAT_MISMATCH":
-        assert err is not None, (
-            f"Expected FORMAT_MISMATCH error but production succeeded. Response: {payload_or_none(ctx)}"
-        )
-        # Graded on the wire code. The old form searched str(err) for "format" plus
-        # "not supported"/"mismatch"; after salesagent-3dawm.14 the message is the
-        # CODE_TABLE sentence, so no such substring can appear and the assertion
-        # could never hold. Production raises AdCPCreativeRejectedError
-        # (_assignments.py:236) for a format the package's product does not accept.
-        ctx["result"].assert_wire_error("CREATIVE_REJECTED")
-    elif outcome in ("success", "success (no agent validation)"):
-        assert err is None, f"Expected '{outcome}' but production raised {type(err).__name__}: {err}"
-        assert payload_or_none(ctx) is not None, f"Expected a response for '{outcome}'"
-    elif outcome in (
-        "CREATIVE_FORMAT_REQUIRED",
-        "CREATIVE_FORMAT_UNKNOWN",
-        "CREATIVE_AGENT_UNREACHABLE",
-        "CREATIVE_NAME_EMPTY",
-        "CREATIVE_GEMINI_KEY_MISSING",
-    ):
-        _assert_per_creative_failure(ctx, outcome)
-    elif outcome == "assignment updated":
-        assert err is None, (
-            f"Expected 'assignment updated' (idempotent upsert) but production raised {type(err).__name__}: {err}"
-        )
-        assigned = _get_creative_assigned_to(ctx)
-        expected_pkg_id = ctx["package"].package_id
-        assert expected_pkg_id in assigned, (
-            f"Expected package {expected_pkg_id!r} in assigned_to after update, got {assigned}"
-        )
-    elif outcome == "standard processing":
-        _assert_standard_processing(ctx)
-    elif outcome == "generative build with prompt":
-        _assert_generative_build(ctx, prompt_source="assets")
-    elif outcome == "generative build with name":
-        _assert_generative_build(ctx, prompt_source="name_fallback")
-    else:
-        raise ValueError(f"Unknown UC-006 outcome: {outcome!r}")
-
-
 @then("the assignment should be created successfully")
 def then_assignment_created_successfully(ctx: dict) -> None:
     """Assert the sync response reports the package was assigned to the creative."""
@@ -2045,10 +1944,15 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
     ctx.setdefault("creatives", []).append(creative_payload)
     ctx["creative_format_id"] = format_id
 
+    # What the registry actually raises when the agent does not answer: the egress
+    # seam types every undelivered request as OutboundDeliveryFailed, which IS an
+    # AdCPServiceUnavailableError, and _processing.py re-raises it as the request's
+    # answer (SERVICE_UNAVAILABLE, transient). A raw ConnectionError modelled a leak
+    # production's registry never has, and landed in the generic per-item branch.
+    from src.core.security.egress.attempts import OutboundDeliveryFailed
+
     registry = env.mock["registry"].return_value
-    registry.get_format = AsyncMock(
-        side_effect=ConnectionError(f"Connection refused to {env.DEFAULT_AGENT_URL}"),
-    )
+    registry.get_format = AsyncMock(side_effect=OutboundDeliveryFailed(attempts=1, http_status=None))
 
 
 @given("the request has an empty principal_id")
@@ -2065,30 +1969,6 @@ def given_request_empty_principal_id(ctx: dict) -> None:
     ctx["identity"] = PrincipalFactory.make_identity(
         principal_id="",
         tenant_id=env._tenant_id,
-    )
-
-
-@given("the principal has no associated tenant")
-def given_principal_no_associated_tenant(ctx: dict) -> None:
-    """Buyer's principal resolves but has no associated tenant.
-
-    Creates an identity with a valid principal_id but a tenant_id that
-    does not exist in the database, so resolve_identity succeeds but
-    tenant lookup fails with TENANT_NOT_FOUND.
-
-    The harness always creates a valid tenant for its session, so the
-    no-tenant error path cannot be exercised. xfail with reason.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id=env._principal_id,
-        tenant_id="nonexistent_tenant_404",
-    )
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: no-tenant error path not exercisable in harness — "
-        "the IntegrationEnv always creates a valid tenant. See UC-005 ext-a xfails "
-        "for the same limitation."
     )
 
 
@@ -2160,82 +2040,6 @@ def then_assignment_includes_placement(ctx: dict) -> None:
         f"package; the stored assignment carries {placement_ids!r} "
         f"(creative={creative_id}, package={expected_pkg})"
     )
-
-
-# ═══════════════════════════════════════════════════════════════════════
-# GIVEN / THEN steps — preview failure (jr6p, ext-h)
-# ═══════════════════════════════════════════════════════════════════════
-
-
-@given("a creative with a known format_id but no media_url")
-def given_creative_with_known_format_no_media_url(ctx: dict) -> None:
-    """Build a creative payload with a known format_id but no media_url / asset url.
-
-    Production's preview-failure branch in _processing.py only fires when both
-    ``creative.url`` and ``data["url"]`` are absent (see _processing.py:712-737).
-    To trigger that branch reliably we omit any url/asset entirely, which the
-    pinned request model rejects — hence the ``malformed`` declaration below.
-    """
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-
-    format_id, _, _ = _format_payload(ctx, env)
-    creative_id = "creative-no-media-url-001"
-    creative_payload = malformed(
-        "absent_key",
-        "no 'assets' key and no url/media_url anywhere: the omission is deliberate, and it is "
-        "the only way to reach production's has_media_url=False preview-failure branch, which "
-        "requires BOTH creative.url and data['url'] to be absent. CreativeAssetRequest rejects "
-        "it with assets Field required [type=missing] — assets are NOT optional on the request "
-        "schema, contrary to what this step used to claim.",
-        CreativeAssetRequestFactory.payload(
-            creative_id=creative_id,
-            name="Creative Without media_url",
-            format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
-            # OMIT, not absence-by-default: the factory HAS a valid assets default, and
-            # dropping this line is the exact repair the gate now reports.
-            assets=OMIT,
-        ),
-        obligation=ErrorCode.INVALID_REQUEST,
-    )
-    ctx.setdefault("creatives", []).append(creative_payload)
-    ctx["creative_format_id"] = format_id
-
-
-@given("the creative agent returns no preview URLs")
-def given_creative_agent_no_preview_urls(ctx: dict) -> None:
-    """Configure the creative agent registry to return no previews.
-
-    ``preview_creative`` is awaited inside production's _processing.py via
-    ``run_async_in_sync_context``. CreativeSyncEnv exposes the registry mock
-    on ``env.mock["registry"].return_value``; ``preview_creative`` is an
-    AsyncMock per the harness defaults. Returning an empty dict (no
-    "previews" key) drives production into the no-previews + no-media_url
-    branch which produces SyncCreativeResult(action="failed", errors=[...]).
-
-    Production's _processing.py only enters the preview branch when
-    ``format_obj`` is found in ``all_formats`` (the list_all_formats result)
-    AND ``format_obj.agent_url`` is set. The harness-default empty
-    ``all_formats`` makes the format lookup miss and the preview branch
-    never fires. We seed ``all_formats`` via ``set_run_async_result()`` with
-    a static (non-generative) mock format whose ``format_id`` equals the
-    creative payload's FormatId.
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    from adcp.types import FormatId as LibraryFormatId
-
-    env = ctx["env"]
-    creative_format_id = _scenario_format_id(ctx, env)
-
-    mock_format = MagicMock()
-    mock_format.format_id = LibraryFormatId(agent_url=env.DEFAULT_AGENT_URL, id=creative_format_id)
-    mock_format.agent_url = env.DEFAULT_AGENT_URL
-    mock_format.output_format_ids = []  # static creative — exercises preview_creative branch
-    env.set_run_async_result([mock_format])
-
-    registry = env.mock["registry"].return_value
-    registry.preview_creative = AsyncMock(return_value={})
 
 
 @then('the creative should have action "created"')
@@ -2428,7 +2232,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     creative_fmt = str(ctx.get("creative_format_id", ""))
 
     # The two SPEC-PRODUCTION GAP xfails that used to live here are DELETED, because
-    # both the gap and the mechanism that detected it are gone (salesagent-3dawm.18):
+    # both the gap and the mechanism that detected it are gone:
     #
     #   THE GAP CLOSED. They said production emitted generic codes -- "production:
     #   'NOT_FOUND'" and "production: 'VALIDATION_ERROR'" -- where the spec demanded
@@ -2439,7 +2243,7 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
     #
     #   THE DETECTOR WAS DEAD ANYWAY. They routed on PROSE --
     #   "package not found" in error.message.lower() -- and message is now derived
-    #   from the code via CODE_TABLE (salesagent-3dawm.14), so neither substring
+    #   from the code via CODE_TABLE, so neither substring
     #   can appear and neither branch could ever fire. An xfail route that silently
     #   stopped working is worse than none: it reads as tracked work while grading
     #   nothing.
@@ -2459,11 +2263,12 @@ def then_operation_fails_with_assignment_error(ctx: dict) -> None:
 
 
 #: The codes strict-mode assignment processing can reject with, all published.
-#: PACKAGE_NOT_FOUND when the named package does not resolve
-#: (_assignments.py:163), CREATIVE_NOT_FOUND when the creative does not
-#: (:139), CREATIVE_REJECTED when the creative's format is incompatible with the
-#: package's product (:236, converging with media_buy_update.py:233 per #1417).
-_ASSIGNMENT_REJECTION_CODES = frozenset({"PACKAGE_NOT_FOUND", "CREATIVE_NOT_FOUND", "CREATIVE_REJECTED"})
+#: PACKAGE_NOT_FOUND when the named package does not resolve, CREATIVE_NOT_FOUND when
+#: the creative does not, VALIDATION_ERROR when the creative's format is one the
+#: package's product does not declare -- the pinned enum's "violates business rules
+#: beyond schema validation", and NOT CREATIVE_REJECTED, which the enum reserves for
+#: "failed content policy review" (the update path emits the same, see #1417).
+_ASSIGNMENT_REJECTION_CODES = frozenset({"PACKAGE_NOT_FOUND", "CREATIVE_NOT_FOUND", "VALIDATION_ERROR"})
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2507,7 +2312,7 @@ def then_assignment_result_should_be(ctx: dict, outcome: str) -> None:
         )
         # Was isinstance(error, (AdCPSalesAgentError, Exception)) -- VACUOUS, since every
         # exception satisfies the second branch. Graded on the wire code instead
-        # (salesagent-3dawm.18).
+        # .
         result = ctx.get("result")
         wire_code = result.wire_error_code() if result is not None else None
         assert wire_code in _ASSIGNMENT_REJECTION_CODES, (
@@ -2554,8 +2359,8 @@ def then_assignment_processing_should_abort(ctx: dict) -> None:
     # The old form accepted three different things -- an AdCPNotFoundError instance,
     # "not_found" appearing in the code string, or "not found" appearing anywhere in
     # str(error) -- so a stringified incidental failure could satisfy it. And the
-    # "references the bad package" check searched str(error), which after
-    # salesagent-3dawm.14 is the table sentence and can never contain an id.
+    # "references the bad package" check searched str(error), which is now
+    # the table sentence and can never contain an id.
     result = ctx["result"]
     result.assert_wire_error("PACKAGE_NOT_FOUND")
     bad_package = ctx.get("nonexistent_package_id", "")
@@ -3325,12 +3130,14 @@ def then_background_ai_review_submitted(ctx: dict) -> None:
     no evidence of AI review submission is available.
     """
     _assert_success_response(ctx)
-    mock_submit = ctx["env"].mock.get("submit_ai_review") or ctx["env"].mock.get("ai_review")
-    assert mock_submit is not None, (
-        "Harness must expose a mock for AI review task submission "
-        "(submit_ai_review or ai_review) to verify INV-4 ai-powered behavior"
+    # The seam is the patched background executor (CreativeSyncEnv's ai_review_executor),
+    # the same one the local dry-run features read; this used to look for mocks named
+    # submit_ai_review / ai_review, which no env has ever wired, and parked the scenario.
+    expected = [c["creative_id"] for c in ctx["creatives"]]
+    submitted = _ai_review_submitted_creative_ids(ctx)
+    assert submitted == expected, (
+        f"ai-powered mode must submit one AI review per synced creative ({expected}), got {submitted}"
     )
-    mock_submit.assert_called_once()
 
 
 # --- local-uc006-dry-run-out-of-transaction-effects: the AI-review submit seam ---
@@ -3936,7 +3743,7 @@ def _product_format_at_respelled_agent(ctx: dict, respell) -> None:
     The agent is whatever the CURRENT transport actually serves. The original version used
     a fictional "https://agent.example.com", which no live registry can resolve: the
     scenario could not succeed on e2e_rest in principle, and in-process it only appeared to
-    because the registry is mocked (salesagent-td4xw).
+    because the registry is mocked.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -3963,7 +3770,7 @@ def given_product_agent_url_host_upper_cased(ctx: dict) -> None:
     EMPTY path, so a trailing-slash scenario is true of the in-process seed and false of
     the e2e one, whose agent_url carries "/api/creative-agent". Host case is spec-true on
     every transport, so the expectation does not need revisiting per transport -- or when
-    the vendored canonicalizer is replaced by the SDK's (salesagent-3xcdk).
+    the vendored canonicalizer is replaced by the SDK's.
     """
 
     def upper_host(url: str) -> str:
@@ -3987,38 +3794,6 @@ def given_product_agent_url_different_path(ctx: dict) -> None:
     _product_format_at_respelled_agent(ctx, lambda url: url.rstrip("/") + "/some-other-agent")
 
 
-@given('a product with format_ids using "format_id" key')
-def given_product_format_ids_using_format_id_key(ctx: dict) -> None:
-    """Create a product whose format_ids use {"format_id": ...} instead of {"id": ...}.
-
-    Per BR-RULE-039 INV-4: products may store format_ids with either "id" or
-    "format_id" as the key name. The format compatibility check must accept both.
-
-    SPEC-PRODUCTION GAP: The DB trigger ``validate_format_ids`` enforces that
-    each entry has ``agent_url`` and ``id`` keys. The ``format_id`` key variant
-    is rejected at the database level, so this scenario cannot be exercised.
-    """
-    pytest.xfail(
-        "SPEC-PRODUCTION GAP: DB trigger validate_format_ids requires 'id' key, "
-        "rejects 'format_id' key variant. Product cannot be created with "
-        'format_ids=[{"format_id": ..., "agent_url": ...}]. '
-        "Spec BR-RULE-039 INV-4 says both should be accepted."
-    )
-
-
-@given("a creative with a matching format")
-def given_creative_with_matching_format(ctx: dict) -> None:
-    """Ensure a creative payload exists with a format that matches the product.
-
-    If no creative exists yet, creates a default one with 'display_300x250'.
-    The preceding 'a product with format_ids ...' step uses the same format_id,
-    so they should match on format compatibility check.
-    """
-    env = ctx["env"]
-    if not ctx.get("creatives"):
-        given_creative_with_format(ctx)
-
-
 @given("the creative agent is reachable")
 def given_creative_agent_is_reachable(ctx: dict) -> None:
     """Ensure the creative agent mock returns valid format data (agent reachable).
@@ -4039,24 +3814,6 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
     fmt = FormatFactory(format_id=fid)
     registry = env.mock["registry"].return_value
     registry.get_format = AsyncMock(return_value=fmt)
-
-
-@then('the formats should match using the "format_id" key')
-def then_formats_match_using_format_id_key(ctx: dict) -> None:
-    """Assert the format check passed with product using "format_id" key.
-
-    Production may not support the "format_id" key variant — if the assignment
-    fails with a format-related error, mark as SPEC-PRODUCTION GAP.
-    """
-    error = ctx.get("error")
-    assert error is None, (
-        f"a product declaring its formats under the 'format_id' key must be accepted, but "
-        f"production raised {type(error).__name__}: {error}"
-    )
-    resp = require_payload(ctx)
-    assigned = _get_creative_assigned_to(ctx)
-    expected = ctx["package"].package_id
-    assert expected in assigned, f"Expected {expected!r} in assigned_to (format_id key variant), got {assigned}"
 
 
 # --- rx9u: asset-level provenance replaces creative-level (BR-RULE-094 INV-5) ---
@@ -4508,23 +4265,17 @@ def then_processed_without_external_validation(ctx: dict) -> None:
     assert action_str in ("created", "updated", "unchanged"), (
         f"Expected creative processed successfully (created/updated/unchanged), got action='{action_str}'"
     )
-    # Assert the external validation agent was NOT called
-    mock_validate = (
-        ctx["env"].mock.get("validate_creative")
-        or ctx["env"].mock.get("external_validation")
-        or ctx["env"].mock.get("creative_agent_validate")
-    )
-    # No mock means the claim is ungradeable, and an ungradeable claim is a harness
-    # defect to fix rather than an expected failure to record: the xfail here reported a
-    # missing seam as though production were at fault.
-    assert mock_validate is not None, (
-        "CreativeSyncEnv exposes no mock for the external creative-validation agent, so "
-        "'validation was bypassed' cannot be graded. Wire one of validate_creative / "
-        "external_validation / creative_agent_validate into EXTERNAL_PATCHES."
-    )
-    assert mock_validate.call_count == 0, (
-        f"External agent validation should be skipped for adapter format, "
-        f"but was called {mock_validate.call_count} time(s)"
+    # The external validation IS the creative-agent registry lookup: _validation.py
+    # resolves a dialled agent_url through fetch_format_spec -> registry.get_format,
+    # and skips that call for an adapter (non-HTTP) agent_url. CreativeSyncEnv patches
+    # that registry, so "no external validation" is measurable as "get_format was never
+    # awaited". This used to look for validate_creative / external_validation /
+    # creative_agent_validate -- names no env has ever wired -- and refused on the
+    # missing mock, which parked every scenario carrying the sentence.
+    get_format = ctx["env"].mock["registry"].return_value.get_format
+    assert get_format.await_count == 0, (
+        f"an adapter (non-HTTP) format must not be looked up with the creative agent, "
+        f"but registry.get_format was awaited {get_format.await_count} time(s)"
     )
 
 
@@ -4605,7 +4356,7 @@ def then_assignment_should_fail_with(ctx: dict, error_code: str) -> None:
     # The message-based escape hatch for FORMAT_MISMATCH is gone. It existed because
     # "production may use different code names", and it matched on
     # "not supported" in error.message -- a substring the derived sentence can no
-    # longer contain (salesagent-3dawm.14), so it had become a dead branch that
+    # longer contain, so it had become a dead branch that
     # merely looked lenient. Production now emits a published code for this outcome
     # (CREATIVE_REJECTED, _assignments.py:236), so the scenario names it directly.
     result = ctx.get("result")
@@ -5233,6 +4984,17 @@ def then_skip_external_format_validation(ctx: dict) -> None:
 def then_processed_without_generative_build(ctx: dict) -> None:
     """Assert the creative was processed as static — no generative build invoked."""
     _assert_standard_processing(ctx)
+
+
+@then("the generative build should use the message asset as the prompt")
+def then_generative_build_uses_message_asset(ctx: dict) -> None:
+    """The build ran, and its prompt came from the request's message asset.
+
+    The outline row that says this does not record the prompt text the way the
+    INV-2 scenario's Given does, so it grades the prompt's SOURCE rather than its
+    exact value; the exact-value form is the sentence below.
+    """
+    _assert_generative_build(ctx, prompt_source="assets")
 
 
 @then("the system should invoke generative build with the asset prompt")
@@ -6096,8 +5858,12 @@ def then_creative_validated_by_agent(ctx: dict) -> None:
     )
     expected_format_id = ctx.get("creative_format_id")
     if expected_format_id is not None:
-        call_args_list = registry_instance.get_format.call_args_list
-        called_format_ids = [c.args[0] if c.args else c.kwargs.get("format_id") for c in call_args_list]
+        # get_format(agent_url, format_id): the id is the SECOND positional argument (or
+        # the keyword). This read args[0] -- the agent_url -- and so could never match.
+        called_format_ids = [
+            c.kwargs.get("format_id", c.args[1] if len(c.args) > 1 else None)
+            for c in registry_instance.get_format.call_args_list
+        ]
         assert expected_format_id in called_format_ids, (
             f"Expected get_format called with format_id={expected_format_id!r}, but was called with {called_format_ids}"
         )
@@ -6549,7 +6315,7 @@ def then_operation_should_abort_package_not_found(ctx: dict) -> None:
     # 'NOT_FOUND' -- needs a domain-specific subclass". That subclass now exists and
     # is used: _assignments.py:163 raises AdCPPackageNotFoundError, which emits the
     # published PACKAGE_NOT_FOUND. The gap is closed, so the scenario asserts it
-    # rather than excusing it (salesagent-3dawm.18).
+    # rather than excusing it.
     result = ctx.get("result")
     wire_code = result.wire_error_code() if result is not None else None
     assert wire_code is not None, (
@@ -6625,37 +6391,6 @@ def then_system_should_reject_validation_error(ctx: dict) -> None:
     expected_codes = {"VALIDATION_ERROR", "INVALID_REQUEST"}
     assert wire_code in expected_codes, (
         f"expected the refusal to carry one of {sorted(expected_codes)} on the wire, got {wire_code!r}"
-    )
-
-
-@then("preview URLs should be generated")
-def then_preview_urls_generated(ctx: dict) -> None:
-    """Assert at least one creative result has a non-empty preview_url.
-
-    For generative/HTTP-based creatives, the creative agent should return
-    preview URLs in the sync response.
-    """
-    error = ctx.get("error")
-    assert error is None, f"Expected success but got error: {error}"
-
-    resp = require_payload(ctx)
-
-    results = getattr(resp, "creatives", None) or getattr(resp, "results", None) or []
-    assert results, f"Response has no creative results: {resp}"
-
-    preview_found = False
-    for r in results:
-        preview_url = getattr(r, "preview_url", None)
-        if preview_url is not None and str(preview_url):
-            preview_found = True
-            break
-
-    assert preview_found, (
-        "SPEC-PRODUCTION GAP: expected at least one creative with a non-empty preview_url, but none found. Production may not generate preview URLs for this creative format. Results: "
-        + ", ".join(
-            f"creative_id={getattr(r, 'creative_id', '?')}, preview_url={getattr(r, 'preview_url', None)!r}"
-            for r in results
-        )
     )
 
 

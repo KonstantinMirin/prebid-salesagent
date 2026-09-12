@@ -149,9 +149,6 @@ _ALLOWLIST: set[XfailSite] = {
     # claim, unlike a conditional xfail keyed on the outcome, which passes when production
     # agrees and excuses itself when it does not. The other 102
     # conditional sites in tests/bdd/steps are gone; this one was never one of them.
-    ("domain/uc006_sync_creatives.py", "_assert_per_creative_failure", 1),
-    ("domain/uc006_sync_creatives.py", "given_principal_no_associated_tenant", 1),
-    ("domain/uc006_sync_creatives.py", "given_product_format_ids_using_format_id_key", 1),
     # Graduated 7 -> 5 (salesagent-3dawm.18): the two prose-routed hatches
     # ("package not found"/"not supported by product" substring matches) are DELETED
     # and replaced with an unconditional wire-code assertion. Both were already dead —

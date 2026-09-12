@@ -777,9 +777,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_tenant_isolation"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_with_latest_review_tenant_isolation"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_delete_missing_archives_unlisted_creatives"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_delete_missing_false_preserves_unlisted"),
-    ("tests/integration/test_creative_sync_behavioral.py", "test_lenient_savepoint_isolation_with_real_db"),
     ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_assets"),
     ("tests/integration/test_creative_sync_data_preservation.py", "test_generative_output_preserves_user_url"),
     (

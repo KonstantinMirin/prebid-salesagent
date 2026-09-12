@@ -947,24 +947,11 @@ class TestCreativeValidation:
             # suggestion are all read-only derivations from the class's code, so
             # there is nothing else on the instance this test could pin.
 
-    def test_unknown_format_raises_with_discovery_hint(self):
-        """Known agent but unknown format raises ValueError mentioning list_creative_formats.
-
-        Spec: UNSPECIFIED (implementation-defined error handling for format discovery).
-        Covers: UC-006-CREATIVE-FORMAT-VALIDATION-04
-        """
-        from src.core.tools.creatives._validation import _validate_creative_input
-
-        creative = _make_creative_asset()
-        mock_registry = MagicMock()
-
-        with patch(
-            "src.core.format_resolver.fetch_format_spec",
-            return_value=None,  # Format not found
-        ):
-            with pytest.raises(AdCPValidationError) as _ei:
-                _validate_creative_input(creative, mock_registry, "p1")
-            # The identifier is STRUCTURED now: details/field, not prose.
+    # The unknown-format outcome is graded on the wire by @T-UC-006-ext-f and the two
+    # format-validation outlines in BR-UC-006 (REFERENCE_NOT_FOUND on the creative's
+    # entry, every transport). The class-level test that stood here pinned the exception
+    # type _validate_creative_input raised, which is the one thing a wire assertion
+    # cannot get wrong and a class assertion cannot get right.
 
 
 class TestGetFieldHelper:

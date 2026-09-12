@@ -1018,23 +1018,6 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
         ),
     ),
     (
-        "T-UC-006-partition-format-id",
-        {
-            "-agent_unreachable-a format_id whose agent is unreachable-AGENT_UNREACHABLE]",
-            "-empty_name-format_id but an empty name-INVALID_REQUEST]",
-            "-missing_format_id-no format_id-INVALID_REQUEST]",
-            "-unknown_format-a format_id unknown to all agents-REFERENCE_NOT_FOUND]",
-        },
-        "uc006 route partition: the Then step does not handle this row's outcome string",
-    ),
-    (
-        "T-UC-006-partition-generative",
-        {
-            "-generative_no_gemini_key-output_format_ids present-message asset but no GEMINI_API_KEY-CONFIGURATION_ERROR]",
-        },
-        "uc006 route partition: the Then step does not handle this row's outcome string",
-    ),
-    (
         "T-UC-006-partition-provenance",
         {
             "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
@@ -2270,12 +2253,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 {"account field absent", "both account_id and brand"},
                 "INVALID_REQUEST validation not implemented (schema-level)",
             ),
-            # boundary-format-id: error-path examples need "suggestion" field
-            (
-                "T-UC-006-boundary-format-id",
-                {"suggestion"},
-                "SPEC-PRODUCTION GAP: _SyntheticError lacks suggestion field",
-            ),
         ]
         if any(t.startswith("T-UC-006") for t in marker_names):
             for tag, substrings, reason in _UC006_VALIDATION_XFAIL:
@@ -2342,48 +2319,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "with the wire-level adcp.types Provenance shape, so a spec-compliant corrected "
                 "resubmission is not accepted"
             ),
-            # Error-path scenarios: production returns CREATIVE_VALIDATION_FAILED or
-            # plain-string errors[] instead of spec-specific error codes / AdCPSalesAgentError.
-            # See _processing.py error handling paths.
-            "T-UC-006-ext-d-whitespace": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion"
-            ),
-            "T-UC-006-ext-f": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
-            ),
-            "T-UC-006-ext-g": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
-            ),
-            "T-UC-006-ext-h": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion "
-                "(preview-failure path, _processing.py:712-737)"
-            ),
-            "T-UC-006-ext-i": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion "
-                "(GEMINI_API_KEY not configured path)"
+            # Error-path scenarios: production returns plain-string errors[] instead of a
+            # structured error. See _processing.py error handling paths. The ext-c/d/e/f/g
+            # entries that stood here named codes the pinned enum does not define
+            # (CREATIVE_VALIDATION_FAILED, CREATIVE_FORMAT_REQUIRED, CREATIVE_FORMAT_UNKNOWN,
+            # CREATIVE_AGENT_UNREACHABLE); the scenarios were corrected to the pin and pass.
+            # INV-4 now reaches its AI-review assertion (the executor seam) and fails one
+            # line later: ai-powered mode sends the Slack notification during the sync
+            # instead of deferring it until the review completes. A diagnosed production
+            # gap; strict so it XPASSes the day the notification moves behind the review.
+            "T-UC-006-rule-037-inv4": (
+                "SPEC-PRODUCTION GAP: ai-powered mode sends Slack during the sync; "
+                "BR-RULE-037 INV-4 defers it until the AI review completes"
             ),
             # Creative unchanged: production returns action "updated" not "unchanged"
             "T-UC-006-main-unchanged": (
                 "SPEC-PRODUCTION GAP: production returns action 'updated', "
                 "spec expects 'unchanged' when creative data is identical"
-            ),
-            # ext-c: schema violation — wrong error code
-            "T-UC-006-ext-c": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_FORMAT_REQUIRED, "
-                "spec expects CREATIVE_VALIDATION_FAILED for schema violations"
-            ),
-            # ext-d: empty name — _SyntheticError lacks suggestion field
-            "T-UC-006-ext-d": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion"
-            ),
-            # ext-e: missing format_id — wrong error code
-            "T-UC-006-ext-e": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_FORMAT_REQUIRED for missing format_id"
             ),
             # Invariant scenarios: production behaviour diverges from spec
             # Graduated: the gap this named is closed. The entry said the scenario asserted
@@ -2394,17 +2346,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # schema validation", and reserves CREATIVE_REJECTED for "Creative failed content
             # policy review". Verified: the scenario passes under --runxfail on a2a, the only
             # transport it routes to, and it is not listed in e2e_rest_known_failures.txt.
-            # FIXME(#1417): ext-k asserts FORMAT_MISMATCH, which is NOT in the pinned
-            # error-code enum (non-canonical). Production now emits CREATIVE_REJECTED
-            # (_assignments.py), converged with the update path for the identical
-            # condition. Reconcile upstream (adcp-req: FORMAT_MISMATCH -> CREATIVE_REJECTED),
-            # then remove this xfail.
-            "T-UC-006-ext-k": (
-                "OVER-SPECIFIED OBLIGATION (#1417): scenario asserts the non-canonical "
-                "FORMAT_MISMATCH (absent from the pinned error-code enum). Production emits "
-                "the canonical CREATIVE_REJECTED, converged with the update path. Awaiting "
-                "upstream reconciliation of the generated feature."
-            ),
             # FIXME(#TBD): inv5-lenient: lenient mode format mismatch doesn't populate assigned_to
             # In lenient mode, the compatible package assignment should be created
             # and incompatible reported in assignment_errors. Production skips both
@@ -2429,35 +2370,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         for tag, reason in _UC006_SPECGAP_XFAIL_TAGS.items():
             if tag in marker_names:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-
-        # UC-006: assignment_package_validation — PACKAGE_NOT_FOUND outcome not
-        # wired in the Then step dispatch (raises ValueError). The production
-        # error is AdCPNotFoundError('NOT_FOUND'), spec demands 'PACKAGE_NOT_FOUND'.
-        if "T-UC-006-partition-assignment-pkg" in marker_names and "package_not_found" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "SPEC-PRODUCTION GAP: outcome 'PACKAGE_NOT_FOUND' not in Then dispatch — "
-                        "production returns AdCPNotFoundError(code='NOT_FOUND'), spec expects "
-                        "'PACKAGE_NOT_FOUND'. See _assignments.py:62-69"
-                    ),
-                    strict=True,
-                )
-            )
-
-        # UC-006: format_validation_boundary agent-unreachable — production returns
-        # success with per-creative action="failed" instead of raising an error.
-        if "T-UC-006-boundary-format-id" in marker_names and "agent unreachable" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "SPEC-PRODUCTION GAP: agent-unreachable returns success with "
-                        "per-creative action='failed', not a top-level error — "
-                        "Then step expects ctx['error'] but gets ctx['response']"
-                    ),
-                    strict=True,
-                )
-            )
 
         # Graduated: T-UC-004-webhook-bearer, T-UC-004-webhook-hmac,
         # T-UC-004-webhook-no-aggregated, T-UC-004-webhook-notification-type
@@ -5431,55 +5343,39 @@ _UC006_NO_STEP_DEFINITION = frozenset(
     }
 )
 
-#: 2 UC-006 scenarios, blocker measured.
+#: 1 UC-006 scenario, blocker measured.
 _UC006_STALE_XFAIL = frozenset(
     {
-        "T-UC-006-boundary-format-id",
         "T-UC-006-ext-a",
     }
 )
 
-#: 2 UC-006 scenarios, blocker measured.
+#: 1 UC-006 scenario, blocker measured.
 _UC006_UNDECLARED_MALFORMATION = frozenset(
     {
-        "T-UC-006-partition-assignment-fmt",
         "T-UC-006-rule-094-inv2",
     }
 )
 
-#: 1 UC-006 scenarios, blocker measured.
-_UC006_MISSING_HARNESS_SEAM = frozenset(
-    {
-        "T-UC-006-rule-037-inv4",
-    }
-)
+#: Empty: the one scenario parked here (rule-037-inv4) reads the AI-review executor
+#: seam the env has carried since the local dry-run features needed it.
+_UC006_MISSING_HARNESS_SEAM: frozenset[str] = frozenset()
 
-#: 3 UC-006 scenarios, blocker measured.
+#: 1 UC-006 scenario, blocker measured: inv6 asserts that Slack is NOT sent when no
+#: webhook is configured, but the env mocks _send_creative_notifications itself, and
+#: that guard lives INSIDE the mocked function -- the seam is one level too shallow
+#: to grade it. Re-seam on the Slack sender, then wire.
 _UC006_UNVERIFIED_FAILURE = frozenset(
     {
-        "T-UC-006-rule-033-inv2",
-        "T-UC-006-rule-035-static",
         "T-UC-006-rule-037-inv6",
     }
 )
 
-#: 16 UC-006 scenarios, blocker measured.
+#: 3 UC-006 scenarios, blocker measured.
 _UC006_OWN_XFAIL = frozenset(
     {
-        "T-UC-006-ext-b",
-        "T-UC-006-ext-c",
-        "T-UC-006-ext-d",
-        "T-UC-006-ext-d-whitespace",
-        "T-UC-006-ext-e",
-        "T-UC-006-ext-f",
-        "T-UC-006-ext-g",
-        "T-UC-006-ext-h",
-        "T-UC-006-ext-i",
-        "T-UC-006-ext-k",
         "T-UC-006-main-unchanged",
         "T-UC-006-main-weight",
-        "T-UC-006-rule-035-inv2",
-        "T-UC-006-rule-039-inv4",
         "T-UC-006-sandbox-validation",
     }
 )
@@ -5529,14 +5425,37 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-partition-auth",
         "T-UC-006-partition-creative-scope",
         "T-UC-006-partition-mb-status",
-        # The four assignment-reference scenarios migrated from
-        # tests/integration/test_creative_sync_behavioral.py: wired because they pass on
-        # every in-process transport.
+        # The four assignment-reference scenarios migrated from the retired creative-sync
+        # integration file: wired because they pass on every in-process transport.
         "T-UC-006-local-assignment-unknown-creative",
         "T-UC-006-local-assignment-only-missing-package",
         "T-UC-006-local-assignment-only-existing-creative",
         "T-UC-006-local-failed-creative-assignment",
         "T-UC-006-local-dryrun-parity",
+        # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
+        # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
+        # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
+        # to what production does; their ledger entries named codes the enum never had.
+        "T-UC-006-boundary-format-id",
+        "T-UC-006-ext-c",
+        "T-UC-006-ext-d",
+        "T-UC-006-ext-d-whitespace",
+        "T-UC-006-ext-e",
+        "T-UC-006-ext-f",
+        "T-UC-006-ext-g",
+        "T-UC-006-rule-035-inv2",
+        # And the rest of that sweep: per-item CONFIGURATION_ERROR read on the entry
+        # (ext-i), pin-shaped format ids in place of the agent/... spellings the
+        # request schema refuses (ext-k, partition-assignment-fmt), strict
+        # PACKAGE_NOT_FOUND carrying which package (rule-033-inv2), and two Then bodies
+        # that read the wrong mock argument or a mock no env wires (rule-035-static,
+        # rule-037-inv4).
+        "T-UC-006-ext-i",
+        "T-UC-006-ext-k",
+        "T-UC-006-partition-assignment-fmt",
+        "T-UC-006-rule-033-inv2",
+        "T-UC-006-rule-035-static",
+        "T-UC-006-rule-037-inv4",
         "T-UC-006-rule-033-inv1",
         "T-UC-006-rule-033-inv3",
         "T-UC-006-rule-033-inv4",

@@ -98,7 +98,7 @@ def _wire_of(error: object) -> dict | None:
 
     A failed wire dispatch now raises ``tests.harness._base.WireError``, which carries
     the envelope the buyer received VERBATIM instead of a production error class
-    rebuilt from those bytes (salesagent-3dawm.15). So the wire is reachable straight
+    rebuilt from those bytes. So the wire is reachable straight
     off the error object, and the extractors below read it without needing ``ctx``
     threaded through their forty call sites.
 
@@ -280,7 +280,7 @@ def then_response_arrives(ctx: dict) -> None:
       reached and there is nothing the buyer received;
     * the dispatch raised in the TEST PROCESS -- ``ctx['error']`` holds an
       ordinary exception rather than the ``WireError`` carrier a wire rejection
-      produces. That is the defect salesagent-prkv.65 removed at 53 sites: a
+      produces. That is the defect removed at 53 sites: a
       pydantic error raised while BUILDING the request looks like a rejection to
       any assertion that only checks "is there an error", but production was
       never executed.
@@ -363,31 +363,31 @@ def then_response_error_field(ctx: dict, field: str) -> None:
 def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
     """The rejection carries a STRUCTURED schema issue: *keyword* against *field*.
 
-    The fourth primitive, and like the other three it grades exactly one property:
-    that the seller's rejection came out of real schema validation and says which
-    rule the value broke.
+     The fourth primitive, and like the other three it grades exactly one property:
+     that the seller's rejection came out of real schema validation and says which
+     rule the value broke.
 
-    WHY THIS IS THE DIRECT GRADING OF BR-RULE-209 INV-1, not a concession to it.
-    INV-1 (BR-UC-001-discover-available-inventory.feature:1420) reads "inputs
-    validated same as production" -- it says nothing about an exception object.
-    The assertion this replaces required a ``pydantic.ValidationError`` INSTANCE,
-    which was a PROXY: "an exception of the right class was constructed" standing
-    in for "validation really ran". The proxy stopped being satisfiable once the
-    rejection moved to the transport boundary, even though the property itself
-    became MORE true -- the payload is now rejected by production's own schema
-    boundary rather than by a model built in the test process
-    (salesagent-prkv.65).
+     WHY THIS IS THE DIRECT GRADING OF BR-RULE-209 INV-1, not a concession to it.
+     INV-1 (BR-UC-001-discover-available-inventory.feature:1420) reads "inputs
+     validated same as production" -- it says nothing about an exception object.
+     The assertion this replaces required a ``pydantic.ValidationError`` INSTANCE,
+     which was a PROXY: "an exception of the right class was constructed" standing
+     in for "validation really ran". The proxy stopped being satisfiable once the
+     rejection moved to the transport boundary, even though the property itself
+     became MORE true -- the payload is now rejected by production's own schema
+     boundary rather than by a model built in the test process
+    .
 
-    An ``issues[]`` entry carrying the JSON-Schema ``keyword`` that failed and a
-    ``pointer`` at the offending member IS production's validation output. It is
-    also STRICTER than the type check it replaces: a sandbox-simulated or
-    hand-wrapped error would not carry that structure, whereas any
-    ``ValidationError`` -- including one synthesised in the test process --
-    satisfied an isinstance check.
+     An ``issues[]`` entry carrying the JSON-Schema ``keyword`` that failed and a
+     ``pointer`` at the offending member IS production's validation output. It is
+     also STRICTER than the type check it replaces: a sandbox-simulated or
+     hand-wrapped error would not carry that structure, whereas any
+     ``ValidationError`` -- including one synthesised in the test process --
+     satisfied an isinstance check.
 
-    *field* is matched against the issue POINTER by trailing segment, so
-    ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
-    having to spell out pydantic's union-branch naming.
+     *field* is matched against the issue POINTER by trailing segment, so
+     ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
+     having to spell out pydantic's union-branch naming.
     """
     from tests.helpers.envelope_assertions import locate_envelope_error
 
@@ -711,7 +711,7 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 #     or agent_url. So those six record obligations production does not meet, which were
 #     never ledgered because no scenario reaches them.
 #
-# Writing those scenarios is filed as salesagent-xighb. When they are written, the assertion should
+# Those scenarios are not written yet. When they are, the assertion should
 # be re-expressed against the CODE plus the sanctioned wire oracle rather than against
 # prose: core/error.json leaves `suggestion` free-form text the seller may reword, and
 # these keyword tests would grade one seller's phrasing.
@@ -1153,7 +1153,7 @@ def then_terminal_failure(ctx: dict) -> None:
     Verifies both that an error occurred and that its recovery hint is
     'terminal' -- meaning the buyer cannot retry with corrected input.
 
-    Wire-first (salesagent-3dawm.18). This step previously had NO wire path at
+    Wire-first. This step previously had NO wire path at
     all: it read recovery off the reconstructed ``ctx['error']``, and its final
     branch fell off the end asserting nothing, on the reasoning quoted below
     that a non-AdCP exception is terminal anyway. That made it the step most

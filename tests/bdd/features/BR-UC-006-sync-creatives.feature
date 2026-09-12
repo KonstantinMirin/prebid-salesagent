@@ -194,26 +194,28 @@ Feature: BR-UC-006 Sync Creative Assets
     # POST-F1, POST-F2, POST-F3
     # --- ext-b: AUTH_INVALID ---
 
-  @T-UC-006-ext-b @extension @ext-b @error
-  Scenario: Tenant not found — principal has no tenant
-    Given the Buyer is authenticated
-    But the principal has no associated tenant
-    And a creative with a known format_id
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives error spec
-    And the operation should fail
-    And the error code should be "AUTH_INVALID"
-    And the error should include a "suggestion" field
-    # POST-F1, POST-F2, POST-F3
+  # ext-b ("Tenant not found — principal has no tenant") is DELETED. A principal
+  # row carries its tenant as a foreign key, so a credential that resolves to a
+  # principal always resolves to that principal's tenant; the state the scenario
+  # named cannot be reached from any wire, and the only way its Given could express
+  # it was a hand-built identity naming a tenant that does not exist -- which the
+  # three transports then answered three different ways (AUTH_MISSING, AUTH_MISSING,
+  # ACCOUNT_NOT_FOUND), none of them the AUTH_INVALID the scenario asserted, because
+  # none of them was ever the seller answering a real request. A missing or invalid
+  # credential is graded by the authentication partition and boundary outlines below.
     # --- ext-c: INVALID_REQUEST ---
 
   @T-UC-006-ext-c @extension @ext-c @error
+  # A schema violation is refused for the WHOLE request: enums/error-code.json puts
+  # "malformed, missing required fields, or violates schema constraints" under
+  # INVALID_REQUEST, and the transports validate the request before any creative is
+  # processed. This used to expect a per-item action "failed" inside a success
+  # response, which no transport can produce for a payload the schema rejects.
   Scenario: Creative validation failed — schema violation
     Given the Buyer is authenticated
     And a creative with invalid schema structure
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should have action "failed"
+    Then the response is compliant with the sync_creatives error spec
     And the error code should be "INVALID_REQUEST"
     And the error should include a "suggestion" field
     # POST-F2: Error explains validation failure
@@ -221,13 +223,18 @@ Feature: BR-UC-006 Sync Creative Assets
     # --- ext-d: INVALID_REQUEST ---
 
   @T-UC-006-ext-d @extension @ext-d @error
+  # core/creative-asset.json requires ``name`` but sets no minLength, so an empty
+  # string is a request the schema ADMITS; refusing it is the seller's own rule, which
+  # enums/error-code.json codes VALIDATION_ERROR ("business rules beyond schema
+  # validation"), on the creative's own entry. INVALID_REQUEST would claim a schema
+  # violation that is not there.
   Scenario: Creative name empty
     Given the Buyer is authenticated
     And a creative with name "" and a known format_id
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative should have action "failed"
-    And the error code should be "INVALID_REQUEST"
+    And the creatives entry carries error code "VALIDATION_ERROR"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
 
@@ -238,57 +245,64 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative should have action "failed"
-    And the error code should be "INVALID_REQUEST"
+    And the creatives entry carries error code "VALIDATION_ERROR"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-e: INVALID_REQUEST ---
 
   @T-UC-006-ext-e @extension @ext-e @error
+  # format_id is in core/creative-asset.json /required: omitting it is a schema
+  # violation and the whole request is refused with INVALID_REQUEST at the transport,
+  # before any creative is processed -- not a per-item failure.
   Scenario: Creative format required — missing format_id
     Given the Buyer is authenticated
     And a creative with name "Banner" but no format_id
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should have action "failed"
+    Then the response is compliant with the sync_creatives error spec
     And the error code should be "INVALID_REQUEST"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-f: REFERENCE_NOT_FOUND ---
 
   @T-UC-006-ext-f @extension @ext-f @error
+  # A well-formed format_id that no agent serves is a reference that does not resolve:
+  # enums/error-code.json routes it to REFERENCE_NOT_FOUND ("Generic fallback for a
+  # referenced identifier ... that does not exist ... Use when no resource-specific
+  # not-found code applies"). It fails the creative, not the request.
   Scenario: Creative format unknown — not in agent registry
     Given the Buyer is authenticated
     And a creative with a format_id that does not exist in any agent registry
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative should have action "failed"
-    And the error code should be "REFERENCE_NOT_FOUND"
+    And the creatives entry carries error code "REFERENCE_NOT_FOUND"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-g: AGENT_UNREACHABLE ---
 
   @T-UC-006-ext-g @extension @ext-g @error
+  # AGENT_UNREACHABLE is not in the pinned enum. What the enum has for "a service the
+  # seller depends on did not answer" is SERVICE_UNAVAILABLE, recovery transient, and
+  # the egress seam types every undelivered request to the creative agent that way
+  # (OutboundDeliveryFailed IS an AdCPServiceUnavailableError), so the refusal reaches
+  # the buyer as the request's answer with a retry hint rather than as a per-item
+  # failure that reads terminal.
   Scenario: Creative agent unreachable
     Given the Buyer is authenticated
     And a creative with a format_id whose agent_url is unreachable
     When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should have action "failed"
-    And the error code should be "AGENT_UNREACHABLE"
-    And the error should include a "suggestion" field
+    Then the response is compliant with the sync_creatives error spec
+    And the error code should be "SERVICE_UNAVAILABLE"
+    And the error recovery should be "transient"
     # POST-F2, POST-F3
     # --- ext-h: INVALID_REQUEST ---
 
-  @T-UC-006-ext-h @extension @ext-h @error
-  Scenario: Creative preview failed — no previews generated
-    Given the Buyer is authenticated
-    And a creative with a known format_id but no media_url
-    And the creative agent returns no preview URLs
-    When the Buyer Agent syncs the creative
-    Then the response is compliant with the sync_creatives success spec
-    And the creative should have action "failed"
-    And the error code should be "INVALID_REQUEST"
-    And the error should include a "suggestion" field
+  # ext-h ("Creative preview failed — no previews generated") is DELETED. The only
+  # way to reach the per-item failure it described is a static creative with no
+  # media url, and core/creative-asset.json makes the asset's url required -- so that
+  # payload is refused as INVALID_REQUEST at the transport before any creative is
+  # processed. With a valid url, an agent that returns no previews is a warning on a
+  # created creative, not a failure. The scenario graded a branch no wire reaches.
     # POST-F2, POST-F3
     # --- ext-i: CONFIGURATION_ERROR ---
 
@@ -300,7 +314,7 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative should have action "failed"
-    And the error code should be "CONFIGURATION_ERROR"
+    And the creatives entry carries error code "CONFIGURATION_ERROR"
     And the error should include a "suggestion" field
     # POST-F2, POST-F3
     # --- ext-j: PACKAGE_NOT_FOUND (strict) ---
@@ -322,8 +336,8 @@ Feature: BR-UC-006 Sync Creative Assets
   @T-UC-006-ext-k @extension @ext-k @error
   Scenario: Format mismatch — creative format incompatible with product
     Given the Buyer is authenticated
-    And a creative with format_id "agent1/banner-300x250"
-    And assignments to a package whose product only accepts "agent1/video-pre-roll"
+    And a creative with format_id "banner_300x250"
+    And assignments to a package whose product only accepts "video_pre_roll"
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives error spec
@@ -434,9 +448,8 @@ Feature: BR-UC-006 Sync Creative Assets
     Then the response is compliant with the sync_creatives success spec
     And the created creative should be associated with principal "buyer-A"
     # --- BR-RULE-034 / BR-RULE-033: assignment references graded on the wire ---
-    # These four came from tests/integration/test_creative_sync_behavioral.py, where
-    # they asserted _impl's returned DTO or a pytest.raises class -- neither of which
-    # can see a wrong wire code. The pinned 3.1 enums/error-code.json defines
+    # These four replaced integration tests that asserted _impl's returned DTO or a
+    # pytest.raises class -- neither of which can see a wrong wire code. The pinned 3.1 enums/error-code.json defines
     # CREATIVE_NOT_FOUND ("Referenced creative does not exist in the agent's creative
     # library ... Sellers MUST return this code uniformly for any creative_id not owned
     # by the calling account", recovery correctable) and PACKAGE_NOT_FOUND; the response
@@ -509,8 +522,11 @@ Feature: BR-UC-006 Sync Creative Assets
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives success spec
     And the creative should be validated by the creative agent
-    And preview URLs should be generated
     And the creative should have action "created"
+    # No preview_url line: sync-creatives-response.json defines preview_url as
+    # "Preview URL for generative creatives (only present for generative formats)",
+    # and this creative is static. The line that stood here asserted a field the
+    # pin says must be absent.
 
   @T-UC-006-rule-035-inv2 @invariant @BR-RULE-035
   Scenario: INV-2 — adapter format skips external validation
@@ -705,7 +721,7 @@ Feature: BR-UC-006 Sync Creative Assets
   # registry on e2e_rest -- so the scenario could not succeed there in principle, and
   # in-process it only appeared to because the registry is mocked. The rule is real and
   # wire-observable: if canonicalization stopped equating the two spellings, the seller would
-  # not resolve the product's format and no assignment would be created (salesagent-td4xw).
+  # not resolve the product's format and no assignment would be created.
   #
   # The axis is HOST CASE, not a trailing slash. core/format-id.json's algorithm
   # (docs/reference/url-canonicalization) collapses host case at step 2 for ANY URL,
@@ -761,14 +777,10 @@ Feature: BR-UC-006 Sync Creative Assets
     And the format compatibility check should pass
     And the assignment should be created successfully
 
-  @T-UC-006-rule-039-inv4 @invariant @BR-RULE-039
-  Scenario: INV-4 — product format_ids accepts both id and format_id keys
-    Given the Buyer is authenticated
-    And a product with format_ids using "format_id" key
-    And a creative with a matching format
-    When the Buyer Agent syncs the creative with assignments
-    Then the response is compliant with the sync_creatives success spec
-    And the formats should match using the "format_id" key
+  # INV-4 ("product format_ids accepts both id and format_id keys") is DELETED. A
+  # product's format_ids entries are core/format-id.json objects, whose key is
+  # ``id``; a ``format_id`` key is a shape the pin does not define, so the
+  # invariant asserted tolerance for something no conformant buyer sends.
 
   @T-UC-006-rule-039-inv6 @invariant @BR-RULE-039
   Scenario: INV-6 — no product_id on package skips format check
@@ -972,17 +984,24 @@ Feature: BR-UC-006 Sync Creative Assets
     And a creative with <format_setup>
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
-    And the result should be "<outcome>"
+    And <expected>
     # --- generative_build partitions ---
 
+    # Each row names the exact wire outcome the pin gives it: a missing format_id is a
+    # schema violation and refuses the request (INVALID_REQUEST); an unknown format is a
+    # reference that does not resolve, on the creative's entry (REFERENCE_NOT_FOUND); an
+    # unreachable agent is the seller's dependency not answering, transient, on the
+    # request (SERVICE_UNAVAILABLE -- AGENT_UNREACHABLE is not in the enum); an empty
+    # name is schema-conformant and fails the seller's own rule on the entry
+    # (VALIDATION_ERROR -- name has no minLength, so INVALID_REQUEST was wrong).
     Examples: Format partitions
-      | partition          | format_setup                             | outcome                      |
-      | known_http_format  | a known HTTP-based format_id             | success                      |
-      | adapter_format     | a non-HTTP adapter format_id             | success (no agent validation)|
-      | missing_format_id  | no format_id                             | INVALID_REQUEST     |
-      | unknown_format     | a format_id unknown to all agents        | REFERENCE_NOT_FOUND      |
-      | agent_unreachable  | a format_id whose agent is unreachable   | AGENT_UNREACHABLE   |
-      | empty_name         | format_id but an empty name      | INVALID_REQUEST          |
+      | partition          | format_setup                             | expected                                                     |
+      | known_http_format  | a known HTTP-based format_id             | the creative should be processed successfully                |
+      | adapter_format     | a non-HTTP adapter format_id             | the creative should skip external format validation          |
+      | missing_format_id  | no format_id                             | the error code should be "INVALID_REQUEST"                   |
+      | unknown_format     | a format_id unknown to all agents        | the creatives entry carries error code "REFERENCE_NOT_FOUND" |
+      | agent_unreachable  | a format_id whose agent is unreachable   | the error code should be "SERVICE_UNAVAILABLE"               |
+      | empty_name         | format_id but an empty name              | the creatives entry carries error code "VALIDATION_ERROR"    |
 
   @T-UC-006-partition-generative @partition @generative
   Scenario Outline: Generative build detection — <partition>
@@ -991,15 +1010,15 @@ Feature: BR-UC-006 Sync Creative Assets
     And <prompt_source>
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
-    And the result should be "<outcome>"
+    And <expected>
     # --- assignment_package partitions ---
 
     Examples: Generative partitions
-      | partition                       | format_type                        | prompt_source                          | outcome                      |
-      | static_creative                 | no output_format_ids               | any assets                             | standard processing          |
-      | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | generative build with prompt |
-      | generative_create_name_fallback | output_format_ids present (create) | no prompt assets or inputs             | generative build with name   |
-      | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | CONFIGURATION_ERROR  |
+      | partition                       | format_type                        | prompt_source                          | expected                                                          |
+      | static_creative                 | no output_format_ids               | any assets                             | the creative should be processed without generative build         |
+      | generative_with_prompt          | output_format_ids present          | message asset with prompt text         | the generative build should use the message asset as the prompt   |
+      | generative_create_name_fallback | output_format_ids present (create) | no prompt assets or inputs             | the system should use the creative name as prompt fallback        |
+      | generative_no_gemini_key        | output_format_ids present          | message asset but no GEMINI_API_KEY    | the creatives entry carries error code "CONFIGURATION_ERROR"      |
 
   @T-UC-006-partition-assignment-pkg @partition @assignment-package
   Scenario Outline: Assignment package validation — <partition>
@@ -1009,14 +1028,14 @@ Feature: BR-UC-006 Sync Creative Assets
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
-    And the result should be "<outcome>"
+    And <expected>
     # --- assignment_format partitions ---
 
     Examples: Package partitions
-      | partition           | package_setup                              | outcome             |
-      | existing_package    | assignments to an existing package          | assignment created  |
-      | existing_assignment | the creative is already assigned to package | assignment updated  |
-      | package_not_found   | assignments to a non-existent package       | PACKAGE_NOT_FOUND   |
+      | partition           | package_setup                              | expected                                        |
+      | existing_package    | assignments to an existing package          | the assignment should be created successfully   |
+      | existing_assignment | the creative is already assigned to package | the existing assignment should be updated       |
+      | package_not_found   | assignments to a non-existent package       | the error code should be "PACKAGE_NOT_FOUND"    |
 
   @T-UC-006-partition-assignment-fmt @partition @assignment-format
   Scenario Outline: Assignment format compatibility — <partition>
@@ -1026,15 +1045,18 @@ Feature: BR-UC-006 Sync Creative Assets
     And validation_mode is "strict"
     When the Buyer Agent syncs the creative
     Then the response is compliant with the sync_creatives spec
-    And the result should be "<outcome>"
+    And <expected>
     # --- media_buy_status partitions ---
 
+    # Format ids are pin-shaped: core/format-id.json gives ``id`` the pattern
+    # ^[a-zA-Z0-9_-]+$, so the ``agent/...`` spellings these rows used to carry were a
+    # schema violation the request never got past.
     Examples: Format compatibility partitions
-      | partition       | creative_format       | product_setup                            | outcome            |
-      | format_matches  | agent/banner-300x250  | product accepting agent/banner-300x250   | assignment created |
-      | no_restrictions | agent/banner-300x250  | product with empty format_ids            | assignment created |
-      | no_product_id   | agent/banner-300x250  | package with no product_id               | assignment created |
-      | format_mismatch | agent/banner-300x250  | product accepting only agent/video-30s   | VALIDATION_ERROR    |
+      | partition       | creative_format  | product_setup                         | expected                                       |
+      | format_matches  | banner_300x250   | product accepting banner_300x250      | the assignment should be created successfully  |
+      | no_restrictions | banner_300x250   | product with empty format_ids         | the assignment should be created successfully  |
+      | no_product_id   | banner_300x250   | package with no product_id            | the assignment should be created successfully  |
+      | format_mismatch | banner_300x250   | product accepting only video_30s      | the error code should be "VALIDATION_ERROR"    |
 
   @T-UC-006-partition-mb-status @partition @media-buy-status
   Scenario Outline: Media buy status transition on assignment — <partition>
@@ -1268,13 +1290,13 @@ Feature: BR-UC-006 Sync Creative Assets
     # --- generative_build boundaries ---
 
     Examples:
-      | boundary_point           | creative_state                                              | expected                                                  |
-      | missing format_id (null) | a creative with name "Banner" but no format_id              | the error should include "suggestion" field               |
-      | known HTTP format        | a creative with a known HTTP-registered format_id           | the creative should be processed successfully             |
-      | adapter format (non-HTTP)| a creative with an adapter (non-HTTP) format_id             | the creative should skip external format validation       |
-      | unknown format           | a creative with an unknown format_id                        | the error should include "suggestion" field               |
-      | agent unreachable        | a creative with a format_id whose agent is unreachable      | the error should include "suggestion" field               |
-      | empty name               | a creative with format_id but an empty name                 | the error should include "suggestion" field               |
+      | boundary_point           | creative_state                                              | expected                                                     |
+      | missing format_id (null) | a creative with name "Banner" but no format_id              | the error code should be "INVALID_REQUEST"                   |
+      | known HTTP format        | a creative with a known HTTP-registered format_id           | the creative should be processed successfully                |
+      | adapter format (non-HTTP)| a creative with an adapter (non-HTTP) format_id             | the creative should skip external format validation          |
+      | unknown format           | a creative with an unknown format_id                        | the creatives entry carries error code "REFERENCE_NOT_FOUND" |
+      | agent unreachable        | a creative with a format_id whose agent is unreachable      | the error code should be "SERVICE_UNAVAILABLE"               |
+      | empty name               | a creative with format_id but an empty name                 | the creatives entry carries error code "VALIDATION_ERROR"    |
 
   @T-UC-006-boundary-generative @boundary @generative
   Scenario Outline: Generative build boundary — <boundary_point>
