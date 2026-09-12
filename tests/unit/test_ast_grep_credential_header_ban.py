@@ -348,10 +348,15 @@ class TestLiveTreeAndExemptions:
         # This module is excluded: it spells the directive inside string
         # literals as TEST DATA (TestExemptionForm), which is not an exemption.
         this_module = str(Path(__file__).resolve().relative_to(repo_root()))
+        # Probes are excluded here for the same reason the live-tree scan excludes
+        # them: a sibling test on another xdist worker writes and removes them, so one
+        # can vanish between rglob and read_text -- a FileNotFoundError that read as
+        # this test failing on two box runs with nothing else changed.
         found = {
             str(path.relative_to(repo_root()))
             for path in (repo_root() / "tests").rglob("*.py")
-            if directive.search(path.read_text(encoding="utf-8", errors="ignore"))
+            if not path.name.startswith(_PROBE_STEM)
+            and directive.search(path.read_text(encoding="utf-8", errors="ignore"))
         } - {this_module}
         assert found == set(_RECORDED_EXEMPTIONS), (
             "the set of files suppressing this rule drifted from _RECORDED_EXEMPTIONS.\n"
