@@ -11,11 +11,10 @@
 # schemas legitimately declare. The ban has to fall on the CALL SITE, which is a structural
 # fact only a syntax rule can state. Same reasoning as the two identity rules beside this one.
 #
-# What is excluded, and why:
-# - pydantic's own `model_dump(context=...)` / `model_dump_json(...)` / `model_validate(...)`:
-#   a serializer switch, not the buyer's context (src/core/schemas/_base.py uses it to reveal
-#   internal-only fields).
-# - the boundary module itself, by path. Never by a suppression comment.
+# The boundary module is excluded by path, never by a suppression comment. Nothing else is:
+# pydantic's `model_dump(context=...)` serializer switch is a `context=` keyword too, and the
+# one use this tree had (a `model_dump_internal` that revealed internal-only fields) had no
+# caller and is deleted, so a serializer context under src/ is as much a finding as any other.
 # `context_id` is a different field and does not match: the regex is anchored.
 id: context-is-written-by-the-boundary-alone
 language: Python
@@ -35,10 +34,3 @@ rule:
   has:
     field: name
     regex: "^context$"
-  not:
-    inside:
-      stopBy: end
-      any:
-        - pattern: $X.model_dump($$$)
-        - pattern: $X.model_dump_json($$$)
-        - pattern: $X.model_validate($$$)

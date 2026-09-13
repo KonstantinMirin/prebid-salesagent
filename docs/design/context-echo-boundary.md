@@ -107,8 +107,9 @@ The deleted plumbing cannot grow back, because each road it took is refused:
   reads and writes it).
 - **The call site**: `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` fails
   any `context=` keyword argument under `src/` and `scripts/` outside the boundary module.
-  Pydantic's own `model_dump(context=...)` serializer switch is excluded; `context_id` is a
-  different field and never matches.
+  Nothing is excluded but the boundary module: the one pydantic `model_dump(context=...)`
+  serializer switch the tree had was dead and is deleted. `context_id` is a different field
+  and never matches.
 - **The object**: `AdcpResponse` refuses a non-None `context` on construction (an `after`
   validator) and on assignment (`__setattr__`). `_served` writes it through
   `object.__setattr__`, the one bypass, so a dict-splat that slips past the rule still fails.

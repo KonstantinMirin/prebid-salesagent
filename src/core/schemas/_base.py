@@ -487,7 +487,8 @@ class WireSerializerMixin:
         )
 
     _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset()
-    """Fields kept OFF protocol responses unless ``context={"include_internal": True}``.
+    """Fields kept OFF protocol responses. There is no switch to put them back on: the wire
+    is the only consumer of a response dump, and persistence reads the model's attributes.
 
     Declarative because the alternative is a second ``@model_serializer`` per class
     that needs one, and a class with two wrap serializers silently runs only one of
@@ -500,9 +501,8 @@ class WireSerializerMixin:
         data = serializer(self)
         if self._SERIALIZE_NESTED_MODELS:
             data = self._apply_nested_models(data, info)
-        if self._INTERNAL_ONLY_FIELDS and not (info.context or {}).get("include_internal"):
-            for field in self._INTERNAL_ONLY_FIELDS:
-                data.pop(field, None)
+        for field in self._INTERNAL_ONLY_FIELDS:
+            data.pop(field, None)
         return self._apply_always_include(data, info)
 
     def _apply_nested_models(self, data, info):
@@ -1099,10 +1099,6 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
         """
         return _mirror_media_buy_status(self)
 
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage and internal processing."""
-        return self.model_dump(context={"include_internal": True}, **kwargs)
-
 
 class CreateMediaBuyError(AdCPCreateMediaBuyError, CreateMediaBuyResult):
     """Failed create_media_buy response, extending the SDK error branch.
@@ -1295,10 +1291,8 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  #
         # Get base serialization
         data = serializer(self)
 
-        # Exclude workflow_step_id from protocol responses
-        # (unless explicitly requested via model_dump_internal)
-        if not info.context or not info.context.get("include_internal"):
-            data.pop("workflow_step_id", None)
+        # workflow_step_id is internal; it never reaches a protocol response.
+        data.pop("workflow_step_id", None)
 
         # Explicitly serialize affected_packages to ensure AffectedPackage.model_dump() is called
         # This ensures internal fields (changes_applied, buyer_package_ref) are excluded via exclude=True
@@ -1321,10 +1315,6 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  #
                 data[field_name] = field_value.model_dump(mode=info.mode)
 
         return data
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage and internal processing."""
-        return self.model_dump(context={"include_internal": True}, **kwargs)
 
 
 class UpdateMediaBuyError(AdCPUpdateMediaBuyError, UpdateMediaBuyResult):  # type: ignore[misc]
@@ -1582,11 +1572,6 @@ class PricingOption(SalesAgentBaseModel):
         if "exclude_none" not in kwargs:
             kwargs["exclude_none"] = True
 
-        return super().model_dump(**kwargs)
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including all fields for database storage and internal processing."""
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
         return super().model_dump(**kwargs)
 
 
@@ -1994,13 +1979,6 @@ class Targeting(TargetingOverlay):
 
         return super().model_dump(**kwargs)
 
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal and managed fields for database storage and internal processing."""
-        kwargs.setdefault("mode", "json")
-        # Don't exclude internal fields or managed fields
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
-
     def dict(self, **kwargs):
         """Override dict to always exclude managed fields (for backward compat)."""
         kwargs["exclude"] = kwargs.get("exclude", set())
@@ -2019,10 +1997,6 @@ class Budget(SalesAgentBaseModel):
     auto_pause_on_budget_exhaustion: bool | None = Field(
         None, description="Whether to pause campaign when budget is exhausted"
     )
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including all fields for internal processing."""
-        return super().model_dump(**kwargs)
 
 
 # Budget utility functions for v1.8.0 compatibility
@@ -2362,23 +2336,6 @@ class Package(LibraryPackage):
     )
 
     # Note: No need for validate_required hack - library Package already has package_id and status as required fields!
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage and internal processing."""
-        # Get base dump with all AdCP fields
-        result = super().model_dump(mode="python", exclude_none=False, **kwargs)
-
-        # Manually add internal fields that are marked with exclude=True
-        # (Pydantic's exclude=True at field level cannot be overridden via parameters)
-        result["tenant_id"] = self.tenant_id
-        result["media_buy_id"] = self.media_buy_id
-        result["platform_line_item_id"] = self.platform_line_item_id
-        result["created_at"] = self.created_at
-        result["updated_at"] = self.updated_at
-        result["metadata"] = self.metadata
-        result["pricing_model"] = self.pricing_model
-
-        return result
 
 
 # --- Media Buy Lifecycle ---
@@ -3131,22 +3088,6 @@ class Signal(LibrarySignal):
             stacklevel=2,
         )
         return self.signal_type
-
-    def model_dump_internal(self, **kwargs: Any) -> dict[str, Any]:
-        """Dump including internal fields for database storage.
-
-        Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
-        We manually include internal fields by accessing the attributes directly.
-        """
-        data = super().model_dump(exclude=set(), **kwargs)
-
-        # Manually add excluded fields
-        for field_name in ("tenant_id", "created_at", "updated_at", "metadata"):
-            val = getattr(self, field_name, None)
-            if val is not None:
-                data[field_name] = val
-
-        return data
 
 
 class SignalFilters(LibrarySignalFilters):

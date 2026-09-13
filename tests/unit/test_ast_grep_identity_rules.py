@@ -38,8 +38,8 @@ _RULES: tuple[tuple[str, str, str, str], ...] = (
         "context-is-written-by-the-boundary-alone",
         "src/core/tools",
         "response = build(items=[], context=req.context)\n",
-        # A serializer switch and a different field: neither is the buyer's context.\n
-        'wire = model.model_dump(context={"include_internal": True})\nrow = create(context_id="ctx_1")\n',
+        # A different field: the regex is anchored, so context_id is not context.
+        'row = create(context_id="ctx_1")\n',
     ),
 )
 

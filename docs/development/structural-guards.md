@@ -275,8 +275,8 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 
 **File:** `tests/unit/test_architecture_no_model_dump_in_impl.py`
 
-**What it enforces:** `_impl` functions must not call `.model_dump()` or
-`.model_dump_internal()`. Serialization is the transport wrapper's job.
+**What it enforces:** `_impl` functions must not call `.model_dump()`.
+Serialization is the boundary's job.
 
 **Why it matters:** When business logic calls `model_dump()`, it takes on
 responsibility for serialization format (JSON mode, aliases, exclude rules).
@@ -286,8 +286,7 @@ wrapper should receive a model object and decide how to serialize it.
 #### How it works
 
 The guard scans all `*_impl()` functions under `src/core/tools/` using AST,
-looking for method calls where the method name is `model_dump` or
-`model_dump_internal`.
+looking for method calls where the method name is `model_dump`.
 
 #### Tests
 
