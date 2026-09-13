@@ -8,7 +8,7 @@ from adcp.types import ContextObject
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import CreativeUoW, WorkflowUoW
-from src.core.exceptions import AdCPAdapterError, AdCPAuthRequiredError
+from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import CreativeStatusEnum
 from src.core.tenant_context import TenantContext
 
@@ -37,12 +37,8 @@ def _create_sync_workflow_steps(
     effect of that unit — cannot name a step the commit has not yet released
     (GH #2002).
     """
-    # Ensure principal_id is available (should always be set by this point).
-    # No principal_id at all -> AUTH_MISSING per v3.1.1 error-code.json
-    # (absent credential, not presented-but-rejected).
-    if principal_id is None:
-        raise AdCPAuthRequiredError()
-
+    # ``principal_id`` is a ``str``: the caller took it from require_principal, so there is no
+    # anonymous case to refuse here and nothing re-derives what the resolver decided.
     assert uow.workflows is not None
     # Context creation joins the caller's transaction too. The repository
     # takes no tenant_id (it uses its own scope) and create_step takes the

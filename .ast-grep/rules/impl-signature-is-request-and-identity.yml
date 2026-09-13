@@ -1,0 +1,41 @@
+# Every tool implementation is called one way: impl(req=<DTO>, identity=<ResolvedIdentity>).
+#
+# `src/core/tools/registry.ToolSpec.impl` is typed as the `ToolImpl` protocol, so mypy
+# already pins that an implementation ACCEPTS the row's DTO and a ResolvedIdentity by
+# keyword, and rejects an extra parameter with no default. What a protocol cannot pin is
+# the two things this rule adds, because a callable that accepts MORE is still a subtype:
+#
+#   - `identity: ResolvedIdentity | None` or `identity: ResolvedIdentity = ...` -- an
+#     implementation declaring a state the boundary never produces, which invites an
+#     `if identity is None` branch that re-derives what the resolver decided;
+#   - a third parameter with a default -- something no transport supplies, silently
+#     taking its default on every call.
+#
+# The parameter list is therefore matched EXACTLY. The request annotation is free (`$R`)
+# because each tool has its own DTO and mypy checks that one against the registry row.
+# `async def` and `def` both match: the selector is the parameters node, not the def.
+#
+# Replaces tests/unit/test_impl_resolved_identity.py and
+# tests/unit/test_architecture_boundary_completeness.py, which read the same fact off
+# `inspect.signature` at test time.
+id: impl-signature-is-request-and-identity
+language: Python
+severity: error
+message: >-
+  A tool implementation declares exactly (req: <Request>, identity: ResolvedIdentity): no
+  Optional, no default, no third parameter. The boundary (src/core/tools/_boundary.py) calls
+  impl(req=..., identity=...) and nothing else; put a value on the request DTO if a buyer
+  sends it, or teach the boundary to derive it if a transport knows it.
+files:
+  - "src/core/tools/**/*.py"
+rule:
+  kind: function_definition
+  has:
+    field: name
+    regex: '^_\w+_impl$'
+  not:
+    has:
+      field: parameters
+      pattern:
+        context: 'def f(req: $R, identity: ResolvedIdentity): pass'
+        selector: parameters

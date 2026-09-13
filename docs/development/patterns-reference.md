@@ -296,7 +296,7 @@ async def list_tasks(
 
 This is tracked debt — functions should be split into `_list_tasks_impl` + transport wrappers.
 
-**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `ruff-boundary.toml`'s TID251 ban on `ToolError`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, the `ToolImpl` protocol on `ToolSpec.impl` (mypy) with `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, `ruff-boundary.toml`'s TID251 bans on `ToolError` and on the two auth errors outside the resolver and `require_*`
 
 ## 7. Error hierarchy
 

@@ -69,13 +69,17 @@ def get_push_notification_config_from_headers(headers: dict[str, str] | None) ->
 def require_principal(
     identity: "ResolvedIdentity",
     *,
-    context: "ContextObject | dict[str, Any] | None" = None,
+    context: "ContextObject | dict[str, Any] | None",
 ) -> Principal:
     """The principal the resolver loaded for this caller, or ``AdCPAuthRequiredError``.
 
     A tool acts only as the resolved principal, so this is the one principal a tool ever
     holds; nothing downstream loads one by id. The anonymous caller of a public tool has
     none, which on a tool that needs one is AUTH_MISSING.
+
+    ``context`` has no default on purpose. The refusal echoes the buyer's request context so
+    the buyer can correlate it, and a call site that has none says so with ``context=None``
+    rather than by omission. Python enforces this at every call; an AST guard used to.
     """
     from src.core.exceptions import AdCPAuthRequiredError
 
@@ -87,7 +91,7 @@ def require_principal(
 def require_tenant(
     identity: "ResolvedIdentity",
     *,
-    context: "ContextObject | dict[str, Any] | None" = None,
+    context: "ContextObject | dict[str, Any] | None",
 ) -> "TenantContext":
     """Return ``identity.tenant`` or raise ``AdCPAuthenticationError``.
 

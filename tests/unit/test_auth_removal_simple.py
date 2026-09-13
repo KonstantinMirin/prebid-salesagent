@@ -30,33 +30,6 @@ class TestAuthRemovalChanges:
 
         assert audit_principal == "real_user"
 
-    def test_discovery_endpoints_use_optional_auth_pattern(self):
-        """Verify the source code uses the optional auth pattern."""
-        # Simple source code check - tools now split across multiple files
-        tool_files = [
-            "src/core/tools/products.py",
-            "src/core/auth.py",
-        ]
-
-        sources = []
-        for tool_file in tool_files:
-            try:
-                with open(tool_file) as f:
-                    sources.append(f.read())
-            except FileNotFoundError:
-                continue
-
-        combined_source = "\n".join(sources)
-
-        # Key changes should be present - tuple return after ContextVar fix
-        # Updated to accept new require_valid_token parameter for discovery endpoints
-        assert (
-            "get_principal_from_context(context)  # Returns (None, None) if no auth" in combined_source
-            or "get_principal_from_context(context)  # Returns None if no auth" in combined_source
-            or "require_valid_token=False" in combined_source  # New pattern for discovery endpoints
-        ), "Optional auth pattern not found in tool files"
-        assert 'principal_id or "anonymous"' in combined_source, "Anonymous user pattern not found"
-
     def test_pricing_filtering_for_anonymous_users(self):
         """Test that pricing data is filtered for anonymous users."""
         # Test the pricing filtering logic

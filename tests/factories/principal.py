@@ -62,8 +62,8 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         and normalizes it. THIS IS THE ONE NORMALIZER. ``ResolvedIdentity.tenant`` is
         typed ``TenantContext | None``, a single type rather than a union, so a dict fails
         validation at construction. Tests are not asked to know that: they pass data and
-        this converts it, which is why inline ``ResolvedIdentity(...)`` in a test is capped
-        by ``tests/unit/test_architecture_resolved_identity_inline_cap.py``. An inline site
+        this converts it, which is why inline ``ResolvedIdentity(...)`` outside this factory
+        fails ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``. An inline site
         carries its own copy of the conversion below, and 98 copies is how the previous
         shape broke -- the union widened to fit them instead of them narrowing to fit it.
         """

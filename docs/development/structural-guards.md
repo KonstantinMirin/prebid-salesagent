@@ -146,9 +146,11 @@ machinery. See [Add a guard](#add-a-guard).
 |-----------|-----------------|
 | `ruff-boundary.toml` (TID251) | Nothing under `src/` imports `ToolError` except the two edge modules that mint and render it. Replaced an AST scan over a hand-written list of 14 files, which was blind to every module not on it. Proven live by `tests/unit/test_ruff_boundary_bans.py`. |
 | `test_transport_agnostic_impl.py` | `_impl` functions have zero transport imports (no fastmcp, a2a, starlette) |
-| `test_impl_resolved_identity.py` | `_impl` functions accept `ResolvedIdentity`, not `Context`/`ToolContext` |
+| `ToolImpl` protocol (`src/core/tools/registry.py`, mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)`, the DTO matching its registry row. Replaced `test_impl_resolved_identity.py` and `test_architecture_boundary_completeness.py`, which read the same fact off `inspect.signature`. |
+| `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` | `ResolvedIdentity(...)` is constructed only by the resolver and `PrincipalFactory.make_identity`. Replaced two AST guards (a zero cap over A2A test files and a per-file cap dict over the rest); ruff cannot take it because TID251 bans the import, which forty modules need for annotations. |
+| `ruff-boundary.toml` (TID251 on `AdCPAuthRequiredError` / `AdCPAuthenticationError`) | The auth refusals are minted only by the resolver and `require_principal` / `require_tenant`. Replaced `test_architecture_no_handrolled_identity_guard.py`, which modelled the `if identity is None: raise` shapes and missed the two helper sites the ban found on landing. |
 
-These three guards enforce Critical Pattern #5: shared `_impl` functions are
+These guards enforce Critical Pattern #5: shared `_impl` functions are
 transport-agnostic. They don't know whether they're called from MCP, A2A, or
 a REST endpoint.
 
@@ -177,35 +179,35 @@ deleted in full ([one tool registry](../design/one-tool-registry.md)),
 because a design in which the DTO IS the pinned model minus a declared
 omission leaves it nothing to compare.
 
-### Boundary completeness guard
+### Implementation signature
 
-**File:** `tests/unit/test_architecture_boundary_completeness.py`
+**Where:** the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py`,
+graded by mypy, plus `.ast-grep/rules/impl-signature-is-request-and-identity.yml`.
 
-**What it enforces:** An `_impl` function may declare only parameters the boundary can
-supply — `req`, `identity` and `context_id` — and must accept the first two.
+**What it enforces:** An `_impl` function declares exactly `(req: <DTO>,
+identity: ResolvedIdentity)`, and the DTO is the one its registry row names.
 
 **Why it matters:** Every transport reaches an implementation through
-`src/core/tools/_boundary.py`, which calls it as `impl(req=..., identity=..., **extra)`.
-`extra` is not open: it carries the transport-derived values the boundary knows how to
-obtain, which today is `context_id` alone. A parameter outside that set can never be filled,
-so it silently takes its default on every call — the tool accepts something no caller can
-send.
+`src/core/tools/_boundary.py`, which calls it as `impl(req=..., identity=...)` and nothing
+else. A third parameter can never be filled, so it silently takes its default on every call;
+an `identity` declared Optional or defaulted describes a state the boundary never produces
+and invites a `None` branch that re-derives what the resolver decided.
 
 #### How it works
 
-It reads the signature of every `TOOLS[...].impl` and compares it to
-`BOUNDARY_SUPPLIED_PARAMS`. There is no registry of implementations to maintain and no file
-to locate: the registry names them.
+The generic `ToolSpec[Req]` ties `dto: type[Req]` to `impl: ToolImpl[Req]`, so mypy checks
+each row's implementation against that row's DTO and against `ResolvedIdentity`, and rejects
+an extra parameter with no default. A protocol accepts a callable that takes MORE than it
+asks for, so the ast-grep rule matches the parameter list exactly: no Optional, no default,
+no third parameter.
 
-#### What it replaced, and why the replacement was necessary
+#### What it replaced
 
-The guard used to scan each `*_raw` and MCP wrapper for the arguments it forwarded, because
-there were fifteen wrappers and any one could drop a parameter the others passed. There are
-none left, so "does the wrapper forward everything" is answered by construction.
-
-The old form also demonstrated the failure this guard exists to prevent. Its wrapper lookup
-returned `None` when it could not find a wrapper, and `None` meant "nothing to check" — so
-the day the wrappers were deleted, it went green while grading nothing.
+`test_impl_resolved_identity.py` and `test_architecture_boundary_completeness.py` read the
+same signature off `inspect.signature` at test time. The latter is the cautionary one: it
+used to scan each `*_raw` wrapper for the arguments it forwarded, and its wrapper lookup
+returned `None` — "nothing to check" — when it found no wrapper, so the day the wrappers were
+deleted it went green while grading nothing.
 
 ### Query type safety guard
 

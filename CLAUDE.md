@@ -43,15 +43,16 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 ### Structural guards (automated architecture enforcement)
 AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
 
-**The following table is a representative subset, not the full set.** There are over 140 guard tests (149 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); for the complete list, run `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
+**The following table is a representative subset, not the full set.** There are over 140 guard tests (149 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py`); for the complete list, run `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
 | Guard | Enforces | Test file |
 |-------|----------|-----------|
 | Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
 | No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
-| ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
-| Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
+| `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)`; the DTO matches the registry row | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
+| One ResolvedIdentity constructor | `ResolvedIdentity(...)` only in the resolver and `PrincipalFactory.make_identity` | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
+| Auth refusals minted in two places | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver and `require_principal` / `require_tenant` | `ruff-boundary.toml` (TID251) |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
@@ -261,7 +262,7 @@ not before.
 attribute: `TOOLS` holds the function object, so `patch("...._x_impl")` renames something
 nothing consults. Use `tests/helpers/capture_wrapper_req.py` (`stub_impl`, `registry_impl`).
 
-**Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `ruff-boundary.toml`'s TID251 ban on `fastmcp.exceptions.ToolError`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `test_transport_agnostic_impl.py`, the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py` (mypy) plus `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, and `ruff-boundary.toml`'s TID251 bans on `fastmcp.exceptions.ToolError` and on the two auth errors outside the resolver and `require_*`
 
 Worked transport-boundary and `_impl` examples: `.claude/rules/patterns/mcp-patterns.md` and [patterns-reference.md §6](docs/development/patterns-reference.md).
 

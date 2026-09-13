@@ -12,7 +12,7 @@ helper) that the media-buy behavioral migration removed.
 
 This guard pins each behavioral file at its current count of mock constructions
 via a per-file cap dict that can only shrink (same ratcheting convention as
-``test_architecture_resolved_identity_inline_cap`` and ``.duplication-baseline``).
+``test_architecture_no_value_error_in_impl`` and ``.duplication-baseline``).
 New behavioral files with mock constructions fail immediately; existing files
 that drop below their cap force it down (no silent regression). The intent is to
 keep the harness migration's gains and steer remaining mocks toward env fluent

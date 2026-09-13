@@ -359,8 +359,9 @@ that point the transport's job is done and Critical Pattern #5
 
 Structural guards enforce this boundary
 ([structural-guards.md](structural-guards.md)):
-`test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`,
-`ruff-boundary.toml`'s TID251 ban on `ToolError`, `test_architecture_boundary_completeness.py`.
+`test_transport_agnostic_impl.py`, the `ToolImpl` protocol on `ToolSpec.impl` (mypy) with
+`.ast-grep/rules/impl-signature-is-request-and-identity.yml`, and `ruff-boundary.toml`'s
+TID251 bans on `ToolError` and on the two auth errors outside the resolver and `require_*`.
 
 ## Where does my change go?
 

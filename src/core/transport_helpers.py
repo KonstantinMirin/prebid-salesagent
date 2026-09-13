@@ -54,7 +54,7 @@ def enrich_identity_with_account(
     # AUTH_REQUIRED first, uniformly across every transport that funnels through here.
     from src.core.auth import require_principal
 
-    require_principal(identity)
+    require_principal(identity, context=None)
 
     if identity.tenant_id is None:
         return identity

@@ -33,10 +33,10 @@ because every wrapper calls the same function with the same
 **Consequence.** Adding a transport, or fixing a transport bug, never changes
 behavior; changing behavior never touches a transport. Structural guards
 enforce the boundary: `_impl` may not import transport machinery
-(`tests/unit/test_transport_agnostic_impl.py`), must accept `ResolvedIdentity`
-rather than a transport context (`tests/unit/test_impl_resolved_identity.py`),
-and every wrapper must forward every `_impl` parameter
-(`tests/unit/test_architecture_boundary_completeness.py`). When unsure where a
+(`tests/unit/test_transport_agnostic_impl.py`), and must declare exactly
+`(req: <DTO>, identity: ResolvedIdentity)` -- pinned by the `ToolImpl` protocol
+on `ToolSpec.impl` (mypy) and
+`.ast-grep/rules/impl-signature-is-request-and-identity.yml`. When unsure where a
 change goes, use the [placement
 table](request-lifecycle.md#where-does-my-change-go) in the request lifecycle.
 

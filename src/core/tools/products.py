@@ -16,10 +16,10 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
+from src.core.auth import require_principal
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
-    AdCPAuthRequiredError,
     AdCPConfigurationError,
     AdCPInternalError,
     AdCPPolicyViolationError,
@@ -218,10 +218,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         # "Brand manifest required by tenant policy" string is dropped for that
         # reason, not because the condition changed.
         raise AdCPAuthorizationError()
-    elif brand_manifest_policy == "require_auth" and not principal_id:
-        # No credential presented at all -> AUTH_MISSING per v3.1.1
-        # error-code.json.
-        raise AdCPAuthRequiredError()
+    elif brand_manifest_policy == "require_auth":
+        # The tenant's policy makes this public tool need a caller: AUTH_MISSING, echoing
+        # the request context, from the one helper that raises it.
+        require_principal(identity, context=req.context)
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
