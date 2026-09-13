@@ -213,7 +213,7 @@ def _run_approval_thread(
         from src.adapters.gam.client import GAMClientManager
 
         client_manager = GAMClientManager(gam_config, adapter_config.gam_network_code)
-        orders_manager = GAMOrdersManager(client_manager, dry_run=False)
+        orders_manager = GAMOrdersManager(client_manager)
 
         # Poll GAM approval endpoint
         for attempt in range(1, max_attempts + 1):

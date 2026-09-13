@@ -482,7 +482,6 @@ def get_gam_advertisers(tenant_id):
                     network_code=tenant.adapter_config.gam_network_code,
                     advertiser_id=None,
                     trafficker_id=tenant.adapter_config.gam_trafficker_id,
-                    dry_run=False,
                     tenant_id=tenant_id,
                 )
 

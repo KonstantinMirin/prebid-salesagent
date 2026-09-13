@@ -40,9 +40,9 @@ flowchart LR
 
 ### What changes by protocol
 
-- `MCP`: `MCPAuthMiddleware` resolves identity once, stores `identity` and optional `context_id`, then the MCP tool wrapper calls the shared implementation.
-- `A2A`: `AdCPRequestHandler` resolves identity once, builds task/context metadata, then dispatches the explicit skill handler to the corresponding raw function or shared implementation.
-- `Shared core`: business behavior is intended to stay in `_impl` functions so MCP and A2A stay aligned.
+- `MCP`: `RegistryTool.run` reads the request headers and hands the buyer's argument object to `serve`.
+- `A2A`: `AdCPRequestHandler.on_message_send` reads the headers off the call context, builds task/context metadata, and `_dispatch_skill` hands the skill's parameters to `serve`.
+- `Shared core`: `serve` validates the payload, resolves the identity once, and runs the `_impl` function, so MCP and A2A cannot drift ([request-lifecycle.md](request-lifecycle.md)).
 
 ## 2. Buyer Agent Flow
 

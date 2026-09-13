@@ -2723,10 +2723,8 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     and ``_update_media_buy_impl`` read it as ``req.today or date.today()``. Nothing set
     it -- no transport could (the marker kept it off all three announced shapes) and no
     caller in src or tests passed it -- so that read already always yielded
-    ``date.today()``, which is now what it says. The simulation clock that field looked
-    like it provided is ``TestingContext.mock_time`` (src/core/testing_hooks.py), which
-    is separate and live. See docs/design/one-tool-registry.md, "Decisions this forces,
-    and the answers".
+    ``date.today()``, which is now what it says. See docs/design/one-tool-registry.md,
+    "Decisions this forces, and the answers".
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (

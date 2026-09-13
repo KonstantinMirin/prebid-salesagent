@@ -421,7 +421,6 @@ def test_gam_connection():
                     network_code=network_code,
                     advertiser_id=None,
                     trafficker_id=None,
-                    dry_run=False,
                     tenant_id=tenant_id,
                 )
 

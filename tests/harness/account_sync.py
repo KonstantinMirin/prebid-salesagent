@@ -171,10 +171,8 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         between it and the wire is real -- the impl, the boundary's exception handling,
         and the per-transport envelope build.
 
-        ``force_error`` on ``AdCPTestContext`` is NOT the seam for this: it is honoured
-        only by the delivery simulator and the mock ad server, and no sync_accounts path
-        reads it. Over e2e there is no seam at all, which is declared rather than
-        silently no-oped.
+        Over e2e there is no seam at all, which is declared rather than silently
+        no-oped: requests carry no testing headers.
         """
         from unittest.mock import patch
 

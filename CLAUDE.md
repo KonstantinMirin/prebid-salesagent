@@ -409,7 +409,7 @@ Tenant → CurrencyLimit (USD required for budget validation)
 ## Testing guidelines
 
 Test organization (unit/integration/e2e/admin/bdd/ui suites and what each needs), database fixtures,
-quality rules (max 10 mocks per file, roundtrip test for `apply_testing_hooks()`), entity markers, and the
+quality rules (max 10 mocks per file), entity markers, and the
 infrastructure decision tree are in `.claude/rules/patterns/testing-patterns.md` — read it before writing
 or running tests. Test authoring with the harness (environments, factories, wire assertions): `tests/CLAUDE.md`.
 

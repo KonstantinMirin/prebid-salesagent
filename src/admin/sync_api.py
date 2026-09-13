@@ -144,7 +144,6 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                 network_code=adapter_config.gam_network_code or "",
                 advertiser_id=None,  # Not needed for inventory sync
                 trafficker_id=adapter_config.gam_trafficker_id or None,
-                dry_run=False,
                 audit_logger=None,
                 tenant_id=tenant_id,
             )

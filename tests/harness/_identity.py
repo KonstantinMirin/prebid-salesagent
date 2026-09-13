@@ -15,7 +15,6 @@ def make_identity(
     tenant_id: str | None = _UNSET,  # type: ignore[assignment]
     tenant: dict | None = _UNSET,  # type: ignore[assignment]
     protocol: str = "mcp",
-    dry_run: bool = False,
     **kwargs: object,
 ) -> ResolvedIdentity:
     """Build a ResolvedIdentity with explicit control over all fields.
@@ -32,6 +31,5 @@ def make_identity(
         tenant_id="test_tenant" if tenant_id is _UNSET else tenant_id,
         tenant=tenant,
         protocol=protocol,
-        dry_run=dry_run,
         **kwargs,
     )

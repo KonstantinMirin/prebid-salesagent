@@ -205,7 +205,6 @@ class AdServerAdapter(ABC):
         self,
         config: dict[str, Any],
         principal: Principal,
-        dry_run: bool = False,
         creative_engine: CreativeEngineAdapter | None = None,
         tenant_id: str | None = None,
     ):
@@ -214,7 +213,6 @@ class AdServerAdapter(ABC):
         self.config = config
         self.principal = principal
         self.principal_id = principal.principal_id  # For backward compatibility
-        self.dry_run = dry_run
         self.creative_engine = creative_engine
         self.tenant_id = tenant_id
         self.console = Console()
@@ -255,12 +253,9 @@ class AdServerAdapter(ABC):
             return value
         raise AdCPConfigurationError(field=field, internal_detail=operator_detail)
 
-    def log(self, message: str, dry_run_prefix: bool = True):
-        """Log a message, with optional dry-run prefix."""
-        if self.dry_run and dry_run_prefix:
-            self.console.print(f"[dim](dry-run)[/dim] {message}")
-        else:
-            self.console.print(message)
+    def log(self, message: str):
+        """Log a message to the adapter console."""
+        self.console.print(message)
 
     def _build_package_responses(
         self,
@@ -389,7 +384,7 @@ class AdServerAdapter(ABC):
     ) -> list[ErrorProblem]:
         """Pre-validate a media buy request without creating anything.
 
-        Called before adapter execution (including dry_run) to catch
+        Called before adapter execution to catch
         adapter-specific constraint violations early. Override in
         subclasses to add adapter-specific validation.
 

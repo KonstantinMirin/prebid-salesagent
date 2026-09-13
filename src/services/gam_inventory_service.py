@@ -1548,7 +1548,6 @@ def create_inventory_endpoints(app):
                 advertiser_id=None,  # Not needed for inventory sync
                 trafficker_id=None,  # Not needed for inventory sync
                 tenant_id=tenant_id,
-                dry_run=False,
             )
 
             # Perform sync
@@ -1752,7 +1751,6 @@ def create_inventory_endpoints(app):
                 advertiser_id=None,
                 trafficker_id=None,
                 tenant_id=tenant_id,
-                dry_run=False,
             )
 
             # Fetch values using GAM API

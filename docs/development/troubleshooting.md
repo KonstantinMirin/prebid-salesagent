@@ -68,7 +68,6 @@ Testing and quality gates:
 - [`TID251` import ban on `httpx`, `requests`, or `aiohttp`](#an-egress-import-ban-fires)
 - [Integration tests are slow or flaky](#integration-tests-slow-or-flaky)
 - [Async tests fail with coroutine warnings](#async-test-failures)
-- [`X-Dry-Run` and other testing headers are ignored](#testing-hook-headers-not-working)
 - [`AttributeError: '...' object has no attribute ...`](#attributeerror-on-model-fields)
 
 Reference:
@@ -662,25 +661,6 @@ For the full containerized suite, its databases, and its failure modes, see
 Mark async tests with `@pytest.mark.asyncio` and mock async dependencies with
 `AsyncMock`. Use `async with` for async context managers and `await` every
 async call — a bare coroutine assertion passes vacuously.
-
-### Testing hook headers not working
-
-**Symptoms**: `X-Dry-Run`, `X-Mock-Time`, or `X-Test-Session-ID` request
-headers have no effect, or `X-Next-Event`, `X-Next-Event-Time`, and
-`X-Simulated-Spend` are missing from responses.
-
-The hooks live in `src/core/testing_hooks.py`:
-
-- Request headers are extracted from the FastMCP context with
-  `context.meta.get("headers", {})` — a wrapper that reads them anywhere else
-  sees nothing.
-- Response event headers are computed only when a `campaign_info` dict is
-  passed to `apply_testing_hooks()`.
-- Parallel test sessions isolate through unique `X-Test-Session-ID` values —
-  generate one per test and send it on every request.
-
-Any operation that calls `apply_testing_hooks()` requires a roundtrip test
-(`check_roundtrip_tests.py` enforces this in `make quality`).
 
 ### AttributeError on model fields
 

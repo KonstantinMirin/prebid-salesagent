@@ -14,7 +14,6 @@ from pydantic import BaseModel, ConfigDict
 
 from src.core.schemas import Principal
 from src.core.tenant_context import TenantContext
-from src.core.testing_hooks import AdCPTestContext
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,6 @@ class ResolvedIdentity(BaseModel):
     # (transitional)", and that union is how dict-shaped tenant handling spread.
     tenant: TenantContext | None = None
     protocol: TransportProtocol = TransportProtocol.MCP
-    testing_context: AdCPTestContext | None = None
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
     # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
     # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
@@ -235,14 +233,29 @@ def _resolve_identity(
 
         raise AdCPAuthenticationError()
 
-    # Step 5: the testing context rides the same headers. Thirteen readers under
-    # src/core/tools branch on ``identity.testing_context`` for dry-run and delivery
-    # simulation, so the one place that resolves the caller resolves the WHOLE caller.
-    testing_context = AdCPTestContext.from_headers(dict(headers))
+    return ResolvedIdentity(principal=principal, tenant=tenant, protocol=protocol)
 
-    return ResolvedIdentity(
-        principal=principal,
-        tenant=tenant,
-        protocol=protocol,
-        testing_context=testing_context,
-    )
+
+def identity_of(tenant_id: str, principal_id: str) -> ResolvedIdentity:
+    """Resolution from STORED ids, for server-initiated work. Not for requests.
+
+    A request is resolved by ``_resolve_identity``: the host names the tenant and the
+    token names the principal inside it. Two jobs run with no request at all -- executing
+    a media buy after a human approved it, and the delivery scheduler reporting on stored
+    buys -- and they act on behalf of the row's owner. The row carries the same two facts
+    the request path derives, as ``tenant_id`` and ``principal_id``, so this is the same
+    resolution with those ids as its input: load the tenant, load the principal inside it,
+    build the same identity. It lives here because this module is the one place an
+    identity is constructed. A row whose tenant or principal is missing is broken seller
+    data, not an authentication outcome.
+    """
+    from src.core.auth_utils import get_principal_by_id
+    from src.core.exceptions import AdCPConfigurationError
+
+    tenant = TenantContext.load(tenant_id)
+    if tenant is None:
+        raise AdCPConfigurationError()
+    principal = get_principal_by_id(tenant_id, principal_id)
+    if principal is None:
+        raise AdCPConfigurationError()
+    return ResolvedIdentity(principal=principal, tenant=tenant)

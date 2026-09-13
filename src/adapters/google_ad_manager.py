@@ -115,7 +115,6 @@ class GoogleAdManager(AdServerAdapter):
         network_code: str,
         advertiser_id: str | None = None,
         trafficker_id: str | None = None,
-        dry_run: bool = False,
         audit_logger: AuditLogger | None = None,
         tenant_id: str | None = None,
         targeting_config: dict[str, Any] | None = None,
@@ -129,7 +128,6 @@ class GoogleAdManager(AdServerAdapter):
             network_code: GAM network code
             advertiser_id: GAM advertiser ID (optional, required only for order/campaign operations)
             trafficker_id: GAM trafficker ID (optional, required only for order/campaign operations)
-            dry_run: Whether to run in dry-run mode
             audit_logger: Audit logging instance
             tenant_id: Tenant identifier
             targeting_config: Pre-loaded targeting config from AdapterConfigRepository.
@@ -137,7 +135,7 @@ class GoogleAdManager(AdServerAdapter):
             naming_templates: Pre-loaded (order_template, line_item_template) tuple.
                 If None, uses (None, None) defaults.
         """
-        super().__init__(config, principal, dry_run, None, tenant_id)
+        super().__init__(config, principal, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation
 
         self.network_code = network_code
@@ -175,94 +173,51 @@ class GoogleAdManager(AdServerAdapter):
         self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
         self._placement_targeting_map: dict[str, str] = {}
 
-        # Skip auth validation in dry_run mode (for testing)
-        if not self.dry_run:
-            if not self.key_file and not self.service_account_json and not self.refresh_token:
-                raise AdCPConfigurationError(
-                    field="authentication",
-                )
+        if not self.key_file and not self.service_account_json and not self.refresh_token:
+            raise AdCPConfigurationError(
+                field="authentication",
+            )
 
         # Initialize modular components
-        if not self.dry_run:
-            self.client_manager = GAMClientManager(self.config, self.network_code)
-            # Legacy client property for backward compatibility
-            self.client = self.client_manager.get_client()
+        self.client_manager = GAMClientManager(self.config, self.network_code)
+        # Legacy client property for backward compatibility
+        self.client = self.client_manager.get_client()
 
-            # Auto-detect trafficker_id if not provided
-            if not self.trafficker_id:
-                try:
-                    user_service = self.client.GetService("UserService")
-                    current_user = user_service.getCurrentUser()
-                    self.trafficker_id = str(current_user["id"])
-                    logger.info(
-                        f"Auto-detected trafficker_id: {self.trafficker_id} ({current_user.get('name', 'Unknown')})"
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not auto-detect trafficker_id: {e}")
-
-            # Initialize manager components with pre-loaded config
-            self.targeting_manager = GAMTargetingManager(
-                self.tenant_id, gam_client=self.client, targeting_config=self._targeting_config
-            )
-
-            # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
-            self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id, dry_run)
-
-            # Only initialize creative manager if we have advertiser_id (required for creative operations)
-            # Note: trafficker_id is NOT required for creative operations - only for order creation
-            if self.advertiser_id:
-                self.creatives_manager = GAMCreativesManager(
-                    self.client_manager, self.advertiser_id, dry_run, self.log, self
+        # Auto-detect trafficker_id if not provided
+        if not self.trafficker_id:
+            try:
+                user_service = self.client.GetService("UserService")
+                current_user = user_service.getCurrentUser()
+                self.trafficker_id = str(current_user["id"])
+                logger.info(
+                    f"Auto-detected trafficker_id: {self.trafficker_id} ({current_user.get('name', 'Unknown')})"
                 )
-            else:
-                self.creatives_manager = None  # type: ignore[assignment]
+            except Exception as e:
+                logger.warning(f"Could not auto-detect trafficker_id: {e}")
 
-            # Inventory manager doesn't need advertiser_id
-            self.inventory_manager = GAMInventoryManager(self.client_manager, self.tenant_id, dry_run)
+        # Initialize manager components with pre-loaded config
+        self.targeting_manager = GAMTargetingManager(
+            self.tenant_id, gam_client=self.client, targeting_config=self._targeting_config
+        )
 
-            # Sync manager only needs inventory manager for inventory sync
-            self.sync_manager = GAMSyncManager(
-                self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id, dry_run
-            )
-            self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
+        # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
+        self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id)
+
+        # Only initialize creative manager if we have advertiser_id (required for creative operations)
+        # Note: trafficker_id is NOT required for creative operations - only for order creation
+        if self.advertiser_id:
+            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id, self.log, self)
         else:
-            self.client_manager = None  # type: ignore[assignment]
-            self.client = None
-            self.log("[yellow]Running in dry-run mode - GAM client not initialized[/yellow]")
+            self.creatives_manager = None  # type: ignore[assignment]
 
-            # Initialize managers for dry-run mode (they can work without real client)
-            self.targeting_manager = GAMTargetingManager(self.tenant_id, targeting_config=self._targeting_config)
+        # Inventory manager doesn't need advertiser_id
+        self.inventory_manager = GAMInventoryManager(self.client_manager, self.tenant_id)
 
-            # Initialize orders manager in dry-run mode
-            self.orders_manager = GAMOrdersManager(None, self.advertiser_id, self.trafficker_id, dry_run=True)
-
-            # Only initialize creative manager if we have advertiser_id (required for creative operations)
-            # Note: trafficker_id is NOT required for creative operations - only for order creation
-            if self.advertiser_id:
-                self.creatives_manager = GAMCreativesManager(
-                    None,
-                    self.advertiser_id,
-                    dry_run=True,
-                    log_func=self.log,
-                    adapter=self,
-                )
-            else:
-                self.creatives_manager = None  # type: ignore[assignment]
-
-            # Initialize inventory manager in dry-run mode
-            self.inventory_manager = GAMInventoryManager(None, self.tenant_id, dry_run=True)  # type: ignore[arg-type]
-
-            # Initialize sync manager in dry-run mode
-            self.sync_manager = GAMSyncManager(
-                None,  # type: ignore[arg-type]
-                self.inventory_manager,
-                self.orders_manager,
-                self.tenant_id,
-                dry_run=True,
-            )
-
-            # Initialize workflow manager (doesn't need client)
-            self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
+        # Sync manager only needs inventory manager for inventory sync
+        self.sync_manager = GAMSyncManager(
+            self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id
+        )
+        self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
 
         # Initialize legacy validator for backward compatibility
         from .gam.utils.validation import GAMValidator
@@ -968,41 +923,32 @@ class GoogleAdManager(AdServerAdapter):
 
         results = []
 
-        if not self.dry_run and self.client_manager:
-            lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
+        lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
 
         for line_item_id in line_item_ids:
             for creative_id in platform_creative_ids:
-                if self.dry_run:
+                association = {
+                    "creativeId": int(creative_id),
+                    "lineItemId": int(line_item_id),
+                }
+
+                try:
+                    lica_service.createLineItemCreativeAssociations([association])
+                    self.log(f"[green]✓ Associated creative {creative_id} with line item {line_item_id}[/green]")
+                    results.append({"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"})
+                except Exception as e:
+                    error_msg = str(e)
                     self.log(
-                        f"[cyan][DRY RUN] Would associate creative {creative_id} with line item {line_item_id}[/cyan]"
+                        f"[red]✗ Failed to associate creative {creative_id} with line item {line_item_id}: {error_msg}[/red]"
                     )
                     results.append(
-                        {"line_item_id": line_item_id, "creative_id": creative_id, "status": "success (dry-run)"}
+                        {
+                            "line_item_id": line_item_id,
+                            "creative_id": creative_id,
+                            "status": "failed",
+                            "error": error_msg,
+                        }
                     )
-                else:
-                    association = {
-                        "creativeId": int(creative_id),
-                        "lineItemId": int(line_item_id),
-                    }
-
-                    try:
-                        lica_service.createLineItemCreativeAssociations([association])
-                        self.log(f"[green]✓ Associated creative {creative_id} with line item {line_item_id}[/green]")
-                        results.append({"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"})
-                    except Exception as e:
-                        error_msg = str(e)
-                        self.log(
-                            f"[red]✗ Failed to associate creative {creative_id} with line item {line_item_id}: {error_msg}[/red]"
-                        )
-                        results.append(
-                            {
-                                "line_item_id": line_item_id,
-                                "creative_id": creative_id,
-                                "status": "failed",
-                                "error": error_msg,
-                            }
-                        )
 
         return results
 
@@ -1093,27 +1039,6 @@ class GoogleAdManager(AdServerAdapter):
             packages_data = raw_request.get("packages", [])
 
         # Initialize GAM reporting service
-        if self.dry_run or not self.client:
-            # Dry run mode - return simulated metrics
-            logger.info(f"Dry-run mode: returning simulated metrics for media buy {media_buy_id}")
-            total_budget = float(media_buy.budget) if media_buy.budget else 0.0
-            progress = 0.5  # Simulate 50% delivery
-
-            return AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id=media_buy_id,
-                reporting_period=date_range,
-                by_package=[],
-                totals=DeliveryTotals(
-                    impressions=int(total_budget * 1000 * progress),  # Assume $1 CPM
-                    spend=total_budget * progress,
-                    clicks=int(total_budget * 1000 * progress * 0.01),  # 1% CTR
-                    ctr=1.0,
-                    completed_views=None,
-                    completion_rate=None,
-                ),
-                currency=str(media_buy.currency or "USD"),
-            )
-
         reporting_service = GAMReportingService(self.client)
 
         # date_range.start/.end are AwareDatetime objects

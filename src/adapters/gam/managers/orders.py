@@ -7,7 +7,7 @@ for Google Ad Manager orders.
 
 import logging
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from googleads import ad_manager
@@ -34,21 +34,17 @@ NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
 class GAMOrdersManager:
     """Manages Google Ad Manager order operations."""
 
-    def __init__(
-        self, client_manager, advertiser_id: str | None = None, trafficker_id: str | None = None, dry_run: bool = False
-    ):
+    def __init__(self, client_manager, advertiser_id: str | None = None, trafficker_id: str | None = None):
         """Initialize orders manager.
 
         Args:
             client_manager: GAMClientManager instance
             advertiser_id: GAM advertiser ID (required for order creation operations)
             trafficker_id: GAM trafficker ID (required for order creation operations)
-            dry_run: Whether to run in dry-run mode
         """
         self.client_manager = client_manager
         self.advertiser_id = advertiser_id
         self.trafficker_id = trafficker_id
-        self.dry_run = dry_run
 
     @timeout(seconds=60)  # 1 minute timeout for order creation
     def create_order(
@@ -112,38 +108,30 @@ class GAMOrdersManager:
         if applied_team_ids:
             order["appliedTeamIds"] = applied_team_ids
 
-        if self.dry_run:
-            logger.info(f"Would call: order_service.createOrders([{order['name']}])")
-            logger.info(f"  Advertiser ID: {self.advertiser_id}")
-            logger.info(f"  Total Budget: ${total_budget:,.2f}")
-            logger.info(f"  Flight Dates: {start_time.date()} to {end_time.date()}")
-            # Return a mock order ID for dry run
-            return f"dry_run_order_{int(datetime.now(UTC).timestamp())}"
+        order_service = self.client_manager.get_service("OrderService")
+        try:
+            created_orders = order_service.createOrders([order])
+        except AdCPSalesAgentError:
+            # Already classified by a lower layer; that decision stands.
+            raise
+        except Exception as fault:
+            # The ad server refused. Classify the SOAP fault into the code the
+            # buyer should act on -- a quota is not a permission problem is not
+            # a missing ad unit. AdCP 3.1.1 transport-errors.mdx Rule 1:
+            # "Translate upstream errors into AdCP error codes. Do not pass
+            # through raw upstream errors."
+            #
+            # Without this the raw googleads fault propagated uncaught to the
+            # tool layer, whose catch-all reported SERVICE_UNAVAILABLE for
+            # every refusal alike.
+            raise map_gam_exception(fault) from fault
+        if created_orders:
+            order_id = str(created_orders[0]["id"])
+            logger.info(f"✓ Created GAM Order ID: {order_id}")
+            return order_id
         else:
-            order_service = self.client_manager.get_service("OrderService")
-            try:
-                created_orders = order_service.createOrders([order])
-            except AdCPSalesAgentError:
-                # Already classified by a lower layer; that decision stands.
-                raise
-            except Exception as fault:
-                # The ad server refused. Classify the SOAP fault into the code the
-                # buyer should act on -- a quota is not a permission problem is not
-                # a missing ad unit. AdCP 3.1.1 transport-errors.mdx Rule 1:
-                # "Translate upstream errors into AdCP error codes. Do not pass
-                # through raw upstream errors."
-                #
-                # Without this the raw googleads fault propagated uncaught to the
-                # tool layer, whose catch-all reported SERVICE_UNAVAILABLE for
-                # every refusal alike.
-                raise map_gam_exception(fault) from fault
-            if created_orders:
-                order_id = str(created_orders[0]["id"])
-                logger.info(f"✓ Created GAM Order ID: {order_id}")
-                return order_id
-            else:
-                # An empty result is an upstream fault, not a bad request.
-                raise AdCPAdapterError(internal_detail="GAM createOrders returned no orders")
+            # An empty result is an upstream fault, not a bad request.
+            raise AdCPAdapterError(internal_detail="GAM createOrders returned no orders")
 
     @timeout(seconds=30)  # 30 seconds timeout for status check
     def get_order_status(self, order_id: str) -> str:
@@ -155,10 +143,6 @@ class GAMOrdersManager:
         Returns:
             Order status string
         """
-        if self.dry_run:
-            logger.info(f"Would call: order_service.getOrdersByStatement(WHERE id={order_id})")
-            return "DRAFT"
-
         try:
             order_service = self.client_manager.get_service("OrderService")
             statement_builder = ad_manager.StatementBuilder()
@@ -187,10 +171,6 @@ class GAMOrdersManager:
             True if archival succeeded, False otherwise
         """
         logger.info(f"Archiving GAM Order {order_id} for cleanup")
-
-        if self.dry_run:
-            logger.info(f"Would call: order_service.performOrderAction(ArchiveOrders, {order_id})")
-            return True
 
         try:
             order_service = self.client_manager.get_service("OrderService")
@@ -237,13 +217,7 @@ class GAMOrdersManager:
         """
         import time
 
-        logger.info(f"[APPROVAL] Approving GAM Order {order_id} (dry_run={self.dry_run})")
-
-        if self.dry_run:
-            logger.info(
-                f"[APPROVAL] DRY-RUN MODE: Would call order_service.performOrderAction(ApproveOrders, {order_id})"
-            )
-            return True
+        logger.info(f"[APPROVAL] Approving GAM Order {order_id}")
 
         # Retry logic for NO_FORECAST_YET errors
         for attempt in range(max_retries):
@@ -310,10 +284,6 @@ class GAMOrdersManager:
         Returns:
             List of line item dictionaries
         """
-        if self.dry_run:
-            logger.info(f"Would call: lineitem_service.getLineItemsByStatement(WHERE orderId={order_id})")
-            return []
-
         try:
             lineitem_service = self.client_manager.get_service("LineItemService")
             statement_builder = ad_manager.StatementBuilder()
@@ -905,12 +875,9 @@ class GAMOrdersManager:
                 raise AdCPConfigurationError()
 
             # Build line item object
-            # In dry-run mode, order_id is a string like 'dry_run_order_123'; use a dummy numeric ID
-            # In real mode, order_id is numeric string that can be converted
-            order_id_int = 999999999 if (self.dry_run and not order_id.isdigit()) else int(order_id)
             line_item = {
                 "name": line_item_name,
-                "orderId": order_id_int,
+                "orderId": int(order_id),
                 "targeting": line_item_targeting,
                 "creativePlaceholders": creative_placeholders,
                 "lineItemType": line_item_type,
@@ -1048,34 +1015,18 @@ class GAMOrdersManager:
                     line_item["creativeTargetings"] = creative_targetings
                     log(f"Added {len(creative_targetings)} creative targeting rule(s) for placement targeting")
 
-            if self.dry_run:
-                log(f"Would call: line_item_service.createLineItems(['{package.name}'])")
-                log(f"  Package: {package.name}")
-                log(f"  Line Item Type: {impl_config.get('line_item_type', 'STANDARD')}")
-                log(f"  Priority: {impl_config.get('priority', 8)}")
-                log(f"  CPM: ${package.cpm}")
-                log(f"  Impressions Goal: {package.impressions:,}")
-                log(f"  Creative Placeholders: {len(creative_placeholders)} sizes")
-                for cp in creative_placeholders[:3]:
-                    log(
-                        f"    - {cp['size']['width']}x{cp['size']['height']} ({'Native' if cp.get('creativeSizeType') == 'NATIVE' else 'Display'})"
-                    )
-                if len(creative_placeholders) > 3:
-                    log(f"    - ... and {len(creative_placeholders) - 3} more")
-                created_line_item_ids.append(f"dry_run_line_item_{len(created_line_item_ids)}")
-            else:
-                try:
-                    line_item_service = self.client_manager.get_service("LineItemService")
-                    created_line_items = line_item_service.createLineItems([line_item])
-                    if created_line_items:
-                        line_item_id = str(created_line_items[0]["id"])
-                        created_line_item_ids.append(line_item_id)
-                        log(f"✓ Created LineItem ID: {line_item_id} for {package.name}")
-                except Exception as e:
-                    error_msg = f"Failed to create LineItem for {package.name}: {str(e)}"
-                    log(f"[red]Error: {error_msg}[/red]")
-                    log(f"[red]Targeting structure: {line_item_targeting}[/red]")
-                    raise
+            try:
+                line_item_service = self.client_manager.get_service("LineItemService")
+                created_line_items = line_item_service.createLineItems([line_item])
+                if created_line_items:
+                    line_item_id = str(created_line_items[0]["id"])
+                    created_line_item_ids.append(line_item_id)
+                    log(f"✓ Created LineItem ID: {line_item_id} for {package.name}")
+            except Exception as e:
+                error_msg = f"Failed to create LineItem for {package.name}: {str(e)}"
+                log(f"[red]Error: {error_msg}[/red]")
+                log(f"[red]Targeting structure: {line_item_targeting}[/red]")
+                raise
 
         return created_line_item_ids
 
@@ -1120,13 +1071,6 @@ class GAMOrdersManager:
         Returns:
             True if update successful, False otherwise
         """
-        if self.dry_run:
-            logger.info(
-                f"[DRY RUN] Would update line item {line_item_id} budget to {new_budget} {currency} "
-                f"(pricing: {pricing_model})"
-            )
-            return True
-
         import time
 
         for attempt in range(max_retries):
@@ -1246,10 +1190,6 @@ class GAMOrdersManager:
         Returns:
             True if update successful, False otherwise
         """
-        if self.dry_run:
-            logger.info(f"[DRY RUN] Would update line item {line_item_id} status to {new_status}")
-            return True
-
         try:
             line_item_service = self.client_manager.get_service("LineItemService")
 
@@ -1304,14 +1244,6 @@ class GAMOrdersManager:
             - Default behavior (limit=500, no search) is fast but may not return all advertisers
         """
         logger.info(f"Loading GAM advertisers (search={search_query}, limit={limit}, fetch_all={fetch_all})")
-
-        if self.dry_run:
-            logger.info("Would call: company_service.getCompaniesByStatement(WHERE type='ADVERTISER')")
-            # Return mock data for dry-run
-            return [
-                {"id": "123456789", "name": "Test Advertiser 1", "type": "ADVERTISER"},
-                {"id": "987654321", "name": "Test Advertiser 2", "type": "ADVERTISER"},
-            ]
 
         try:
             company_service = self.client_manager.get_service("CompanyService")

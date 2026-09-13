@@ -221,15 +221,13 @@ def media_buy_detail(tenant_id, media_buy_id):
                 try:
                     from datetime import UTC, datetime, timedelta
 
-                    from src.core.database.models import Tenant
                     from src.core.helpers.adapter_helpers import get_adapter
-                    from src.core.schemas import Principal as PrincipalSchema
+                    from src.core.resolved_identity import identity_of
                     from src.core.schemas import ReportingPeriod
 
-                    # Get adapter for this principal, on the media buy's own tenant row
-                    tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                    if principal and tenant:
-                        adapter = get_adapter(PrincipalSchema.from_row(principal), dry_run=False, tenant=tenant)
+                    if principal:
+                        # Resolution from stored ids: the operator view acts as the buy's owner.
+                        adapter = get_adapter(identity_of(tenant_id, media_buy.principal_id))
 
                         # Calculate date range (last 7 days or campaign duration) - always use UTC
                         end_date = datetime.now(UTC)

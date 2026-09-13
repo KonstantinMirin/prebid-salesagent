@@ -52,9 +52,7 @@ from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import (
-    get_adapter_channels_override,
     get_adapter_class_for_tenant,
-    get_targeting_capabilities_override,
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
@@ -359,12 +357,7 @@ def _get_adcp_capabilities_impl(
     )
 
     def _map_adapter_channels() -> None:
-        # A per-tenant override wins over the adapter class's default, so a
-        # seller's configured channel set is honoured over a real transport and
-        # not just where the adapter object can be patched (#1871).
-        declared = get_adapter_channels_override(tenant)
-        if declared is None and adapter and hasattr(adapter, "default_channels"):
-            declared = adapter.default_channels
+        declared = adapter.default_channels if adapter and hasattr(adapter, "default_channels") else None
         for channel_name in declared or []:
             if channel_name.lower() in CHANNEL_MAPPING:
                 primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
@@ -463,15 +456,11 @@ def _get_adcp_capabilities_impl(
     # Same degrade-on-exception posture as the adapter-channels block above —
     # the override read is a DB call, not a hard requirement.
     def _resolve_targeting_caps() -> TargetingCapabilities | None:
-        resolved = get_targeting_capabilities_override(tenant)
-        # INSIDE the degradation boundary the comment above already claims to
-        # cover. The adapter call used to sit outside it, so an adapter raising
-        # here was an uncaught 500 instead of the advisory this block exists to
-        # record -- for the one call in the pair that talks to a third-party ad
-        # server and is therefore the likelier of the two to fail.
-        if resolved is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
-            resolved = adapter.get_targeting_capabilities()
-        return resolved
+        # INSIDE the degradation boundary: an adapter raising here is recorded as an
+        # advisory, not surfaced as a 500.
+        if adapter and hasattr(adapter, "get_targeting_capabilities"):
+            return adapter.get_targeting_capabilities()
+        return None
 
     targeting_caps = _resolve_or_degrade(advisories, "targeting capabilities", _resolve_targeting_caps, default=None)
 

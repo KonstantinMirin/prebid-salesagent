@@ -383,14 +383,12 @@ class BaseTestEnv:
         self,
         principal_id: str = "test_principal",
         tenant_id: str = "test_tenant",
-        dry_run: bool = False,
         database_url: str | None = None,
         e2e_config: E2EConfig | None = None,
         **tenant_overrides: Any,
     ) -> None:
         self._principal_id = principal_id
         self._tenant_id = tenant_id
-        self._dry_run = dry_run
         # E2E mode: bind factories to the live server's DB so the HTTP-reached
         # server sees Given-step data. Explicit database_url wins; else the
         # e2e_config's postgres_url. None => normal cached/integration engine.
@@ -481,8 +479,8 @@ class BaseTestEnv:
     def credential(self, **overrides: Any) -> dict[str, str]:
         """The headers this env's buyer presents: THE one way a wire leg authenticates.
 
-        ``credential_headers(token=<the env principal's access_token>, tenant=self._tenant_id,
-        dry_run=self._dry_run)`` with *overrides* applied through the same three keywords.
+        ``credential_headers(token=<the env principal's access_token>, tenant=self._tenant_id)``
+        with *overrides* applied through the same two keywords.
 
         - ``env.credential()``: the env's principal, valid token.
         - ``env.credential(token=INVALID_TOKEN)``: presented and rejected.
@@ -498,12 +496,12 @@ class BaseTestEnv:
         ``x-adcp-tenant`` carries the tenant_id on every leg. ``_detect_tenant`` tries it as a
         subdomain and then takes it as the literal id, so it resolves either way.
         """
-        values: dict[str, Any] = {"tenant": self._tenant_id, "dry_run": self._dry_run}
+        values: dict[str, Any] = {"tenant": self._tenant_id}
         if "token" not in overrides:
             values["token"] = self._principal_token()
-        unknown = set(overrides) - {"token", "tenant", "dry_run"}
+        unknown = set(overrides) - {"token", "tenant"}
         if unknown:
-            raise TypeError(f"credential() takes token, tenant and dry_run, not {sorted(unknown)}")
+            raise TypeError(f"credential() takes token and tenant, not {sorted(unknown)}")
         values.update(overrides)
         return credential_headers(**values)
 
@@ -619,7 +617,6 @@ class BaseTestEnv:
             principal_id=self._principal_id,
             tenant_id=self._tenant_id,
             protocol="mcp",
-            dry_run=self._dry_run,
             **self._tenant_overrides,
         )
 

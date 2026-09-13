@@ -27,12 +27,10 @@ from src.core.errors.details import (
 )
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPBudgetExhaustedError,
     AdCPCapabilityNotSupportedError,
     AdCPCreativeRejectedError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
-    AdCPProductUnavailableError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
@@ -137,62 +135,12 @@ class MockAdServer(AdServerAdapter):
     SUPPORTED_DEVICE_TYPES = {"mobile", "desktop", "tablet", "ctv", "dooh", "audio"}
     SUPPORTED_MEDIA_TYPES = {"olv", "display", "social", "streaming_audio", "dooh"}
 
-    def __init__(self, config, principal, dry_run=False, creative_engine=None, tenant_id=None, strategy_context=None):
+    def __init__(self, config, principal, creative_engine=None, tenant_id=None):
         """Initialize mock adapter with GAM-like objects."""
-        super().__init__(config, principal, dry_run, creative_engine, tenant_id)
-
-        # Store strategy context for simulation behavior
-        self.strategy_context = strategy_context
-        self._current_simulation_time = None
+        super().__init__(config, principal, creative_engine, tenant_id)
 
         # Initialize HITL configuration from principal's platform_mappings
         self._initialize_hitl_config()
-
-    def _is_simulation(self) -> bool:
-        """Check if we're running in simulation mode."""
-        return (
-            self.strategy_context
-            and hasattr(self.strategy_context, "is_simulation")
-            and hasattr(self.strategy_context, "strategy_id")
-            and self.strategy_context.is_simulation
-            and self.strategy_context.strategy_id.startswith("sim_")
-        )
-
-    def _should_force_error(self, error_type: str) -> bool:
-        """Check if strategy should force a specific error."""
-        if not self._is_simulation() or not self.strategy_context:
-            return False
-        if hasattr(self.strategy_context, "should_force_error"):
-            return self.strategy_context.should_force_error(error_type)
-        return False
-
-    def _get_simulation_scenario(self) -> str:
-        """Get current simulation scenario."""
-        if not self._is_simulation() or not self.strategy_context:
-            return "normal"
-        if hasattr(self.strategy_context, "get_config_value"):
-            return self.strategy_context.get_config_value("scenario", "normal")
-        return "normal"
-
-    def _apply_strategy_multipliers(self, base_value: float, multiplier_key: str) -> float:
-        """Apply strategy-based multipliers to base values."""
-        if not self.strategy_context:
-            return base_value
-
-        if hasattr(self.strategy_context, "get_config_value"):
-            multiplier = self.strategy_context.get_config_value(multiplier_key, 1.0)
-            return base_value * multiplier
-        return base_value
-
-    def _simulate_time_progression(self) -> datetime:
-        """Get current time for simulation (real or simulated)."""
-        if self._is_simulation() and self._current_simulation_time:
-            return self._current_simulation_time
-        return datetime.now(UTC)
-
-    def set_simulation_time(self, simulation_time: datetime):
-        """Set the current simulation time."""
-        self._current_simulation_time = simulation_time
 
     @staticmethod
     def get_supported_pricing_models() -> set[str]:
@@ -921,25 +869,6 @@ class MockAdServer(AdServerAdapter):
         )
         order_name = apply_naming_template(order_name_template, context)
 
-        # Strategy-aware behavior modifications
-        if self._is_simulation():
-            strategy_id = getattr(self.strategy_context, "strategy_id", "unknown")
-            self.log(f"🧪 Running in simulation mode with strategy: {strategy_id}")
-            scenario = self._get_simulation_scenario()
-            self.log(f"   Simulation scenario: {scenario}")
-
-            # Check for forced errors
-            if self._should_force_error("budget_exceeded"):
-                raise AdCPBudgetExhaustedError()
-
-            if self._should_force_error("targeting_invalid"):
-                raise AdCPValidationError(
-                    field="targeting",
-                )
-
-            if self._should_force_error("inventory_unavailable"):
-                raise AdCPProductUnavailableError()
-
         # Default priority for campaigns (standard = 8, guaranteed = 4)
         priority = 4 if any(p.delivery_type == "guaranteed" for p in packages) else 8
 
@@ -971,81 +900,37 @@ class MockAdServer(AdServerAdapter):
                 # Fallback: calculate from CPM * impressions (legacy)
                 total_budget += resolve_package_rate(p, package_pricing_info) * p.impressions / 1000
 
-        # Apply strategy-based bid adjustment
-        if self.strategy_context and hasattr(self.strategy_context, "get_bid_adjustment"):
-            bid_adjustment = self.strategy_context.get_bid_adjustment()
-            if bid_adjustment != 1.0:
-                adjusted_budget = total_budget * bid_adjustment
-                self.log(
-                    f"📈 Strategy bid adjustment: {bid_adjustment:.2f} (${total_budget:,.2f} → ${adjusted_budget:,.2f})"
-                )
-                total_budget = adjusted_budget
-
         self.log(f"Creating media buy with ID: {media_buy_id}")
         self.log(f"Order name: {order_name}")
         self.log(f"Campaign priority: {priority}")
         self.log(f"Budget: ${total_budget:,.2f}")
         self.log(f"Flight dates: {start_time.date()} to {end_time.date()}")
 
-        # Simulate API call details
-        if self.dry_run:
-            self.log("Would call: MockAdServer.createCampaign()")
-            self.log("  API Request: {")
-            self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
-            self.log(f"    'campaign_name': '{order_name}',")
-            self.log(f"    'budget': {total_budget},")
-            self.log(f"    'start_date': '{start_time.isoformat()}',")
-            self.log(f"    'end_date': '{end_time.isoformat()}',")
-            self.log("    'targeting': {")
-            # Log targeting from packages (per AdCP spec, targeting is at package level)
-            for package in packages:
-                if package.targeting_overlay:
-                    targeting = package.targeting_overlay
-                    # GeoCountry/GeoRegion are RootModels — log the wrapped values,
-                    # not root='US' reprs. geo_metros stays as-is on purpose:
-                    # GeoMetro is a plain model (system/values), not a RootModel.
-                    if targeting.geo_countries:
-                        self.log(f"      'countries': {[c.root for c in targeting.geo_countries]},")
-                    if targeting.geo_regions:
-                        self.log(f"      'regions': {[r.root for r in targeting.geo_regions]},")
-                    if targeting.geo_metros:
-                        self.log(f"      'metros': {targeting.geo_metros},")
-                    if getattr(targeting, "key_value_pairs", None):
-                        self.log(f"      'key_values': {targeting.key_value_pairs},")
-                    if getattr(targeting, "media_type_any_of", None):
-                        self.log(f"      'media_types': {targeting.media_type_any_of},")
-                    break  # Log first package's targeting only to avoid repetition
-            self.log("    }")
-            self.log("  }")
+        self._media_buys[media_buy_id] = {
+            "id": media_buy_id,
+            "name": order_name,
+            "po_number": request.po_number,
+            "packages": packages,
+            "total_budget": total_budget,
+            "start_time": start_time,
+            "end_time": end_time,
+            "creatives": [],
+            "test_scenario": scenario.__dict__ if scenario else None,
+        }
+        self.log("✓ Media buy created successfully")
+        self.log(f"  Campaign ID: {media_buy_id}")
+        self.log(f"  Campaign Name: {order_name}")
+        # Log successful creation
+        self.audit_logger.log_success(f"Created Mock Order ID: {media_buy_id}")
 
-        if not self.dry_run:
-            self._media_buys[media_buy_id] = {
-                "id": media_buy_id,
-                "name": order_name,
-                "po_number": request.po_number,
-                "packages": packages,
-                "total_budget": total_budget,
-                "start_time": start_time,
-                "end_time": end_time,
-                "creatives": [],
-                "test_scenario": scenario.__dict__ if scenario else None,
-            }
-            self.log("✓ Media buy created successfully")
-            self.log(f"  Campaign ID: {media_buy_id}")
-            self.log(f"  Campaign Name: {order_name}")
-            # Log successful creation
-            self.audit_logger.log_success(f"Created Mock Order ID: {media_buy_id}")
-
-            # Start delivery simulation if enabled in config
-            self._start_delivery_simulation(
-                media_buy_id=media_buy_id,
-                tenant_id=tenant_id,
-                start_time=start_time,
-                end_time=end_time,
-                total_budget=total_budget,
-            )
-        else:
-            self.log(f"Would return: Campaign ID '{media_buy_id}' with status 'pending_creative'")
+        # Start delivery simulation if enabled in config
+        self._start_delivery_simulation(
+            media_buy_id=media_buy_id,
+            tenant_id=tenant_id,
+            start_time=start_time,
+            end_time=end_time,
+            total_budget=total_budget,
+        )
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(packages)} packages in response")
         return self._build_create_success(
@@ -1194,26 +1079,14 @@ class MockAdServer(AdServerAdapter):
 
         self.log(
             f"[bold]MockAdServer.add_creative_assets[/bold] for campaign '{media_buy_id}'",
-            dry_run_prefix=False,
         )
         self.log(f"Adding {len(assets)} creative assets")
 
-        if self.dry_run:
-            for i, asset in enumerate(assets):
-                self.log("Would call: MockAdServer.uploadCreative()")
-                self.log(f"  Creative {i + 1}:")
-                self.log(f"    'creative_id': '{asset['id']}',")
-                self.log(f"    'name': '{asset['name']}',")
-                self.log(f"    'format': '{asset['format']}',")
-                self.log(f"    'media_url': '{asset['media_url']}',")
-                self.log(f"    'click_url': '{asset['click_url']}'")
-            self.log(f"Would return: All {len(assets)} creatives with status 'approved'")
-        else:
-            if media_buy_id not in self._media_buys:
-                raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
+        if media_buy_id not in self._media_buys:
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
 
-            self._media_buys[media_buy_id]["creatives"].extend(assets)
-            self.log(f"✓ Successfully uploaded {len(assets)} creatives")
+        self._media_buys[media_buy_id]["creatives"].extend(assets)
+        self.log(f"✓ Successfully uploaded {len(assets)} creatives")
 
         # Process each creative individually with keyword-based test scenarios
         # Keywords: [APPROVE], [REJECT:reason], [ASK:field needed]
@@ -1313,19 +1186,8 @@ class MockAdServer(AdServerAdapter):
         """Simulates getting delivery data for a media buy with testing hooks support."""
         self.log(
             f"[bold]MockAdServer.get_media_buy_delivery[/bold] for principal '{self.principal.name}' and media buy '{media_buy_id}'",
-            dry_run_prefix=False,
         )
         self.log(f"Reporting date: {today}")
-
-        # Apply testing hooks if strategy context contains them
-        if self.strategy_context and hasattr(self.strategy_context, "force_error"):
-            if self.strategy_context.force_error == "platform_error":
-                self.log("[red]Simulating platform error[/red]")
-                raise AdCPServiceUnavailableError()
-            elif self.strategy_context.force_error == "budget_exceeded":
-                self.log("[yellow]Simulating budget exceeded scenario[/yellow]")
-            elif self.strategy_context.force_error == "low_delivery":
-                self.log("[yellow]Simulating low delivery scenario[/yellow]")
 
         # Server-side delivery seeding (#1418): if the live server has a seeded
         # row for this (tenant, media_buy), return it verbatim. This lets the
@@ -1335,19 +1197,7 @@ class MockAdServer(AdServerAdapter):
         if seeded is not None:
             return seeded
 
-        # Simulate API call
-        if self.dry_run:
-            self.log("Would call: MockAdServer.getDeliveryReport()")
-            self.log("  API Request: {")
-            self.log(f"    'advertiser_id': '{self.adapter_principal_id}',")
-            self.log(f"    'campaign_id': '{media_buy_id}',")
-            start_str = date_range.start.date()
-            end_str = date_range.end.date()
-            self.log(f"    'start_date': '{start_str}',")
-            self.log(f"    'end_date': '{end_str}'")
-            self.log("  }")
-        else:
-            self.log(f"Retrieving delivery data for campaign {media_buy_id}")
+        self.log(f"Retrieving delivery data for campaign {media_buy_id}")
 
         # Get the media buy details
         if media_buy_id in self._media_buys:
@@ -1418,51 +1268,16 @@ class MockAdServer(AdServerAdapter):
                     spend = total_budget * delivery_progress
                     impressions = int(spend / 0.01)  # $10 CPM
                 else:
-                    # Normal pacing logic
-                    # Apply strategy-based pacing multiplier
-                    pacing_multiplier = 1.0
-                    if self.strategy_context and hasattr(self.strategy_context, "get_pacing_multiplier"):
-                        pacing_multiplier = self.strategy_context.get_pacing_multiplier()
-                        if self._is_simulation():
-                            self.log(f"🚀 Strategy pacing multiplier: {pacing_multiplier:.2f}")
-
-                    # Strategy-aware spend calculation
-                    if self._is_simulation():
-                        scenario = self._get_simulation_scenario()
-
-                        # Check for forced budget exceeded error
-                        if self._should_force_error("budget_exceeded"):
-                            spend = total_budget * 1.15  # Overspend by 15%
-                            self.log("🚨 Simulating budget exceeded scenario")
-                        elif scenario == "high_performance":
-                            spend = daily_budget * elapsed_duration * pacing_multiplier * 1.3
-                            self.log("📈 High performance scenario - accelerated spend")
-                        elif scenario == "underperforming":
-                            spend = daily_budget * elapsed_duration * pacing_multiplier * 0.6
-                            self.log("📉 Underperforming scenario - reduced spend")
-                        else:
-                            # Normal variance with strategy pacing
-                            daily_variance = random.uniform(0.8, 1.2)
-                            spend = daily_budget * elapsed_duration * daily_variance * pacing_multiplier
-                    else:
-                        # Production mode - normal variance with strategy pacing
-                        daily_variance = random.uniform(0.8, 1.2)
-                        spend = daily_budget * elapsed_duration * daily_variance * pacing_multiplier
-
-                    # Cap at total budget (unless simulating budget exceeded)
-                    if not self._should_force_error("budget_exceeded"):
-                        spend = min(spend, total_budget)
-
+                    # Normal pacing: daily variance, capped at the total budget
+                    daily_variance = random.uniform(0.8, 1.2)
+                    spend = min(daily_budget * elapsed_duration * daily_variance, total_budget)
                     impressions = int(spend / 0.01)  # $10 CPM
         else:
             # Fallback for missing media buy
             impressions = random.randint(8000, 12000)
             spend = impressions * 0.01  # $10 CPM
 
-        if not self.dry_run:
-            self.log(f"✓ Retrieved delivery data: {impressions:,} impressions, ${spend:,.2f} spend")
-        else:
-            self.log("Would retrieve delivery data from ad server")
+        self.log(f"✓ Retrieved delivery data: {impressions:,} impressions, ${spend:,.2f} spend")
 
         # Build per-package breakdown if packages are available
         from src.core.schemas import AdapterPackageDelivery

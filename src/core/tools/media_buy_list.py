@@ -168,7 +168,6 @@ def _get_media_buys_impl(
     # accessible accounts.
     account_filter = identity.account_id if req.account is not None else None
 
-    testing_ctx = identity.testing_context
     # Both guards RAISE rather than degrading to an empty list plus a payload
     # advisory, and both now use the shared helpers every other media-buy tool
     # already uses -- get_media_buys was the one tool open-coding them, precisely
@@ -225,12 +224,7 @@ def _get_media_buys_impl(
     unavailable_reason: SnapshotUnavailableReason | None = None
 
     if req.include_snapshot:
-        adapter = get_adapter(
-            principal,
-            dry_run=testing_ctx.dry_run if testing_ctx else False,
-            testing_context=testing_ctx,
-            tenant=tenant,
-        )
+        adapter = get_adapter(identity)
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
             package_refs = []

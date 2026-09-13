@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
     from src.core.schemas import FormatId, PackageRequest, Product
-    from src.core.testing_context import TestingContext
 
 from src.core.errors.details import CreativeRejectionDetails
 
@@ -334,7 +333,6 @@ def validate_creative_format_against_product(
 def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
     context: "ResolvedIdentity | None" = None,
-    testing_ctx: "TestingContext | None" = None,
     *,
     # The OUTER create_media_buy's account, because the nested sync is built as a real
     # SyncCreativesRequest and these creatives belong to that account. No idempotency_key:
@@ -358,7 +356,6 @@ def process_and_upload_package_creatives(
     Args:
         packages: List of Package objects to process
         context: FastMCP context (for principal_id extraction)
-        testing_ctx: Optional testing context for dry_run mode
         account: The outer create_media_buy's account, carried onto the nested sync request
         adcp_context: The outer request's ContextObject, so errors name the right context
         principal_id: The already-resolved caller, passed to the creative-sync service
@@ -427,7 +424,7 @@ def process_and_upload_package_creatives(
                 context=adcp_context,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
                 assignments=None,  # Assign separately after creation
-                dry_run=testing_ctx.dry_run if testing_ctx else False,
+                dry_run=False,
                 validation_mode=ValidationMode.strict,
                 push_notification_config=None,
             )

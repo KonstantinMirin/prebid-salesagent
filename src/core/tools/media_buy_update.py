@@ -92,7 +92,6 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives import sync_creatives
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
@@ -312,7 +311,7 @@ def _verify_principal(
     """
     principal_id = require_principal(identity, context=context).principal_id
 
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    # Tenant is resolved once, in the resolver invoke_tool runs
     tenant = require_tenant(identity, context=context)
 
     # Fetch the media buy (raises AdCPMediaBuyNotFoundError if absent)
@@ -355,7 +354,7 @@ def _update_media_buy_impl(
 
     principal_id = require_principal(identity, context=req.context).principal_id
 
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    # Tenant is resolved once, in the resolver invoke_tool runs
     tenant = require_tenant(identity, context=req.context)
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
@@ -449,44 +448,40 @@ def _update_media_buy_impl(
                         field="media_buy_id",
                     )
 
-            # Extract testing context early (needed for dry_run check)
-            testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
-
             # Create or get persistent context and workflow step
             # (ctx_manager + step were hoisted before the try block so the
             # AdCPSalesAgentError / Exception handlers can mark the step as failed)
             ctx_id = None
             persistent_ctx = None
 
-            if not testing_ctx.dry_run:
-                persistent_ctx = ctx_manager.get_or_create_context(
-                    tenant_id=tenant["tenant_id"],
-                    principal_id=principal_id,  # Now guaranteed to be str
-                    context_id=ctx_id,
-                    is_async=True,
+            persistent_ctx = ctx_manager.get_or_create_context(
+                tenant_id=tenant["tenant_id"],
+                principal_id=principal_id,  # Now guaranteed to be str
+                context_id=ctx_id,
+                is_async=True,
+            )
+
+            # Verify persistent_ctx is not None. In the async path this is
+            # only None when a buyer-supplied context_id does not resolve —
+            # a not-found condition, not a transient adapter outage.
+            if persistent_ctx is None:
+                raise AdCPContextNotFoundError(
+                    details=EntityRefDetails(context_id=ctx_id), field="context_id", context=req.context
                 )
 
-                # Verify persistent_ctx is not None. In the async path this is
-                # only None when a buyer-supplied context_id does not resolve —
-                # a not-found condition, not a transient adapter outage.
-                if persistent_ctx is None:
-                    raise AdCPContextNotFoundError(
-                        details=EntityRefDetails(context_id=ctx_id), field="context_id", context=req.context
-                    )
-
-                # Create workflow step for this tool call
-                step = ctx_manager.create_workflow_step(
-                    context_id=persistent_ctx.context_id,  # Now safe to access
-                    step_type="tool_call",
-                    owner="principal",
-                    status="in_progress",
-                    tool_name="update_media_buy",
-                    request_data=req,
-                )
+            # Create workflow step for this tool call
+            step = ctx_manager.create_workflow_step(
+                context_id=persistent_ctx.context_id,  # Now safe to access
+                step_type="tool_call",
+                owner="principal",
+                status="in_progress",
+                tool_name="update_media_buy",
+                request_data=req,
+            )
 
             principal = require_principal(identity, context=req.context)
 
-            adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+            adapter = get_adapter(identity)
             today = date.today()
 
             # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
@@ -535,59 +530,8 @@ def _update_media_buy_impl(
                         property_targeting_violations.append(violation)
                 raise_if_property_targeting_violations(property_targeting_violations)
 
-            # Dry-run mode: Return simulated response without any database writes
-            # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
-            if testing_ctx.dry_run:
-                logger.info(f"[DRY_RUN] Returning simulated update response for media_buy_id={req.media_buy_id}")
-
-                # Build simulated affected packages from request
-                simulated_affected: list[AffectedPackage] = []
-                if req.packages:
-                    for pkg_update in req.packages:
-                        simulated_affected.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id or "",
-                                paused=pkg_update.paused if pkg_update.paused is not None else False,
-                                buyer_package_ref=pkg_update.package_id,
-                                changes_applied={"dry_run": True, "would_update": pkg_update},
-                            )
-                        )
-
-                # Look up current status for valid_actions (date-refined for
-                # parity with get_media_buys — see _adcp_status_and_actions).
-                _dry_run_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "", context=req.context)
-
-                # Build simulated response.
-                # The wire status="completed" is KEPT for dry_run and is
-                # spec-correct (PR #1567): spec 3.1.1
-                # update-media-buy-response.json has exactly three variants
-                # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
-                # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the
-                # spec is SILENT on a dry_run response status -> production authoritative.
-                # Unlike pending-approval (-> UpdateMediaBuySubmitted) and reject
-                # (-> Error), a dry_run buyer asked to SIMULATE the would-be
-                # outcome, which IS completion -> "completed" is a truthful preview, not a
-                # lie. Guarded by tests/integration/test_media_buy_dry_run_status.py.
-                _dry_run_revision = _dry_run_mb.revision
-                _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
-                dry_run_response = UpdateMediaBuySuccess(
-                    media_buy_id=req.media_buy_id or "",
-                    message=f"Media buy {req.media_buy_id or ''} updated successfully.",
-                    # A dry run applies nothing, so it reports the CURRENT token, not a bump.
-                    revision=_dry_run_revision,
-                    media_buy_status=_dry_run_mbs,  # AdCP 3.1: mirrors `status`
-                    affected_packages=simulated_affected,
-                    valid_actions=_dry_run_actions,
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                )
-
-                dry_run_response.status = AdcpTaskStatus.completed
-                return dry_run_response
-
-            # Type narrowing: after dry_run early return, step and persistent_ctx are guaranteed to exist
-            assert step is not None, "step should be created when not in dry_run mode"
-            assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
+            assert step is not None
+            assert persistent_ctx is not None
 
             # Check if manual approval is required
             manual_approval_required = adapter.manual_approval_required

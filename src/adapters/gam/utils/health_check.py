@@ -60,9 +60,8 @@ class HealthCheckResult:
 class GAMHealthChecker:
     """Health checker for Google Ad Manager integration."""
 
-    def __init__(self, config: dict[str, Any], dry_run: bool = False):
+    def __init__(self, config: dict[str, Any]):
         self.config = config
-        self.dry_run = dry_run
         self.client = None
         self.last_check_time: datetime | None = None
         self.last_results: list[HealthCheckResult] = []
@@ -73,10 +72,6 @@ class GAMHealthChecker:
         Supports all auth methods via GAMAuthManager: service_account_json,
         service_account_key_file, and refresh_token.
         """
-        if self.dry_run:
-            logger.info("Health check running in dry-run mode")
-            return True
-
         try:
             from src.adapters.gam.auth import GAMAuthManager
 
@@ -95,15 +90,6 @@ class GAMHealthChecker:
     def check_authentication(self) -> HealthCheckResult:
         """Check if we can authenticate with GAM."""
         start_time = time.time()
-
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="authentication",
-                message="Dry-run mode - authentication check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
 
         try:
             if not self.client and not self._init_client():
@@ -143,15 +129,6 @@ class GAMHealthChecker:
     def check_permissions(self, advertiser_id: str) -> HealthCheckResult:
         """Check if we have necessary permissions."""
         start_time = time.time()
-
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="permissions",
-                message="Dry-run mode - permissions check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
 
         try:
             if not self.client:
@@ -224,15 +201,6 @@ class GAMHealthChecker:
         """Check API quota status."""
         start_time = time.time()
 
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="api_quota",
-                message="Dry-run mode - quota check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
-
         try:
             # GAM doesn't expose quota directly, but we can track our usage
             # In production, this would integrate with quota monitoring
@@ -262,15 +230,6 @@ class GAMHealthChecker:
     def check_inventory_access(self, ad_unit_ids: list[str]) -> HealthCheckResult:
         """Check if we can access configured ad units."""
         start_time = time.time()
-
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="inventory_access",
-                message="Dry-run mode - inventory check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
 
         if not ad_unit_ids:
             return HealthCheckResult(
@@ -351,15 +310,6 @@ class GAMHealthChecker:
     def check_service_availability(self) -> HealthCheckResult:
         """Check if GAM services are available."""
         start_time = time.time()
-
-        if self.dry_run:
-            return HealthCheckResult(
-                status=HealthStatus.HEALTHY,
-                check_name="service_availability",
-                message="Dry-run mode - service check skipped",
-                details={"dry_run": True},
-                duration_ms=0,
-            )
 
         try:
             if not self.client:

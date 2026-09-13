@@ -33,7 +33,6 @@ from src.core.schemas import (
     GetProductsResponse,
     Product,  # Extends library Product
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -189,7 +188,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     if not req.brief and not req.brand and not req.filters:
         raise AdCPValidationError()
 
-    testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
     tenant = identity.tenant
     if tenant is None:
@@ -231,7 +229,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
 
     # Skip strict validation in test environments (allow simple test values)
 
-    is_test_mode = (testing_ctx and testing_ctx.test_session_id is not None) or os.getenv("ADCP_TESTING") == "true"
+    is_test_mode = os.getenv("ADCP_TESTING") == "true"
 
     # Note: brand_manifest validation is handled by Pydantic schema, no need for runtime validation here
 

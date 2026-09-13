@@ -409,7 +409,7 @@ def register_adapter_routes(app):
         # Note: We skip instantiation errors since routes are optional
         adapter_configs = [
             (GoogleAdManager, {"config": {}, "principal": None}),
-            (MockAdServer, {"principal": None, "dry_run": False}),
+            (MockAdServer, {"principal": None}),
         ]
 
         for adapter_class, kwargs in adapter_configs:

@@ -11,7 +11,6 @@ from src.core.database.models import Principal
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Principal as SchemaPrincipal
 from src.core.tenant_context import TenantContext
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories.core import TenantFactory
 
 _UNSET = object()
@@ -36,9 +35,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         principal_id: str | None = "test_principal",
         tenant_id: str = "test_tenant",
         protocol: str = "mcp",
-        dry_run: bool = False,
         tenant: TenantContext | None | Any = _UNSET,
-        testing_context: AdCPTestContext | None | Any = _UNSET,
         account_id: str | None = None,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
@@ -55,8 +52,6 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         an afternoon: the idempotency cache is scoped by (principal, account, key), so a
         test that thought it had set the account was probing a different scope. It is what
         ``enrich_identity_with_account`` resolves onto the identity in production.
-        Pass testing_context to override the default (e.g. set
-        test_session_id for harness routing).
 
         ``tenant`` accepts whatever a test has to hand -- a dict or a ``TenantContext`` --
         and normalizes it. THIS IS THE ONE NORMALIZER. ``ResolvedIdentity.tenant`` is
@@ -84,22 +79,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
             if principal_id
             else None
         )
-        # An explicit ``testing_context=None`` MEANS none, and is not the same as omitting
-        # the argument. The sentinel keeps them apart: without it, a caller converted from
-        # an inline ``ResolvedIdentity(..., testing_context=None)`` silently acquired the
-        # default context below, and a test reading ``if identity.testing_context`` would
-        # take the other branch.
-        if testing_context is _UNSET:
-            testing_context = AdCPTestContext(
-                dry_run=dry_run,
-                mock_time=None,
-                jump_to_event=None,
-                test_session_id=None,
-            )
         return ResolvedIdentity(
             principal=principal,
             tenant=resolved_tenant,
             protocol=protocol,
-            testing_context=testing_context,
             account_id=account_id,
         )

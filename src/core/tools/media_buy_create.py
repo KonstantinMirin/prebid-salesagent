@@ -30,9 +30,7 @@ if TYPE_CHECKING:
 
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types import MediaBuyStatus
 from adcp.types import PackageRequest as AdcpPackageRequest
-from adcp.types.aliases import Package as ResponsePackage
 from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
@@ -130,7 +128,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.logging_config import log_safe
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import ResolvedIdentity, identity_of
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyError,
@@ -143,7 +141,6 @@ from src.core.schemas import (
     MediaPackage,
     Package,
     PackageRequest,
-    Principal,
     Product,
     Targeting,
     canonical_agent_url,
@@ -152,8 +149,6 @@ from src.core.schemas import (
     url as make_url,
 )
 from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
-from src.core.tenant_context import TenantContext
-from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
@@ -554,7 +549,7 @@ def _pre_validate_package_creatives(
             _validate_creatives_before_adapter_call(packages, tenant_id, principal_id, session=pre_validate_uow.session)
     except AdCPSalesAgentError:
         # Validation failed - creative validation errors already logged
-        # Update workflow step as failed and re-raise (only if step exists - not created in dry_run mode)
+        # Update workflow step as failed and re-raise
         if step:
             ctx_manager.update_workflow_step(step.step_id, status="failed", error_message="Creative validation failed")
         raise
@@ -566,10 +561,7 @@ def _execute_adapter_media_buy_creation(
     start_time: datetime,
     end_time: datetime,
     package_pricing_info: dict[str, dict[str, Any]],
-    principal: Principal,
-    testing_ctx: TestingContext | None = None,
-    *,
-    tenant: TenantContext | Tenant,
+    identity: ResolvedIdentity,
 ) -> schemas.CreateMediaBuyResponse:
     """Execute adapter's create_media_buy call.
 
@@ -582,8 +574,7 @@ def _execute_adapter_media_buy_creation(
         start_time: Resolved campaign start datetime
         end_time: Resolved campaign end datetime
         package_pricing_info: Pricing model info per package
-        principal: The Principal object (buyer/advertiser)
-        testing_ctx: Optional testing context for dry-run mode
+        identity: The caller the adapter acts for (from a request or from stored ids)
 
     Returns:
         CreateMediaBuyResponse from the adapter
@@ -591,9 +582,8 @@ def _execute_adapter_media_buy_creation(
     Raises:
         Exception: If adapter creation fails (with detailed logging)
     """
-    # Get adapter using helper
-    dry_run = testing_ctx.dry_run if testing_ctx else False
-    adapter = get_adapter(principal, dry_run=dry_run, testing_context=testing_ctx, tenant=tenant)
+    principal = require_principal(identity, context=None)
+    adapter = get_adapter(identity)
 
     # Call adapter with detailed error logging
     try:
@@ -879,8 +869,6 @@ def execute_approved_media_buy(
     from src.core.database.repositories import MediaBuyUoW
 
     logger.info(log_safe(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}"))
-
-    from src.core.database.models import Tenant
 
     adapter_ran = False
 
@@ -1174,14 +1162,10 @@ def execute_approved_media_buy(
                 logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
-            # The buy's owner, off the row's relationship while the session is open:
-            # media_buy detaches (attributes expired) when this block commits, and the
-            # creative reload below runs in a later UoW.
+            # Resolution from stored ids: this job acts as the buy's owner. Captured while
+            # the session is open, because media_buy detaches when this block commits.
             buy_principal_id = media_buy.principal_id
-            principal = schemas.Principal.from_row(media_buy.principal)
-
-            # Create testing context (dry_run should be False for approved buys)
-            testing_ctx = TestingContext(dry_run=False, test_session_id=None)
+            identity = identity_of(tenant_id, buy_principal_id)
 
             logger.info(
                 f"[APPROVAL] Calling adapter for {media_buy_id}: "
@@ -1204,9 +1188,7 @@ def execute_approved_media_buy(
             start_time,
             end_time,
             package_pricing_info,
-            principal,
-            testing_ctx,
-            tenant=tenant_obj,
+            identity,
         )
 
         # Check if adapter returned an error response
@@ -1322,7 +1304,7 @@ def execute_approved_media_buy(
                     logger.info(f"[APPROVAL] Uploading {len(assets)} creatives to adapter")
 
                     # Get adapter and upload creatives
-                    adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
+                    adapter = get_adapter(identity)
 
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
@@ -1375,7 +1357,7 @@ def execute_approved_media_buy(
         # 2. Creatives may have been uploaded after the initial approval attempt
         logger.info(log_safe(f"[APPROVAL] Attempting to approve order {response.media_buy_id} in GAM"))
         try:
-            adapter = get_adapter(principal, dry_run=False, testing_context=testing_ctx, tenant=tenant_obj)
+            adapter = get_adapter(identity)
             if hasattr(adapter, "orders_manager") and adapter.orders_manager:
                 approval_success = adapter.orders_manager.approve_order(response.media_buy_id)
                 if approval_success:
@@ -1502,8 +1484,9 @@ def push_creative_to_existing_buy(
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
-            principal = schemas.Principal.from_row(creative.principal)
-            adapter = get_adapter(principal, dry_run=False, tenant=tenant_obj)
+            # Resolution from stored ids: this job acts as the creative's owner.
+            identity = identity_of(tenant_id, creative.principal_id)
+            adapter = get_adapter(identity)
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
@@ -2016,12 +1999,10 @@ async def _create_media_buy_impl(
                 raw_freq,
             )
 
-    testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
-
     # Authentication and tenant setup
     principal_id = require_principal(identity, context=req.context).principal_id
 
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
+    # Tenant is resolved once, in the resolver invoke_tool runs
     tenant = require_tenant(identity, context=req.context)
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
@@ -2041,18 +2022,16 @@ async def _create_media_buy_impl(
             context=req.context,
         )
 
-    # Validate setup completion (only in production, skip for testing)
-    if not testing_ctx.dry_run and not testing_ctx.test_session_id:
-        try:
-            validate_setup_complete(tenant["tenant_id"])
-        except SetupIncompleteError as e:
-            # Return helpful error with missing tasks
-            raise AdCPConfigurationError(
-                details=ConfigurationDetails(
-                    missing_tasks=[t["name"] for t in e.missing_tasks],
-                    setup_checklist_url=f"/tenant/{tenant['tenant_id']}/setup-checklist",
-                )
+    try:
+        validate_setup_complete(tenant["tenant_id"])
+    except SetupIncompleteError as e:
+        # Return helpful error with missing tasks
+        raise AdCPConfigurationError(
+            details=ConfigurationDetails(
+                missing_tasks=[t["name"] for t in e.missing_tasks],
+                setup_checklist_url=f"/tenant/{tenant['tenant_id']}/setup-checklist",
             )
+        )
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
@@ -2067,88 +2046,74 @@ async def _create_media_buy_impl(
     # so the address policy is enforced where the socket is opened.
 
     # Context management and workflow step creation - create workflow step FIRST
-    # Skip for dry_run mode (no side effects, no database writes)
     ctx_manager = get_context_manager()
-    ctx_id = None
-    persistent_ctx = None
-    step = None
+    persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
 
-    if not testing_ctx.dry_run:
-        # Create workflow step immediately for tracking all operations
-        if not persistent_ctx:
-            # Check if we have an existing context ID
-            if ctx_id:
-                persistent_ctx = ctx_manager.get_context(ctx_id)
+    # Create workflow step for tracking this operation
+    # Pass model directly — ContextManager serializes at the DB boundary
+    workflow_metadata: dict[str, Any] = {}
+    if req.push_notification_config:
+        # The VALUE's canonical dump, not the buyer's raw dict: what
+        # context_manager reads back at delivery time is then gate-receipted
+        # data, rehydrated through the same gate via from_stash.
+        workflow_metadata["push_notification_config"] = registration.to_stash()
 
-            # Create new context if needed (principal already validated above)
-            if not persistent_ctx:
-                persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
+    step = ctx_manager.create_workflow_step(
+        context_id=persistent_ctx.context_id,
+        step_type="media_buy_creation",
+        owner="system",
+        status="in_progress",
+        tool_name="create_media_buy",
+        request_data=req,
+        request_metadata=workflow_metadata,
+    )
 
-        # Create workflow step for tracking this operation
-        # Pass model directly — ContextManager serializes at the DB boundary
-        workflow_metadata: dict[str, Any] = {}
-        if req.push_notification_config:
-            # The VALUE's canonical dump, not the buyer's raw dict: what
-            # context_manager reads back at delivery time is then gate-receipted
-            # data, rehydrated through the same gate via from_stash.
-            workflow_metadata["push_notification_config"] = registration.to_stash()
+    # Register push notification config if provided (MCP/A2A protocol support).
+    # URL was SSRF-checked above; persist via repository upsert (registration gate
+    # + defense in depth).
+    if req.push_notification_config:
+        # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
+        from src.core.database.repositories import PushNotificationConfigUoW
 
-        step = ctx_manager.create_workflow_step(
-            context_id=persistent_ctx.context_id,
-            step_type="media_buy_creation",
-            owner="system",
-            status="in_progress",
-            tool_name="create_media_buy",
-            request_data=req,
-            request_metadata=workflow_metadata,
+        # No blank-URL guard here any more, and that is the TYPE doing the work
+        # rather than an omission. Lane C2 needed one: _impl took a dict, the
+        # registration gate is a documented no-op on blank/None URLs, so a value
+        # existed for url="   " and an unguarded write persisted it. Now _impl
+        # takes PushNotificationConfig, whose url is a pydantic AnyUrl —
+        # PushNotificationConfig(url="   ") raises url_parsing, so a blank-url
+        # config cannot be constructed, let alone arrive here. A whitespace URL
+        # is refused at the wrapper, correctably, naming push_notification_config.url.
+        # Log scheme+host+path only — never credentials / full auth blob.
+        logger.info(
+            "[MCP/A2A] Registering push notification config url=%s",
+            webhook_url_for_log(registration.url),
         )
-
-        # Register push notification config if provided (MCP/A2A protocol support)
-        # Skip for dry_run mode (no database writes). URL was SSRF-checked above;
-        # persist via repository upsert (registration gate + defense in depth).
-        if req.push_notification_config:
-            # Lazy: call-time import so tests that patch the UoW on the repositories package see their patched object (hoisting would bind the unpatched one at module load).
-            from src.core.database.repositories import PushNotificationConfigUoW
-
-            # No blank-URL guard here any more, and that is the TYPE doing the work
-            # rather than an omission. Lane C2 needed one: _impl took a dict, the
-            # registration gate is a documented no-op on blank/None URLs, so a value
-            # existed for url="   " and an unguarded write persisted it. Now _impl
-            # takes PushNotificationConfig, whose url is a pydantic AnyUrl —
-            # PushNotificationConfig(url="   ") raises url_parsing, so a blank-url
-            # config cannot be constructed, let alone arrive here. A whitespace URL
-            # is refused at the wrapper, correctably, naming push_notification_config.url.
-            # Log scheme+host+path only — never credentials / full auth blob.
-            logger.info(
-                "[MCP/A2A] Registering push notification config url=%s",
-                webhook_url_for_log(registration.url),
+        # THE ROW IS IDENTIFIED BY ITS URL, not by anything the buyer names.
+        # core/push-notification-config.json declares no ``id`` property, so a buyer
+        # cannot name a row -- an earlier version dug one out of the raw wire payload,
+        # which is processing a field the schema does not define.
+        #
+        # But identity still has to come from somewhere, or every re-registration
+        # inserts and a buyer re-registering one webhook accumulates rows forever.
+        # (tenant, principal, url) is the natural key and it is made of SPEC fields:
+        # re-registering the same URL updates the same row, which is the behaviour
+        # A2A re-registration needs, without honouring a non-spec id to get it.
+        with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
+            assert pnc_uow.push_notification_configs is not None
+            _existing = pnc_uow.push_notification_configs.find_by_url(
+                principal_id, str(registration.url), active_only=False
             )
-            # THE ROW IS IDENTIFIED BY ITS URL, not by anything the buyer names.
-            # core/push-notification-config.json declares no ``id`` property, so a buyer
-            # cannot name a row -- an earlier version dug one out of the raw wire payload,
-            # which is processing a field the schema does not define.
-            #
-            # But identity still has to come from somewhere, or every re-registration
-            # inserts and a buyer re-registering one webhook accumulates rows forever.
-            # (tenant, principal, url) is the natural key and it is made of SPEC fields:
-            # re-registering the same URL updates the same row, which is the behaviour
-            # A2A re-registration needs, without honouring a non-spec id to get it.
-            with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
-                assert pnc_uow.push_notification_configs is not None
-                _existing = pnc_uow.push_notification_configs.find_by_url(
-                    principal_id, str(registration.url), active_only=False
-                )
-                row_id = _existing.id if _existing is not None else f"pnc_{uuid.uuid4().hex[:16]}"
-                _config, created = pnc_uow.push_notification_configs.upsert(
-                    registration,
-                    config_id=row_id,
-                    principal_id=principal_id,
-                )
-                logger.info(
-                    "[MCP/A2A] Push notification config %s: %s",
-                    "created" if created else "updated",
-                    row_id,
-                )
+            row_id = _existing.id if _existing is not None else f"pnc_{uuid.uuid4().hex[:16]}"
+            _config, created = pnc_uow.push_notification_configs.upsert(
+                registration,
+                config_id=row_id,
+                principal_id=principal_id,
+            )
+            logger.info(
+                "[MCP/A2A] Push notification config %s: %s",
+                "created" if created else "updated",
+                row_id,
+            )
 
     try:
         # Validate input parameters
@@ -2606,11 +2571,8 @@ async def _create_media_buy_impl(
         ctx_manager.audit_workflow_step_failure_if_present(step, e)
         raise
 
-    # Type narrowing: in non-dry_run mode, step and persistent_ctx are guaranteed to exist
-    # In dry_run mode, they may be None (database operations are skipped)
-    if not testing_ctx.dry_run:
-        assert step is not None, "step should be created when not in dry_run mode"
-        assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
+    assert step is not None
+    assert persistent_ctx is not None
 
     # Principal already validated earlier (before context creation) to avoid foreign key errors
 
@@ -2630,7 +2592,6 @@ async def _create_media_buy_impl(
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
                     packages=cast(list[PackageRequest], req.packages),
                     context=identity,
-                    testing_ctx=testing_ctx,
                     # The nested creative sync is built as a real SyncCreativesRequest, so
                     # it carries THIS request's account and context rather than a set of
                     # loose fields with no request behind them. Not the client key: it calls
@@ -2651,9 +2612,7 @@ async def _create_media_buy_impl(
                     ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=str(e))
                 raise
 
-        # Get the appropriate adapter with testing context
-        # Use dry_run from testing context (which comes from config or testing flags)
-        adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+        adapter = get_adapter(identity)
 
         # Check if manual approval is required
         # Use tenant.human_review_required as the authoritative source, with adapter setting as fallback.
@@ -2683,11 +2642,7 @@ async def _create_media_buy_impl(
         auto_create_enabled = tenant.get("auto_create_media_buys", True)
         product_auto_create = True  # Will be set correctly when we get products later
 
-        # Skip manual approval path in dry_run mode - we're only validating, not creating workflow
-        if not testing_ctx.dry_run and manual_approval_required and "create_media_buy" in manual_approval_operations:
-            # Type narrowing: step and persistent_ctx exist in non-dry_run mode
-            assert step is not None and persistent_ctx is not None
-
+        if manual_approval_required and "create_media_buy" in manual_approval_operations:
             # PRE-VALIDATE: same creative validation the auto path runs, BEFORE any
             # media-buy state is persisted. Missing creative_ids, format-vs-product
             # mismatches, terminal states, and malformed reference creatives fail
@@ -3122,11 +3077,8 @@ async def _create_media_buy_impl(
         )
 
         # Check if either tenant or product disables auto-creation
-        # Skip in dry_run mode - we're only validating, not creating workflow
-        if not testing_ctx.dry_run and (not auto_create_enabled or not product_auto_create):
+        if not auto_create_enabled or not product_auto_create:
             reason = "Tenant configuration" if not auto_create_enabled else "Product configuration"
-            # Type narrowing: step and persistent_ctx exist in non-dry_run mode
-            assert step is not None and persistent_ctx is not None
             # Update existing workflow step to require approval
             ctx_manager.update_workflow_step(step.step_id, status="requires_approval")
 
@@ -3490,60 +3442,12 @@ async def _create_media_buy_impl(
             # type system, not a review, is what stops a string arriving here.
             raise AdCPValidationError(details=ValidationDetails(problems=pre_creation_problems))
 
-        # Dry-run mode: skip adapter call entirely, return simulated response
-        # All validation (products, pricing, budgets, creatives) has passed above.
-        if testing_ctx.dry_run:
-            logger.info("[DRY_RUN] Validation passed, returning simulated response without adapter call")
-            simulated_packages = [
-                ResponsePackage(
-                    package_id=pkg.package_id,
-                    product_id=pkg.product_id,
-                    budget=pkg.budget,
-                )
-                for pkg in packages
-            ]
-            # The adcp-6.6 CreateMediaBuySuccess default status="completed" is KEPT for
-            # dry_run and is spec-correct (PR #1567): spec 3.1.1
-            # create-media-buy-response.json has exactly three variants
-            # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
-            # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the spec
-            # is SILENT on a dry_run response status -> production authoritative. A dry_run
-            # buyer asked to SIMULATE the would-be outcome, which IS completion, so
-            # "completed" is a truthful preview (unlike the pending-approval and reject paths, where the op
-            # did not apply). Guarded by tests/integration/test_media_buy_dry_run_status.py.
-            # Simulated lifecycle: a would-be-created buy starts before its flight,
-            # so pending_start — the SAME value must feed both the wire field and
-            # valid_actions (spec 3.1.1 pending_creatives_to_start.yaml grades
-            # media_buy_status alongside the envelope status; partial GH #1326).
-            simulated_lifecycle = MediaBuyStatus.pending_start.value
-            simulated_message_id = f"dry_run_{uuid.uuid4().hex[:12]}"
-            simulated_response = CreateMediaBuySuccess.sync_success(
-                media_buy_id=simulated_message_id,
-                message=f"Media buy {simulated_message_id} created successfully.",
-                packages=simulated_packages,
-                media_buy_status=simulated_lifecycle,  # AdCP 3.1: mirrors deprecated `status`
-                valid_actions=valid_actions_for_status(simulated_lifecycle),
-                # Dry run: nothing is persisted, so there is no row to read and both
-                # values are stated rather than fetched. Both follow from the simulated
-                # lifecycle: pending_start IS a seller-committed status
-                # (models._SELLER_COMMITTED_STATUSES), so a row that WOULD be created
-                # is stamped by _stamp_confirmation_if_needed at creation — the
-                # simulated instant is what the real write would record, not an
-                # invented one — and it would start at the column's server_default of 1.
-                confirmed_at=datetime.now(UTC),
-                revision=1,
-                context=req.context,
-                errors=property_list_unsupported_advisories(req.packages, adapter),
-            )
-            simulated_response.status = AdcpTaskStatus.completed.value
-            return simulated_response
-
         # Call adapter using shared creation logic
         # Note: start_time variable already resolved from 'asap' to actual datetime if needed
         # This uses the same function as manual approval to ensure consistency across adapters
         try:
             response = _execute_adapter_media_buy_creation(
-                req, packages, start_time, end_time, package_pricing_info, principal, testing_ctx, tenant=tenant
+                req, packages, start_time, end_time, package_pricing_info, identity
             )
         except Exception:
             raise
@@ -3572,11 +3476,6 @@ async def _create_media_buy_impl(
             for i, pkg_item in enumerate(response.packages):
                 # pkg_item is dict[str, Any] here (response.packages), different scope from earlier Package usage
                 logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
-
-        # Type narrowing: after dry_run return, step and persistent_ctx are guaranteed to exist
-        # This is needed for mypy to understand these won't be None in the code below
-        assert step is not None, "step should be created when not in dry_run mode"
-        assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
 
         # Determine initial status using centralized logic
         # Check if creatives are assigned and approved
@@ -4112,21 +4011,7 @@ async def _create_media_buy_impl(
             # Activity feed logging is non-critical, but we should log the failure
             logger.warning(f"Failed to log media buy creation to activity feed: {e}")
 
-        # Apply testing hooks to response with campaign information (resolved from 'asap' if needed)
-        campaign_info = {"start_date": start_time, "end_date": end_time, "total_budget": total_budget}
-
-        hooks_result = apply_testing_hooks(
-            testing_ctx,
-            "create_media_buy",
-            campaign_info,
-            media_buy_id=adcp_response.media_buy_id,
-            spend_amount=float(total_budget),
-        )
-
-        # Only mutation that survives: test_ prefix on media_buy_id in dry-run mode
         modified_response = adcp_response
-        if hooks_result.media_buy_id_override:
-            modified_response = adcp_response.model_copy(update={"media_buy_id": hooks_result.media_buy_id_override})
 
         # Link workflow step to media buy so _send_push_notifications can find the webhook URL.
         # This MUST happen before update_workflow_step() which triggers _send_push_notifications.

@@ -40,7 +40,6 @@ quality-ci:
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
-	uv run python .pre-commit-hooks/check_roundtrip_tests.py
 	# ALL 38 feature files, bound and unbound, at ZERO -- no --uc filter and no
 	# baseline. Widened in three steps: UC-002/UC-003 -> the 16 bound files
 	# (salesagent-3dawm.17) -> everything (salesagent-yz8mo), once the 529

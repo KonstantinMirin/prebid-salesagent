@@ -120,11 +120,8 @@ class GAMClientManager:
         self._client = None
         logger.info("GAM client reset - will re-initialize on next access")
 
-    def get_health_checker(self, dry_run: bool = False) -> GAMHealthChecker:
+    def get_health_checker(self) -> GAMHealthChecker:
         """Get or create the health checker.
-
-        Args:
-            dry_run: Whether to run in dry-run mode
 
         Returns:
             GAMHealthChecker instance
@@ -132,7 +129,7 @@ class GAMClientManager:
         if self._health_checker is None:
             # Merge network_code into config for health checker's own client init
             health_config = {**self.config, "network_code": self.network_code}
-            self._health_checker = GAMHealthChecker(health_config, dry_run=dry_run)
+            self._health_checker = GAMHealthChecker(health_config)
         return self._health_checker
 
     def check_health(

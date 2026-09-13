@@ -85,10 +85,9 @@ typed at the boundary and stay typed until the boundary serializes them.
 
 **Rule.** This principle is the symmetry at the heart of the design:
 
-- **Inbound**: The boundary constructs the Pydantic request model — the
-  compatibility middlewares normalize the wire format and the route/tool
-  wrapper parses it
-  ([request-lifecycle.md](request-lifecycle.md#backward-compatibility-at-the-boundary)).
+- **Inbound**: The boundary constructs the Pydantic request model —
+  `validated_request` parses the wire payload into the registry row's DTO
+  ([request-lifecycle.md](request-lifecycle.md#the-boundary-serve-and-invoke_tool)).
 - **Outbound, response**: `_impl` returns a response model and stops. It does
   not build the response — the transport converts the model automatically, and
   wire serialization lives in one place (`WireSerializerMixin` in

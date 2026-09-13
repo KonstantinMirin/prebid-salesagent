@@ -15,7 +15,7 @@ Enforced by ``.ast-grep/rules/test-credential-header-single-producer.yml``, whic
 from __future__ import annotations
 
 
-def credential_headers(*, token: str | None = None, tenant: str | None = None, dry_run: bool = False) -> dict[str, str]:
+def credential_headers(*, token: str | None = None, tenant: str | None = None) -> dict[str, str]:
     """THE producer: the headers a test presents to this seller, from plain values.
 
     Every dispatcher, fixture, builder and per-test literal in ``tests/`` builds its
@@ -47,6 +47,4 @@ def credential_headers(*, token: str | None = None, tenant: str | None = None, d
         headers["Authorization"] = f"Bearer {token}"
     if tenant:
         headers["x-adcp-tenant"] = tenant
-    if dry_run:
-        headers["x-dry-run"] = "true"
     return headers

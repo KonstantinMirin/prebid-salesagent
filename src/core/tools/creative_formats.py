@@ -470,8 +470,6 @@ def _list_creative_formats_impl(
     # Create response (no message/specification_version - not in adapter schema)
     # Determine sandbox flag from identity (BR-RULE-209 INV-4)
     sandbox_flag: bool | None = None
-    if identity.testing_context and identity.testing_context.dry_run:
-        sandbox_flag = True
 
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
