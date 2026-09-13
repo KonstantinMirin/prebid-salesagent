@@ -60,7 +60,7 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
     carries host:port and resolver detail. AdCP 3.1.1 transport-errors.mdx
     § Security Considerations forbids that on a buyer-facing message, so the
     buyer gets the stable first-party sentence from the mapping table below and
-    the raw text goes to ``internal_detail`` (logged, not serialized).
+    the SDK exception goes to ``internal_detail`` (logged, not serialized).
     """
     from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPTimeoutError
 
@@ -95,14 +95,12 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
             break
 
     logger.error("%s for %s: %s", failure_mode, agent_label, exc.message)
-    # The mode is an operator label, i.e. prose — it belongs in the log and on
-    # internal_detail, not in details. Four lines above, this file's own comment says a
-    # mode needing its own buyer sentence needs its own AppErrorCode, "not a message
-    # argument"; parking the sentence in details would be the same thing by another route.
-    raise error_class(
-        details={"agent": agent_label},
-        internal_detail=f"{failure_mode}: {exc.message}",
-    ) from exc
+    # The mode is an operator label, i.e. prose — it belongs in the log, not in
+    # details. Four lines above, this file's own comment says a mode needing its own
+    # buyer sentence needs its own AppErrorCode, "not a message argument"; parking
+    # the sentence in details would be the same thing by another route. The SDK
+    # exception itself is the cause, logged with its traceback by the boundary.
+    raise error_class(details={"agent": agent_label}, internal_detail=exc) from exc
 
 
 def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -> tuple[str, str]:

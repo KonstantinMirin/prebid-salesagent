@@ -147,11 +147,7 @@ class GoogleAdManager(AdServerAdapter):
         self.principal = principal
 
         # Validate configuration
-        self.network_code = self._require_config(
-            self.network_code,
-            field="network_code",
-            operator_detail="GAM config is missing 'network_code'",
-        )
+        self.network_code = self._require_config(self.network_code, field="network_code")
 
         # Validate advertiser_id is numeric if provided (GAM expects integer company IDs)
         if advertiser_id is not None and advertiser_id != "":

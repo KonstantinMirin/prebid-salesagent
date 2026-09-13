@@ -363,27 +363,14 @@ class MockAdServer(AdServerAdapter):
             # Typed, not ValueError: a bad knob is deployment/test configuration,
             # which is what CONFIGURATION_ERROR means, and src/ may not grow new
             # bare ValueError raises (test_architecture_no_value_error_in_impl).
-            raise AdCPConfigurationError(
-                # internal_detail, not a positional message: buyer-facing text comes
-                # from CODE_TABLE and no raise site may author it. A misspelt knob is
-                # a server-side diagnostic, so the explanation goes to the log.
-                internal_detail=(
-                    f"test_behavior recovery={requested!r} is not a recovery classification. "
-                    f"Use one of {sorted(recovery_to_class)} — each selects the exception class "
-                    f"whose pinned enumMetadata recovery is that value."
-                )
-            ) from None
+            # The rejected spelling is a test fixture's own string and stays off
+            # the buyer's wire; the class and code are the whole diagnosis.
+            raise AdCPConfigurationError() from None
 
-        raise error_cls(
-            # The injected error_details rode `details` while this comment said it
-            # belongs server-side. It does: internal_detail below carries the injected
-            # text, and a fault-injection knob has no business shaping a buyer's
-            # details block.
-            # A fault-injection knob must still DO something (CLAUDE.md: no quiet
-            # failures). The injected text is a server-side diagnostic, so it rides
-            # internal_detail rather than being dropped or put on the buyer's wire.
-            internal_detail=test_behavior.get("error_message"),
-        )
+        # The injected error_message is fault-injection text, not a cause: it
+        # neither reaches the buyer's wire nor the server log. Selecting the
+        # exception class is what the knob does.
+        raise error_cls()
 
     def _raise_injected_rejection(self) -> None:
         """Raise a SELLER REJECTION when the injected ``reject_on_create`` flag is set.
@@ -638,11 +625,14 @@ class MockAdServer(AdServerAdapter):
         if scenario:
             # Handle error simulation
             if scenario.error_message:
-                raise AdCPAdapterError(internal_detail=scenario.error_message)
+                raise AdCPAdapterError()
 
             # Handle rejection
             if scenario.should_reject:
-                raise AdCPMediaBuyRejectedError(internal_detail=scenario.rejection_reason)
+                reason = scenario.rejection_reason
+                raise AdCPMediaBuyRejectedError(
+                    details=RejectionReasonDetails(rejection_reason=reason) if reason else None
+                )
 
             # Handle question asking (return pending with question)
             if scenario.should_ask_question:

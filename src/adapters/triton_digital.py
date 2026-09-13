@@ -39,21 +39,13 @@ class TritonDigital(AdServerAdapter):
         super().__init__(config, principal, creative_engine, tenant_id)
 
         # Get Triton-specific principal ID
-        self.advertiser_id = self._require_config(
-            self.principal.get_adapter_id("triton"),
-            field="advertiser_id",
-            operator_detail=f"Principal {principal.principal_id} does not have a Triton advertiser ID",
-        )
+        self.advertiser_id = self._require_config(self.principal.get_adapter_id("triton"), field="advertiser_id")
 
         # Get Triton configuration
         self.base_url = self.config.get("base_url", "https://tap-api.tritondigital.com/v1")
         self.auth_token = self.config.get("auth_token")
 
-        self.auth_token = self._require_config(
-            self.auth_token,
-            field="auth_token",
-            operator_detail="Triton Digital config is missing 'auth_token'",
-        )
+        self.auth_token = self._require_config(self.auth_token, field="auth_token")
         self._vendor: VendorHttpClient | None = VendorHttpClient(
             base_url=self.base_url,
             headers={"Authorization": f"Bearer {self.auth_token}", "Content-Type": "application/json"},

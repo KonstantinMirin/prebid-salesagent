@@ -537,15 +537,10 @@ class CreativeAgentRegistry:
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger, field=field)
 
-        raise AdCPValidationError(
-            field=field,
-            # The endpoint stays OFF the wire: ``message`` is a read-only
-            # CODE_TABLE property and ``agent.agent_url`` is a URL this seller
-            # does not publish (transport-errors.mdx § Security Considerations).
-            # ``field`` is what the buyer needs; the address is a server-side
-            # diagnostic, so it goes to the non-wire channel.
-            internal_detail=f"No parseable result in MCP response from {agent.agent_url}",
-        )
+        # The endpoint stays OFF the wire: ``agent.agent_url`` is a URL this seller
+        # does not publish (transport-errors.mdx § Security Considerations).
+        # ``field`` is what the buyer needs.
+        raise AdCPValidationError(field=field)
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any, *, field: str | None = None) -> list[Format]:
         """Parse formats from an MCP tools/call result.
@@ -563,7 +558,7 @@ class CreativeAgentRegistry:
                 formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPValidationError(field=field, internal_detail="No text content in MCP tool result")
+        raise AdCPValidationError(field=field)
 
     async def get_formats_for_agent(
         self,

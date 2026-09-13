@@ -54,14 +54,10 @@ class NaturalKeyConflict(AdCPConflictError, ValueError):
     def __init__(self, message: str, *, existing_account_id: str | None = None) -> None:
         # OPERATOR-facing, never the buyer wire: the admin form flashes this so the
         # human sees which account to edit. The buyer-facing sentence is CODE_TABLE's,
-        # resolved from CONFLICT, and this text also goes to internal_detail for the
-        # server log.
+        # resolved from CONFLICT.
         self.operator_message = message
         self.existing_account_id = existing_account_id
-        super().__init__(
-            details=ConflictDetails(account_id=existing_account_id),
-            internal_detail=message,
-        )
+        super().__init__(details=ConflictDetails(account_id=existing_account_id))
 
 
 @dataclass(frozen=True)

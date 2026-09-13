@@ -103,30 +103,15 @@ class BroadstreetAdapter(AdServerAdapter):
         if not self.advertiser_id:
             # Fall back to default advertiser from config
             self.advertiser_id = self.config.get("default_advertiser_id")
-            self.advertiser_id = self._require_config(
-                self.advertiser_id,
-                field="advertiser_id",
-                operator_detail=(
-                    f"Principal {principal.principal_id} does not have a Broadstreet advertiser ID "
-                    "and no default_advertiser_id configured"
-                ),
-            )
+            self.advertiser_id = self._require_config(self.advertiser_id, field="advertiser_id")
 
         # Get Broadstreet configuration
         self.network_id = self.config.get("network_id")
         self.api_key = self.config.get("api_key")
 
         # Initialize client
-        self.network_id = self._require_config(
-            self.network_id,
-            field="network_id",
-            operator_detail="Broadstreet config is missing 'network_id'",
-        )
-        self.api_key = self._require_config(
-            self.api_key,
-            field="api_key",
-            operator_detail="Broadstreet config is missing 'api_key'",
-        )
+        self.network_id = self._require_config(self.network_id, field="network_id")
+        self.api_key = self._require_config(self.api_key, field="api_key")
         self.client = BroadstreetClient(access_token=self.api_key, network_id=self.network_id)
 
         # Initialize managers

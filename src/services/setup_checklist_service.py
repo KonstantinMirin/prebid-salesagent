@@ -1197,10 +1197,7 @@ class SetupIncompleteError(AdCPConfigurationError):
         # `message` is accepted and DISCARDED: the sentence is a function of the code
         # through CODE_TABLE. The parameter stays so the one raise site is unchanged.
         self.missing_tasks = missing_tasks
-        super().__init__(
-            details=ConfigurationDetails(missing_tasks=[t["name"] for t in missing_tasks]),
-            internal_detail=message,
-        )
+        super().__init__(details=ConfigurationDetails(missing_tasks=[t["name"] for t in missing_tasks]))
 
 
 def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:

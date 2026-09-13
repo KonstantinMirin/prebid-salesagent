@@ -192,12 +192,12 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         field: Optional field name that caused the error.
         suggestion: Correction hint for buyer agents (read-only, from
             CODE_TABLE).
-        internal_detail: Optional NON-WIRE diagnostic payload — the raw
-            third-party exception (or free text) that caused this error.
-            NEVER serialized: ``AdcpErrorResponse.of`` ignores it. It
-            exists so a raise site has a sanctioned destination for text whose
-            provenance we do not control, instead of interpolating it into
-            ``message``.
+        internal_detail: Optional NON-WIRE cause — the caught exception that
+            produced this error (ADR-010 point 5). NEVER serialized:
+            ``AdcpErrorResponse.of`` ignores it; the boundary logs it with its
+            traceback. An authored sentence here says nothing the code, the class
+            and the typed details do not already say; every raise site passes the
+            exception it caught, or nothing.
             See the class note below.
 
     Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
@@ -299,8 +299,9 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     ) -> None:
         # There is no ``message`` parameter. Buyer-facing text comes from CODE_TABLE
         # via the read-only ``message`` property, so no raise site can author it and
-        # no caught exception's text can reach the wire. Provenance-bearing text goes
-        # to ``internal_detail`` (server log only); values go to ``field``/``details``.
+        # no caught exception's text can reach the wire. The raw CAUSE goes to
+        # ``internal_detail`` (an exception, server log only); values go to
+        # ``field``/``details``.
         #
         # Assigned FIRST: every derived property keys on it.
         self._error_code = error_code if error_code is not None else type(self)._code

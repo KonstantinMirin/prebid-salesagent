@@ -39,11 +39,7 @@ class Kevel(AdServerAdapter):
         super().__init__(config, principal, creative_engine, tenant_id)
 
         # Get Kevel-specific principal ID
-        self.advertiser_id = self._require_config(
-            self.principal.get_adapter_id("kevel"),
-            field="advertiser_id",
-            operator_detail=f"Principal {principal.principal_id} does not have a Kevel advertiser ID",
-        )
+        self.advertiser_id = self._require_config(self.principal.get_adapter_id("kevel"), field="advertiser_id")
 
         # Get Kevel configuration
         self.network_id = self.config.get("network_id")
@@ -54,12 +50,8 @@ class Kevel(AdServerAdapter):
         self.userdb_enabled = self.config.get("userdb_enabled", False)
         self.frequency_capping_enabled = self.config.get("frequency_capping_enabled", False)
 
-        self.network_id = self._require_config(
-            self.network_id, field="network_id", operator_detail="Kevel config is missing 'network_id'"
-        )
-        self.api_key = self._require_config(
-            self.api_key, field="api_key", operator_detail="Kevel config is missing 'api_key'"
-        )
+        self.network_id = self._require_config(self.network_id, field="network_id")
+        self.api_key = self._require_config(self.api_key, field="api_key")
         self._vendor: VendorHttpClient | None = VendorHttpClient(
             base_url=self.base_url,
             headers={"X-Adzerk-ApiKey": self.api_key, "Content-Type": "application/json"},

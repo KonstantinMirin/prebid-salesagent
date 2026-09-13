@@ -67,19 +67,18 @@ def _raise_broadstreet_error(exc: OutboundError) -> NoReturn:
     adapters -- including the one that owns this client.
     """
     status = exc.http_status if isinstance(exc, OutboundDeliveryFailed) else None
-    upstream = f"broadstreet HTTP {status}"
 
     error: AdCPSalesAgentError[Any] | None = None
     if status == 403:
-        error = AdCPAuthorizationError(internal_detail=upstream)
+        error = AdCPAuthorizationError(internal_detail=exc)
     elif status == 404:
-        error = AdCPAdapterResourceNotFoundError(internal_detail=upstream)
+        error = AdCPAdapterResourceNotFoundError(internal_detail=exc)
     elif status == 429:
         # Owned by the shared table (see the docstring): delegating keeps the
         # clamped retry_after a locally-built AdCPRateLimitError would drop.
         pass
     elif status is not None and 400 <= status < 500:
-        error = AdCPAdapterError(internal_detail=upstream)
+        error = AdCPAdapterError(internal_detail=exc)
 
     if error is not None:
         raise error from exc

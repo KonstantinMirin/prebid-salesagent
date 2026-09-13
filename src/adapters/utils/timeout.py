@@ -56,14 +56,12 @@ def timeout(seconds: int = 300):
                     result = future.result(timeout=seconds)
                     return result
 
-                except concurrent.futures.TimeoutError:
+                except concurrent.futures.TimeoutError as e:
                     # Log timeout for debugging
                     logger.error(
                         f"Operation {func.__name__} timed out after {seconds}s. This usually means the API is hanging."
                     )
-                    raise AdCPServiceUnavailableError(
-                        internal_detail=f"{func.__name__} timed out after {seconds} seconds"
-                    )
+                    raise AdCPServiceUnavailableError(internal_detail=e) from e
 
         return wrapper
 

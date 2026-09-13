@@ -283,11 +283,7 @@ async def call_mcp_tool(
                     )
                     raise MCPCompatibilityError(
                         details=AdapterFailureDetails(url=current_url),
-                        internal_detail=(
-                            f"MCP SDK compatibility issue with {current_url}: "
-                            f"Server doesn't support notifications/initialized notification. "
-                            f"The agent may need to upgrade their FastMCP version to match the client."
-                        ),
+                        internal_detail=e,
                     ) from e
 
                 attempts.record_transport_failure()
@@ -313,11 +309,8 @@ async def call_mcp_tool(
                     )
                     break
 
-    # If we reach here, all candidates failed — preserve legacy error format regardless of fallback
+    # If we reach here, all candidates failed, regardless of fallback
     raise MCPConnectionError(
         details=AdapterFailureDetails(url=agent_url, max_retries=max_attempts),
-        internal_detail=(
-            f"Failed to connect to MCP agent at {agent_url} after {max_attempts} attempts: "
-            f"{type(last_exception).__name__ if last_exception else 'UnknownError'}: {last_exception}"
-        ),
+        internal_detail=last_exception,
     ) from last_exception

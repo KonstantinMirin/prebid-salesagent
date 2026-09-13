@@ -143,13 +143,9 @@ def _spec_task_type(step: Any) -> str:
         raise AdCPValidationError(
             details=ValidationDetails(
                 field="task_type",
+                step_id=getattr(step, "step_id", None),
                 rejected_value=repr(tool_name),
                 accepted_values=sorted(_TASK_TYPE_BY_TOOL),
-            ),
-            internal_detail=(
-                f"workflow step {getattr(step, 'step_id', '?')!r} has tool_name {tool_name!r}, which is "
-                f"not an AdCP task this seller can name. enums/task-type.json requires one, and "
-                f"neither fabricating nor omitting it is honest -- see _spec_task_type."
             ),
         )
     return task_type

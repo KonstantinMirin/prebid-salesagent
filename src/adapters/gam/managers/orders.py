@@ -131,7 +131,7 @@ class GAMOrdersManager:
             return order_id
         else:
             # An empty result is an upstream fault, not a bad request.
-            raise AdCPAdapterError(internal_detail="GAM createOrders returned no orders")
+            raise AdCPAdapterError()
 
     @timeout(seconds=30)  # 30 seconds timeout for status check
     def get_order_status(self, order_id: str) -> str:

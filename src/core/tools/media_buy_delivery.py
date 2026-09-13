@@ -311,13 +311,7 @@ def get_media_buy_delivery(
                     # `or 0` would silently report zero delivery for one.
                     totals = adapter_response.totals
                     if totals.spend is None or totals.impressions is None:
-                        raise AdCPInternalError(
-                            details=EntityRefDetails(media_buy_id=media_buy_id),
-                            internal_detail=(
-                                f"adapter returned totals without spend/impressions for "
-                                f"{media_buy_id}: both are required by the pinned delivery schema"
-                            ),
-                        )
+                        raise AdCPInternalError(details=EntityRefDetails(media_buy_id=media_buy_id))
                     spend = float(totals.spend)
                     impressions = int(totals.impressions)
                     raw_conversions = getattr(adapter_response.totals, "conversions", None)

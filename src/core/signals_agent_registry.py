@@ -151,15 +151,11 @@ class SignalsAgentRegistry:
             # would otherwise validate CLEANLY with signals=None — every field is
             # optional — silently producing signals=[] and masking a genuine
             # agent failure as "agent up, 0 signals" (salesagent-9eu class bug).
-            raise AdCPConfigurationError(
-                internal_detail=f"No parseable content in get_signals response from {agent.name}"
-            )
+            raise AdCPConfigurationError()
         try:
             parsed = LibraryGetSignalsResponse.model_validate(payload)
         except ValidationError as e:
-            raise AdCPConfigurationError(
-                internal_detail=f"Signals agent {agent.name} returned an invalid response"
-            ) from e
+            raise AdCPConfigurationError(internal_detail=e) from e
 
         signals = parsed.signals or []
         total_duration = time.time() - start_time

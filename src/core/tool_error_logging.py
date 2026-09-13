@@ -100,6 +100,9 @@ def record_boundary_error(
     principal_id = identity.principal_id if identity is not None else None
 
     if is_typed:
+        # A typed error is the buyer-correctable path, so WARNING. When it was raised
+        # ``from`` a cause, the traceback carries that chain and is the one record of
+        # what broke underneath; without a cause there is nothing a traceback adds.
         logger.warning(
             "%s boundary translating %s to envelope: %s - %s (operation=%s)",
             transport_upper,
@@ -107,6 +110,7 @@ def record_boundary_error(
             error_code,
             error_message,
             operation,
+            exc_info=error if error.__cause__ is not None else None,
         )
     else:
         logger.error(

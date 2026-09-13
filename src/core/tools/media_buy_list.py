@@ -645,22 +645,18 @@ def _persisted_revision(buy) -> int:
     minimum = revision_minimum()
     revision = buy.revision
     if revision is None or revision < minimum:
-        # The buy and the refused value travel as typed details, and the bound as
-        # server-log-only provenance: buyer-facing text is a function of the code
-        # (``AdCPSalesAgentError.message``), so this raise site names the subject
-        # instead of writing the sentence — the same shape the sibling status door
-        # uses (``PersistedMediaBuyStatus.parse``). ``accepted_values`` stays unset:
-        # the pin states a MINIMUM here, not an enumerable member set.
+        # The buy and the refused value travel as typed details: buyer-facing text
+        # is a function of the code (``AdCPSalesAgentError.message``), so this raise
+        # site names the subject instead of writing the sentence — the same shape
+        # the sibling status door uses (``PersistedMediaBuyStatus.parse``).
+        # ``accepted_values`` stays unset: the pin states a MINIMUM here, not an
+        # enumerable member set.
         raise AdCPPersistedStateError(
             details=ConfigurationDetails(
                 media_buy_id=buy.media_buy_id,
                 rejected_value=repr(revision),
             ),
             field="revision",
-            internal_detail=(
-                f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
-                f"pinned minimum of {minimum}; the optimistic-concurrency token cannot be published"
-            ),
         )
     return revision
 
