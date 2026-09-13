@@ -1079,23 +1079,6 @@ class TestPreconditionObligations:
 
         assert callable(_create_media_buy_impl)
 
-    @pytest.mark.asyncio
-    async def test_buyer_authenticated_required(self):
-        """Authentication is always required for create_media_buy.
-
-        Covers: UC-002-PRECOND-02
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        req = _make_request()
-
-        # None identity -> should raise
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            await _create_media_buy_impl(req=req, identity=None)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
-
 
 class TestAsapStartTimingObligations:
     """ASAP start timing obligation tests."""
@@ -1694,14 +1677,7 @@ class TestExtensionObligations:
 
         req = _make_request()
 
-        # None identity -> requires authentication
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            await _create_media_buy_impl(req=req, identity=None)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
-
         # Identity with no principal_id -> requires authentication
-
         identity_no_principal = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="test_tenant",

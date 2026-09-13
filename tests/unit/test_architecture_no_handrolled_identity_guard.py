@@ -2,7 +2,7 @@
 
 The transport boundary resolves identity; ``_impl`` functions receive a
 ``ResolvedIdentity`` and must narrow it through ``src.core.auth`` helpers
-(``require_identity`` / ``require_principal_id`` / ``require_tenant``), which raise a
+(``require_principal_id`` / ``require_tenant``), which raise a
 canonical ``AdCPAuthRequiredError`` with a wire code + recovery. They must NOT
 hand-roll the guard via:
 
@@ -46,8 +46,8 @@ SCAN_DIRS = [
 # (relative_path, enclosing_function_name) — empty: migrate every site to the helpers.
 KNOWN_VIOLATIONS: set[tuple[str, str]] = set()
 
-# Targets whose ``X is None`` check belongs in require_identity / require_principal_id /
-# require_tenant rather than a hand-rolled guard.
+# Targets whose ``X is None`` check belongs in require_principal_id / require_tenant
+# rather than a hand-rolled guard.
 _IDENTITY_TARGETS = frozenset({"identity", "identity.principal_id", "identity.tenant_id", "principal_id", "tenant_id"})
 
 
@@ -91,8 +91,8 @@ def _is_not_identity_target(test: ast.expr) -> bool:
 def _if_identity_guard_kind(node: ast.AST) -> str | None:
     """Return a label if ``node`` is an ``if <identity> is None`` / ``if not <identity>`` guard that RAISES.
 
-    Only raising guards are flagged: ``require_identity`` / ``require_principal_id`` /
-    ``require_tenant`` exist to replace the hand-rolled *raise*. ``if not principal_id:``
+    Only raising guards are flagged: ``require_principal_id`` / ``require_tenant`` exist
+    to replace the hand-rolled *raise*. ``if not principal_id:``
     (truthiness) and ``if principal_id is None:`` (identity check) are equivalent here and
     both flagged. A non-raising None/falsy branch (anonymous-caller graceful degradation —
     stripping pricing, returning minimal capabilities) is legitimate and out of scope.
@@ -167,7 +167,7 @@ def _find_violations() -> list[tuple[str, str, int, str]]:
 
 
 class TestNoHandrolledIdentityGuard:
-    """Business-logic identity guards must use require_identity / require_principal_id / require_tenant."""
+    """Business-logic identity guards must use require_principal_id / require_tenant."""
 
     def test_no_handrolled_identity_guards(self):
         new = [
@@ -177,7 +177,7 @@ class TestNoHandrolledIdentityGuard:
         ]
         assert not new, (
             f"Found {len(new)} hand-rolled identity guard(s). Replace with the typed helpers in "
-            "src.core.auth (require_identity / require_principal_id / require_tenant):\n" + "\n".join(new)
+            "src.core.auth (require_principal_id / require_tenant):\n" + "\n".join(new)
         )
 
     def test_known_violations_not_stale(self):

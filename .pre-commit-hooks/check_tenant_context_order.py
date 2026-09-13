@@ -91,11 +91,7 @@ def main():
     files_to_check = [Path(f) for f in sys.argv[1:]]
 
     # Only check tool implementation files
-    tool_files = [
-        f
-        for f in files_to_check
-        if f.suffix == ".py" and "/tools/" in str(f) and f.name not in ["__init__.py", "tool_context.py"]
-    ]
+    tool_files = [f for f in files_to_check if f.suffix == ".py" and "/tools/" in str(f) and f.name != "__init__.py"]
 
     if not tool_files:
         return 0  # No tool files to check

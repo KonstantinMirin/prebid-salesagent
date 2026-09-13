@@ -46,7 +46,6 @@ TOOLS_DIR = REPO_ROOT / "src" / "core" / "tools"
 # _verify_principal ownership check that forwards context to them.
 AUTH_HELPERS = frozenset(
     {
-        "require_identity",
         "require_principal_id",
         "require_tenant",
         "resolve_principal_or_raise",

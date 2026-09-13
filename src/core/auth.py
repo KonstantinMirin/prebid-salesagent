@@ -128,11 +128,11 @@ def resolve_principal_or_raise(
 
 
 def require_principal_id(
-    identity: "ResolvedIdentity | None",
+    identity: "ResolvedIdentity",
     *,
     context: "ContextObject | dict[str, Any] | None" = None,
 ) -> str:
-    """Return ``identity.principal_id`` or raise ``AdCPAuthenticationError``.
+    """Return ``identity.principal_id`` or raise ``AdCPAuthRequiredError``.
 
     Single source of truth for the "no principal_id in identity" guard that
     every ``_impl`` runs at entry. Use this instead of open-coding the check
@@ -141,7 +141,7 @@ def require_principal_id(
     """
     from src.core.exceptions import AdCPAuthRequiredError
 
-    principal_id = identity.principal_id if identity else None
+    principal_id = identity.principal_id
     if not principal_id:
         # No principal_id was resolved at all (absent credential, not a
         # presented-but-rejected one) -> AUTH_MISSING per v3.1.1
@@ -157,7 +157,7 @@ def require_principal_id(
 
 
 def require_tenant(
-    identity: "ResolvedIdentity | None",
+    identity: "ResolvedIdentity",
     *,
     context: "ContextObject | dict[str, Any] | None" = None,
 ) -> "LazyTenantContext":
@@ -176,7 +176,7 @@ def require_tenant(
     """
     from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 
-    tenant = identity.tenant if identity else None
+    tenant = identity.tenant
     if not tenant:
         # AUTH_MISSING/AUTH_INVALID split (#2092), completed for the
         # tenant-resolution axis (salesagent-otc5). The signal is whether a
@@ -189,7 +189,7 @@ def require_tenant(
         # still didn't resolve -> AUTH_INVALID (terminal). The TENANT_REQUIRED
         # gap (salesagent-40kk) — full tenant-axis semantics beyond this
         # credential-presence split — remains tracked separately.
-        if not identity or not identity.auth_token:
+        if not identity.auth_token:
             raise AdCPAuthRequiredError(
                 context=context,
             )
@@ -197,27 +197,6 @@ def require_tenant(
             context=context,
         )
     return tenant
-
-
-def require_identity(
-    identity: "ResolvedIdentity | None",
-    *,
-    context: "ContextObject | dict[str, Any] | None" = None,
-) -> "ResolvedIdentity":
-    """Return the resolved identity or raise ``AdCPAuthRequiredError``.
-
-    Single source of truth for the "identity is required" guard every ``_impl``
-    runs at entry. Narrowing the return type lets callers drop the follow-up
-    ``assert identity is not None`` (which ``python -O`` strips) instead of
-    open-coding the check across tool modules.
-    """
-    from src.core.exceptions import AdCPAuthRequiredError
-
-    if identity is None:
-        raise AdCPAuthRequiredError(
-            context=context,
-        )
-    return identity
 
 
 def get_adapter_principal_id(principal_id: str, adapter: str, tenant_id: str | None = None) -> str | None:

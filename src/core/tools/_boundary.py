@@ -142,7 +142,7 @@ async def _run(impl: Callable[..., Any], /, **kwargs: Any) -> Any:
     return await result if inspect.isawaitable(result) else result
 
 
-def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[str, str, str | None, str] | None:
+def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity) -> tuple[str, str, str | None, str] | None:
     """``(tenant_id, principal_id, account_id, idempotency_key)`` when this request is cacheable.
 
     None whenever any part is absent: a request whose schema declares no key, one carrying
@@ -151,7 +151,7 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     every request model is the pinned schema and nothing else.
     """
     key = req.get_idempotency_key()
-    if not key or identity is None:
+    if not key:
         return None
     if identity.tenant_id is None or identity.principal_id is None:
         return None
@@ -293,7 +293,7 @@ async def _invoke_stamped(
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> AdcpResponse:
     """Run ``tool_name`` for a request that arrived over a transport.
 
@@ -336,11 +336,11 @@ async def _invoke(
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> AdcpResponse:
     """``invoke`` without the envelope stamp: resolve the account, honour the key, run it."""
     account = req.get_account()
-    if account is not None and identity is not None:
+    if account is not None:
         from src.core.transport_helpers import enrich_identity_with_account
 
         identity = enrich_identity_with_account(identity, account)

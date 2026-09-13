@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_principal_id, require_tenant
+from src.core.auth import require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import EntityRefDetails
@@ -158,7 +158,7 @@ def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> st
 
 def _list_creatives_impl(
     req: "ListCreativesRequest",
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP v2.5 spec endpoint).
 
@@ -226,10 +226,7 @@ def _list_creatives_impl(
     # Authentication - REQUIRED (creatives contain sensitive data)
     # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
     # which are principal-specific and must be access-controlled
-    # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
-    # require_identity narrows the type for the tenant lookup below.
     principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
 
     creatives = []
@@ -462,10 +459,7 @@ def _list_creatives_impl(
         },
     )
 
-    # Log activity
-    # Activity logging imported at module level
-    if identity is not None:
-        log_tool_activity(identity, "list_creatives", start_time)
+    log_tool_activity(identity, "list_creatives", start_time)
 
     message = f"Found {len(creatives)} creatives"
     if total_count > len(creatives):

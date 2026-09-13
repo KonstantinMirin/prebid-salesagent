@@ -7,18 +7,6 @@ from src.core.tools.creatives._sync import _sync_creatives_impl
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
 
 
-def test_sync_creatives_requires_authentication():
-    """sync_creatives should raise AdCPAuthenticationError when principal_id is None (no auth)."""
-    # Prepare minimal creative data
-    creatives = [creative_payload(creative_id="test_creative", name="Test Creative")]
-
-    # Call without context (simulates missing auth header)
-    with pytest.raises(AdCPAuthenticationError) as exc_info:
-        _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=None)
-
-    # Verify error message mentions authentication
-
-
 def test_sync_creatives_with_invalid_auth():
     """sync_creatives should raise AdCPAuthenticationError when auth token is invalid."""
     from tests.factories.principal import PrincipalFactory

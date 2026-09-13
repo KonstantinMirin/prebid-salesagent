@@ -73,12 +73,6 @@ def _wire_entries(result) -> dict:
 class TestSyncAuthRequired:
     """Auth errors are operation-level — raised before any creative processing."""
 
-    def test_no_identity_raises_auth_error(self, integration_db):
-        """Covers: UC-006-EXT-A-01 — identity=None → AdCPAuthenticationError."""
-        with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError):
-                env.call_impl(creatives=[_make_creative_asset()], identity=None)
-
     def test_identity_without_principal_raises(self, integration_db):
         """Covers: UC-006-EXT-A-01 — principal_id=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id=None, tenant={"tenant_id": "t1", "name": "T1"})
@@ -92,13 +86,6 @@ class TestSyncAuthRequired:
         with CreativeSyncEnv() as env:
             with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(creatives=[_make_creative_asset()], identity=identity)
-
-    def test_auth_error_before_db_access(self, integration_db):
-        """Covers: UC-006-EXT-A-02 — auth error is operation-level, no partial results."""
-        with CreativeSyncEnv() as env:
-            with pytest.raises(AdCPAuthenticationError):
-                # If this returned a response instead of raising, auth is broken
-                env.call_impl(creatives=[_make_creative_asset()], identity=None)
 
     def test_empty_principal_id_raises(self, integration_db):
         """Covers: UC-006-EXT-A-01 — empty string principal_id → AdCPAuthenticationError."""

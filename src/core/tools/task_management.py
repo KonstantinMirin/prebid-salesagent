@@ -17,7 +17,7 @@ from adcp.types.generated_poc.protocol.get_task_status_response import HistoryIt
 from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_principal_id, require_tenant
+from src.core.auth import require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.errors.details import ConflictDetails, ValidationDetails
 from src.core.exceptions import (
@@ -216,7 +216,7 @@ def _list_tasks_response(tasks: list[TaskSummary], *, total: int | None, limit: 
 
 async def _list_tasks_impl(
     req: ListTasksRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> ListTasksResponse:
     """The transport-agnostic implementation of ``list_tasks``.
 
@@ -248,7 +248,6 @@ async def _list_tasks_impl(
 
     # context is forwarded so a refusal ECHOES the buyer's context object, as it does on
     # every other tool -- available here now that this tool builds a request.
-    identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
     principal_id = require_principal_id(identity, context=req.context)  # F-03: authenticated principal required
 
@@ -315,7 +314,7 @@ async def _list_tasks_impl(
 
 async def _get_task_status_impl(
     req: GetTaskStatusRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> GetTaskStatusResponse:
     """The transport-agnostic implementation of ``get_task_status``.
 
@@ -325,7 +324,6 @@ async def _get_task_status_impl(
     """
     task_id = req.task_id
 
-    identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
     # F-03: an authenticated (non-anonymous) principal is required
     principal_id = require_principal_id(identity, context=req.context)
@@ -432,7 +430,7 @@ def _task_history(task: Any) -> list[dict[str, Any]]:
 
 async def _complete_task_impl(
     req: CompleteTaskRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> CompleteTaskResponse:
     """The transport-agnostic implementation of ``complete_task``.
 
@@ -445,7 +443,6 @@ async def _complete_task_impl(
     response_data = req.response_data
     error_message = req.error_message
 
-    identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
     principal_id = require_principal_id(identity, context=req.context)  # F-03: an authenticated principal is required
 

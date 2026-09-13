@@ -44,7 +44,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 )
 
 from src.adapters.base import TargetingCapabilities
-from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.errors.codes import ErrorCode
@@ -300,7 +299,7 @@ def _build_geo_postal_areas(targeting_caps: TargetingCapabilities | None) -> Pos
 
 
 def _get_adcp_capabilities_impl(
-    req: GetAdcpCapabilitiesRequest | None = None, identity: ResolvedIdentity | None = None
+    req: GetAdcpCapabilitiesRequest | None, identity: ResolvedIdentity
 ) -> GetAdcpCapabilitiesResponse:
     """Shared implementation for get_adcp_capabilities.
 
@@ -318,8 +317,7 @@ def _get_adcp_capabilities_impl(
     # can forget to ask. It stays un-tenant-gated by construction: the boundary rejects before
     # an identity is enriched, let alone a tenant read.
 
-    # Extract tenant from resolved identity
-    tenant = identity.tenant if identity else None
+    tenant = identity.tenant
 
     if not tenant:
         # Return minimal capabilities if no tenant context
@@ -331,9 +329,6 @@ def _get_adcp_capabilities_impl(
             request_signing=_REQUEST_SIGNING_UNSUPPORTED,
             context=req.context if req else None,
         )
-
-    # If we got here, tenant is truthy, which means identity was not None on line 84
-    identity = require_identity(identity, context=req.context if req else None)
 
     tenant_id = tenant["tenant_id"]
     tenant_name = tenant.get("name", "Unknown")

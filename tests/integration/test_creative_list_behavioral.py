@@ -49,12 +49,6 @@ _make_identity = make_identity  # Canonical version from tests.harness
 class TestListAuth:
     """list_creatives requires authentication — creatives are principal-scoped."""
 
-    def test_no_identity_raises_auth_error(self, integration_db):
-        """Covers: UC-006-EXT-A-01 — identity=None → AdCPAuthenticationError."""
-        with CreativeListEnv() as env:
-            with pytest.raises(AdCPAuthenticationError):
-                env.call_impl(identity=None)
-
     def test_no_principal_raises_auth_error(self, integration_db):
         """Covers: UC-006-EXT-A-01 — principal_id=None → AdCPAuthenticationError."""
         identity = _make_identity(principal_id=None, tenant={"tenant_id": "t1", "name": "T1"})

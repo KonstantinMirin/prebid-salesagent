@@ -8,13 +8,35 @@ tenant_id directly from it without isinstance checks or auth extraction.
 Core Invariant: _impl functions receive ResolvedIdentity (transport-agnostic).
 They never import from fastmcp, never call get_principal_from_context, never
 do isinstance checks on context types.
+
+The identity is never optional. The boundary resolves one on every path, anonymous on a
+public tool, so an ``_impl`` declaring ``identity: ResolvedIdentity | None`` or a default
+would be declaring a state the boundary cannot produce and inviting a ``None`` branch that
+re-derives what the resolver already decided.
 """
 
 import inspect
 
 import pytest
 
+from src.core.resolved_identity import ResolvedIdentity
+from src.core.tools.registry import TOOLS
 from tests.factories.principal import PrincipalFactory
+
+
+@pytest.mark.parametrize("tool_name", sorted(TOOLS))
+@pytest.mark.arch_guard
+def test_impl_identity_is_a_resolved_identity_with_no_default(tool_name: str) -> None:
+    """Every registered ``_impl`` declares ``identity: ResolvedIdentity``, exactly, with no default."""
+    impl = TOOLS[tool_name].impl
+    param = inspect.signature(impl).parameters["identity"]
+    assert param.annotation in (ResolvedIdentity, "ResolvedIdentity"), (
+        f"{impl.__module__}.{impl.__name__}: identity is annotated {param.annotation!r}, not ResolvedIdentity"
+    )
+    assert param.default is inspect.Parameter.empty, (
+        f"{impl.__module__}.{impl.__name__}: identity has default {param.default!r}; the boundary always supplies one"
+    )
+
 
 # ---------------------------------------------------------------------------
 # Signature tests — verify _impl functions accept ResolvedIdentity
@@ -170,8 +192,8 @@ class TestResolvedIdentityPassthrough:
         assert identity.tenant["tenant_id"] == "test_tenant"
 
     @pytest.mark.arch_guard
-    def test_none_identity_for_discovery(self):
-        """_impl functions should handle None identity for discovery endpoints."""
+    def test_anonymous_identity_is_a_resolved_identity(self):
+        """A public tool's anonymous caller is still a ResolvedIdentity, with no principal."""
         identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="default",

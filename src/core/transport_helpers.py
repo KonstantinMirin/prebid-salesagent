@@ -1,9 +1,7 @@
-"""Transport boundary helpers for creating ResolvedIdentity from transport-specific types.
+"""Helpers the transport boundary applies to a resolved identity.
 
-These functions bridge transport-specific types (FastMCP Context, ToolContext,
-A2A headers) to the transport-agnostic ResolvedIdentity used by _impl functions.
-
-Each transport boundary calls one of these helpers before invoking _impl.
+The boundary resolves the caller once; what remains here is the account enrichment it
+runs when a request names an account.
 """
 
 from __future__ import annotations
@@ -16,19 +14,8 @@ if TYPE_CHECKING:
 
 
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
 
 logger = logging.getLogger(__name__)
-
-
-def _make_lazy_tenant(tenant_id: str) -> LazyTenantContext:
-    """Create a lazy-loading tenant context for the given tenant_id.
-
-    The DB query is deferred until a non-tenant_id field is first accessed.
-    This avoids hitting the database for requests that only need tenant_id
-    (the common case) or that fail auth before reaching tenant-dependent logic.
-    """
-    return LazyTenantContext(tenant_id)
 
 
 # (Deleted) resolve_identity_from_context was the MCP/A2A bridge: it turned a FastMCP
@@ -38,16 +25,16 @@ def _make_lazy_tenant(tenant_id: str) -> LazyTenantContext:
 
 
 def enrich_identity_with_account(
-    identity: ResolvedIdentity | None,
+    identity: ResolvedIdentity,
     account_ref: AccountReference | None = None,
-) -> ResolvedIdentity | None:
+) -> ResolvedIdentity:
     """Enrich a ResolvedIdentity with a resolved account_id.
 
     Called at the transport boundary after resolve_identity(), when the request
     payload contains an AccountReference. Opens an AccountUoW, resolves the
     reference to a validated account_id, and returns an enriched identity.
 
-    If account_ref is None or identity is None, returns identity unchanged.
+    If account_ref is None, returns identity unchanged.
 
     Args:
         identity: Base ResolvedIdentity from resolve_identity().
@@ -56,7 +43,7 @@ def enrich_identity_with_account(
     Returns:
         ResolvedIdentity with account_id populated, or original identity if no account.
     """
-    if identity is None or account_ref is None:
+    if account_ref is None:
         return identity
 
     # Require an authenticated principal BEFORE resolving the account (#1417).

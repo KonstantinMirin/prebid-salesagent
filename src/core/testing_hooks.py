@@ -17,16 +17,13 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from fastmcp.server.context import Context
 from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel, ConfigDict, field_validator
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from src.core.tool_context import ToolContext
 
 
 def _ensure_aware(dt: datetime) -> datetime:
@@ -587,22 +584,8 @@ class DeliverySimulator:
 _session_manager = TestSessionManager()
 
 
-def get_testing_context(context: "Context | ToolContext") -> TestContext:
-    """Get testing context from FastMCP context or ToolContext.
-
-    Args:
-        context: Either FastMCP Context or ToolContext
-
-    Returns:
-        TestContext with testing hooks configuration
-    """
-    from src.core.tool_context import ToolContext
-
-    # Handle ToolContext (testing_context is already AdCPTestContext)
-    if isinstance(context, ToolContext):
-        return context.testing_context or TestContext()
-
-    # Handle FastMCP Context (extract from headers)
+def get_testing_context(context: Context) -> TestContext:
+    """Get testing context from a FastMCP context's headers."""
     return TestContext.from_context(context)
 
 

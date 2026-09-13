@@ -108,39 +108,6 @@ class TestValidStatusValuesAccepted:
 # the service posts and the envelope the spec defines.
 
 
-# ---------------------------------------------------------------------------
-# UC-004-EXT-A-02
-# ---------------------------------------------------------------------------
-
-
-class TestUC004EXTA02AuthenticationFailure:
-    """Authentication failure returns no data and no state modification.
-
-    Covers: UC-004-EXT-A-02
-
-    Given: an authentication failure (identity=None)
-    When: _get_media_buy_delivery_impl is called
-    Then: AdCPValidationError is raised, no delivery data is returned,
-          and no state is modified (read-only operation).
-    """
-
-    def test_none_identity_raises_validation_error(self) -> None:
-        """No delivery data returned on auth failure.
-
-        Covers: UC-004-EXT-A-02
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-
-            # Call _impl directly with identity=None (bypassing env.call_impl which provides identity)
-            req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
-
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                _get_media_buy_delivery_impl(req, identity=None)
-
-
 # UC-004-MAIN-13 (the MCP ToolResult carries content and structured_content) is graded on
 # the wire: every BR-UC-004 scenario parametrized over mcp reads structured_content
 # through the harness's MCP leg, so no direct-call test of the wrapper is kept here.
@@ -286,7 +253,6 @@ class TestMissingPrincipalIdReturnsError:
     """
 
     def test_none_principal_id_raises_auth_error(self):
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity = PrincipalFactory.make_identity(
             principal_id=None,
@@ -299,7 +265,6 @@ class TestMissingPrincipalIdReturnsError:
             _get_media_buy_delivery_impl(req, identity)
 
     def test_empty_string_principal_id_raises_auth_error(self):
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity = PrincipalFactory.make_identity(
             principal_id="",
@@ -319,7 +284,6 @@ class TestMissingTenantRaisesAuthError:
     """
 
     def test_none_tenant_raises_auth_error(self):
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity = PrincipalFactory.make_identity(
             principal_id="p1",

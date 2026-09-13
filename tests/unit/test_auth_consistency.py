@@ -104,20 +104,6 @@ class TestMissingTokenConsistency:
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
-    @pytest.mark.asyncio
-    async def test_all_authenticated_tools_reject_none_identity(self):
-        """Authenticated tools that require identity should fail when identity is None."""
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-        from src.core.tools.media_buy_update import _update_media_buy_impl
-
-        # create_media_buy raises AdCPAuthenticationError with None identity
-        with pytest.raises((AdCPAuthenticationError, AdCPValidationError, ValueError)):
-            await _create_media_buy_impl(req=MagicMock(), identity=None)
-
-        # update_media_buy raises AdCPAuthenticationError with None identity
-        with pytest.raises((AdCPAuthenticationError, ValueError)):
-            _update_media_buy_impl(req=MagicMock(), identity=None)
-
 
 class TestInvalidTokenConsistency:
     """Test that all authenticated MCP tools raise consistent errors with an invalid token.

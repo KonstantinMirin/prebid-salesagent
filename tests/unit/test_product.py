@@ -40,21 +40,6 @@ from tests.harness.product_unit import ProductEnv, _make_product
 class TestProductPreconditions:
     """Precondition tests: identity, tenant, principal requirements."""
 
-    async def test_missing_identity_raises(self):
-        """Covers: UC-001-PRECOND-04
-
-        Identity is required to determine tenant and principal.
-        """
-
-        with ProductEnv() as env:
-            # Bypass the harness identity by calling impl directly
-            from src.core.schemas import GetProductsRequest as GetProductsRequestGenerated
-            from src.core.tools.products import _get_products_impl
-
-            req = GetProductsRequestGenerated(brief="test", brand={"domain": "test.com"})
-            with pytest.raises(AdCPAuthenticationError):
-                await _get_products_impl(req, identity=None)
-
     async def test_no_principal_requires_auth_policy_rejects(self):
         """Covers: UC-001-PRECOND-05
 

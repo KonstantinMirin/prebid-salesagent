@@ -15,17 +15,15 @@ This test file ensures all tools that require authentication properly enforce it
 
 Migration note:
 --------------
-_impl functions now accept `identity: ResolvedIdentity | None` instead of
-transport-specific context objects. Tests pass identity=None for unauthenticated
-scenarios and ResolvedIdentity(principal_id=None) for invalid auth scenarios.
+_impl functions accept `identity: ResolvedIdentity`, never None: the boundary resolves one on
+every path. Tests pass ResolvedIdentity(principal_id=None) for the anonymous caller; the
+no-credential refusal is graded on the wire by BDD.
 """
 
 import pytest
-from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas.creative import ListCreativesRequest
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
@@ -37,16 +35,6 @@ class TestAuthenticationRequirements:
     # =========================================================================
     # Creative Tools
     # =========================================================================
-
-    def test_sync_creatives_requires_authentication(self):
-        """sync_creatives must reject requests without authentication."""
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        creatives = [creative_payload(creative_id="test_creative", name="Test Creative")]
-
-        # Call without identity (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=None)
 
     def test_sync_creatives_with_invalid_auth(self):
         """sync_creatives must reject requests with invalid authentication."""
@@ -67,39 +55,9 @@ class TestAuthenticationRequirements:
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=invalid_identity)
 
-    def test_list_creatives_requires_authentication(self):
-        """list_creatives must reject requests without authentication."""
-        from src.core.tools.creatives.listing import _list_creatives_impl
-
-        # Call without identity (no auth) — _impl raises AdCPAuthenticationError (transport-agnostic)
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _list_creatives_impl(req=ListCreativesRequest(), identity=None)
-
     # =========================================================================
     # Media Buy Tools
     # =========================================================================
-
-    def test_create_media_buy_requires_authentication(self):
-        """create_media_buy must reject requests without authentication."""
-        import asyncio
-
-        from src.core.schemas import CreateMediaBuyRequest
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        # Construct spec-compliant request at the test boundary (matches refactored _impl signature)
-        req = CreateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            brand={"domain": "testbrand.com"},
-            packages=[{"product_id": "prod1", "budget": 1000.0, "pricing_option_id": "test_pricing"}],
-            start_time="2025-01-01T00:00:00Z",
-            end_time="2025-01-31T23:59:59Z",
-            idempotency_key="unit-test-key-authreq-001",
-        )
-
-        # Call without identity (no auth) — _impl raises AdCPValidationError (transport-agnostic)
-        with pytest.raises((AdCPValidationError, AdCPAuthenticationError)) as exc_info:
-            asyncio.run(_create_media_buy_impl(req=req, identity=None))
-        # create_media_buy validates identity presence first
 
     def test_update_media_buy_requires_authentication(self):
         """update_media_buy must reject requests without authentication."""
@@ -129,17 +87,6 @@ class TestAuthenticationRequirements:
         # repo is not accessed when principal_id is None (early exit)
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             _verify_principal(media_buy_id="test_buy", identity=invalid_identity, repo=MagicMock())
-
-    def test_get_media_buy_delivery_requires_authentication(self):
-        """get_media_buy_delivery must reject requests without authentication."""
-        from src.core.schemas import GetMediaBuyDeliveryRequest
-        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["test_buy"])
-
-        # Call without identity (no auth) — _impl raises AdCPValidationError (transport-agnostic)
-        with pytest.raises((AdCPValidationError, AdCPAuthenticationError, ToolError, ValueError)) as exc_info:
-            _get_media_buy_delivery_impl(req=req, identity=None)
 
     # =========================================================================
     # Performance Tools
@@ -182,14 +129,6 @@ class TestAuthenticationRequirements:
 
 class TestAuthenticationErrorMessages:
     """Test that auth error messages are clear and actionable."""
-
-    def test_sync_creatives_error_message_mentions_header(self):
-        """Error message should mention x-adcp-auth header."""
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _sync_creatives_impl(req=sync_creatives_request(), identity=None)
-        # Should mention the header name so users know what to fix
 
     def test_update_media_buy_error_message_actionable(self):
         """Error message should be actionable for developers."""

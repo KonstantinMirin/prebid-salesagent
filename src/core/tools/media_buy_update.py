@@ -56,7 +56,6 @@ from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
-    require_identity,
     require_principal_id,
     require_tenant,
     resolve_principal_or_raise,
@@ -336,7 +335,7 @@ def _verify_principal(
 
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> UpdateMediaBuyResult:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -354,8 +353,6 @@ def _update_media_buy_impl(
     """
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
-
-    identity = require_identity(identity, context=req.context)
 
     principal_id = require_principal_id(identity, context=req.context)
 

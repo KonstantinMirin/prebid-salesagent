@@ -33,7 +33,7 @@ from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_principal_id, require_tenant
+from src.core.auth import require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKey, NaturalKeyConflict
 from src.core.database.repositories.account_serialization import as_json_dict
@@ -186,8 +186,8 @@ def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsR
 
 
 def _list_accounts_impl(
-    req: ListAccountsRequest | None = None,
-    identity: ResolvedIdentity | None = None,
+    req: ListAccountsRequest | None,
+    identity: ResolvedIdentity,
 ) -> ListAccountsResponse:
     """List accounts accessible to the authenticated agent.
 
@@ -889,8 +889,7 @@ def _check_billing_policy(
 
     # Read billing policy from tenant configuration (not identity).
     # Both dict and TenantContext expose .get() identically, so no branching needed.
-    tenant = identity.tenant if identity else None
-    supported = resolve_supported_billing(tenant)
+    supported = resolve_supported_billing(identity.tenant)
 
     if billing_val not in supported:
         # billing-not-supported.json: supported_billing minItems 1, "Sellers MAY
@@ -1425,7 +1424,7 @@ def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBA
 
 async def _sync_accounts_impl(
     req: SyncAccountsRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> SyncAccountsResponse:
     """Sync accounts by natural key — upsert, delete_missing, dry_run.
 
@@ -1445,11 +1444,8 @@ async def _sync_accounts_impl(
     Returns:
         SyncAccountsResponse with per-account action results.
     """
-    # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
-    # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
-    # then narrows the type for _check_billing_policy below.
+    # BR-RULE-055: sync requires auth (consistent with list_accounts).
     principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
     tenant_id = tenant["tenant_id"]
 

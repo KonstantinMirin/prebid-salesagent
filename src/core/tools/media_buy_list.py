@@ -120,7 +120,6 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
 from src.core.auth import (
-    require_identity,
     require_principal_id,
     require_tenant,
     resolve_principal_or_raise,
@@ -150,7 +149,7 @@ from src.core.schemas._pinned_fields import revision_minimum
 
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
@@ -162,8 +161,6 @@ def _get_media_buys_impl(
     Returns:
         GetMediaBuysResponse with matching media buys
     """
-    identity = require_identity(identity, context=req.context)
-
     # get-media-buys-request.json, `account`: "Account to retrieve media buys for. When
     # omitted, returns data across all accessible accounts."
     #

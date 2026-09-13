@@ -80,7 +80,7 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
-from src.core.auth import require_identity, require_principal_id, require_tenant, resolve_principal_or_raise
+from src.core.auth import require_principal_id, require_tenant, resolve_principal_or_raise
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
@@ -152,19 +152,15 @@ def _is_circuit_breaker_open(tenant_id: str) -> bool:
 
 
 def _get_media_buy_delivery_impl(
-    req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity | None
+    req: GetMediaBuyDeliveryRequest, identity: ResolvedIdentity
 ) -> GetMediaBuyDeliveryResponse:
     """Establish who is asking, then delegate to :func:`get_media_buy_delivery`.
 
     A controller (critical pattern #5): it resolves the caller and validates what only a
     BUYER request can get wrong, and asks nothing about how delivery is gathered.
     """
-    # Validate identity is provided
-    identity = require_identity(identity, context=req.context)
-
     # BR-RULE-092 INV-5: reject a campaign-unit attribution window with interval != 1
     # (cross-field constraint the schema can't express, so it reaches us as valid).
-    # After require_identity so an unauthenticated caller gets AUTH_REQUIRED first.
     _validate_attribution_window(req.attribution_window)
 
     principal_id = require_principal_id(identity, context=req.context)

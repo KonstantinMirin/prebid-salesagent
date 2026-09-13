@@ -30,6 +30,7 @@ import re
 import pytest
 
 from src.core.schemas import GetAdcpCapabilitiesRequest
+from tests.factories.principal import PrincipalFactory
 
 
 class TestSupportedAdcpVersionsDerivation:
@@ -174,7 +175,7 @@ class TestBoundaryNegotiatesForEveryTool:
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
         # Reached directly, past the boundary, the implementation just answers.
-        response = _get_adcp_capabilities_impl(req, None)
+        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_identity(principal_id=None, tenant=None))
         assert response.adcp.supported_versions is not None
 
 
@@ -190,7 +191,7 @@ class TestBuildAdcpBlockDry:
         from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
 
         current_tenant.set(None)
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
 
         assert response.adcp.supported_versions is not None
         assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS

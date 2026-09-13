@@ -28,12 +28,6 @@ class TestRequirePrincipalId:
 
         assert require_principal_id(identity) == "p1"
 
-    def test_raises_canonical_error_when_identity_is_none(self):
-        from src.core.auth import require_principal_id
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(None)
-
     def test_raises_canonical_error_when_principal_id_is_none(self):
         from src.core.auth import require_principal_id
 
@@ -54,9 +48,10 @@ class TestRequirePrincipalId:
         from src.core.auth import require_principal_id
 
         sentinel_context = {"request_id": "req-123"}
+        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1")
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(None, context=sentinel_context)
+            require_principal_id(identity, context=sentinel_context)
 
         assert exc_info.value.context == sentinel_context
 
@@ -76,12 +71,6 @@ class TestRequireTenant:
 
         assert require_tenant(identity) == identity.tenant
 
-    def test_raises_canonical_error_when_identity_is_none(self):
-        from src.core.auth import require_tenant
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(None)
-
     def test_raises_canonical_error_when_tenant_is_none(self):
         from src.core.auth import require_tenant
 
@@ -94,9 +83,10 @@ class TestRequireTenant:
         from src.core.auth import require_tenant
 
         sentinel_context = {"request_id": "req-456"}
+        identity = PrincipalFactory.make_identity(principal_id="p1", tenant_id="t1", tenant=None)
 
         with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(None, context=sentinel_context)
+            require_tenant(identity, context=sentinel_context)
 
         assert exc_info.value.context == sentinel_context
 

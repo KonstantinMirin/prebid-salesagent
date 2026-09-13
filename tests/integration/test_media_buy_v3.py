@@ -1023,23 +1023,6 @@ class TestUpdateMediaBuyAdapterError:
                 _update_media_buy_impl(req=update_req, identity=mb_identity)
 
 
-class TestDeliveryIdentityValidation:
-    """UC-004: delivery query auth boundary."""
-
-    def test_missing_identity_raises_error(self, mb_tenant, mb_principal, mb_products):
-        """UC-004-E01: None identity raises AdCPValidationError.
-
-        Covers: UC-004-EXT-A-01
-        Integration equivalent of UNSPECIFIED test_missing_identity_raises_error.
-        """
-        from src.core.schemas import GetMediaBuyDeliveryRequest
-        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity=None)
-
-
 class TestUpdateMediaBuyMissingPackageId:
     """UC-003 ext-h: a package update entry lacking package_id (and buyer_ref) is rejected."""
 

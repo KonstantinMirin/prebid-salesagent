@@ -16,7 +16,7 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object, require_identity, require_tenant
+from src.core.auth import get_principal_object, require_tenant
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
@@ -171,7 +171,7 @@ def _products_message(count: int, *, anonymous: bool) -> str:
     return base
 
 
-async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity | None) -> GetProductsResponse:
+async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity) -> GetProductsResponse:
     """Shared implementation for get_products.
 
     Contains all business logic for product discovery including policy checks,
@@ -189,9 +189,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     # Require at least one search criterion (brief, brand, or filters)
     if not req.brief and not req.brand and not req.filters:
         raise AdCPValidationError()
-
-    # Extract identity fields
-    identity = require_identity(identity, context=req.context)
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id

@@ -110,7 +110,6 @@ from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     get_principal_object,
-    require_identity,
     require_principal_id,
     require_tenant,
     resolve_principal_or_raise,
@@ -2010,7 +2009,7 @@ def _resolve_idempotency_race_or_raise(
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -2040,9 +2039,6 @@ async def _create_media_buy_impl(
                 "Hourly and monthly reporting will be ignored until implemented.",
                 raw_freq,
             )
-
-    # Extract testing context first
-    identity = require_identity(identity, context=req.context)
 
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
@@ -2856,7 +2852,7 @@ async def _create_media_buy_impl(
                         order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
                         package_id_map=package_id_map,
                         by_alias=True,
-                        account_id=identity.account_id if identity else None,
+                        account_id=identity.account_id,
                         created_at=datetime.now(UTC),
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
@@ -3659,7 +3655,7 @@ async def _create_media_buy_impl(
                     status=media_buy_status,
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
-                    account_id=identity.account_id if identity else None,
+                    account_id=identity.account_id,
                 )
                 # Read the two columns the REPOSITORY owns, inside the UoW while the
                 # row is still attached. The response reports what was persisted; it

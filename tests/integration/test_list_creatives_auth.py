@@ -41,12 +41,6 @@ class TestInvalidTokenAtTransportBoundary:
 class TestListCreativesAuthentication:
     """Integration tests for list_creatives authentication."""
 
-    def test_unauthenticated_request_should_fail(self, integration_db):
-        """SECURITY: identity=None → AdCPAuthenticationError."""
-        with CreativeListEnv() as env:
-            with pytest.raises(AdCPAuthenticationError):
-                env.call_impl(identity=None)
-
     def test_no_principal_should_fail(self, integration_db):
         """SECURITY: principal_id=None → AdCPAuthenticationError."""
         identity = make_identity(principal_id=None, tenant={"tenant_id": "t1", "name": "T1"})

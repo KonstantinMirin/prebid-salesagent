@@ -523,14 +523,6 @@ class TestGetMediaBuysImpl:
         assert pkg_response.snapshot is None
         assert pkg_response.snapshot_unavailable_reason == SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED
 
-    def test_identity_required(self):
-        """identity=None raises AdCPAuthenticationError."""
-        from src.core.exceptions import AdCPAuthenticationError
-
-        req = self._make_request()
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buys_impl(req, None)
-
 
 class TestTargetingOverlayRoundTrip:
     """get_media_buys must echo persisted targeting_overlay so callers can

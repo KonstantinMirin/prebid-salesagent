@@ -564,18 +564,6 @@ class TestSyncCreativesAuth:
     Existing: test_sync_creatives_auth.py covers core auth check.
     """
 
-    def test_no_identity_raises_auth_error(self):
-        """Missing identity raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Existing: test_sync_creatives_auth.py::test_sync_creatives_requires_authentication
-        Covers: UC-006-EXT-A-01
-        """
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]))
-
     def test_identity_without_principal_raises(self):
         """Identity with None principal_id raises AdCPAuthenticationError.
 
@@ -634,8 +622,9 @@ class TestSyncCreativesAuth:
             creative_payload(creative_id="c1", name="Banner"),
             creative_payload(creative_id="c2", name="Video"),
         ]
+        anonymous = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1")
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives))
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=anonymous)
         # No return value -- exception is the entire response
 
     def test_tenant_error_is_operation_level(self):
@@ -1398,19 +1387,6 @@ class TestListCreativesAuth:
 
     Spec: UNSPECIFIED (implementation-defined security boundary).
     """
-
-    def test_no_identity_raises_auth_error(self):
-        """list_creatives requires authentication (creatives are principal-scoped).
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Covers: UC-006-EXT-A-01
-        """
-        from src.core.tools.creatives.listing import _list_creatives_impl
-
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _list_creatives_impl(req=ListCreativesRequest(), identity=None)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
 
     def test_no_principal_raises_auth_error(self):
         """Spec: UNSPECIFIED (implementation-defined security boundary).
@@ -2201,10 +2177,6 @@ class TestWorkflowStepCreation:
         """
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
-        )
-
         # prkv.16: the step is written through the caller's unit of work, so
         # the step creation is observed at uow.workflows.create_step rather
         # than at the removed ContextManager collaborator.
@@ -2225,7 +2197,6 @@ class TestWorkflowStepCreation:
             approval_mode="require-human",
             push_notification_config=None,
             context=None,
-            identity=identity,
             uow=mock_uow,
         )
 

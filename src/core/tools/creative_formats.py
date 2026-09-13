@@ -136,7 +136,7 @@ def _make_asset(
 
 
 def _list_creative_formats_impl(
-    req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
+    req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (AdCP spec endpoint).
 
@@ -152,7 +152,7 @@ def _list_creative_formats_impl(
         req = ListCreativeFormatsRequest()
 
     # Extract principal and tenant from resolved identity
-    principal_id = identity.principal_id if identity else None
+    principal_id = identity.principal_id
     tenant = require_tenant(identity, context=req.context)
 
     # Get formats from all registered creative agents via registry
@@ -469,7 +469,7 @@ def _list_creative_formats_impl(
     # Create response (no message/specification_version - not in adapter schema)
     # Determine sandbox flag from identity (BR-RULE-209 INV-4)
     sandbox_flag: bool | None = None
-    if identity and identity.testing_context and identity.testing_context.dry_run:
+    if identity.testing_context and identity.testing_context.dry_run:
         sandbox_flag = True
 
     # Format list from registry is compatible with library Format type

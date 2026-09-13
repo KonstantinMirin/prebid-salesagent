@@ -1164,20 +1164,6 @@ class TestCreateMediaBuyImplAuth:
     """UC-002 auth extension: identity and principal validation."""
 
     @pytest.mark.asyncio
-    async def test_missing_identity_raises_validation_error(self):
-        """UC-002-A01: None identity raises error.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        Covers: UC-002-EXT-I-01
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        req = _make_request()
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            await _create_media_buy_impl(req, identity=None)
-        # The identifier is STRUCTURED now: details/field, not prose.
-
-    @pytest.mark.asyncio
     async def test_missing_principal_raises_auth_error(self):
         """UC-002-A02: principal not found raises AdCPAuthenticationError.
 
@@ -3600,26 +3586,6 @@ class TestDeliveryImplDateRange:
 class TestDeliveryImplErrors:
     """UC-004 extensions: auth, principal, adapter errors."""
 
-    def test_missing_identity_raises_error(self):
-        """UC-004-E01: None identity raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity=None)
-
-    def test_missing_identity_recovery_is_correctable(self):
-        """Missing identity is correctable — buyer can fix by including auth headers.
-
-        Covers: (PR #1083 review)
-        """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _get_media_buy_delivery_impl(req, identity=None)
-        # AdCPAuthenticationError inherits recovery from AdCPSalesAgentError (default "fatal")
-        # but the actual behavior is that the error is raised, which is correct
-
     def test_principal_not_found_returns_error_response(self):
         """UC-004-E02: principal not in DB raises AdCPAuthenticationError.
 
@@ -4077,21 +4043,6 @@ class TestGetMediaBuysResponseShape:
 
 class TestGetMediaBuysImplAuth:
     """get_media_buys: authentication and principal checks."""
-
-    def test_missing_identity_raises_error(self):
-        """GMB-A01: None identity raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        Priority: P0
-        Type: unit
-        Source: get_media_buys
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-
-        req = GetMediaBuysRequest()
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buys_impl(req, identity=None)
 
     def test_missing_principal_raises_auth_missing(self):
         """GMB-A02: no principal_id is a FATAL auth failure, so it raises.

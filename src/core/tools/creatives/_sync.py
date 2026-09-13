@@ -9,7 +9,7 @@ from typing import Any
 from adcp.types import CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
-from src.core.auth import require_identity, require_principal_id, require_tenant
+from src.core.auth import require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
@@ -54,7 +54,7 @@ def _with_creative(details: ValidationDetails | None, creative_id: str) -> Valid
 
 def _sync_creatives_impl(
     req: SyncCreativesRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> SyncCreativesResponse:
     """The sync_creatives CONTROLLER: resolve who is calling, then run the service.
 
@@ -69,7 +69,6 @@ def _sync_creatives_impl(
     seeing it, and inherited an auth check that had already run. They call the SERVICE now.
     """
     principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
     tenant = require_tenant(identity, context=req.context)
     return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
 
@@ -452,7 +451,6 @@ def sync_creatives(
                 approval_mode=approval_mode,
                 push_notification_config=req.push_notification_config,
                 context=req.context,
-                identity=identity,
                 uow=uow,
             )
 
@@ -508,9 +506,7 @@ def sync_creatives(
         creatives_needing_approval=creatives_needing_approval,
     )
 
-    # Log activity
-    if identity is not None:
-        log_tool_activity(identity, "sync_creatives", start_time)
+    log_tool_activity(identity, "sync_creatives", start_time)
 
     # Build message
     message = f"Synced {created_count + updated_count} creatives"

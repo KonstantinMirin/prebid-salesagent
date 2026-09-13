@@ -9,7 +9,6 @@ from adcp.types import ContextObject
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import CreativeUoW, WorkflowUoW
 from src.core.exceptions import AdCPAdapterError, AdCPAuthRequiredError
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum
 from src.core.tenant_context import LazyTenantContext
 
@@ -23,7 +22,6 @@ def _create_sync_workflow_steps(
     approval_mode: str,
     push_notification_config: PushNotificationConfig | None,
     context: ContextObject | dict | None,
-    identity: ResolvedIdentity | None = None,
     *,
     uow: CreativeUoW,
 ) -> None:
