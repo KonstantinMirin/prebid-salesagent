@@ -56,36 +56,7 @@ class TestCapabilitiesRestPostRoute:
                 f"the wire response; got {data.get('context')!r}"
             )
 
-    def test_post_capabilities_filters_sections_by_protocols(self, integration_db):
-        """When ``protocols`` names only ``media_buy``, the response must
-        include the ``media_buy`` section and NULL OUT the other
-        protocol-domain sections (``signals``, ``governance``,
-        ``sponsored_intelligence``, ``creative``) -- @T-UC-010-ext-d-filter.
-        Protocol-invariant fields (``adcp``, ``supported_protocols``) must
-        survive untouched.
-        """
-        with CapabilitiesEnv() as env:
-            env.setup_default_data()
-            client = env.get_rest_client()
-
-            response = client.post(
-                "/api/v1/capabilities",
-                json={"protocols": ["media_buy"]},
-            )
-
-            assert response.status_code == 200, (
-                f"Expected 200 from POST /api/v1/capabilities, got {response.status_code}: {response.text}"
-            )
-            data = response.json()
-            assert data.get("media_buy") is not None, "media_buy section must be present when protocols=['media_buy']"
-            assert data.get("signals") is None, (
-                f"signals section must be filtered out for protocols=['media_buy'], got {data.get('signals')!r}"
-            )
-            assert data.get("governance") is None, (
-                f"governance section must be filtered out for protocols=['media_buy'], got {data.get('governance')!r}"
-            )
-            assert data.get("sponsored_intelligence") is None, (
-                "sponsored_intelligence section must be filtered out for "
-                f"protocols=['media_buy'], got {data.get('sponsored_intelligence')!r}"
-            )
-            assert data.get("adcp") is not None, "adcp is protocol-invariant and must survive filtering"
+    # The protocols filter (media_buy kept, signals / governance / sponsored_intelligence
+    # nulled, adcp invariant) is graded on the wire by @T-UC-010-ext-d-filter on rest,
+    # mcp, a2a and e2e_rest. The copy that stood here posted without credential headers
+    # and was deleted rather than migrated.

@@ -400,7 +400,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_creative_lifecycle_mcp.py", "setup_test_data"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_upsert_existing_creative"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_list_creatives_with_media_buy_assignments"),
-    ("tests/integration/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
     # tests/integration/test_gam_automation_focused.py
     ("tests/integration/test_gam_automation_focused.py", "test_tenant_data"),
     # tests/integration/test_get_products_database_integration.py — migrated to factories
@@ -771,7 +770,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_validation_failures"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_with_assignments_lookup"),
     ("tests/integration/test_creative_lifecycle_mcp.py", "test_sync_creatives_with_package_assignments"),
-    ("tests/integration/test_creative_lifecycle_mcp.py", "test_validate_creatives_missing_required_fields"),
     ("tests/integration/test_creative_review_model.py", "test_get_ai_review_stats_empty"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_filters_by_review_type"),
     ("tests/integration/test_creative_review_model.py", "test_get_creative_reviews_query"),

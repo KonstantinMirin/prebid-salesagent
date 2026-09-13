@@ -17,25 +17,13 @@ from tests.factories import (
     TenantFactory,
 )
 from tests.harness import CreativeListEnv, make_identity
-from tests.helpers.credentials import credential_headers
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-
-class TestInvalidTokenAtTransportBoundary:
-    """Transport boundary rejects invalid token strings via resolve_identity()."""
-
-    def test_bad_token_string_rejected(self, integration_db):
-        """SECURITY: An actual bad token string → AdCPAuthenticationError at boundary."""
-        from src.core.resolved_identity import resolve_identity
-
-        # Create a real tenant so _detect_tenant succeeds
-        with CreativeListEnv():
-            tenant = TenantFactory(tenant_id="token_test_tenant")
-            # Pass a fabricated bad token that doesn't match any principal in the DB
-            headers = credential_headers(token="bad-token-xyz-not-a-real-token", tenant=tenant.tenant_id)
-            with pytest.raises(AdCPAuthenticationError):
-                resolve_identity(headers, require_valid_token=True)
+# A presented-but-unresolvable credential is refused AUTH_INVALID on the wire by
+# @T-UC-011-ext-c-a2a and the expired-token sync_accounts scenario in
+# BR-UC-011-manage-accounts.feature. The direct call to the resolver that stood here
+# was deleted: a test whose subject IS the credential decision belongs on the wire.
 
 
 class TestListCreativesAuthentication:

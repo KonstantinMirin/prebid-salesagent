@@ -34,7 +34,7 @@ from src.core.schemas import CreateMediaBuyRequest, ListCreativesResponse, SyncC
 from src.core.schemas.creative import ListCreativesRequest
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories import PricingOptionFactory
-from tests.factories.creative_asset import asset_spec, build_assets, image_spec
+from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.credentials import credential_headers
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
@@ -893,51 +893,10 @@ class TestCreativeLifecycleMCP:
         assert response.query_summary.returned == 0
         assert response.pagination.has_more is False
 
-    def test_validate_creatives_missing_required_fields(self, mock_context):
-        """Test _validate_creatives_before_adapter_call detects missing required fields."""
-        from src.core.exceptions import AdCPCreativeRejectedError
-        from src.core.schemas import PackageRequest
-        from src.core.tools.media_buy_create import _validate_creatives_before_adapter_call
-
-        with get_db_session() as session:
-            creative_no_url = DBCreative(
-                tenant_id=self.test_tenant_id,
-                creative_id="validate_test_no_url",
-                principal_id=self.test_principal_id,
-                name="Creative Missing URL",
-                agent_url="https://creative.adcontextprotocol.org",
-                format="display_300x250_image",
-                status="approved",
-                # Image asset with dimensions but NO url (and no click_url fallback),
-                # so the validator finds no media URL and must raise.
-                data={"assets": build_assets(asset_spec("banner_image", "image", width=300, height=250))},
-            )
-            session.add(creative_no_url)
-            session.commit()
-
-        packages = [
-            PackageRequest(
-                product_id="prod_1",
-                budget=1000.0,
-                creative_ids=["validate_test_no_url"],
-                pricing_option_id="price_1",
-            )
-        ]
-
-        # Use proper Format object for mock (adcp 2.18.0 uses get_format_assets utility)
-        from tests.helpers.adcp_factories import create_test_format
-
-        mock_format = create_test_format(
-            "display_300x250",
-            assets=[{"item_type": "individual", "asset_id": "banner_image", "asset_type": "image", "required": True}],
-        )
-
-        with patch("src.core.tools.media_buy_create._get_format_spec_sync", return_value=mock_format):
-            with get_db_session() as session:
-                with pytest.raises(AdCPCreativeRejectedError) as exc_info:
-                    _validate_creatives_before_adapter_call(
-                        packages, self.test_tenant_id, self.test_principal_id, session=session
-                    )
+    # The missing-media-URL gate (now VALIDATION_ERROR per 3.1.1 enums/error-code.json) is
+    # graded by TestCreativeMissingUrl in test_create_media_buy_behavioral.py and by the
+    # @T-UC-002-partition-creative-asset row missing_required_assets; the copy that stood
+    # here still expected the retired CREATIVE_REJECTED and was deleted.
 
     async def test_create_media_buy_with_creative_ids(self, mock_context, sample_creatives):
         """Test create_media_buy accepts creative_ids in packages."""
