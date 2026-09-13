@@ -207,24 +207,26 @@ a response, and **business logic** (`_impl` functions). Between them sits ONE se
 ```python
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity | None = None,    # NOT Context/ToolContext
-    context_id: str | None = None,
+    identity: ResolvedIdentity,    # never Context, headers or a token
 ) -> CreateMediaBuyResult:
     # Business logic only — no transport awareness, no account resolution, no idempotency
     ...
 ```
 
-**Transports** name a tool and hand over the request they validated:
+**Transports** name a tool and hand over the raw payload and the request headers:
 ```python
-# Every transport, one call. The registry says which function runs.
-response = await invoke_tool("create_media_buy", req, identity)
+# Every transport, one call. The registry says which function runs and whether the
+# credential must verify; the boundary validates the payload and resolves the caller.
+response = await serve("create_media_buy", payload, request.headers, TransportProtocol.REST)
 ```
 
-`invoke_tool` resolves the account the request names, honours its `idempotency_key`, and
-calls the implementation as `impl(req=..., identity=..., **extra)`. Both of those are
+`serve` validates the payload into the registry row's DTO, resolves the identity once
+(`_resolve_identity`, private to the boundary), resolves the account the request names,
+honours its `idempotency_key`, stamps the buyer's `context` and the served version onto the
+response, and calls the implementation as `impl(req=..., identity=...)`. All of those are
 properties of the REQUEST, not steps in the work, and doing them once is what keeps the
 transports from disagreeing — the fifteen `*_raw` wrappers this replaced disagreed about
-exactly those two.
+exactly those.
 
 **Controller and service.** An `_impl` is a CONTROLLER: it establishes who is calling and
 then delegates. The work itself belongs in a service function that takes an already-resolved
@@ -248,15 +250,15 @@ outer request's `idempotency_key` into a function with no business seeing it. To
 not before.
 
 **Rules for `_impl` functions:**
-- Accept `ResolvedIdentity`, never `Context`, `ToolContext`, or raw headers
+- Accept `ResolvedIdentity`, never `Context`, raw headers or a token
 - Raise `AdCPSalesAgentError` subclasses, never `ToolError` (that's transport-specific)
 - Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
-- No auth extraction, tenant resolution, account resolution, or idempotency — the boundary's job
-- Declare only `req`, `identity` and `context_id`: nothing else can be supplied
+- No auth extraction, tenant resolution, account resolution, idempotency or context echo — the boundary's job
+- Declare exactly `(req: <DTO>, identity: ResolvedIdentity)`: nothing else can be supplied
 
 **Rules for transports:**
-- Resolve identity, then call `invoke_tool(tool_name, req, identity)` — never an implementation directly
-- Catch `AdCPSalesAgentError` and translate to transport-appropriate error format
+- Hand the raw payload and the request headers to `serve(tool_name, payload, headers, protocol)` — never resolve an identity, never call an implementation directly
+- Catch `AdcpFailure`, serialize its response with `to_wire`, and add only the transport's own failure marker (an HTTP status, an MCP tool error, an A2A task state)
 
 **Substituting an implementation in a test** patches the registry ROW, not a module
 attribute: `TOOLS` holds the function object, so `patch("...._x_impl")` renames something
