@@ -30,7 +30,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         ...     stmt = select(Tenant).filter_by(tenant_id="example")
         ...     tenant = session.scalars(stmt).first()
         ...     tenant_dict = serialize_tenant_to_dict(tenant)
-        ...     set_current_tenant(tenant_dict)
     """
     return {
         "tenant_id": tenant.tenant_id,

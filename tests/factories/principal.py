@@ -37,7 +37,6 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         tenant_id: str = "test_tenant",
         protocol: str = "mcp",
         dry_run: bool = False,
-        credential_presented: bool = True,
         tenant: TenantContext | None | Any = _UNSET,
         testing_context: AdCPTestContext | None | Any = _UNSET,
         account_id: str | None = None,
@@ -100,7 +99,6 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         return ResolvedIdentity(
             principal=principal,
             tenant=resolved_tenant,
-            credential_presented=credential_presented,
             protocol=protocol,
             testing_context=testing_context,
             account_id=account_id,

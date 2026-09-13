@@ -19,11 +19,12 @@ not a description of one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import Literal, Protocol
 
+from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     CompleteTaskRequest,
     CreateMediaBuyRequest,
@@ -40,7 +41,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.schemas._base import BuyerRequest
+from src.core.schemas._base import AdcpResponse, BuyerRequest
 from src.core.tools.accounts import _list_accounts_impl, _sync_accounts_impl
 from src.core.tools.capabilities import _get_adcp_capabilities_impl
 from src.core.tools.creative_formats import _list_creative_formats_impl
@@ -76,12 +77,34 @@ class RestBinding:
     path_fields: frozenset[str] = frozenset()
 
 
-@dataclass(frozen=True)
-class ToolSpec:
-    """One tool's wiring: what runs it, what shape it takes, and where it is reachable."""
+class ToolImpl[Req: BuyerRequest](Protocol):
+    """How the boundary calls an implementation: ``impl(req=<DTO>, identity=<ResolvedIdentity>)``.
 
-    dto: type[BuyerRequest]
-    impl: Callable[..., Any]
+    Typing ``ToolSpec.impl`` with this is what makes mypy grade every row: an implementation
+    whose ``req`` is not the row's ``dto`` (or a supertype of it), whose ``identity`` is not a
+    ``ResolvedIdentity``, or which declares a third parameter without a default, fails to
+    type-check at the row that names it. Sync and async implementations both satisfy it -- a
+    coroutine is an ``Awaitable`` of the response -- and the boundary awaits whichever comes
+    back.
+
+    A protocol accepts a callable that takes MORE than it asks for, so two things it cannot
+    pin are pinned by ``.ast-grep/rules/impl-signature-is-request-and-identity.yml``:
+    ``identity`` declared Optional or defaulted, and an extra defaulted parameter.
+    """
+
+    def __call__(self, *, req: Req, identity: ResolvedIdentity) -> AdcpResponse | Awaitable[AdcpResponse]: ...
+
+
+@dataclass(frozen=True)
+class ToolSpec[Req: BuyerRequest]:
+    """One tool's wiring: what runs it, what shape it takes, and where it is reachable.
+
+    Generic in the request so that ``dto`` and ``impl`` are checked against EACH OTHER: the
+    DTO the transports validate into is the one the implementation is typed to receive.
+    """
+
+    dto: type[Req]
+    impl: ToolImpl[Req]
     rest: RestBinding | None
     a2a: bool = True
     #: Whether a request reaches the implementation without an authenticated caller. A

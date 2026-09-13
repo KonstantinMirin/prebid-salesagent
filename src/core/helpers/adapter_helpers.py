@@ -24,7 +24,7 @@ if TYPE_CHECKING:
     #: IdentityTenant plus the raw ORM row some call sites pass directly (e.g.
     #: media_buy_create.py's session.scalars(...).first()) instead of routing
     #: through identity.tenant.
-    TenantLike = DBTenant | IdentityTenant | None
+    TenantLike = DBTenant | IdentityTenant
 
 
 from src.adapters.google_ad_manager import GoogleAdManager
@@ -128,23 +128,7 @@ def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -
     return tenant.tenant_id, tenant.ad_server or "mock"
 
 
-def _resolved_tenant(tenant: TenantLike) -> DBTenant | IdentityTenant:
-    """Resolve an Optional tenant param to a concrete tenant, falling back to
-    the ContextVar for callers that haven't threaded identity.tenant through yet.
-
-    Single home for the ``tenant is None`` fallback (previously duplicated --
-    and, in three of the five callers below, MISSING entirely, meaning
-    ``_resolve_tenant_id_and_fallback_adapter(None)`` would crash on a bare
-    ``AttributeError`` the moment ``tenant: Any`` stopped hiding it).
-    """
-    if tenant is not None:
-        return tenant
-    from src.core.config_loader import get_current_tenant
-
-    return get_current_tenant()
-
-
-def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
+def resolve_tenant_adapter_type(tenant: TenantLike) -> str:
     """Resolve the authoritative ad-server adapter type for a tenant.
 
     Single source of truth for adapter-TYPE resolution: ``AdapterConfig.adapter_type``
@@ -155,11 +139,11 @@ def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
     tenant-adapter-type resolution copies would only half-close INV-4).
 
     Args:
-        tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
+        tenant: Tenant context (dict or ORM model).
     """
     logger = logging.getLogger(__name__)
 
-    resolved_tenant = _resolved_tenant(tenant)
+    resolved_tenant = tenant
     tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
@@ -224,9 +208,9 @@ class AdapterContext:
     tenant_id: str
 
 
-def resolve_adapter_context(tenant: TenantLike = None) -> AdapterContext:
+def resolve_adapter_context(tenant: TenantLike) -> AdapterContext:
     """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1)."""
-    resolved_tenant = _resolved_tenant(tenant)
+    resolved_tenant = tenant
     adapter_type = resolve_tenant_adapter_type(resolved_tenant)
     tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
     return AdapterContext(tenant=resolved_tenant, adapter_type=adapter_type, tenant_id=tenant_id)
@@ -238,7 +222,7 @@ def _test_behavior_for(tenant: TenantLike) -> MockTestBehavior:
     return _read_mock_test_behavior(ctx.tenant_id, ctx.adapter_type)
 
 
-def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdapter]:
+def get_adapter_class_for_tenant(tenant: TenantLike) -> type[AdServerAdapter]:
     """Resolve the ad-server adapter CLASS for a tenant, without a Principal.
 
     For read-only capability/discovery paths (e.g. get_adcp_capabilities) that
@@ -256,7 +240,7 @@ def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdap
     there would leak the fault onto ``create_media_buy`` during an e2e run.
 
     Args:
-        tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
+        tenant: Tenant context (dict or ORM model).
     """
     from src.adapters import get_adapter_class
 
@@ -272,7 +256,7 @@ def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdap
     return get_adapter_class(adapter_type)
 
 
-def get_targeting_capabilities_override(tenant: TenantLike = None) -> TargetingCapabilities | None:
+def get_targeting_capabilities_override(tenant: TenantLike) -> TargetingCapabilities | None:
     """Return the per-tenant mock-adapter targeting-capability override, if any.
 
     Reads the same ``test_behavior`` seam as ``get_adapter_class_for_tenant``
@@ -290,7 +274,7 @@ def get_targeting_capabilities_override(tenant: TenantLike = None) -> TargetingC
     return _TargetingCapabilities(**override)
 
 
-def get_adapter_channels_override(tenant: TenantLike = None) -> list[str] | None:
+def get_adapter_channels_override(tenant: TenantLike) -> list[str] | None:
     """Return the per-tenant mock-adapter channel override, if any.
 
     Same ``test_behavior`` seam as :func:`get_targeting_capabilities_override`,
@@ -317,7 +301,7 @@ _MANUAL_APPROVAL_COLUMNS: dict[str, str] = {
 }
 
 
-def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool:
+def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
     """Whether this tenant's configuration genuinely requires manual approval
     on new media buys -- the same signal ``_create_media_buy_impl`` enforces
     (media_buy_create.py), read tenant/DB-side so it works without a live
@@ -336,7 +320,7 @@ def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool
     uses for enforcement, since that default is exactly the false-conformance
     risk this reader must avoid (salesagent-becl.72 refine).
     """
-    if tenant and tenant.get("human_review_required"):
+    if tenant.get("human_review_required"):
         return True
 
     ctx = resolve_adapter_context(tenant)
@@ -354,9 +338,10 @@ def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool
 
 def get_adapter(
     principal: Principal,
+    *,
+    tenant: TenantLike,
     dry_run: bool = False,
     testing_context: TestingContext | None = None,
-    tenant: TenantLike = None,
 ) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
     """Get the appropriate adapter instance for the selected adapter type.
 
@@ -364,8 +349,7 @@ def get_adapter(
         principal: The authenticated principal
         dry_run: Whether to run in dry-run mode
         testing_context: Optional test context for simulations
-        tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
-    """
+        tenant: Tenant context (from identity.tenant)."""
     ctx = resolve_adapter_context(tenant)
     selected_adapter = ctx.adapter_type
     tenant_id = ctx.tenant_id

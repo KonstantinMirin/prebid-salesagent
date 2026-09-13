@@ -64,10 +64,6 @@ def get_push_notification_config_from_headers(headers: dict[str, str] | None) ->
 # because seven test modules called it directly; test_no_duplicate_auth_functions.py said
 # so outright, keeping it "in auth.py for test compat". A second resolver kept alive by its
 # own tests is still a second resolver.
-#
-# Its docstring carried the tell: "the caller MUST call set_current_tenant(tenant_context)
-# in their own context" because ContextVar writes do not cross the sync/async boundary --
-# an obligation on every caller, which is what the boundary exists to remove.
 
 
 def require_principal(
@@ -106,25 +102,12 @@ def require_tenant(
     subscripting is safe and attribute access is not, which is how dict-shaped handling
     spread from here. The context supports both, and the annotation now says what it is.
     """
-    from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
+    from src.core.exceptions import AdCPInternalError
 
     tenant = identity.tenant
-    if not tenant:
-        # AUTH_MISSING/AUTH_INVALID split (#2092), completed for the
-        # tenant-resolution axis (salesagent-otc5). The signal is whether a
-        # credential was PRESENTED, the one auth fact the resolver hands on:
-        # it always builds a ResolvedIdentity for a public tool, even with no
-        # credential, and for a presented-but-rejected credential it leaves
-        # principal_id unresolved. Nothing presented -> AUTH_MISSING
-        # (correctable); presented but the tenant still did not resolve ->
-        # AUTH_INVALID (terminal). The TENANT_REQUIRED gap (salesagent-40kk),
-        # full tenant-axis semantics beyond this split, remains tracked
-        # separately.
-        if not identity.credential_presented:
-            raise AdCPAuthRequiredError(
-                context=context,
-            )
-        raise AdCPAuthenticationError(
-            context=context,
-        )
+    if tenant is None:
+        # Not an auth outcome. A protected tool is reached only with a resolved principal,
+        # and a principal is a row in a tenant, so this is the resolver's invariant broken.
+        # A public tool reads ``identity.tenant`` itself and answers without a seller.
+        raise AdCPInternalError(context=context)
     return tenant

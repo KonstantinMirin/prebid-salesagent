@@ -3,7 +3,6 @@
 import logging
 import time
 
-from src.core.config_loader import set_current_tenant
 from src.core.database.repositories.principal_lookup import read_principal_name
 from src.core.resolved_identity import ResolvedIdentity
 from src.services.activity_feed import activity_feed
@@ -29,7 +28,6 @@ def log_tool_activity(identity: ResolvedIdentity, tool_name: str, start_time: fl
 
         if not tenant:
             return
-        set_current_tenant(tenant)
         principal_name = "Unknown"
 
         if principal_id:

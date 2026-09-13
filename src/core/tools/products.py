@@ -16,7 +16,6 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_tenant
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
@@ -192,8 +191,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
 
     testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
-    tenant = require_tenant(identity, context=req.context)
-    logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
+    tenant = identity.tenant
+    if tenant is None:
+        # No seller is addressed: there is no catalog to list, and nothing to refuse.
+        return GetProductsResponse(products=[])
 
     # The principal the resolver loaded with the token; None for the anonymous caller.
     principal = identity.principal
@@ -831,21 +832,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     return resp
 
 
-def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
+def get_product_catalog(tenant_id: str) -> list[Product]:
     """Get products for a tenant.
-
-    Args:
-        tenant_id: Tenant ID to load products for. Falls back to ContextVar if not provided.
 
     Returns:
         List of Product objects with full pricing options
     """
     from src.core.database.repositories.uow import ProductUoW
-
-    if tenant_id is None:
-        from src.core.config_loader import get_current_tenant
-
-        tenant_id = get_current_tenant()["tenant_id"]
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None

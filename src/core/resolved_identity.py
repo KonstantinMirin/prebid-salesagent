@@ -57,10 +57,6 @@ class ResolvedIdentity(BaseModel):
     # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
     # (transitional)", and that union is how dict-shaped tenant handling spread.
     tenant: TenantContext | None = None
-    # Whether an ``Authorization: Bearer`` value was present. The pinned enum keys
-    # AUTH_MISSING versus AUTH_INVALID on header presence, a fact only the header reader
-    # knows, so it travels; the secret itself does not.
-    credential_presented: bool = False
     protocol: TransportProtocol = TransportProtocol.MCP
     testing_context: AdCPTestContext | None = None
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
@@ -247,7 +243,6 @@ def _resolve_identity(
     return ResolvedIdentity(
         principal=principal,
         tenant=tenant,
-        credential_presented=auth_token is not None,
         protocol=protocol,
         testing_context=testing_context,
     )

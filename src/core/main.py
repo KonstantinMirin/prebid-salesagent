@@ -4,7 +4,6 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.tools.tool import Tool, ToolResult
 from rich.console import Console
-from sqlalchemy import select
 
 from src.adapters.mock_creative_engine import MockCreativeEngine
 
@@ -13,13 +12,7 @@ logger = logging.getLogger(__name__)
 # Database models
 
 # Other imports
-from src.core.config_loader import (
-    get_current_tenant,
-    load_config,
-)
 from src.core.database.database import init_db
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Product as ModelProduct
 from src.core.database.models import (
     WorkflowStep,
 )
@@ -55,21 +48,6 @@ Task = WorkflowStep
 # NOTE: Database initialization moved to startup script to avoid import-time failures
 # The run_all_services.py script handles database initialization before starting the MCP server
 
-# Try to load config, but use defaults if no tenant context available
-try:
-    config = load_config()
-except Exception as e:
-    # Use minimal config for test environments or when DB is unavailable
-    # This handles both "No tenant context set" and database connection errors
-    if "No tenant context" in str(e) or "connection" in str(e).lower() or "operational" in str(e).lower():
-        config = {
-            "creative_engine": {},
-            "dry_run": False,
-            "adapters": {"mock": {"enabled": True}},
-            "ad_server": {"adapter": "mock", "enabled": True},
-        }
-    else:
-        raise
 
 from contextlib import asynccontextmanager
 
@@ -192,24 +170,8 @@ from src.core.context_manager import ContextManager
 
 context_mgr = ContextManager()
 
-# --- Adapter Configuration ---
-# Get adapter from config, fallback to mock
-SELECTED_ADAPTER = ((config.get("ad_server", {}).get("adapter") or "mock") if config else "mock").lower()
-AVAILABLE_ADAPTERS = ["mock", "gam", "kevel", "triton", "triton_digital"]
-
 # --- In-Memory State (already initialized above, just adding context_map) ---
 context_map: dict[str, str] = {}  # Maps context_id to media_buy_id
-
-# --- Dry Run Mode ---
-DRY_RUN_MODE = config.get("dry_run", False)
-if DRY_RUN_MODE:
-    console.print("[bold yellow]🏃 DRY RUN MODE ENABLED - Adapter calls will be logged[/bold yellow]")
-
-# Display selected adapter
-if SELECTED_ADAPTER not in AVAILABLE_ADAPTERS:
-    console.print(f"[bold red]❌ Invalid adapter '{SELECTED_ADAPTER}'. Using 'mock' instead.[/bold red]")
-    SELECTED_ADAPTER = "mock"
-console.print(f"[bold cyan]🔌 Using adapter: {SELECTED_ADAPTER.upper()}[/bold cyan]")
 
 
 # --- Creative Conversion Helper ---
@@ -239,33 +201,6 @@ console.print(f"[bold cyan]🔌 Using adapter: {SELECTED_ADAPTER.upper()}[/bold 
 # Removed assign_task - assignment handled through admin UI workflow management
 
 # Dry run logs are now handled by the adapters themselves
-
-
-def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
-    """Get products for the current tenant.
-
-    Uses shared convert_product_model_to_schema() to ensure consistent
-    conversion logic across all product catalog providers.
-    """
-    from sqlalchemy.orm import selectinload
-
-    from src.core.product_conversion import convert_product_model_to_schema
-
-    if tenant_id is None:
-        tenant = get_current_tenant()
-        tenant_id = tenant["tenant_id"]
-
-    with get_db_session() as session:
-        stmt = select(ModelProduct).filter_by(tenant_id=tenant_id).options(selectinload(ModelProduct.pricing_options))
-        products = session.scalars(stmt).all()
-
-        loaded_products = []
-        for product in products:
-            loaded_products.append(convert_product_model_to_schema(product))
-
-    # convert_product_model_to_schema returns LibraryProduct,
-    # which our Product extends - safe cast at runtime
-    return loaded_products
 
 
 # Creative macro support is now simplified to a single creative_macro string

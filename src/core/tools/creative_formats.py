@@ -79,7 +79,6 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_tenant
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Error as AdCPResponseError
 
@@ -151,9 +150,11 @@ def _list_creative_formats_impl(
     if req is None:
         req = ListCreativeFormatsRequest()
 
-    # Extract principal and tenant from resolved identity
     principal_id = identity.principal_id
-    tenant = require_tenant(identity, context=req.context)
+    tenant = identity.tenant
+    if tenant is None:
+        # No seller is addressed: there are no formats to list, and nothing to refuse.
+        return ListCreativeFormatsResponse(formats=[])
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry

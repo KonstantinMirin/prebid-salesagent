@@ -1157,11 +1157,6 @@ class BaseTestEnv:
             return
         if self.use_real_db:
             self._ensure_tenant_for_audit(tenant_id)
-        from src.core.config_loader import get_tenant_by_id, set_current_tenant
-
-        row = get_tenant_by_id(tenant_id)
-        if row:
-            set_current_tenant(row)
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).

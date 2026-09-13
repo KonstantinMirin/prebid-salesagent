@@ -51,6 +51,15 @@ select = ["TID251"]
 "src/core/resolved_identity.py" = ["TID251"]
 # Defines get_principal_from_token, so it cannot be banned from naming it.
 "src/core/auth_utils.py" = ["TID251"]
+# The auth refusals are minted in two places (see the AdCPAuthRequiredError ban below): the
+# resolver, exempted above, and the require_* helpers here.
+"src/core/auth.py" = ["TID251"]
+# Two legitimate readers of AdCPAuthenticationError that are not identity resolution: the
+# adapter helper translates the SDK's ADCPAuthenticationError (an ad server rejecting the
+# SELLER's credential) into it, and webhook verification subclasses it for an inbound
+# webhook credential. Different credentials, different owners; neither decides who a buyer is.
+"src/core/helpers/adapter_helpers.py" = ["TID251"]
+"src/services/webhook_verification.py" = ["TID251"]
 # The two places a ToolError legitimately exists. ``tool_error_logging`` MINTS one, on the
 # way out to MCP, from an already-typed AdCPSalesAgentError; ``app.py`` registers the handler
 # that renders one. Both are the transport edge. Everything between them raises
@@ -118,3 +127,18 @@ select = ["TID251"]
 # and src/core/auth_utils.py, which defines one of them.
 "src.core.auth_utils.get_principal_from_token".msg = "Resolving a principal from a token is identity resolution, and it happens once, in src/core/resolved_identity._resolve_identity, called only from the tool boundary. A second caller is a second resolver -- which this codebase had, unnoticed, until it was deleted (salesagent-02rgd)."
 "src.core.resolved_identity._detect_tenant".msg = "Detecting the tenant from request headers happens once, inside _resolve_identity. A caller that detects its own tenant is a second tenant resolver, and the two WILL disagree -- the deleted get_principal_from_context disagreed by reading x-adcp-tenant with different fallbacks (salesagent-02rgd)."
+
+# The two auth refusals, minted in two places only: the resolver decides AUTH_MISSING versus
+# AUTH_INVALID from the headers it alone reads, and src/core/auth.py's require_principal /
+# require_tenant turn "this tool needs a caller the resolver did not find" into the same typed
+# error with the request context echoed. Business logic asks the helper; it never raises the
+# refusal itself.
+#
+# This replaces tests/unit/test_architecture_no_handrolled_identity_guard.py, which walked the
+# AST of *_impl functions for `if identity is None: raise` and `if not principal_id: raise`
+# shapes. It modelled those shapes and missed the rest -- the two sites this ban found on
+# landing were both in helpers, not in an `_impl`. A hand-rolled guard that raises anything
+# else is a wire-graded behaviour (BDD grades the AUTH_MISSING envelope on every transport);
+# one that raises THESE is a second author of the refusal, and this is where it fails.
+"src.core.exceptions.AdCPAuthRequiredError".msg = "AUTH_MISSING is raised by the resolver (src/core/resolved_identity.py) or by require_principal / require_tenant (src/core/auth.py). Call the helper with context=; do not hand-roll the refusal."
+"src.core.exceptions.AdCPAuthenticationError".msg = "AUTH_INVALID is raised by the resolver (src/core/resolved_identity.py). A credential that was presented and rejected is decided where the credential is read; nothing downstream re-decides it."

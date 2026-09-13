@@ -113,7 +113,7 @@ from src.core.auth import (
     require_tenant,
 )
 from src.core.context_manager import get_context_manager
-from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus
+from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
@@ -152,6 +152,7 @@ from src.core.schemas import (
     url as make_url,
 )
 from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
+from src.core.tenant_context import TenantContext
 from src.core.testing_hooks import AdCPTestContext, TestingContext, apply_testing_hooks
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.financial_validation import (
@@ -567,7 +568,8 @@ def _execute_adapter_media_buy_creation(
     package_pricing_info: dict[str, dict[str, Any]],
     principal: Principal,
     testing_ctx: TestingContext | None = None,
-    tenant: Any = None,
+    *,
+    tenant: TenantContext | Tenant,
 ) -> schemas.CreateMediaBuyResponse:
     """Execute adapter's create_media_buy call.
 
@@ -878,8 +880,6 @@ def execute_approved_media_buy(
 
     logger.info(log_safe(f"[APPROVAL] Executing adapter creation for approved media buy {media_buy_id}"))
 
-    # Set tenant context (required for adapter helpers to work)
-    from src.core.config_loader import set_current_tenant
     from src.core.database.models import Tenant
 
     adapter_ran = False
@@ -897,14 +897,6 @@ def execute_approved_media_buy(
                 error_msg = f"Tenant {tenant_id} not found"
                 logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
-
-            # Set tenant ContextVar via standard config_loader boundary
-            from src.core.config_loader import get_tenant_by_id
-
-            tenant_config = get_tenant_by_id(tenant_id)
-            if tenant_config:
-                set_current_tenant(tenant_config)
-            logger.info(f"[APPROVAL] Set tenant context: {tenant_id}")
 
             # Load media buy
             stmt = select(MediaBuy).filter_by(tenant_id=tenant_id, media_buy_id=media_buy_id)
@@ -1477,7 +1469,6 @@ def push_creative_to_existing_buy(
 
     Returns (success, error_message). error_message is non-None only on failure.
     """
-    from src.core.config_loader import get_tenant_by_id, set_current_tenant
     from src.core.database.repositories.uow import AdminCreativeUoW
 
     try:
@@ -1490,10 +1481,6 @@ def push_creative_to_existing_buy(
             tenant_obj = uow.tenant_config.get_tenant()
             if not tenant_obj:
                 return False, f"Tenant {tenant_id} not found"
-
-            tenant_config = get_tenant_by_id(tenant_id)
-            if tenant_config:
-                set_current_tenant(tenant_config)
 
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
@@ -3073,7 +3060,7 @@ async def _create_media_buy_impl(
         # Lazy: tests patch src.core.tools.products.get_product_catalog; the call-time import binds the patched object.
         from src.core.tools.products import get_product_catalog
 
-        catalog = get_product_catalog(tenant_id=identity.tenant_id)
+        catalog = get_product_catalog(tenant_id=tenant.tenant_id)
         product_ids = req.get_product_ids()
         products_in_buy = [p for p in catalog if p.product_id in product_ids]
 

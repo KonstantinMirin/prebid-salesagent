@@ -221,31 +221,15 @@ def media_buy_detail(tenant_id, media_buy_id):
                 try:
                     from datetime import UTC, datetime, timedelta
 
-                    from src.core.config_loader import set_current_tenant
                     from src.core.database.models import Tenant
                     from src.core.helpers.adapter_helpers import get_adapter
                     from src.core.schemas import Principal as PrincipalSchema
                     from src.core.schemas import ReportingPeriod
 
-                    # Get adapter for this principal
-                    if principal:
-                        # Set tenant context before calling get_adapter (required for adapter initialization)
-                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                        if tenant:
-                            set_current_tenant(
-                                {
-                                    "tenant_id": tenant_id,
-                                    "ad_server": tenant.ad_server or "mock",
-                                }
-                            )
-
-                        # Convert SQLAlchemy model to Pydantic schema (get_adapter expects schema)
-                        principal_schema = PrincipalSchema(
-                            principal_id=principal.principal_id,
-                            name=principal.name,
-                            platform_mappings=principal.platform_mappings or {},
-                        )
-                        adapter = get_adapter(principal_schema, dry_run=False)
+                    # Get adapter for this principal, on the media buy's own tenant row
+                    tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+                    if principal and tenant:
+                        adapter = get_adapter(PrincipalSchema.from_row(principal), dry_run=False, tenant=tenant)
 
                         # Calculate date range (last 7 days or campaign duration) - always use UTC
                         end_date = datetime.now(UTC)

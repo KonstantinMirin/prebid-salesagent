@@ -60,14 +60,6 @@ async def reset_db_pool(request: Request):
         reset_engine()
         logger.info("  ✓ Database connection pool reset")
 
-        from src.core.config_loader import current_tenant
-
-        try:
-            current_tenant.set(None)
-            logger.info("  ✓ Cleared tenant context (will force fresh lookup on next request)")
-        except Exception as ctx_error:
-            logger.warning(f"  ⚠️ Could not clear tenant context: {ctx_error}")
-
         return JSONResponse(
             {
                 "status": "success",

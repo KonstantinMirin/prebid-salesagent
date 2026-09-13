@@ -10,7 +10,6 @@ Environment variables:
 import json
 import logging
 import os
-from contextvars import ContextVar
 from typing import Any
 
 from sqlalchemy import select
@@ -53,55 +52,6 @@ def safe_json_loads(value, default=None):
     return default
 
 
-# Thread-safe tenant context
-current_tenant: ContextVar[dict[str, Any] | None] = ContextVar("current_tenant", default=None)
-
-
-def get_current_tenant() -> dict[str, Any]:
-    """Get current tenant from context.
-
-    CRITICAL: This function must only be called AFTER tenant context has been established
-    via resolve_identity() at the transport boundary + set_current_tenant().
-
-    Common mistake: Calling get_current_tenant() before authenticating the request.
-    Correct order:
-        1. identity = resolve_identity(headers, protocol=...)  # At transport boundary
-        2. set_current_tenant(identity.tenant)  # Sets tenant context
-        3. tenant = get_current_tenant()  # Now safe to call
-
-    Raises:
-        RuntimeError: If tenant context is not set (indicates authentication/ordering bug)
-    """
-    import inspect
-
-    tenant = current_tenant.get()
-    if not tenant:
-        # SECURITY: Do NOT fall back to default tenant in production.
-        # This would cause tenant isolation breach.
-        # Only CLI/testing scripts should call this without context.
-
-        # Get caller information for debugging
-        frame = inspect.currentframe()
-        caller_frame = frame.f_back if frame else None
-        caller_info = ""
-        if caller_frame:
-            caller_file = caller_frame.f_code.co_filename
-            caller_line = caller_frame.f_lineno
-            caller_func = caller_frame.f_code.co_name
-            caller_info = f"\n  Called from: {caller_file}:{caller_line} in {caller_func}()"
-
-        raise RuntimeError(
-            "No tenant context set. Tenant must be set via set_current_tenant() "
-            "before calling this function. This is a critical security error - "
-            "falling back to default tenant would breach tenant isolation.\n"
-            "\n"
-            "COMMON CAUSE: Calling get_current_tenant() before authenticating the request.\n"
-            "FIX: Ensure resolve_identity() is called at the transport boundary BEFORE get_current_tenant()."
-            f"{caller_info}"
-        )
-    return tenant
-
-
 def get_default_tenant() -> dict[str, Any] | None:
     """Get the default tenant for CLI/testing."""
     try:
@@ -126,75 +76,6 @@ def get_default_tenant() -> dict[str, Any] | None:
         if "no such table" in str(e) or "does not exist" in str(e):
             return None
         raise
-
-
-def load_config() -> dict[str, Any]:
-    """
-    Load configuration from current tenant.
-
-    For backward compatibility, this returns config in the old format.
-    In multi-tenant mode, config comes from database.
-    """
-    tenant = get_current_tenant()
-
-    # Build config from tenant fields
-    config = {
-        "ad_server": {"adapter": tenant.get("ad_server", "mock"), "enabled": True},
-        "creative_engine": {
-            "auto_approve_format_ids": tenant.get("auto_approve_format_ids", []),
-            "human_review_required": tenant.get("human_review_required", True),
-        },
-        "features": {
-            "max_daily_budget": tenant.get("max_daily_budget", 10000),
-            "enable_axe_signals": tenant.get("enable_axe_signals", True),
-            "slack_webhook_url": tenant.get("slack_webhook_url"),
-            "slack_audit_webhook_url": tenant.get("slack_audit_webhook_url"),
-            "hitl_webhook_url": tenant.get("hitl_webhook_url"),
-        },
-        "admin_token": tenant.get("admin_token"),
-        "dry_run": False,
-    }
-
-    # Add policy settings if present
-    if tenant.get("policy_settings"):
-        config["policy_settings"] = tenant["policy_settings"]
-
-    # Apply environment variable overrides (for development/testing)
-    if gemini_key := os.environ.get("GEMINI_API_KEY"):
-        config["gemini_api_key"] = gemini_key
-
-    # System-level overrides
-    if dry_run := os.environ.get("ADCP_DRY_RUN"):
-        config["dry_run"] = dry_run.lower() == "true"
-
-    return config
-
-
-def get_tenant_config(key: str, default=None):
-    """Get config value for current tenant."""
-    tenant = get_current_tenant()
-
-    # Check if it's a top-level tenant field
-    if key in tenant:
-        return tenant[key]
-
-    # Otherwise return default
-    return default
-
-
-def set_current_tenant(tenant_data: Any) -> None:
-    """Set the current tenant context.
-
-    Normalizes a TenantContext to a plain dict before
-    storing in the ContextVar.  This is the SINGLE conversion point —
-    callers pass whatever they have and this function ensures the ContextVar
-    always holds dict[str, Any].
-    """
-    from src.core.tenant_context import TenantContext
-
-    if isinstance(tenant_data, TenantContext):
-        tenant_data = dict(tenant_data)
-    current_tenant.set(tenant_data)
 
 
 def get_tenant_by_subdomain(subdomain: str) -> dict[str, Any] | None:
