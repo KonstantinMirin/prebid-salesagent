@@ -243,7 +243,7 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     # here: they are read-only properties over ``_error_code``, so none of
     # those slots can be written after construction.
     _error_code: ErrorCodeT
-    internal_detail: BaseException | str | None
+    internal_detail: BaseException | None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Refuse, at class creation, a subclass whose code the table does not classify.
@@ -295,7 +295,7 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         issues: list[ErrorIssue] | None = None,
         field: str | None = None,
         retry_after: int | None = None,
-        internal_detail: BaseException | str | None = None,
+        internal_detail: BaseException | None = None,
     ) -> None:
         # There is no ``message`` parameter. Buyer-facing text comes from CODE_TABLE
         # via the read-only ``message`` property, so no raise site can author it and
@@ -1162,10 +1162,10 @@ def _log_internal_detail(exc: AdCPSalesAgentError) -> None:
     if detail is None:
         return
     logger.error(
-        "AdCPSalesAgentError %s internal detail (not emitted to the buyer): %s",
+        "AdCPSalesAgentError %s caused by %s (not emitted to the buyer)",
         type(exc).__name__,
-        detail,
-        exc_info=detail if isinstance(detail, BaseException) else None,
+        type(detail).__name__,
+        exc_info=detail,
     )
 
 
