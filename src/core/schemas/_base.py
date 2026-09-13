@@ -792,7 +792,29 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     ``context`` in ``_boundary._served``, ``replayed`` in ``_boundary._deserializer_for`` --
     and they come from the two different bases above. Naming both bases here is what lets the
     boundary be typed rather than cast.
+
+    ``context`` is REFUSED here on both roads in: a validator rejects a non-None value on
+    construction, and ``__setattr__`` rejects assignment afterwards. Both are needed --
+    pydantic's ``__init__`` populates a model without routing through ``__setattr__``, so the
+    override alone never sees a constructor argument. ``_boundary._served`` writes the field
+    through ``object.__setattr__``, which bypasses both; it is the one writer, and these two
+    refusals are what make that true rather than customary (salesagent-3cs7o.3).
     """
+
+    @model_validator(mode="after")
+    def _context_is_the_boundarys(self) -> "AdcpResponse":
+        if self.__dict__.get("context") is not None:
+            raise ValueError(
+                "context is stamped by the boundary (src/core/tools/_boundary._served); a response is constructed without one"
+            )
+        return self
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if name == "context":
+            raise AttributeError(
+                "context is stamped by the boundary (src/core/tools/_boundary._served); nothing else assigns it"
+            )
+        super().__setattr__(name, value)
 
     @classmethod
     def revive(cls, data: dict[str, Any]) -> "AdcpResponse":

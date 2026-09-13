@@ -34,6 +34,13 @@ _RULES: tuple[tuple[str, str, str, str], ...] = (
         "def _probe_impl(req: object, identity: object | None = None) -> None: ...\n",
         "async def _probe_impl(req: object, identity: ResolvedIdentity) -> None: ...\n",
     ),
+    (
+        "context-is-written-by-the-boundary-alone",
+        "src/core/tools",
+        "response = build(items=[], context=req.context)\n",
+        # A serializer switch and a different field: neither is the buyer's context.\n
+        'wire = model.model_dump(context={"include_internal": True})\nrow = create(context_id="ctx_1")\n',
+    ),
 )
 
 

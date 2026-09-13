@@ -275,8 +275,11 @@ Structural guards enforce this boundary
 ([structural-guards.md](structural-guards.md)):
 `test_transport_agnostic_impl.py`, the `ToolImpl` protocol on `ToolSpec.impl`
 (mypy) with `.ast-grep/rules/impl-signature-is-request-and-identity.yml`,
-`.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml`, and
-`ruff-boundary.toml`'s TID251 bans on `ToolError` and on the two auth errors
+`.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml`,
+`.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` (no `context=`
+keyword outside the boundary; `AdcpResponse` refuses the field on construction
+and assignment), and `ruff-boundary.toml`'s TID251 bans on `ToolError`, on
+`ContextObject` outside the schemas and the boundary, and on the two auth errors
 outside the resolver and `require_*`.
 
 ## Where does my change go?

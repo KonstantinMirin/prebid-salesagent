@@ -328,7 +328,10 @@ def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) 
     the caller being served, rather than the context of whichever request filled the cache.
     """
     response.adcp_version = SERVED_ADCP_VERSION
-    response.context = echo
+    # ``object.__setattr__``, not assignment: ``AdcpResponse.__setattr__`` refuses ``context``
+    # so that no code outside this function can write it. This is the one bypass, and it is
+    # the reason the refusal can be unconditional everywhere else.
+    object.__setattr__(response, "context", echo)
     return response
 
 

@@ -53,6 +53,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)`; the DTO matches the registry row | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
 | One ResolvedIdentity constructor | `ResolvedIdentity(...)` only in the resolver and `PrincipalFactory.make_identity` | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
 | Auth refusals minted in two places | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver and `require_principal` / `require_tenant` | `ruff-boundary.toml` (TID251) |
+| Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
@@ -230,10 +231,9 @@ then delegates. The work itself belongs in a service function that takes an alre
 caller and asks nothing about transports, auth or idempotency:
 
 ```python
-def _sync_creatives_impl(req, identity=None):          # controller
-    principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
+def _sync_creatives_impl(req, identity):               # controller
+    principal_id = require_principal(identity).principal_id
+    tenant = require_tenant(identity)
     return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
 
 def sync_creatives(req, *, identity, principal_id, tenant):   # service

@@ -66,6 +66,8 @@ select = ["TID251"]
 # AdCPSalesAgentError.
 "src/core/tool_error_logging.py" = ["TID251"]
 "src/app.py" = ["TID251"]
+# The request and response schemas DECLARE the context field, so they name its type.
+"src/core/schemas/*.py" = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "src.core.tools.accounts._list_accounts_impl".msg = "Reach a tool through invoke_tool() / TOOLS[name].impl, never its _impl directly -- a direct call skips every obligation src/core/tools/_boundary.py performs (salesagent-83pmq)."
@@ -140,5 +142,14 @@ select = ["TID251"]
 # landing were both in helpers, not in an `_impl`. A hand-rolled guard that raises anything
 # else is a wire-graded behaviour (BDD grades the AUTH_MISSING envelope on every transport);
 # one that raises THESE is a second author of the refusal, and this is where it fails.
-"src.core.exceptions.AdCPAuthRequiredError".msg = "AUTH_MISSING is raised by the resolver (src/core/resolved_identity.py) or by require_principal / require_tenant (src/core/auth.py). Call the helper with context=; do not hand-roll the refusal."
+"src.core.exceptions.AdCPAuthRequiredError".msg = "AUTH_MISSING is raised by the resolver (src/core/resolved_identity.py) or by require_principal / require_tenant (src/core/auth.py). Call the helper; do not hand-roll the refusal."
 "src.core.exceptions.AdCPAuthenticationError".msg = "AUTH_INVALID is raised by the resolver (src/core/resolved_identity.py). A credential that was presented and rejected is decided where the credential is read; nothing downstream re-decides it."
+
+# The buyer's context object. Two modules have business with its TYPE: the schemas, which
+# declare the field on every request and response, and the boundary, which reads it once off
+# the request and stamps it once onto whatever leaves (src/core/tools/_boundary._served).
+# Business logic used to thread it through 16 signatures and 103 call sites to reach a raise
+# site (salesagent-3cs7o.2 deleted them); an import of the type anywhere else is the first
+# line of that plumbing growing back. The CALL-SITE half of the same ban -- a `context=`
+# keyword outside the boundary -- is .ast-grep/rules/context-is-written-by-the-boundary-alone.yml.
+"adcp.types.ContextObject".msg = "The buyer's context is read and written by src/core/tools/_boundary.py alone; the schemas declare the field. Business logic neither carries it nor names its type (salesagent-3cs7o.3)."
