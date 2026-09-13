@@ -12,17 +12,42 @@ a subprocess to learn the same fact.
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
 
+_SOURCE = Path(__file__).resolve().parents[1] / "_worker_profile.py"
+
 
 def _profile_module(monkeypatch: pytest.MonkeyPatch, out_dir: Path):
-    """A fresh, enabled copy of the module pointed at *out_dir*."""
+    """A genuinely separate module object pointed at *out_dir*.
+
+    NOT `importlib.reload`. Reload re-executes into the SAME object in
+    `sys.modules` -- the one `tests/conftest.py` imported at collection time and
+    keeps feeding hooks for the rest of the session. It left the live `_OUT_DIR`
+    pointing at this test's `tmp_path` and wiped `_marks`, `_counts` and
+    `_test_seconds`, so every worker that ran one of these tests dropped out of
+    the profile: measured at `-n 2` over these three files, the directory held
+    only `unit-main.json` and the reader printed a plausible one-worker row and
+    exited 0.
+
+    That is the failure this file exists to prevent, committed by the file
+    itself -- and silently, where the defect it grades at least crashed. Hence
+    the two assertions below: the module under test must not BE the live one,
+    and the live one must not have been repointed.
+    """
     monkeypatch.setenv("PYTEST_WORKER_PROFILE", str(out_dir))
-    module = importlib.reload(importlib.import_module("tests._worker_profile"))
-    assert module.enabled, "the module reads its directory at import; the reload did not take"
+    spec = importlib.util.spec_from_file_location("_worker_profile_under_test", _SOURCE)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.enabled, "the module reads its directory at import; the env var did not take"
+
+    live = sys.modules["tests._worker_profile"]
+    assert module is not live, "loaded the live module, not a separate copy"
+    assert live._OUT_DIR != str(out_dir), "the live module was repointed at the test directory"
     return module
 
 
