@@ -2,7 +2,6 @@
 
 import logging
 import os
-import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -139,7 +138,6 @@ def create_tenant():
 
             # Generate tenant ID
             tenant_id = f"tenant_{uuid.uuid4().hex[:8]}"
-            admin_token = secrets.token_urlsafe(32)
 
             # Handle authorized emails - automatically add creator's email
             email_list = data.get("authorized_emails", [])
@@ -188,7 +186,6 @@ def create_tenant():
                 slack_webhook_url=data.get("slack_webhook_url"),
                 slack_audit_webhook_url=data.get("slack_audit_webhook_url"),
                 hitl_webhook_url=data.get("hitl_webhook_url"),
-                admin_token=admin_token,
                 auto_approve_format_ids=data.get("auto_approve_format_ids", ["display_300x250"]),
                 human_review_required=data.get("human_review_required", True),
                 policy_settings=data.get("policy_settings", {}),
@@ -270,7 +267,6 @@ def create_tenant():
             principal_token = None
             if data.get("create_default_principal", True):
                 principal_id = f"principal_{uuid.uuid4().hex[:8]}"
-                principal_token = secrets.token_urlsafe(32)
 
                 # Add a default platform mapping based on the adapter type
                 default_mappings = {}
@@ -285,12 +281,12 @@ def create_tenant():
                     # For mock and others
                     default_mappings = {"mock": {"advertiser_id": "default"}}
 
-                new_principal = Principal(
+                # The token is returned once, in the result; the row keeps its hash.
+                new_principal, principal_token = Principal.issue(
                     tenant_id=tenant_id,
                     principal_id=principal_id,
                     name=f"{data['name']} Default Principal",
                     platform_mappings=default_mappings,
-                    access_token=principal_token,
                     created_at=datetime.now(UTC),
                 )
                 db_session.add(new_principal)
@@ -301,7 +297,6 @@ def create_tenant():
                 "tenant_id": tenant_id,
                 "name": data["name"],
                 "subdomain": data["subdomain"],
-                "admin_token": admin_token,
                 "admin_ui_url": (
                     f"http://{data['subdomain']}.localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
                     f"/admin/tenant/{tenant_id}"

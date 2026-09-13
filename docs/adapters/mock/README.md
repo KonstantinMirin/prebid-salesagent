@@ -246,10 +246,8 @@ before calling `get_products`.
 In the Admin UI, open the tenant's advertisers list and copy the API token.
 Or query the database:
 
-```bash
-docker compose exec postgres psql -U adcp_user -d adcp \
-  -c "SELECT principal_id, access_token FROM principals WHERE tenant_id = 'test_publisher';"
-```
+The database holds only a hash of each token, so it cannot be read back from `principals`;
+use the token shown when the advertiser was created, or rotate it in the admin UI.
 
 ### 3. Call the server
 
@@ -259,7 +257,7 @@ Over MCP with the Python client:
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-headers = {"x-adcp-auth": "your_principal_token"}
+headers = {"Authorization": "Bearer your_principal_token"}
 transport = StreamableHttpTransport(url="http://localhost:8000/mcp/", headers=headers)
 client = Client(transport=transport)
 

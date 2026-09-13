@@ -13,6 +13,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 
 from src.core.config_loader import get_tenant_by_virtual_host
+from src.core.credentials import hash_token
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
@@ -79,7 +80,7 @@ async def debug_db_state(request: Request):
             product_stmt = select(ModelProduct)
             all_products = session.scalars(product_stmt).all()
 
-            principal_stmt = select(ModelPrincipal).filter_by(access_token="ci-test-token")
+            principal_stmt = select(ModelPrincipal).filter_by(token_hash=hash_token("ci-test-token"))
             principal = session.scalars(principal_stmt).first()
 
             principal_info = None

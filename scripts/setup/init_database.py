@@ -1,5 +1,4 @@
 import os
-import secrets
 import sys
 
 # Add project root to path for imports
@@ -97,9 +96,6 @@ def init_db(exit_on_error=False):
 
         if not existing_tenant:
             # No default tenant exists - create one for simple use case
-            admin_token = secrets.token_urlsafe(32)
-            secrets.token_urlsafe(32)
-
             # Create default tenant
             from datetime import UTC, datetime
 
@@ -112,7 +108,6 @@ def init_db(exit_on_error=False):
                 billing_plan="standard",
                 ad_server="mock",
                 enable_axe_signals=True,
-                admin_token=admin_token,
                 human_review_required=True,
                 auto_approve_format_ids=["display_300x250", "display_728x90", "display_320x50"],
                 brand_manifest_policy="public",  # Allow unauthenticated discovery for quick start
@@ -146,12 +141,12 @@ def init_db(exit_on_error=False):
 
             # Create default principal with well-known token for easy testing
             # This token is documented and can be used immediately after docker-compose up
-            default_principal = Principal(
+            default_principal = Principal.with_token(
+                "test-token",  # Well-known token for easy testing; stored hashed like any other
                 tenant_id="default",
                 principal_id="default_principal",
                 name="Default Principal",
                 platform_mappings={"mock": {"advertiser_id": "mock-default"}},
-                access_token="test-token",  # Well-known token for easy testing
             )
             session.add(default_principal)
 
@@ -247,12 +242,12 @@ def init_db(exit_on_error=False):
                 ]
 
                 for p in principals_data:
-                    principal = Principal(
+                    principal = Principal.with_token(
+                        p["access_token"],
                         tenant_id="default",
                         principal_id=p["principal_id"],
                         name=p["name"],
                         platform_mappings=p["platform_mappings"],
-                        access_token=p["access_token"],
                     )
                     session.add(principal)
 
@@ -341,7 +336,7 @@ def init_db(exit_on_error=False):
             # Update the print statement based on whether sample data was created
             if os.environ.get("CREATE_SAMPLE_DATA", "false").lower() == "true":
                 print(
-                    f"""
+                    """
 ╔══════════════════════════════════════════════════════════════════╗
 ║                 🚀 ADCP SALES AGENT INITIALIZED                  ║
 ╠══════════════════════════════════════════════════════════════════╣
@@ -351,8 +346,8 @@ def init_db(exit_on_error=False):
 ║  🏢 Tenant: Default Publisher                                    ║
 ║  🌐 URL: http://localhost:8080                                   ║
 ║                                                                  ║
-║  🔑 Admin Token (x-adcp-auth header):                            ║
-║     {admin_token}  ║
+║  🔑 Default Advertiser Token (Authorization: Bearer):            ║
+║     test-token                                                   ║
 ║                                                                  ║
 ║  👤 Sample Advertiser Tokens:                                    ║
 ║     • Acme Corp: acme_corp_token                                 ║

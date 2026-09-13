@@ -137,13 +137,13 @@ Add to your Claude config (`~/Library/Application Support/Claude/claude_desktop_
   "mcpServers": {
     "adcp": {
       "command": "uvx",
-      "args": ["mcp-remote", "http://localhost:8000/mcp/", "--header", "x-adcp-auth: YOUR_TOKEN"]
+      "args": ["mcp-remote", "http://localhost:8000/mcp/", "--header", "Authorization: Bearer YOUR_TOKEN"]
     }
   }
 }
 ```
 
-Get your token from Admin UI → Advertisers → (select advertiser) → API Token.
+Your token is shown once, when the advertiser is created in Admin UI → Advertisers; rotate it there if it is lost.
 
 ---
 
@@ -262,7 +262,7 @@ from fastmcp.client.transports import StreamableHttpTransport
 # Connect to the server
 transport = StreamableHttpTransport(
     url="http://localhost:8000/mcp/",
-    headers={"x-adcp-auth": "your_token"},
+    headers={"Authorization": "Bearer your_token"},
 )
 client = Client(transport=transport)
 

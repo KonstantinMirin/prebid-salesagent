@@ -25,6 +25,7 @@ def init_db_ci():
         from sqlalchemy import select
 
         from scripts.ops.migrate import run_migrations
+        from src.core.credentials import hash_token
         from src.core.database.database_session import get_db_session
         from src.core.database.models import (
             Account,
@@ -64,17 +65,17 @@ def init_db_ci():
                     session.flush()
                     print("   ✓ Access control configured")
 
-                # Check if principal exists GLOBALLY by access_token (it's unique across all tenants)
-                stmt_principal = select(Principal).filter_by(access_token="ci-test-token")
+                # Check if principal exists GLOBALLY by token hash (it's unique across all tenants)
+                stmt_principal = select(Principal).filter_by(token_hash=hash_token("ci-test-token"))
                 existing_principal = session.scalars(stmt_principal).first()
                 if not existing_principal:
                     # Create principal if it doesn't exist
                     principal_id = str(uuid.uuid4())
-                    principal = Principal(
+                    principal = Principal.with_token(
+                        "ci-test-token",
                         principal_id=principal_id,
                         tenant_id=tenant_id,
                         name="CI Test Principal",
-                        access_token="ci-test-token",
                         platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
                     )
                     session.add(principal)
@@ -205,15 +206,15 @@ def init_db_ci():
 
                 # Now create principal + dependencies in separate transaction
                 # Query again for principal (may have been created by other container)
-                stmt_principal = select(Principal).filter_by(access_token="ci-test-token")
+                stmt_principal = select(Principal).filter_by(token_hash=hash_token("ci-test-token"))
                 existing_principal = session.scalars(stmt_principal).first()
 
                 if not existing_principal:
-                    principal = Principal(
+                    principal = Principal.with_token(
+                        "ci-test-token",
                         principal_id=principal_id,
                         tenant_id=tenant_id,
                         name="CI Test Principal",
-                        access_token="ci-test-token",
                         platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
                     )
                     session.add(principal)
@@ -225,7 +226,7 @@ def init_db_ci():
                         session.rollback()
                         print(f"⚠️  Principal already exists (race condition): {e}")
                         # Re-query for principal created by other container
-                        stmt_principal = select(Principal).filter_by(access_token="ci-test-token")
+                        stmt_principal = select(Principal).filter_by(token_hash=hash_token("ci-test-token"))
                         existing_principal = session.scalars(stmt_principal).first()
                         if existing_principal:
                             principal_id = existing_principal.principal_id
@@ -588,15 +589,15 @@ def init_db_ci():
                         raise ValueError("Failed to create or find isolation tenant")
 
             # Create principal for isolation tenant
-            stmt_iso_principal = select(Principal).filter_by(access_token="iso-test-token")
+            stmt_iso_principal = select(Principal).filter_by(token_hash=hash_token("iso-test-token"))
             existing_iso_principal = iso_session.scalars(stmt_iso_principal).first()
             if not existing_iso_principal:
                 iso_principal_id = str(uuid.uuid4())
-                iso_principal = Principal(
+                iso_principal = Principal.with_token(
+                    "iso-test-token",
                     principal_id=iso_principal_id,
                     tenant_id=iso_tenant_id,
                     name="Isolation Test Principal",
-                    access_token="iso-test-token",
                     platform_mappings={"mock": {"advertiser_id": "iso-test-advertiser"}},
                 )
                 iso_session.add(iso_principal)

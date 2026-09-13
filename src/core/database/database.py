@@ -1,5 +1,4 @@
 import os
-import secrets
 from datetime import UTC, datetime
 from typing import cast
 
@@ -45,8 +44,6 @@ def init_db(exit_on_error=False):
         existing_tenant = db_session.scalars(stmt).first()
 
         if not existing_tenant:
-            admin_token = secrets.token_urlsafe(32)
-
             if create_demo_tenant:
                 # Demo mode: Create fully configured tenant with mock adapter
                 new_tenant = Tenant(
@@ -65,7 +62,6 @@ def init_db(exit_on_error=False):
                         "video_30s",
                     ],
                     human_review_required=False,
-                    admin_token=admin_token,
                     auth_setup_mode=False,  # Disable setup mode for demo (simulates SSO configured)
                 )
             else:
@@ -80,7 +76,6 @@ def init_db(exit_on_error=False):
                     billing_plan="standard",
                     ad_server=None,  # No adapter - user must configure
                     enable_axe_signals=False,  # User should explicitly enable
-                    admin_token=admin_token,
                 )
 
             db_session.add(new_tenant)
@@ -99,12 +94,12 @@ def init_db(exit_on_error=False):
                 db_session.add(new_adapter)
 
                 # Create a CI test principal for E2E testing
-                ci_test_principal = Principal(
+                ci_test_principal = Principal.with_token(
+                    "ci-test-token",  # Fixed token for E2E tests; stored hashed like any other
                     tenant_id="default",
                     principal_id="ci-test-principal",
                     name="CI Test Principal",
                     platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
-                    access_token="ci-test-token",  # Fixed token for E2E tests
                 )
                 db_session.add(ci_test_principal)
 
@@ -163,12 +158,12 @@ def init_db(exit_on_error=False):
                 ]
 
                 for p in principals_data:
-                    new_principal = Principal(
+                    new_principal = Principal.with_token(
+                        p["access_token"],
                         tenant_id="default",
                         principal_id=p["principal_id"],
                         name=p["name"],
                         platform_mappings=p["platform_mappings"],
-                        access_token=p["access_token"],
                     )
                     db_session.add(new_principal)
 

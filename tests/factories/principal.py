@@ -7,6 +7,7 @@ from typing import Any
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
+from src.core.credentials import hash_token, token_prefix
 from src.core.database.models import Principal
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import Principal as SchemaPrincipal
@@ -14,6 +15,17 @@ from src.core.tenant_context import TenantContext
 from tests.factories.core import TenantFactory
 
 _UNSET = object()
+
+
+def plaintext_token_for(principal_id: str) -> str:
+    """The token a test presents for the factory principal *principal_id*.
+
+    Production stores ``sha256(token)`` and never the token, so a test cannot read a
+    credential back out of the row it created. The factory derives the plaintext from the
+    principal id instead, and the harness derives the same one when it builds the
+    ``Authorization`` header, which is what lets the real resolver run in every test.
+    """
+    return f"tok_test_{principal_id}"
 
 
 class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -26,7 +38,11 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     principal_id = Sequence(lambda n: f"principal_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Advertiser {o.principal_id}")
-    access_token = Sequence(lambda n: f"token_{n:08d}")
+    # The row stores only the hash. The plaintext a test PRESENTS is derived from the
+    # principal id by ``plaintext_token_for`` -- the harness computes the same value, so a
+    # credential never has to be read back out of a table that no longer holds it.
+    token_hash = LazyAttribute(lambda o: hash_token(plaintext_token_for(o.principal_id)))
+    token_prefix = LazyAttribute(lambda o: token_prefix(plaintext_token_for(o.principal_id)))
     platform_mappings = factory.LazyFunction(lambda: {"mock": {"advertiser_id": "test_adv"}})
 
     @classmethod

@@ -31,7 +31,7 @@ Authentication:
 - ["Access denied" when logging in to the Admin UI](#access-denied-in-the-admin-ui)
 - [404 after the Google OAuth redirect](#oauth-callback-404)
 - [Login loops back to the OAuth screen](#oauth-redirect-loop)
-- ["Missing or invalid x-adcp-auth header" with a valid token](#missing-or-invalid-x-adcp-auth-header)
+- [Rejected with a valid token](#rejected-with-a-valid-token)
 - [MCP requests rejected as unauthorized](#invalid-token-for-the-mcp-api)
 - [A2A requests rejected as unauthenticated](#a2a-authentication-failed)
 
@@ -272,10 +272,9 @@ flowchart TD
     UI -->|"Access denied page"| Denied["Check SUPER_ADMIN_EMAILS:\nsee Access denied in the Admin UI"]
     UI -->|"404 after Google login"| CB["Fix the redirect URI:\nsee OAuth callback 404"]
     UI -->|"Login loops"| Loop["Clear cookies, check FLASK_SECRET_KEY:\nsee OAuth redirect loop"]
-    Which -->|"MCP (x-adcp-auth header)"| MCP{"Is the token in the\nprincipals table?"}
-    MCP -->|No| Token["Get a token from the Admin UI:\nsee Invalid token for the MCP API"]
-    MCP -->|Yes| Active["Check the tenant is active:\nsee Missing or invalid\nx-adcp-auth header"]
-    Which -->|"A2A (Authorization header)"| A2A["Send Authorization: Bearer TOKEN:\nsee A2A authentication failed"]
+    Which -->|"MCP / REST / A2A\n(Authorization: Bearer)"| MCP{"Does the token's hash match\na principal of the tenant\nthe request addressed?"}
+    MCP -->|No| Token["Rotate the token in the Admin UI:\nsee Invalid token for the MCP API"]
+    MCP -->|Yes| Active["Check the tenant is active:\nsee Rejected with a valid token"]
 ```
 
 ### Access denied in the Admin UI
@@ -318,9 +317,9 @@ echo $FLASK_SECRET_KEY
 When `FLASK_SECRET_KEY` is unset, the app generates a random key at startup,
 which invalidates every existing session cookie on each restart.
 
-### Missing or invalid x-adcp-auth header
+### Rejected with a valid token
 
-**Symptoms**: the token is correct, but MCP requests are still rejected.
+**Symptoms**: the token is correct, but requests are still rejected.
 
 ```bash
 # Verify the tenant is active
@@ -328,19 +327,19 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT is_active FROM tenants WHERE tenant_id='your_tenant_id';"
 ```
 
-Token extraction accepts `x-adcp-auth` first, then `Authorization: Bearer` —
-the [request lifecycle](request-lifecycle.md) document describes the exact
-resolution order, including how the tenant is resolved before the token.
+The credential is read from `Authorization: Bearer` only; `x-adcp-auth` is not
+recognized, so a request sending only the alias presents nothing and is
+answered `AUTH_MISSING`. The tenant is identified from the host before the
+token is looked up, and the token is looked up only inside that tenant, so a
+token issued for one tenant is `AUTH_INVALID` on another. The
+[request lifecycle](request-lifecycle.md) document describes the exact order.
 
 ### Invalid token for the MCP API
 
 Get the token from the Admin UI: open the **Advertisers** tab and copy the
-API token. Or read it from the database:
-
-```bash
-docker compose exec postgres psql -U adcp_user adcp -c \
-  "SELECT principal_id, access_token FROM principals;"
-```
+API token. The database holds only a hash of each token (`principals.token_hash`), so a
+lost token cannot be read back; rotate it from the advertiser's row in the admin UI and
+copy the new one when it is shown.
 
 ### A2A authentication failed
 
@@ -702,7 +701,7 @@ The following table maps HTTP errors to their usual cause.
 
 | Error | Cause | Solution |
 |-------|-------|----------|
-| `401 Unauthorized` | Invalid token | Check the `x-adcp-auth` header |
+| `401 Unauthorized` | Invalid token | Check the `Authorization: Bearer` header |
 | `404 Not Found` | Wrong endpoint | Check the URL and method |
 | `422 Validation Error` | Invalid request | Check the request schema |
 | `400 Invalid ID format` | Malformed IDs | Ensure IDs match the expected pattern |

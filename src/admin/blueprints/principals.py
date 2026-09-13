@@ -2,7 +2,6 @@
 
 import json
 import logging
-import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -67,7 +66,7 @@ def list_principals(tenant_id):
                 principal_dict = {
                     "principal_id": principal.principal_id,
                     "name": principal.name,
-                    "access_token": principal.access_token,
+                    "token_prefix": principal.token_prefix,
                     "platform_mappings": mappings,
                     "media_buy_count": media_buy_count,
                     "created_at": principal.created_at,
@@ -153,9 +152,7 @@ def create_principal(tenant_id):
             flash("Principal name is required", "error")
             return redirect(request.url)
 
-        # Generate unique ID and token
         principal_id = f"prin_{uuid.uuid4().hex[:8]}"
-        access_token = f"tok_{secrets.token_urlsafe(32)}"
 
         # Build platform mappings
         platform_mappings = {}
@@ -194,12 +191,12 @@ def create_principal(tenant_id):
             # pre-check here read as a guarantee it could not hold under
             # concurrency. Identity is (tenant_id, principal_id).
 
-            # Create the principal
-            principal = Principal(
+            # The token is minted here and shown ONCE, in the flash below; the row keeps
+            # its hash. An operator who loses it rotates it.
+            principal, token = Principal.issue(
                 tenant_id=tenant_id,
                 principal_id=principal_id,
                 name=principal_name,
-                access_token=access_token,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
@@ -208,7 +205,10 @@ def create_principal(tenant_id):
             db_session.add(principal)
             db_session.commit()
 
-            flash(f"Advertiser '{principal_name}' created successfully", "success")
+            flash(
+                f"Advertiser '{principal_name}' created. Its API token, shown only now: {token}",
+                "success",
+            )
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
     except Exception as e:
@@ -332,7 +332,7 @@ def get_principal(tenant_id, principal_id):
                     "principal": {
                         "principal_id": principal.principal_id,
                         "name": principal.name,
-                        "access_token": principal.access_token,
+                        "token_prefix": principal.token_prefix,
                         "platform_mappings": mappings,
                         "created_at": principal.created_at.isoformat() if principal.created_at else None,
                     },
@@ -342,6 +342,33 @@ def get_principal(tenant_id, principal_id):
     except Exception as e:
         logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
         return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
+
+
+@principals_bp.route("/principal/<principal_id>/rotate-token", methods=["POST"])
+@log_admin_action("rotate_principal_token")
+@require_tenant_access()
+def rotate_token(tenant_id, principal_id):
+    """Replace the principal's API token. The new token is in the response, once.
+
+    The stored hash is the only record of a token, so a lost token cannot be shown again;
+    rotation is the recovery. The old token stops resolving on commit.
+    """
+    try:
+        with get_db_session() as db_session:
+            principal = db_session.scalars(
+                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
+            ).first()
+            if not principal:
+                return jsonify({"error": "Principal not found"}), 404
+
+            token = principal.rotate_token()
+            principal.updated_at = datetime.now(UTC)
+            db_session.commit()
+            return jsonify({"success": True, "token": token, "token_prefix": principal.token_prefix})
+
+    except Exception as e:
+        logger.error(f"Error rotating token for principal {principal_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to rotate token"}), 500
 
 
 @principals_bp.route("/principal/<principal_id>/update_mappings", methods=["POST"])

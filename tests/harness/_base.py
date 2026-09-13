@@ -479,7 +479,7 @@ class BaseTestEnv:
     def credential(self, **overrides: Any) -> dict[str, str]:
         """The headers this env's buyer presents: THE one way a wire leg authenticates.
 
-        ``credential_headers(token=<the env principal's access_token>, tenant=self._tenant_id)``
+        ``credential_headers(token=<the env principal's token>, tenant=self._tenant_id)``
         with *overrides* applied through the same two keywords.
 
         - ``env.credential()``: the env's principal, valid token.
@@ -506,7 +506,14 @@ class BaseTestEnv:
         return credential_headers(**values)
 
     def _principal_token(self) -> str | None:
-        """The env principal's access token, or ``None`` when no such principal exists."""
+        """The token the env principal presents, or ``None`` when no such principal exists.
+
+        The row holds only the hash, so the plaintext is DERIVED, the way the factory
+        derived it (``plaintext_token_for``); in DB mode the row must exist for the resolver
+        to find it, which is why the factory data is committed first.
+        """
+        from tests.factories.principal import plaintext_token_for
+
         if self.use_real_db:
             if not self._session:
                 return None
@@ -515,13 +522,14 @@ class BaseTestEnv:
             from src.core.database.models import Principal
 
             self._commit_factory_data()
-            return self._session.scalars(
-                select(Principal.access_token).filter_by(
+            row = self._session.scalars(
+                select(Principal.principal_id).filter_by(
                     principal_id=self._principal_id,
                     tenant_id=self._tenant_id,
                 )
             ).first()
-        return self._unit_principal().access_token
+            return plaintext_token_for(row) if row else None
+        return plaintext_token_for(self._unit_principal().principal_id)
 
     def _unit_principal(self) -> Any:
         """The Principal the factory BUILT for this env (unit mode: no row, no session)."""
@@ -565,10 +573,11 @@ class BaseTestEnv:
 
         def _principal_from_token(token: str, tenant_id: str) -> Any:
             # Scoped to the tenant addressed, as the real lookup is.
+            from src.core.credentials import hash_token
             from src.core.schemas import Principal as SchemaPrincipal
 
             principal = self._unit_principal()
-            if token == principal.access_token and tenant_id == self._tenant_id:
+            if hash_token(token) == principal.token_hash and tenant_id == self._tenant_id:
                 return SchemaPrincipal.from_row(principal)
             return None
 

@@ -11,6 +11,7 @@ import logging
 
 from sqlalchemy import select
 
+from src.core.credentials import hash_token
 from src.core.database.database_session import execute_with_retry
 from src.core.database.models import Principal as ModelPrincipal
 from src.core.schemas import Principal
@@ -23,11 +24,14 @@ def get_principal_from_token(token: str, tenant_id: str) -> Principal | None:
 
     A buyer credential is a ``Principal`` row and nothing else, and the lookup is always
     scoped to the tenant the request addressed, so a token minted for one tenant never
-    acts on another.
+    acts on another. The row stores ``sha256(token)``, so the presented value is hashed
+    here and compared by equality on the hash; the plaintext is never written anywhere.
     """
 
+    token_hash = hash_token(token)
+
     def _lookup_principal(session):
-        stmt = select(ModelPrincipal).filter_by(access_token=token, tenant_id=tenant_id)
+        stmt = select(ModelPrincipal).filter_by(token_hash=token_hash, tenant_id=tenant_id)
         principal = session.scalars(stmt).first()
         return Principal.from_row(principal) if principal else None
 

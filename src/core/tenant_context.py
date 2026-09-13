@@ -42,7 +42,6 @@ class TenantContext(BaseModel):
     slack_webhook_url: str | None = None
     slack_audit_webhook_url: str | None = None
     hitl_webhook_url: str | None = None
-    admin_token: str | None = None
     auto_approve_format_ids: list[str] = []
     human_review_required: bool = True
     policy_settings: dict[str, Any] | None = None
@@ -120,7 +119,6 @@ class TenantContext(BaseModel):
             slack_webhook_url=tenant.slack_webhook_url,
             slack_audit_webhook_url=tenant.slack_audit_webhook_url,
             hitl_webhook_url=tenant.hitl_webhook_url,
-            admin_token=tenant.admin_token,
             auto_approve_format_ids=safe_json_loads(tenant.auto_approve_format_ids, []),
             human_review_required=tenant.human_review_required if tenant.human_review_required is not None else True,
             policy_settings=safe_json_loads(tenant.policy_settings, None),

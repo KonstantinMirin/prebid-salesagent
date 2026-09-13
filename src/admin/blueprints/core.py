@@ -2,8 +2,6 @@
 
 import logging
 import os
-import secrets
-import string
 from datetime import UTC, datetime
 
 from flask import (
@@ -461,9 +459,6 @@ def create_tenant():
 
         tenant_id = f"tenant_{subdomain}"
 
-        # Generate admin token
-        admin_token = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-
         with get_db_session() as db_session:
             # Create new tenant
             new_tenant = Tenant(
@@ -472,7 +467,6 @@ def create_tenant():
                 subdomain=subdomain,
                 is_active=True,
                 ad_server=ad_server,
-                admin_token=admin_token,
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
                 # Set default measurement provider (Publisher Ad Server)

@@ -21,7 +21,7 @@ async with client:
 # List available tools
 uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 
-# Get a real token from Admin UI -> Advertisers -> API Token
+# A real token is shown once, when the advertiser is created (or rotated) in Admin UI -> Advertisers
 uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"video"}'
 ```
 

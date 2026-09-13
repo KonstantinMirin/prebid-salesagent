@@ -72,7 +72,6 @@ def get_tenant_config_from_db(tenant_id):
                 "adapters": {},
                 "features": {},
                 "creative_engine": {},
-                "admin_token": tenant.admin_token or "",
                 "slack_webhook_url": tenant.slack_webhook_url or "",
                 "policy_settings": {},
             }
