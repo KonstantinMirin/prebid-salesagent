@@ -4,7 +4,6 @@ import logging
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import ContextObject
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import CreativeUoW, WorkflowUoW
@@ -21,7 +20,6 @@ def _create_sync_workflow_steps(
     tenant: TenantContext,
     approval_mode: str,
     push_notification_config: PushNotificationConfig | None,
-    context: ContextObject | dict | None,
     *,
     uow: CreativeUoW,
 ) -> None:
@@ -85,10 +83,6 @@ def _create_sync_workflow_steps(
         if push_notification_config:
             request_data_for_workflow["push_notification_config"] = push_notification_config
 
-        # Store context if provided (for echoing back in webhook)
-        if context:
-            request_data_for_workflow["context"] = context
-
         # (Deleted) The caller's transport was stored here "for webhook payload creation".
         # Nothing ever read it back -- the approval webhook is built in
         # src/admin/blueprints/creatives.py from push_notification_config and context, and
@@ -101,7 +95,7 @@ def _create_sync_workflow_steps(
         # events -- but that is the task-status push envelope, not this one.)
 
         step = uow.workflows.create_step(
-            context=persistent_ctx,
+            persistent_context=persistent_ctx,
             step_type="creative_approval",
             owner="publisher",
             status="requires_approval",

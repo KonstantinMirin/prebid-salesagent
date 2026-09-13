@@ -39,8 +39,6 @@ from src.core.errors.issues import ErrorIssue, issues_from_validation_error, poi
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from adcp.types import ContextObject
-
     from src.core.schemas._base import AdcpErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -194,9 +192,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         field: Optional field name that caused the error.
         suggestion: Correction hint for buyer agents (read-only, from
             CODE_TABLE).
-        context: Optional AdCP ContextObject (or dict) echoed in the
-            envelope so buyer agents can correlate failures to the
-            request that produced them (spec 3.0.0 normative).
         internal_detail: Optional NON-WIRE diagnostic payload — the raw
             third-party exception (or free text) that caused this error.
             NEVER serialized: ``AdcpErrorResponse.of`` ignores it. It
@@ -300,7 +295,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         issues: list[ErrorIssue] | None = None,
         field: str | None = None,
         retry_after: int | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
         internal_detail: BaseException | str | None = None,
     ) -> None:
         # There is no ``message`` parameter. Buyer-facing text comes from CODE_TABLE
@@ -331,7 +325,9 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             field = pointer_to_field(issues[0].pointer)
         self.field = field
         self.retry_after = retry_after
-        self.context = context
+        # No ``context``. The buyer's context object is echoed by the boundary
+        # (``_boundary._served``) onto every outcome, a failure included; an error carries
+        # nothing about the request it answers, so nothing outside the boundary can write it.
         # NON-WIRE. Deliberately absent from ``AdcpErrorResponse.of``; emitted only
         # to the server-side log by adcp_error_for(). Never add it to a serializer.
         self.internal_detail = internal_detail

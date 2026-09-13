@@ -41,7 +41,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from adcp.types import ContextObject, PushNotificationConfig
+from adcp.types import PushNotificationConfig
 from adcp.types.generated_poc.core.push_notification_config import Authentication
 from adcp.types.generated_poc.core.push_notification_config import (
     Authentication as LibraryAuthentication,
@@ -220,7 +220,6 @@ class ValidatedWebhookRegistration:
         stashed: object,
         *,
         field_prefix: str = "push_notification_config",
-        context: ContextObject | dict[str, Any] | None = None,
     ) -> ValidatedWebhookRegistration:
         """Rehydrate a STORED registration — deliberately NOT a fresh ingest.
 
@@ -266,7 +265,6 @@ class ValidatedWebhookRegistration:
                     f"(got {type(stashed).__name__}). Re-register the webhook; the stored "
                     "configuration is unreadable."
                 ),
-                context=context,
             )
 
         url = str(document.get("url") or "").strip()
@@ -276,7 +274,6 @@ class ValidatedWebhookRegistration:
                 internal_detail=(
                     f"Invalid {field_prefix}.url: stored registration has no URL. Re-register the webhook with a URL."
                 ),
-                context=context,
             )
 
         # The authentication block IS validated here, through the SAME type the
@@ -325,7 +322,6 @@ class ValidatedWebhookRegistration:
                         "as written. Its owner must re-register with a supported scheme and a "
                         "conforming credential."
                     ),
-                    context=context,
                 ) from exc
             document = {**document, "authentication": validated.model_dump(mode="json")}
 
@@ -388,7 +384,6 @@ def _accept(
     *,
     config: PushNotificationConfig,
     field_prefix: str,
-    context: ContextObject | dict[str, Any] | None,
 ) -> ValidatedWebhookRegistration:
     """Run both preconditions, then build the value. The ONE gate body.
 
@@ -399,7 +394,7 @@ def _accept(
     and that a credential refusal is not mislabelled as a URL refusal.
     """
     url = str(config.url) if config.url is not None else None
-    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
 
     # No credential check here any more, and its absence is the DELETION of dead
     # code rather than of a safeguard. The config reaching this function has
@@ -422,7 +417,6 @@ def accept_push_notification_primitives(
     *,
     token: str | None = None,
     field_prefix: str = "push_notification_config",
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> ValidatedWebhookRegistration:
     """Accept a registration already destructured into primitives.
 
@@ -443,7 +437,7 @@ def accept_push_notification_primitives(
     routes; this path refuses to create more of them, and the seam refuses to
     deliver the ones that exist.
     """
-    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
 
     authentication: dict[str, Any] | None = None
     if scheme is not None or credentials is not None:
@@ -459,7 +453,6 @@ def accept_push_notification_primitives(
             field_prefix=field_prefix,
         ),
         field_prefix=field_prefix,
-        context=context,
     )
 
 
@@ -495,7 +488,6 @@ def accept_push_notification_config(
     config: dict[str, Any] | PushNotificationConfig | None,
     *,
     field_prefix: str = "push_notification_config",
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> ValidatedWebhookRegistration:
     """Accept a config-shaped registration, normalizing model-or-dict ONCE.
 
@@ -526,6 +518,5 @@ def accept_push_notification_config(
                 f"(got {type(config).__name__}). Supply a push_notification_config object "
                 "with a url."
             ),
-            context=context,
         )
-    return _accept(config=coerced, field_prefix=field_prefix, context=context)
+    return _accept(config=coerced, field_prefix=field_prefix)

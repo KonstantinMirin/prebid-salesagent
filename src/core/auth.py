@@ -9,8 +9,6 @@ import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from adcp.types import ContextObject
-
     from src.core.resolved_identity import ResolvedIdentity
     from src.core.tenant_context import TenantContext
 
@@ -66,33 +64,22 @@ def get_push_notification_config_from_headers(headers: dict[str, str] | None) ->
 # own tests is still a second resolver.
 
 
-def require_principal(
-    identity: "ResolvedIdentity",
-    *,
-    context: "ContextObject | dict[str, Any] | None",
-) -> Principal:
+def require_principal(identity: "ResolvedIdentity") -> Principal:
     """The principal the resolver loaded for this caller, or ``AdCPAuthRequiredError``.
 
     A tool acts only as the resolved principal, so this is the one principal a tool ever
     holds; nothing downstream loads one by id. The anonymous caller of a public tool has
-    none, which on a tool that needs one is AUTH_MISSING.
-
-    ``context`` has no default on purpose. The refusal echoes the buyer's request context so
-    the buyer can correlate it, and a call site that has none says so with ``context=None``
-    rather than by omission. Python enforces this at every call; an AST guard used to.
+    none, which on a tool that needs one is AUTH_MISSING. The refusal carries no request
+    context: the boundary echoes the buyer's context onto the failure it builds.
     """
     from src.core.exceptions import AdCPAuthRequiredError
 
     if identity.principal is None:
-        raise AdCPAuthRequiredError(context=context)
+        raise AdCPAuthRequiredError()
     return identity.principal
 
 
-def require_tenant(
-    identity: "ResolvedIdentity",
-    *,
-    context: "ContextObject | dict[str, Any] | None",
-) -> "TenantContext":
+def require_tenant(identity: "ResolvedIdentity") -> "TenantContext":
     """Return ``identity.tenant`` or raise ``AdCPAuthenticationError``.
 
     Single source of truth for the "no tenant context available" guard — the
@@ -113,5 +100,5 @@ def require_tenant(
         # Not an auth outcome. A protected tool is reached only with a resolved principal,
         # and a principal is a row in a tenant, so this is the resolver's invariant broken.
         # A public tool reads ``identity.tenant`` itself and answers without a seller.
-        raise AdCPInternalError(context=context)
+        raise AdCPInternalError()
     return tenant

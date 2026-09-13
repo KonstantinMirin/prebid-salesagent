@@ -142,7 +142,6 @@ def review_workflow_step(tenant_id, workflow_id, step_id):
             tenant_id=tenant_id,
             workflow_id=workflow_id,
             step=step,
-            context=context,
             principal=principal,
             request_data=request_data,
             formatted_request=formatted_request,

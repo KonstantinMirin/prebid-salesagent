@@ -205,8 +205,8 @@ def _list_accounts_impl(
         req = ListAccountsRequest()
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    principal_id = require_principal(identity, context=req.context).principal_id
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = require_principal(identity).principal_id
+    tenant = require_tenant(identity)
     tenant_id = tenant["tenant_id"]
 
     with AccountUoW(tenant_id) as uow:
@@ -227,7 +227,6 @@ def _list_accounts_impl(
     return ListAccountsResponse(
         accounts=paginated,
         pagination=pagination_resp,
-        context=req.context,
         message=f"Found {len(paginated)} account{'s' if len(paginated) != 1 else ''}.",
     )
 
@@ -1445,8 +1444,8 @@ async def _sync_accounts_impl(
         SyncAccountsResponse with per-account action results.
     """
     # BR-RULE-055: sync requires auth (consistent with list_accounts).
-    principal_id = require_principal(identity, context=req.context).principal_id
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = require_principal(identity).principal_id
+    tenant = require_tenant(identity)
     tenant_id = tenant["tenant_id"]
 
     # Validate non-empty accounts array. field= names WHICH input was rejected: the
@@ -1467,7 +1466,6 @@ async def _sync_accounts_impl(
         accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
 
     # bool() here narrows the ANNOTATION, it does not supply the default. The model
@@ -1687,7 +1685,6 @@ async def _sync_accounts_impl(
     return SyncAccountsResponse(
         accounts=results,
         dry_run=dry_run if dry_run else None,
-        context=req.context,
         message=f"Synced {len(results)} account{'s' if len(results) != 1 else ''}{' (dry run)' if dry_run else ''}.",
     )
 

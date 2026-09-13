@@ -19,7 +19,6 @@ from src.core.tenant_context import TenantContext
 
 if TYPE_CHECKING:
     from adcp.types import AccountReference as LibraryAccountReference
-    from adcp.types import ContextObject
 
     from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
@@ -332,13 +331,12 @@ def validate_creative_format_against_product(
 
 def process_and_upload_package_creatives(
     packages: list["PackageRequest"],
-    context: "ResolvedIdentity | None" = None,
     *,
+    identity: "ResolvedIdentity",
     # The OUTER create_media_buy's account, because the nested sync is built as a real
     # SyncCreativesRequest and these creatives belong to that account. No idempotency_key:
     # this calls the creative-sync SERVICE, and idempotency is the controller's job.
     account: "LibraryAccountReference | None" = None,
-    adcp_context: "ContextObject | None" = None,
     principal_id: str,
     tenant: TenantContext,
 ) -> tuple[list["PackageRequest"], dict[str, list[str]]]:
@@ -355,9 +353,8 @@ def process_and_upload_package_creatives(
 
     Args:
         packages: List of Package objects to process
-        context: FastMCP context (for principal_id extraction)
+        identity: The caller the create controller already resolved
         account: The outer create_media_buy's account, carried onto the nested sync request
-        adcp_context: The outer request's ContextObject, so errors name the right context
         principal_id: The already-resolved caller, passed to the creative-sync service
         tenant: The already-resolved tenant, likewise
 
@@ -371,7 +368,7 @@ def process_and_upload_package_creatives(
 
     Example:
         >>> packages = [PackageRequest(product_id="p1", creatives=[creative1, creative2])]
-        >>> updated_pkgs, uploaded_ids = process_and_upload_package_creatives(packages, ctx)
+        >>> updated_pkgs, uploaded_ids = process_and_upload_package_creatives(packages, identity=identity, ...)
         >>> # updated_pkgs[0].creative_ids contains uploaded IDs
         >>> assert uploaded_ids["p1"] == ["c1", "c2"]
     """
@@ -421,19 +418,15 @@ def process_and_upload_package_creatives(
                 # Borrowing the outer key here is what used to make this call look like a
                 # second buyer request wearing the same identifier.
                 idempotency_key=f"internal-creative-upload-{uuid.uuid4().hex}",
-                context=adcp_context,
                 # AdCP 2.5: Full upsert semantics (no patch parameter)
                 assignments=None,  # Assign separately after creation
                 dry_run=False,
                 validation_mode=ValidationMode.strict,
                 push_notification_config=None,
             )
-            # ``context`` is the caller's already-resolved identity; the create controller
-            # resolved it before reaching here, which is why the service can take it as
-            # non-optional. assert rather than a re-check: re-running auth inside a service
-            # is the layering this extraction removed.
-            assert context is not None, "process_and_upload_package_creatives requires a resolved identity"
-            sync_response = sync_creatives(sync_req, identity=context, principal_id=principal_id, tenant=tenant)
+            # The create controller resolved the caller before reaching here; no auth is
+            # re-run inside a service, which is the layering this extraction removed.
+            sync_response = sync_creatives(sync_req, identity=identity, principal_id=principal_id, tenant=tenant)
 
             # A failed sync result means the creative was REJECTED (e.g. missing
             # required URL / dimensions in strict validation). Surface it instead

@@ -19,7 +19,6 @@ from adcp import CreativeFilters, GetProductsResponse, Product
 # FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas.
 from adcp.types import (
     BrandReference,
-    ContextObject,
     PushNotificationConfig,
     ReportingWebhook,
 )
@@ -34,7 +33,6 @@ logger = logging.getLogger(__name__)
 def _coerce_wire_object[ModelT: BaseModel](
     value: Any,
     model_cls: type[ModelT],
-    context: str,
     field_prefix: str | None = None,
 ) -> ModelT | None:
     """Shared dict → typed-model coercion with the boundary BUILT IN.
@@ -57,7 +55,7 @@ def _coerce_wire_object[ModelT: BaseModel](
     if value is None or isinstance(value, model_cls):
         return value
     if isinstance(value, dict):
-        with adcp_validation_boundary(context=context, field_prefix=field_prefix):
+        with adcp_validation_boundary(field_prefix=field_prefix):
             # model_validate handles plain models and RootModels alike
             # (AccountReference is a RootModel — field-unpacking would break it).
             return model_cls.model_validate(value)
@@ -88,7 +86,6 @@ def to_push_notification_config(
     return _coerce_wire_object(
         config,
         PushNotificationConfig,
-        "push_notification_config value",
         field_prefix=field_prefix,
     )
 
@@ -134,6 +131,5 @@ __all__ = [
     "GetProductsRequest",
     "GetProductsResponse",
     "Product",
-    "ContextObject",
     "ReportingWebhook",
 ]

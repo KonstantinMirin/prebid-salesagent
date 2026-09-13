@@ -171,7 +171,6 @@ class SignalsAgentRegistry:
         brief: str,
         tenant_id: str,
         principal_id: str | None = None,
-        context: dict[str, Any] | None = None,
         principal_data: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Get signals from all registered agents for a tenant.
@@ -180,7 +179,6 @@ class SignalsAgentRegistry:
             brief: Search brief/query
             tenant_id: Tenant identifier
             principal_id: Optional principal identifier
-            context: Optional context data (may include promoted_offering)
             principal_data: Optional principal information
 
         Returns:

@@ -6,19 +6,14 @@ the same policy checks without duplicating comparison logic.
 """
 
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
-
-if TYPE_CHECKING:
-    from adcp.types import ContextObject
 
 
 def raise_if_validation_failed(
     reason: str | None,
     *,
     exc_type: type[AdCPSalesAgentError] = AdCPValidationError,
-    context: "ContextObject | None" = None,
 ) -> None:
     """Raise ``exc_type`` when ``reason`` is non-empty.
 
@@ -33,7 +28,7 @@ def raise_if_validation_failed(
     travels under ``details`` where it is machine-readable.
     """
     if reason:
-        raise exc_type(details={"reason": reason}, context=context)
+        raise exc_type(details={"reason": reason})
 
 
 def validate_budget_positive(
@@ -74,13 +69,13 @@ def validate_min_package_budget(
     min_package_budget: Decimal,
     currency: str,
     subject: str = "Package",
-    context: str = "The same minimum applies to updates as to creation.",
+    trailer: str = "The same minimum applies to updates as to creation.",
 ) -> str | None:
     """Check that a package budget meets the minimum spend requirement.
 
     Args:
         subject: Label for the budget kind, e.g. "Package" or "Total".
-        context: Trailing sentence that varies by call site (create vs update path).
+        trailer: Trailing sentence that varies by call site (create vs update path).
 
     Returns:
         An error message string if validation fails, or None if the budget is acceptable.
@@ -89,7 +84,7 @@ def validate_min_package_budget(
         return (
             f"{subject} budget ({package_budget} {currency}) does not meet the minimum spend "
             f"requirement ({min_package_budget} {currency}). "
-            f"{context}"
+            f"{trailer}"
         )
     return None
 
@@ -102,7 +97,7 @@ def validate_max_daily_package_spend(
     currency: str,
     subject: str = "Package daily",
     limit_label: str = "maximum",
-    context: str = "Flight date changes that reduce daily budget are not allowed to bypass limits.",
+    trailer: str = "Flight date changes that reduce daily budget are not allowed to bypass limits.",
 ) -> str | None:
     """Check that a package's daily spend does not exceed the limit.
 
@@ -110,7 +105,7 @@ def validate_max_daily_package_spend(
         subject: Full noun phrase for the budget kind, e.g. "Package daily" or "Daily".
                  Combined with " budget" to form the message prefix.
         limit_label: Description of the limit, e.g. "maximum daily spend per package".
-        context: Trailing sentence that varies by call site (create vs update path).
+        trailer: Trailing sentence that varies by call site (create vs update path).
 
     Returns:
         An error message string if validation fails, or None if within limits.
@@ -119,5 +114,5 @@ def validate_max_daily_package_spend(
         flight_days = 1
     daily = package_budget / Decimal(str(flight_days))
     if daily > max_daily_spend:
-        return f"{subject} budget ({daily} {currency}) exceeds {limit_label} ({max_daily_spend} {currency}). {context}"
+        return f"{subject} budget ({daily} {currency}) exceeds {limit_label} ({max_daily_spend} {currency}). {trailer}"
     return None

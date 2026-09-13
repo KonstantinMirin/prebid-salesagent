@@ -58,7 +58,7 @@ def resolve_account(
     # (#1417; split per v3.1.1 error-code.json — #2092).
     from src.core.auth import require_principal
 
-    require_principal(identity, context=None)
+    require_principal(identity)
 
     inner = account_ref.root
 
@@ -108,7 +108,7 @@ def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: A
     """
     from src.core.auth import require_principal
 
-    principal_id = require_principal(identity, context=None).principal_id
+    principal_id = require_principal(identity).principal_id
     if not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(
             details=EntityRefDetails(principal_id=principal_id, account_id=account_id),

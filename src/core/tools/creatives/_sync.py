@@ -68,8 +68,8 @@ def _sync_creatives_impl(
     carried the outer request's ``idempotency_key`` into a function that had no business
     seeing it, and inherited an auth check that had already run. They call the SERVICE now.
     """
-    principal_id = require_principal(identity, context=req.context).principal_id
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = require_principal(identity).principal_id
+    tenant = require_tenant(identity)
     return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
 
 
@@ -125,7 +125,6 @@ def sync_creatives(
         registration = accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
@@ -213,7 +212,7 @@ def sync_creatives(
                     creative_id = creative.creative_id or "unknown"
                     # Format ValidationError nicely for clients, pass through ValueError as-is
                     if isinstance(validation_error, ValidationError):
-                        error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
+                        error_msg = format_validation_error(validation_error, label=f"creative {creative_id}")
                     else:
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
@@ -260,7 +259,6 @@ def sync_creatives(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=req.context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -320,7 +318,6 @@ def sync_creatives(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=req.context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -450,7 +447,6 @@ def sync_creatives(
                 tenant=tenant,
                 approval_mode=approval_mode,
                 push_notification_config=req.push_notification_config,
-                context=req.context,
                 uow=uow,
             )
 
@@ -532,7 +528,6 @@ def sync_creatives(
     response = SyncCreativesResponse(
         creatives=results,
         dry_run=dry_run,
-        context=req.context,
         message=message,
     )
 

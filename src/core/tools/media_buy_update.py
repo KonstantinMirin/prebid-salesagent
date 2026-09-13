@@ -32,7 +32,6 @@ if TYPE_CHECKING:
 #: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
 MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
 
-from adcp.types import ContextObject
 from sqlalchemy import select
 
 from src.core.exceptions import (
@@ -182,7 +181,6 @@ def _validate_creatives_for_assignment(
     principal_id: str,
     product: "DBProduct | None",
     product_name: str | None = None,
-    context: ContextObject | None = None,
 ) -> None:
     """Validate a set of creatives is assignable to a package.
 
@@ -210,7 +208,6 @@ def _validate_creatives_for_assignment(
             has no resolvable product, in which case the format check is skipped).
         product_name: Display name for error messages (falls back to the
             product's name, then the product_id).
-        context: AdCP context object, flowed into the error envelope.
 
     Raises:
         AdCPCreativeRejectedError: If any creative is not found, in a terminal
@@ -230,10 +227,7 @@ def _validate_creatives_for_assignment(
         # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
         # CREATIVE_NOT_FOUND uniformity MUST — the BR-UC-003 ext-i storyboard
         # cell grades CREATIVE_REJECTED; deferred pending upstream reconciliation.
-        raise AdCPCreativeRejectedError(
-            details=CreativeRejectionDetails(creative_ids=missing_ids),
-            context=context,
-        )
+        raise AdCPCreativeRejectedError(details=CreativeRejectionDetails(creative_ids=missing_ids))
 
     # (b) Status — terminal-state creatives are not assignable.
     bad_state = [c for c in creatives_list if c.status in ("error", "rejected")]
@@ -247,7 +241,6 @@ def _validate_creatives_for_assignment(
                     for c in bad_state
                 ]
             ),
-            context=context,
         )
 
     # (c) Format compatibility against the package's product.
@@ -284,7 +277,6 @@ def _validate_creatives_for_assignment(
             # FIXME(#2099): the product's DISPLAY NAME is prose, and product_id already
             # identifies it. Preserved for now because removing it changes the wire.
             details=CreativeRejectionDetails(accepted_values=[supported_display], product_id=display_name),
-            context=context,
         )
 
 
@@ -292,8 +284,6 @@ def _verify_principal(
     media_buy_id: str,
     identity: "ResolvedIdentity",
     repo: MediaBuyRepository,
-    *,
-    context: ContextObject | None = None,
 ) -> None:
     """Verify that the principal from identity owns the media buy.
 
@@ -309,13 +299,13 @@ def _verify_principal(
         AdCPMediaBuyNotFoundError: Media buy not found
         AdCPAuthorizationError: Principal doesn't own media buy
     """
-    principal_id = require_principal(identity, context=context).principal_id
+    principal_id = require_principal(identity).principal_id
 
     # Tenant is resolved once, in the resolver invoke_tool runs
-    tenant = require_tenant(identity, context=context)
+    tenant = require_tenant(identity)
 
     # Fetch the media buy (raises AdCPMediaBuyNotFoundError if absent)
-    media_buy = repo.get_by_id_or_raise(media_buy_id, context=context)
+    media_buy = repo.get_by_id_or_raise(media_buy_id)
 
     if media_buy.principal_id != principal_id:
         # Log security violation
@@ -352,10 +342,10 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    principal_id = require_principal(identity, context=req.context).principal_id
+    principal_id = require_principal(identity).principal_id
 
     # Tenant is resolved once, in the resolver invoke_tool runs
-    tenant = require_tenant(identity, context=req.context)
+    tenant = require_tenant(identity)
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first, and ABOVE the UoW so no DB transaction is held and a refused URL is
@@ -375,7 +365,6 @@ def _update_media_buy_impl(
         registration = accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
         pnc_url = registration.url
         if pnc_url is not None and str(pnc_url).strip():
@@ -389,7 +378,6 @@ def _update_media_buy_impl(
         reject_unsafe_webhook_registration_url(
             str(rw_url) if rw_url is not None else None,
             field="reporting_webhook.url",
-            context=req.context,
         )
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
@@ -420,7 +408,7 @@ def _update_media_buy_impl(
                 raise AdCPValidationError()
 
             # Verify principal owns this media buy
-            _verify_principal(media_buy_id_to_use, identity, uow.media_buys, context=req.context)
+            _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
 
             # State-machine precondition: terminal states reject all mutations,
             # and non-terminal states only accept actions in their valid set.
@@ -465,9 +453,7 @@ def _update_media_buy_impl(
             # only None when a buyer-supplied context_id does not resolve —
             # a not-found condition, not a transient adapter outage.
             if persistent_ctx is None:
-                raise AdCPContextNotFoundError(
-                    details=EntityRefDetails(context_id=ctx_id), field="context_id", context=req.context
-                )
+                raise AdCPContextNotFoundError(details=EntityRefDetails(context_id=ctx_id), field="context_id")
 
             # Create workflow step for this tool call
             step = ctx_manager.create_workflow_step(
@@ -479,7 +465,7 @@ def _update_media_buy_impl(
                 request_data=req,
             )
 
-            principal = require_principal(identity, context=req.context)
+            principal = require_principal(identity)
 
             adapter = get_adapter(identity)
             today = date.today()
@@ -549,7 +535,6 @@ def _update_media_buy_impl(
                 approval_response = UpdateMediaBuySubmitted(
                     task_id=step.step_id,
                     message=f"Media buy update submitted for approval (task {step.step_id}).",
-                    context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
                 ctx_manager.audit_workflow_step_result(
@@ -592,7 +577,6 @@ def _update_media_buy_impl(
                     if not currency_limit:
                         raise AdCPCapabilityNotSupportedError(
                             details=CapabilityRefusalDetails(capability="currency", rejected_value=request_currency),
-                            context=req.context,
                         )
 
                     start = req.start_time if req.start_time else media_buy.start_time
@@ -642,7 +626,6 @@ def _update_media_buy_impl(
                                 raise_if_validation_failed(
                                     package_daily_spend_error,
                                     exc_type=AdCPBudgetExceededError,
-                                    context=req.context,
                                 )
 
             # Handle campaign-level updates
@@ -696,7 +679,7 @@ def _update_media_buy_impl(
                     # flushes, so the read below sees both.
                     uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
 
-                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id, context=req.context)
+                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id)
                     _post_action_revision = _post_action_mb.revision
                     _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
                     success_response = UpdateMediaBuySuccess(
@@ -769,10 +752,7 @@ def _update_media_buy_impl(
                     if pkg_update.budget is not None:
                         # Validate package_id is provided (required for budget updates)
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
                         # Extract budget amount - handle both float and Budget object
                         budget_amount: float
                         currency: str
@@ -795,10 +775,7 @@ def _update_media_buy_impl(
                             Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
                         )
                         if budget_positive_err:
-                            raise AdCPBudgetTooLowError(
-                                field=package_field_path("budget", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
 
                         assert uow.currency_limits is not None
                         _cl = uow.currency_limits.get_for_currency(currency)
@@ -817,7 +794,6 @@ def _update_media_buy_impl(
                             raise_if_validation_failed(
                                 package_min_budget_error,
                                 exc_type=AdCPBudgetTooLowError,
-                                context=req.context,
                             )
 
                         # The package must exist in the media buy before we hand the
@@ -825,9 +801,7 @@ def _update_media_buy_impl(
                         # no-ops (quiet failure). Checked after the budget-value
                         # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
                         # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
-                        uow.media_buys.get_package_or_raise(
-                            req.media_buy_id, pkg_update.package_id, context=req.context
-                        )
+                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
 
                         result = adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
@@ -875,13 +849,10 @@ def _update_media_buy_impl(
                     if pkg_update.creative_ids is not None:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         # Resolve media_buy_id
-                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
+                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
 
                         # Use the actual internal media_buy_id
                         actual_media_buy_id = media_buy_obj.media_buy_id
@@ -901,7 +872,6 @@ def _update_media_buy_impl(
                             uow=uow,
                             principal_id=principal_id,
                             product=product,
-                            context=req.context,
                         )
 
                         # Get existing assignments for this package
@@ -973,10 +943,7 @@ def _update_media_buy_impl(
                     if pkg_update.creatives:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         # Sync creatives (upload/update)
                         # Built through the SAME builder the three transports use, rather
@@ -997,7 +964,6 @@ def _update_media_buy_impl(
                             # ITS OWN key: required by the schema, never read by the service,
                             # and never the outer request's -- see creative_helpers.
                             idempotency_key=f"internal-creative-upload-{uuid.uuid4().hex}",
-                            context=req.context,
                             # The typed Assignment the request model declares, not the
                             # {creative_id: [package_id]} map this used to build. That
                             # map was a second, internal-only spelling of the same
@@ -1018,7 +984,6 @@ def _update_media_buy_impl(
                         failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
                         if failed_creatives:
                             raise AdCPAdapterError(
-                                context=req.context,
                                 # ``e.code`` rather than ``e.message``: the message is a
                                 # function of the code through CODE_TABLE, so the code is
                                 # the fact and the sentence is derivable from it. Sending
@@ -1054,13 +1019,10 @@ def _update_media_buy_impl(
                     if pkg_update.creative_assignments:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         # Resolve media_buy_id
-                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
+                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
 
                         actual_media_buy_id = media_buy_obj.media_buy_id
 
@@ -1081,7 +1043,6 @@ def _update_media_buy_impl(
                             uow=uow,
                             principal_id=principal_id,
                             product=ca_product,
-                            context=req.context,
                         )
 
                         # Validate placement_ids against product's available placements (adcp#208)
@@ -1093,9 +1054,7 @@ def _update_media_buy_impl(
 
                         if all_requested_placement_ids:
                             # Get package to find product_id
-                            pkg_record = uow.media_buys.get_package_or_raise(
-                                actual_media_buy_id, pkg_update.package_id, context=req.context
-                            )
+                            pkg_record = uow.media_buys.get_package_or_raise(actual_media_buy_id, pkg_update.package_id)
 
                             product_id = (
                                 pkg_record.package_config.get("product_id") if pkg_record.package_config else None
@@ -1117,15 +1076,11 @@ def _update_media_buy_impl(
                                     }
                                     invalid_ids = all_requested_placement_ids - available_placement_ids
                                     if invalid_ids:
-                                        raise AdCPValidationError(
-                                            field="creative_assignments[].placement_ids",
-                                            context=req.context,
-                                        )
+                                        raise AdCPValidationError(field="creative_assignments[].placement_ids")
                                 elif product_obj and not product_obj.placements:
                                     # Product doesn't define placements, so placement targeting not supported
                                     raise AdCPCapabilityNotSupportedError(
                                         details=CapabilityRefusalDetails(product_id=product_id),
-                                        context=req.context,
                                     )
 
                         updated_assignments = []
@@ -1223,17 +1178,12 @@ def _update_media_buy_impl(
                     if pkg_update.targeting_overlay is not None:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         from sqlalchemy.orm import attributes
 
                         # Get the package via repository
-                        media_package = uow.media_buys.get_package_or_raise(
-                            req.media_buy_id, pkg_update.package_id, context=req.context
-                        )
+                        media_package = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
 
                         # property_targeting_allowed validation runs earlier (before dry_run gate);
                         # by this point the request is known-valid against that rule.
@@ -1289,7 +1239,7 @@ def _update_media_buy_impl(
 
                 if update_values:
                     # Get existing media buy to check date range consistency
-                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
+                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
 
                     # Validate date range: end_time must be after start_time
                     # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)
@@ -1310,10 +1260,7 @@ def _update_media_buy_impl(
                         )
 
                     if final_start_time and final_end_time and final_end_time <= final_start_time:
-                        raise AdCPValidationError(
-                            field="end_time",
-                            context=req.context,
-                        )
+                        raise AdCPValidationError(field="end_time")
 
                     uow.media_buys.update_fields(req.media_buy_id, **update_values)
                     logger.warning(
@@ -1340,7 +1287,7 @@ def _update_media_buy_impl(
             # - AdCP-required fields (package_id) for spec compliance
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
-            _final_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "", context=req.context)
+            _final_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "")
             _final_revision = _final_mb.revision
             _final_mbs, _final_actions = _adcp_status_and_actions(_final_mb)
             final_response = UpdateMediaBuySuccess(
@@ -1350,7 +1297,6 @@ def _update_media_buy_impl(
                 media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
-                context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
 

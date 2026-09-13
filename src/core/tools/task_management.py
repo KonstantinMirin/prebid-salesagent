@@ -246,12 +246,8 @@ async def _list_tasks_impl(
     limit = req.pagination.max_results if req.pagination and req.pagination.max_results else 20
     offset = 0
 
-    # context is forwarded so a refusal ECHOES the buyer's context object, as it does on
-    # every other tool -- available here now that this tool builds a request.
-    tenant = require_tenant(identity, context=req.context)
-    principal_id = require_principal(
-        identity, context=req.context
-    ).principal_id  # F-03: authenticated principal required
+    tenant = require_tenant(identity)
+    principal_id = require_principal(identity).principal_id  # F-03: authenticated principal required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -326,9 +322,9 @@ async def _get_task_status_impl(
     """
     task_id = req.task_id
 
-    tenant = require_tenant(identity, context=req.context)
+    tenant = require_tenant(identity)
     # F-03: an authenticated (non-anonymous) principal is required
-    principal_id = require_principal(identity, context=req.context).principal_id
+    principal_id = require_principal(identity).principal_id
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -445,10 +441,8 @@ async def _complete_task_impl(
     response_data = req.response_data
     error_message = req.error_message
 
-    tenant = require_tenant(identity, context=req.context)
-    principal_id = require_principal(
-        identity, context=req.context
-    ).principal_id  # F-03: an authenticated principal is required
+    tenant = require_tenant(identity)
+    principal_id = require_principal(identity).principal_id  # F-03: an authenticated principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None

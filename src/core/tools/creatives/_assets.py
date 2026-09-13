@@ -143,26 +143,19 @@ def _extract_url_from_assets(creative: CreativeAsset) -> str | None:
     return None
 
 
-def _build_creative_data(
-    creative: CreativeAsset, url: str | None, context: dict[str, Any] | BaseModel | None = None
-) -> dict[str, Any]:
+def _build_creative_data(creative: CreativeAsset, url: str | None) -> dict[str, Any]:
     """Build the data dict for a creative from a CreativeAsset model.
 
-    Extracts standard fields (url, click_url, width, height, duration),
-    optional fields (assets, snippet, snippet_type, template_variables),
-    and context if provided.
+    Extracts standard fields (url, click_url, width, height, duration) and
+    optional fields (assets, snippet, snippet_type, template_variables).
 
     Args:
         creative: CreativeAsset model from the sync payload.
         url: Extracted URL (from _extract_url_from_assets).
-        context: Optional application-level context per AdCP spec.
 
     Returns:
         Data dict for storing in the creative's data field.
     """
-    if context is not None and not isinstance(context, dict):
-        context = context.model_dump(mode="json")
-
     data: dict[str, Any] = {
         "url": url,
         "click_url": getattr(creative, "click_url", None),
@@ -179,8 +172,6 @@ def _build_creative_data(
     template_variables = getattr(creative, "template_variables", None)
     if template_variables:
         data["template_variables"] = template_variables
-    if context is not None:
-        data["context"] = context
     # Store AI provenance metadata (EU AI Act Article 50)
     provenance = getattr(creative, "provenance", None)
     if provenance is not None:

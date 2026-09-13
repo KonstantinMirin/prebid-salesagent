@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adcp.types import CreativeAsset
-from pydantic import BaseModel
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
 from src.core.exceptions import (
@@ -221,7 +220,6 @@ def _update_existing_creative(
     approval_mode: str,
     tenant: TenantContext,
     webhook_url: str | None,
-    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -240,7 +238,6 @@ def _update_existing_creative(
         approval_mode: Tenant approval mode (auto-approve, ai-powered, require-human).
         tenant: Tenant dict with tenant_id, slack_webhook_url, etc.
         webhook_url: Push notification webhook URL for AI review callbacks.
-        context: Application-level context per AdCP spec.
         all_formats: Pre-fetched creative formats from registry.
         registry: CreativeAgentRegistry instance.
         principal_id: Authenticated principal ID for AI review callbacks.
@@ -313,7 +310,7 @@ def _update_existing_creative(
     # Store creative properties in data field
     # AdCP 2.5: Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url)
 
     # ALWAYS validate updates with creative agent
     if creative_format:
@@ -669,7 +666,6 @@ def _create_new_creative(
     approval_mode: str,
     tenant: TenantContext,
     webhook_url: str | None,
-    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -691,7 +687,7 @@ def _create_new_creative(
 
     # Prepare data field with all creative properties
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url)
 
     # Store user-provided assets for preservation check
     user_provided_assets = creative.assets

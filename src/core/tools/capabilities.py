@@ -325,7 +325,6 @@ def _get_adcp_capabilities_impl(
             specialisms=list(_DEFAULT_SPECIALISMS),
             webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
             request_signing=_REQUEST_SIGNING_UNSUPPORTED,
-            context=req.context if req else None,
         )
 
     tenant_id = tenant["tenant_id"]
@@ -556,7 +555,6 @@ def _get_adcp_capabilities_impl(
         request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         errors=advisories or None,
         last_updated=datetime.now(UTC),
-        context=req.context if req else None,
     )
 
     # Filter protocol-domain sections to the requested protocols. adcp/

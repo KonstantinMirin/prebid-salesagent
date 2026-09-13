@@ -33,7 +33,6 @@ def _qualified_field(error: ValidationError, field_prefix: str | None) -> str | 
 
 @contextmanager
 def adcp_validation_boundary(
-    context: str = "parameters",
     field: str | None = None,
     field_prefix: str | None = None,
 ) -> Iterator[None]:
@@ -62,10 +61,6 @@ def adcp_validation_boundary(
     what the buyer sent. Coercing the same value AS A DTO FIELD needs no wrapper (the
     loc carries the field), so the honest end state for these two is to stop coercing
     ahead of construction rather than to keep a wrapper. That move is not done.
-
-    ``context`` names what was invalid in the message (e.g. ``"get_products
-    request"``); the default renders the ``Invalid parameters`` prefix existing
-    wire assertions rely on.
 
     ``field`` pins the reported request field when the failing model is nested
     under a named request field: coercing a ``BrandReference`` reports
@@ -205,7 +200,7 @@ def package_field_path(attr: str, index: int) -> str:
     return f"packages[{index}].{attr}"
 
 
-def format_validation_error(validation_error: ValidationError, context: str = "request") -> str:
+def format_validation_error(validation_error: ValidationError, label: str = "request") -> str:
     """Format Pydantic ValidationError with helpful context for clients.
 
     Provides clear, actionable error messages that reference the AdCP spec
@@ -213,7 +208,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
 
     Args:
         validation_error: The Pydantic ValidationError to format
-        context: Context string for the error message (e.g., "request", "creative")
+        label: What was being validated, for the message (e.g., "request", "creative")
 
     Returns:
         Formatted error message string suitable for client consumption
@@ -260,7 +255,7 @@ def format_validation_error(validation_error: ValidationError, context: str = "r
             error_details.append(f"  • {field_path}: {msg}")
 
     error_msg = (
-        f"Invalid {context}: The following fields do not match the AdCP specification:\n\n"
+        f"Invalid {label}: The following fields do not match the AdCP specification:\n\n"
         + "\n".join(error_details)
         + "\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/v1/ for correct field types."
     )

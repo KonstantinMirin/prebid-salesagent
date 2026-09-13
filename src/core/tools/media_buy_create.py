@@ -582,7 +582,7 @@ def _execute_adapter_media_buy_creation(
     Raises:
         Exception: If adapter creation fails (with detailed logging)
     """
-    principal = require_principal(identity, context=None)
+    principal = require_principal(identity)
     adapter = get_adapter(identity)
 
     # Call adapter with detailed error logging
@@ -1902,7 +1902,6 @@ def _submitted_approval_result(step, req: CreateMediaBuyRequest, adapter) -> Cre
     """
     return CreateMediaBuySubmitted(
         task_id=step.step_id,  # Client tracks approval via this ID
-        context=req.context,
         errors=property_list_unsupported_advisories(req.packages, adapter),
         message=f"Media buy submitted for approval (task {step.step_id}).",
         # No explicit status: the branch's own field is a const "submitted" in the pin, and
@@ -2000,10 +1999,10 @@ async def _create_media_buy_impl(
             )
 
     # Authentication and tenant setup
-    principal_id = require_principal(identity, context=req.context).principal_id
+    principal_id = require_principal(identity).principal_id
 
     # Tenant is resolved once, in the resolver invoke_tool runs
-    tenant = require_tenant(identity, context=req.context)
+    tenant = require_tenant(identity)
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first. Must run before workflow metadata / DB writes.
@@ -2013,13 +2012,11 @@ async def _create_media_buy_impl(
         reject_unsafe_webhook_registration_url(
             str(rw_url) if rw_url is not None else None,
             field="reporting_webhook.url",
-            context=req.context,
         )
     if req.push_notification_config:
         registration = accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
 
     try:
@@ -2035,7 +2032,7 @@ async def _create_media_buy_impl(
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
-    principal = require_principal(identity, context=req.context)
+    principal = require_principal(identity)
 
     # No second webhook-URL verdict here: the stored-then-fetched URLs already
     # got their correctable refusal at the registration gate above, before any
@@ -2123,10 +2120,7 @@ async def _create_media_buy_impl(
         # fault -- the pointer names the array (salesagent-rfxfu).
         budget_err = validate_budget_positive(total_budget, field=PACKAGES_FIELD)
         if budget_err:
-            raise AdCPBudgetTooLowError(
-                field=PACKAGES_FIELD,
-                context=req.context,
-            )
+            raise AdCPBudgetTooLowError(field=PACKAGES_FIELD)
 
         # 2. DateTime validation
         now = datetime.now(UTC)
@@ -2354,7 +2348,6 @@ async def _create_media_buy_impl(
                 # emit UNSUPPORTED_FEATURE (matches the update path and UC-002 ext-d).
                 raise AdCPCapabilityNotSupportedError(
                     details=CapabilityRefusalDetails(capability="currency", rejected_value=request_currency),
-                    context=req.context,
                 )
 
             # Check if currency is supported by GAM network (if GAM is configured)
@@ -2369,9 +2362,7 @@ async def _create_media_buy_impl(
 
                 if request_currency not in supported_currencies:
                     # Same seller-capability gap as above, scoped to the GAM network.
-                    raise AdCPCapabilityNotSupportedError(
-                        context=req.context,
-                    )
+                    raise AdCPCapabilityNotSupportedError()
 
             # NEW: Validate pricing_model selections (AdCP PR #88)
             # Store validated pricing info for later use in adapter
@@ -2473,10 +2464,9 @@ async def _create_media_buy_impl(
                                             package_budget=package_budget,
                                             min_package_budget=package_min_spend,
                                             currency=package_currency,
-                                            context="for products in this package",
+                                            trailer="for products in this package",
                                         ),
                                         exc_type=AdCPBudgetTooLowError,
-                                        context=req.context,
                                     )
                     else:
                         # Legacy mode: single total_budget for all products
@@ -2491,10 +2481,9 @@ async def _create_media_buy_impl(
                                     min_package_budget=required_min_spend,
                                     currency=request_currency,
                                     subject="Total",
-                                    context="for the selected products",
+                                    trailer="for the selected products",
                                 ),
                                 exc_type=AdCPBudgetTooLowError,
-                                context=req.context,
                             )
 
             # Validate maximum daily spend per package (if set)
@@ -2521,13 +2510,12 @@ async def _create_media_buy_impl(
                                 max_daily_spend=Decimal(str(currency_limit.max_daily_package_spend)),
                                 currency=request_currency,
                                 limit_label="maximum daily spend per package",
-                                context=(
+                                trailer=(
                                     "This protects against accidental large budgets "
                                     "and prevents GAM line item proliferation."
                                 ),
                             ),
                             exc_type=AdCPBudgetExceededError,
-                            context=req.context,
                         )
                 else:
                     # Legacy mode: validate total budget
@@ -2539,10 +2527,9 @@ async def _create_media_buy_impl(
                             currency=request_currency,
                             subject="Daily",
                             limit_label="maximum daily spend",
-                            context="This protects against accidental large budgets.",
+                            trailer="This protects against accidental large budgets.",
                         ),
                         exc_type=AdCPBudgetExceededError,
-                        context=req.context,
                     )
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)
@@ -2591,13 +2578,12 @@ async def _create_media_buy_impl(
                 # Cast packages to local PackageRequest type (runtime compatible, mypy list invariance)
                 updated_packages, uploaded_ids = process_and_upload_package_creatives(
                     packages=cast(list[PackageRequest], req.packages),
-                    context=identity,
+                    identity=identity,
                     # The nested creative sync is built as a real SyncCreativesRequest, so
                     # it carries THIS request's account and context rather than a set of
                     # loose fields with no request behind them. Not the client key: it calls
                     # the creative-sync SERVICE, which does no idempotency.
                     account=req.account,
-                    adcp_context=req.context,
                     principal_id=principal_id,
                     tenant=tenant,
                 )
@@ -3066,10 +3052,7 @@ async def _create_media_buy_impl(
                     )
 
             if config_errors:
-                raise AdCPValidationError(
-                    details=ValidationDetails(reasons=config_errors),
-                    context=req.context,
-                )
+                raise AdCPValidationError(details=ValidationDetails(reasons=config_errors))
 
         product_auto_create = all(
             p.implementation_config.get("auto_create_enabled", True) if p.implementation_config else True
@@ -3417,9 +3400,7 @@ async def _create_media_buy_impl(
         # Create the media buy using the adapter (SYNCHRONOUS operation)
         # Defensive null check: ensure start_time and end_time are set
         if not req.start_time or not req.end_time:
-            raise AdCPValidationError(
-                context=req.context,
-            )
+            raise AdCPValidationError()
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
@@ -3974,7 +3955,6 @@ async def _create_media_buy_impl(
             media_buy_status=media_buy_status,
             valid_actions=valid_actions_for_status(media_buy_status),
             creative_deadline=getattr(response, "creative_deadline", None),
-            context=req.context,
             errors=property_list_unsupported_advisories(req.packages, adapter),
         )
 

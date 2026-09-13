@@ -165,10 +165,7 @@ def _list_creative_formats_impl(
         raise
     except Exception as e:
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
-        raise AdCPServiceUnavailableError(
-            internal_detail=e,
-            context=req.context,
-        ) from e
+        raise AdCPServiceUnavailableError(internal_detail=e) from e
 
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:
@@ -479,7 +476,6 @@ def _list_creative_formats_impl(
         formats=page_formats,
         creative_agents=creative_agents_list,
         errors=agent_errors if agent_errors else None,
-        context=req.context,
         pagination=pagination_response,
         sandbox=sandbox_flag,
     )

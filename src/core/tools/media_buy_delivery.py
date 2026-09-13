@@ -159,7 +159,6 @@ def delivery_for_media_buy(
             status_filter=[MediaBuyStatus.active, MediaBuyStatus.completed],
             start_date=start_date,
             end_date=end_date,
-            context=None,
         ),
         # Resolution from stored ids: the job acts as the buy's owner.
         identity=identity_of(media_buy.tenant_id, media_buy.principal_id),
@@ -175,8 +174,8 @@ def get_media_buy_delivery(
     transports, auth or idempotency, so a server-initiated read can reach it through
     :func:`delivery_for_media_buy` without the front door.
     """
-    principal_id = require_principal(identity, context=req.context).principal_id
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = require_principal(identity).principal_id
+    tenant = require_tenant(identity)
     adapter = get_adapter(identity)
 
     # Determine reporting period
@@ -186,10 +185,7 @@ def get_media_buy_delivery(
         end_dt = datetime.strptime(req.end_date, "%Y-%m-%d").replace(tzinfo=UTC)
 
         if start_dt >= end_dt:
-            raise AdCPValidationError(
-                field="start_date",
-                context=req.context,
-            )
+            raise AdCPValidationError(field="start_date")
     else:
         # Default to last 30 days
         end_dt = datetime.now(UTC)
@@ -601,7 +597,6 @@ def get_media_buy_delivery(
         advisory_errors = not_found_errors + adapter_errors
 
         # Create AdCP-compliant response
-        context_val = req.context
         response = GetMediaBuyDeliveryResponse(
             reporting_period={"start": reporting_period.start, "end": reporting_period.end},
             currency="USD",  # TODO: @yusuf - This is wrong. Currency should be at the media buy delivery level, not on aggregated totals.
@@ -619,7 +614,6 @@ def get_media_buy_delivery(
             media_buy_deliveries=deliveries,
             attribution_window=attribution_window,
             errors=advisory_errors or None,
-            context=context_val,
             notification_type=notification_type,
             sequence_number=sequence_number,
             next_expected_at=next_expected_at,

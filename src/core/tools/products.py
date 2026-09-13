@@ -217,9 +217,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         # reason, not because the condition changed.
         raise AdCPAuthorizationError()
     elif brand_manifest_policy == "require_auth":
-        # The tenant's policy makes this public tool need a caller: AUTH_MISSING, echoing
-        # the request context, from the one helper that raises it.
-        require_principal(identity, context=req.context)
+        # The tenant's policy makes this public tool need a caller: AUTH_MISSING, from the
+        # one helper that raises it.
+        require_principal(identity)
     # public policy allows all requests (no brand_manifest or auth required)
 
     # For non-public policies, we need offering for policy checks and product matching
@@ -805,7 +805,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
         errors=None,
-        context=req.context,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 

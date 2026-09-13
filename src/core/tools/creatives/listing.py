@@ -226,8 +226,8 @@ def _list_creatives_impl(
     # Authentication - REQUIRED (creatives contain sensitive data)
     # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
     # which are principal-specific and must be access-controlled
-    principal_id = require_principal(identity, context=req.context).principal_id
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = require_principal(identity).principal_id
+    tenant = require_tenant(identity)
 
     creatives = []
     total_count = 0
@@ -487,7 +487,6 @@ def _list_creatives_impl(
         format_summary=None,
         status_summary=None,
         errors=unreadable_status_advisories or None,
-        context=req.context,
         message=(
             f"Found {len(creatives)} creative{'s' if len(creatives) != 1 else ''}."
             if len(creatives) == total_count

@@ -42,10 +42,9 @@ coercion) that happens to live in this file.
 from __future__ import annotations
 
 import os
-from typing import Any
 from urllib.parse import urlparse
 
-from adcp.types import ContextObject, TaskType
+from adcp.types import TaskType
 
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.egress.policy import EgressPolicy
@@ -133,7 +132,6 @@ def reject_unsafe_webhook_registration_url(
     url: str | None,
     *,
     field: str,
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> None:
     """Raise AdCPBlockedUrlError when ``url`` fails the registration SSRF gate.
 
@@ -162,10 +160,7 @@ def reject_unsafe_webhook_registration_url(
         #
         # No suggestion= either: it is a read-only property off CODE_TABLE keyed by
         # the error code, never a per-raise-site or per-class override (ADR-010).
-        raise AdCPBlockedUrlError(
-            field=field,
-            context=context,
-        )
+        raise AdCPBlockedUrlError(field=field)
 
 
 class WebhookURLValidator:

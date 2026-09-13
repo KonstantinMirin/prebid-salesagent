@@ -11,7 +11,7 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, echo_context, require_auth, require_tenant_access
+from src.admin.utils import approve_media_buy_through_writer, require_auth, require_tenant_access
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.errors.details import RejectionReasonDetails
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 
 def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
-    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    """Narrow JSONType (dict|str|None) to a dict for .get()."""
     return value if isinstance(value, dict) else {}
 
 
@@ -343,7 +343,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
             # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
-            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
+            # JSONType columns are typed as dict|str|None; narrow before .get().
             request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
@@ -418,10 +418,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        # Echo the buyer's request context (shared helper, also used by
-                        # the creative approval webhook in blueprints/creatives.py).
-                        approve_context = echo_context(request_data)
-
                         # Both columns come off the ApprovalResult, not a re-read. The
                         # writer reports what it wrote; a route that re-reads the row after
                         # the call is the shape that made a detached read possible here.
@@ -431,7 +427,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             confirmed_at=approval.confirmed_at,
                             revision=approval.revision,
-                            context=approve_context,
                         )
                         webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
 

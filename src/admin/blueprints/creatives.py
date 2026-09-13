@@ -39,7 +39,7 @@ def discover_creative_formats_from_url(url):
 
 from flask import Blueprint, jsonify, redirect, render_template, request, url_for
 
-from src.admin.utils import echo_context, require_tenant_access
+from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.repositories.uow import AdminCreativeUoW
 from src.core.tools.media_buy_create import execute_approved_media_buy, push_creative_to_existing_buy
@@ -215,11 +215,7 @@ async def _call_webhook_for_creative_status(
                 for c in all_creatives
             ]
 
-            # Echo the buyer's request context (shared helper, also used by the
-            # media-buy approve webhook in blueprints/operations.py).
-            context_obj = echo_context(step.request_data)
-
-            complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False, context=context_obj)
+            complete_result = SyncCreativesResponse(creatives=creatives, dry_run=False)
 
             # The push-notification config is not stored when the creative is
             # created, so the target comes from the step's request data. It is built

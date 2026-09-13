@@ -185,12 +185,12 @@ def _get_media_buys_impl(
     # unauthenticated request at the boundary and already return the two-layer
     # envelope -- which is why get_media_buys was the ONE tool of 16 answering a
     # fatal auth failure with HTTP 200 and isError:false (#1651).
-    principal_id = require_principal(identity, context=req.context).principal_id
-    principal = require_principal(identity, context=req.context)
+    principal_id = require_principal(identity).principal_id
+    principal = require_principal(identity)
 
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal guards above take precedence).
-    tenant = require_tenant(identity, context=req.context)
+    tenant = require_tenant(identity)
     today = datetime.now(UTC).date()
     tenant_id: str = tenant["tenant_id"]
 
@@ -396,7 +396,6 @@ def _get_media_buys_impl(
 
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
-        context=req.context,
         errors=row_advisories or None,
         message=f"Found {len(response_media_buys)} media buy{'s' if len(response_media_buys) != 1 else ''}."
         if response_media_buys

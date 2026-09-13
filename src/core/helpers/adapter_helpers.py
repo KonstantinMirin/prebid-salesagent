@@ -254,8 +254,8 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     """
     from src.core.auth import require_principal, require_tenant
 
-    principal = require_principal(identity, context=None)
-    tenant = require_tenant(identity, context=None)
+    principal = require_principal(identity)
+    tenant = require_tenant(identity)
     ctx = resolve_adapter_context(tenant)
     selected_adapter = ctx.adapter_type
     tenant_id = ctx.tenant_id
