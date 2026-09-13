@@ -106,9 +106,6 @@ async def _deliver_sync_creatives_webhook(
     """
     service = get_protocol_webhook_service()
     try:
-        # Determine protocol type from workflow step request_data
-        result_dict = complete_result.model_dump(mode="json")
-
         # The payload build used to live here, and the metadata was a hand-built
         # dict carrying task_type alone. Both are now notify()'s job: it builds the
         # one envelope, and it takes a typed context whose fields have to be named.
@@ -130,7 +127,7 @@ async def _deliver_sync_creatives_webhook(
                 notification_type=None,
             ),
             status=GeneratedTaskStatus.completed,
-            result=result_dict,
+            result=complete_result,
         )
 
         logger.info(

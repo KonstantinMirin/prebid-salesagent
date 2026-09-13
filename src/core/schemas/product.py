@@ -24,6 +24,7 @@ from src.core.schemas._base import (
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
+    WireSerializerMixin,
     strip_none_deep,
 )
 
@@ -89,7 +90,7 @@ class Placement(LibraryPlacement):
     )
 
 
-class Product(LibraryProduct):
+class Product(WireSerializerMixin, LibraryProduct):
     """Product schema extending library Product with internal fields.
 
     Inherits all AdCP-compliant fields from adcp library's Product,
@@ -171,59 +172,26 @@ class Product(LibraryProduct):
     # - floor_price present = auction pricing with floor
     # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
 
-    def model_dump(self, **kwargs):
-        """Return AdCP-compliant model dump with proper field names, excluding internal fields and null values."""
-        # Exclude internal/non-spec fields
-        kwargs["exclude"] = kwargs.get("exclude", set())
-        if isinstance(kwargs["exclude"], set):
-            kwargs["exclude"].update({"implementation_config", "expires_at"})
+    # expires_at is internal; implementation_config is Field(exclude=True) at its declaration.
+    _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset({"expires_at"})
 
-        # Turn off AdCPBaseModel's exclude_none=True default and do the null
-        # stripping here instead: it has to run AFTER the formats -> format_ids
-        # rename below, and it has to go deep through nested models whose own
-        # model_dump() overrides the parent's flags don't reach (strip_none_deep).
-        kwargs["exclude_none"] = False
-        data = super().model_dump(**kwargs)
+    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
+        """The AdCP field names, with nulls dropped at every level.
 
-        # Convert formats to format_ids per AdCP spec
+        ``formats`` -> ``format_ids`` per the spec. Nested optional fields
+        (format_ids[].width, pricing_options[].floor_price, placements[].*,
+        delivery_measurement.vendors, publisher_properties[].publisher_domains, ...) are
+        typed by the pinned schema and reject null, so nulls are stripped deep.
+        Falsy-but-present values are kept: ``pricing_options=[]`` is the anonymous-user
+        shape, which the spec requires as an empty array, not an omission. Every field
+        the pinned core/product.json requires unconditionally is non-nullable on the
+        model (pinned by test_required_fields_are_non_nullable), so nothing required can
+        be dropped; ``format_ids`` is Optional here but typed "array" in the pin, so an
+        unset one is omitted rather than emitted as null (#1868 review).
+        """
         if "formats" in data:
             data["format_ids"] = data.pop("formats")
-
-        # Nested optional fields (format_ids[].width, pricing_options[].floor_price,
-        # placements[].*, delivery_measurement.vendors, publisher_properties[].
-        # publisher_domains, ...) are typed by the pinned schema and reject null.
-        # Strip those first, then decide inclusion at this level: strip_none_deep
-        # reaches INTO values, so a top-level key whose value is itself None has
-        # to survive it and be judged by the pass below.
-        data = {key: strip_none_deep(value) for key, value in data.items()}
-
-        # Drop null fields per AdCP spec, and only null ones. Every field the
-        # pinned core/product.json requires unconditionally is non-nullable on
-        # the model, so this cannot drop a required field — pinned by
-        # test_required_fields_are_non_nullable. Falsy-but-present values are
-        # kept deliberately: pricing_options=[] is the anonymous-user shape (no
-        # pricing shown), which the spec requires as an empty array, not an
-        # omission.
-        #
-        # format_ids is the case that makes "null" and "absent" different here:
-        # it is Optional on this model (see the field override above) while the
-        # pinned schema types it "array", which rejects null. An unset
-        # format_ids must therefore be OMITTED, never emitted as null — it is
-        # required only via anyOf with format_options, not unconditionally
-        # (#1868 review).
-        return {key: value for key, value in data.items() if value is not None}
-
-    def model_dump_internal(self, **kwargs):
-        """Return internal model dump including all fields for database operations."""
-        return super().model_dump(**kwargs)
-
-    def model_dump_adcp_compliant(self, **kwargs):
-        """Return model dump for AdCP schema compliance."""
-        return self.model_dump(**kwargs)
-
-    def dict(self, **kwargs):
-        """Override dict to maintain backward compatibility."""
-        return self.model_dump(**kwargs)
+        return strip_none_deep(data)
 
 
 class ProductFilters(LibraryFilters):

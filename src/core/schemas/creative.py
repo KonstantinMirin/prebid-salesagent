@@ -70,6 +70,7 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     Targeting,
+    WireSerializerMixin,
     copy_before_mutating,
     strip_none_deep,
 )
@@ -211,7 +212,7 @@ class CreativeAssetRequest(LibraryCreativeAsset):
 
 
 # --- Creative Lifecycle ---
-class Creative(LibraryCreative):
+class Creative(WireSerializerMixin, LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
 
     adcp 3.6.0 listing Creative fields (public):
@@ -238,6 +239,19 @@ class Creative(LibraryCreative):
 
     # === AI Provenance (EU AI Act Article 50) ===
     provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
+
+    @field_validator("provenance", mode="before")
+    @classmethod
+    def _adopt_library_provenance(cls, v: Any) -> Any:
+        """A request carries the LIBRARY ``Provenance``; this field is the local subclass.
+
+        Pydantic validates a model-typed field by instance, so the library instance would be
+        refused. Rebuilt from its attributes -- a model-to-model step, never a dump -- so a
+        creative asset's provenance passes through as the model it is.
+        """
+        if isinstance(v, LibraryProvenance) and not isinstance(v, Provenance):
+            return Provenance.model_validate(v, from_attributes=True)
+        return v
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
@@ -285,13 +299,10 @@ class Creative(LibraryCreative):
         """Get agent URL string from FormatId object."""
         return str(self.format_id.agent_url) if self.format_id else None
 
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """AdCP-compliant dump. ``assets`` is an untyped dict[str, Any] (the DB
-        stores arbitrary asset shapes), so Pydantic's exclude_none=True default
-        never sees inside it — a None field on a stored asset survives as a
-        literal null instead of being omitted, failing AdCP schema validation.
-        """
-        data = super().model_dump(**kwargs)
+    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
+        """``assets`` is an untyped dict[str, Any] (the DB stores arbitrary asset shapes),
+        so ``exclude_none`` never sees inside it: a None field on a stored asset would
+        survive as a literal null and fail AdCP schema validation."""
         if data.get("assets") is not None:
             data["assets"] = strip_none_deep(data["assets"])
         return data
@@ -447,7 +458,7 @@ class SyncSummary(SalesAgentBaseModel):
     deleted: int = Field(0, ge=0, description="Number of creatives deleted/archived (when delete_missing=true)")
 
 
-class SyncCreativeResult(LibrarySyncCreativeResult):
+class SyncCreativeResult(WireSerializerMixin, LibrarySyncCreativeResult):
     """Extends library SyncCreativeResult with internal-only fields.
 
     adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
@@ -499,29 +510,15 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
 
-    def model_dump(self, **kwargs):
-        """Override to strip empty lists for AdCP spec compliance.
-
-        Internal fields (internal_status, review_feedback) are excluded via Field(exclude=True).
-        This override handles empty-list stripping: changes, errors, warnings are
-        optional in the AdCP spec, so omit them when empty rather than serializing [].
-        """
-        exclude = set(kwargs.get("exclude") or ())
-        kwargs["exclude"] = exclude
-
-        # Exclude None values by default for AdCP compliance
-        if "exclude_none" not in kwargs:
-            kwargs["exclude_none"] = True
-
-        # Call parent model_dump
-        result = super().model_dump(**kwargs)
-
-        # Strip empty lists for cleaner responses (AdCP spec: optional, omit if empty)
+    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
+        """Internal fields (internal_status, review_feedback) are ``Field(exclude=True)``.
+        Optional fields are omitted rather than null, and ``changes`` / ``errors`` /
+        ``warnings`` are optional in the AdCP spec, so an empty list is omitted too."""
+        data = strip_none_deep(data)
         for key in ("changes", "errors", "warnings"):
-            if key in result and not result[key]:
-                result.pop(key, None)
-
-        return result
+            if key in data and not data[key]:
+                data.pop(key)
+        return data
 
     def model_dump_internal(self, **kwargs):
         """Dump including all fields for database storage and internal processing."""
@@ -555,7 +552,7 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesSuccess, AdcpResponse):
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
     """Extends library SyncCreativesResponse success variant.
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
@@ -600,13 +597,6 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess, AdcpResponse):
     # synchronously-processed sync always carries a creatives array, even all-failed
     # (#1399 R3-F2).
     creatives: list[SyncCreativeResult]  # type: ignore[assignment]
-
-    def model_dump(self, **kwargs):
-        """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
-        result = super().model_dump(**kwargs)
-        if "creatives" in result and self.creatives:
-            result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        return result
 
 
 class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest):

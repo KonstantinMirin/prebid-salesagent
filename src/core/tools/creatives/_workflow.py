@@ -63,17 +63,11 @@ def _create_sync_workflow_steps(
         else:
             comment = f"Creative '{creative_info['name']}' (format: {creative_info['format']}) requires review"
 
-        # Create workflow step for creative approval
-        # Serialize format to JSON-compatible form (FormatId is a Pydantic model)
-        from pydantic import BaseModel
-
-        format_value = creative_info["format"]
-        if isinstance(format_value, BaseModel):
-            format_value = format_value.model_dump(mode="json")
-
+        # Create workflow step for creative approval. The format is a FormatId model;
+        # the JSON column type serializes it at flush.
         request_data_for_workflow = {
             "creative_id": creative_info["creative_id"],
-            "format": format_value,
+            "format": creative_info["format"],
             "name": creative_info["name"],
             "status": status,
             "approval_mode": approval_mode,

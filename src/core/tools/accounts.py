@@ -1040,12 +1040,11 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
         # `exc.field` is the gate's own pointer -- it is built from this prefix, so
         # it names the refused half (`.url` or `.authentication.credentials`)
         # without carrying any refused host or credential into buyer-facing text.
-        auth = getattr(config, "authentication", None)
         try:
             accept_push_notification_config(
                 {
                     "url": getattr(config, "url", None),
-                    "authentication": auth.model_dump(mode="json", exclude_none=True) if auth is not None else None,
+                    "authentication": getattr(config, "authentication", None),
                 },
                 field_prefix=f"notification_configs[{index}]",
             )

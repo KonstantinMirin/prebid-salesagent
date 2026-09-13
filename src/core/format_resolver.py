@@ -15,6 +15,7 @@ from typing import Any
 
 from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
 from adcp.types import FormatId as LibraryFormatId
+from pydantic import BaseModel
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
@@ -31,13 +32,13 @@ FormatRef = str | LibraryFormatId | Mapping[str, Any]
 def _as_ref(value: FormatRef) -> Any:
     """Normalize a reference to the shape the SDK predicates accept.
 
-    A Pydantic model is dumped to its wire dict: the SDK reads (agent_url, id)
-    off a mapping, and dumping is also what strips the LOCAL SUBCLASS identity
-    that made ``==`` fail in the first place — the value survives, the class
-    does not, which is the whole point.
+    A local ``FormatId`` subclass is rebuilt as the LIBRARY type from its attributes:
+    pydantic model equality is by class, so a subclass instance never compares equal to
+    the library instance the SDK builds, and the predicate would report every format
+    as different. The value survives, the class does not, which is the whole point.
     """
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, BaseModel):
+        return LibraryFormatId.model_validate(value, from_attributes=True)
     return value
 
 

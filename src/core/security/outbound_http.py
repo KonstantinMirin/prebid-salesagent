@@ -179,11 +179,10 @@ from src.core.security.egress.response import OutboundResult
 
 logger = logging.getLogger(__name__)
 
-# Escape hatch. Defaults OFF — a guarded posture is the default, and an
-# operator has to say so out loud to leave it. The scheme requirement
-# (https-only) has NO escape hatch (GH #1757): the outbound origins
-# that used to need one are all TLS-fronted now (GH #1757).
-_ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
+# Escape hatch: ``limits.adcp_outbound_allow_private`` on the settings (ADCP_OUTBOUND_ALLOW_PRIVATE).
+# Defaults OFF — a guarded posture is the default, and an operator has to say so out
+# loud to leave it. The scheme requirement (https-only) has NO escape hatch (GH #1757):
+# the outbound origins that used to need one are all TLS-fronted now (GH #1757).
 
 #: A query string, as the seam accepts it. Scalars only: httpx would also take a
 #: sequence value or its own ``_httpx.QueryParams``, and admitting either would

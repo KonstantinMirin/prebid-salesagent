@@ -503,7 +503,19 @@ class WireSerializerMixin:
             data = self._apply_nested_models(data, info)
         for field in self._INTERNAL_ONLY_FIELDS:
             data.pop(field, None)
-        return self._apply_always_include(data, info)
+        return self._finish_wire(self._apply_always_include(data, info), info)
+
+    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
+        """The class's own last word on its wire shape. Override; return the dict.
+
+        This is where a ``def model_dump(self, **kwargs)`` override used to live. It could
+        not live there: ``model_dump`` is one of three ways a model is serialized --
+        ``model_dump_json`` and ``pydantic_core.to_json`` (the JSON column type, every
+        nested parent) are the other two, and they never call a Python override -- so a
+        shape written there existed on one path and not the others. A hook inside the
+        serializer runs on all three.
+        """
+        return data
 
     def _apply_nested_models(self, data, info):
         """Re-serialize nested models through their own ``model_dump()``.
@@ -1483,7 +1495,7 @@ class PricingParameters(SalesAgentBaseModel):
     )
 
 
-class PricingOption(SalesAgentBaseModel):
+class PricingOption(WireSerializerMixin, SalesAgentBaseModel):
     """LEGACY flat pricing option — no production consumers.
 
     Production pricing options are the discriminated-union subclasses in
@@ -1549,30 +1561,13 @@ class PricingOption(SalesAgentBaseModel):
         object.__setattr__(self, "is_fixed", has_fixed)
         return self
 
-    def model_dump(self, **kwargs):
-        """Override to exclude internal fields for AdCP V3 compliance.
+    # V3 uses separate schemas (cpm-pricing-option, vcpm-pricing-option, ...) decided by
+    # which pricing field is present; the three internal fields are not in any of them,
+    # and optional fields are omitted rather than null.
+    _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset({"is_fixed", "supported", "unsupported_reason"})
 
-        V3 uses separate schemas (cpm-pricing-option, vcpm-pricing-option, etc.)
-        determined by which pricing fields are present:
-        - fixed_price present = fixed-rate pricing
-        - floor_price present = auction pricing with floor
-
-        Excludes internal fields (is_fixed, supported, unsupported_reason) from
-        external responses. Also excludes None values to match AdCP spec where
-        optional fields should be omitted rather than set to null.
-        """
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Exclude internal fields that aren't in AdCP spec
-            exclude.update({"is_fixed", "supported", "unsupported_reason"})
-            kwargs["exclude"] = exclude
-
-        # Set exclude_none=True by default for AdCP compliance
-        # This ensures nested models (PriceGuidance) also exclude None values
-        if "exclude_none" not in kwargs:
-            kwargs["exclude_none"] = True
-
-        return super().model_dump(**kwargs)
+    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
+        return strip_none_deep(data)
 
 
 class AssetRequirement(SalesAgentBaseModel):
@@ -1831,7 +1826,7 @@ _PLATFORM_TO_FORM_FACTORS: dict[str, list[str]] = {
 }
 
 
-class Targeting(TargetingOverlay):
+class Targeting(WireSerializerMixin, TargetingOverlay):
     """Targeting extending AdCP TargetingOverlay with internal dimensions.
 
     Inherits v3 structured geo fields from library:
@@ -1959,32 +1954,10 @@ class Targeting(TargetingOverlay):
 
         return values
 
-    def model_dump(self, **kwargs):
-        """Override to provide AdCP-compliant responses while preserving internal fields."""
-        kwargs.setdefault("mode", "json")
-        # Default to excluding internal and managed fields for AdCP compliance
-        exclude = kwargs.get("exclude", set())
-        if isinstance(exclude, set):
-            # Add internal and managed fields to exclude by default
-            exclude.update(
-                {
-                    "key_value_pairs",  # Managed-only field
-                    "tenant_id",
-                    "created_at",
-                    "updated_at",
-                    "metadata",  # Internal fields
-                }
-            )
-            kwargs["exclude"] = exclude
-
-        return super().model_dump(**kwargs)
-
-    def dict(self, **kwargs):
-        """Override dict to always exclude managed fields (for backward compat)."""
-        kwargs["exclude"] = kwargs.get("exclude", set())
-        if isinstance(kwargs["exclude"], set):
-            kwargs["exclude"].add("key_value_pairs")
-        return super().dict(**kwargs)
+    # The managed-only field and the internal bookkeeping never reach a buyer.
+    _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset(
+        {"key_value_pairs", "tenant_id", "created_at", "updated_at", "metadata"}
+    )
 
 
 class Budget(SalesAgentBaseModel):
@@ -3293,7 +3266,7 @@ class Snapshot(LibraryGetMediaBuysSnapshot):
     """
 
 
-class GetMediaBuysPackage(LibraryGetMediaBuysPackage):
+class GetMediaBuysPackage(NestedModelSerializerMixin, LibraryGetMediaBuysPackage):
     """Package details within a GetMediaBuys response.
 
     Grounded on the library type so the item chain above it can be too. Only the
@@ -3317,13 +3290,8 @@ class GetMediaBuysPackage(LibraryGetMediaBuysPackage):
     # be narrowed here: list[] is invariant, so list[our CreativeApproval] is not a
     # list[library CreativeApproval] even though the element type now IS a subclass —
     # and inheriting costs nothing, since our subclass adds no fields and instances of
-    # it satisfy the library annotation.
-
-    def model_dump(self, **kwargs):
-        result = super().model_dump(**kwargs)
-        if "targeting_overlay" in result and self.targeting_overlay is not None:
-            result["targeting_overlay"] = self.targeting_overlay.model_dump(**kwargs)
-        return result
+    # it satisfy the library annotation. targeting_overlay is a local subclass, and the
+    # nested-model serializer above re-dumps it through its own serializer.
 
 
 class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy):
@@ -3356,14 +3324,8 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
     # as an explicit null. This adopter was already correct; deriving means it stays
     # correct across a pin bump without anyone re-checking.
 
-    def model_dump(self, **kwargs):
-        """Serialize local package subclasses, then keep required-nullable fields."""
-        result = super().model_dump(**kwargs)
-        if "packages" in result and self.packages:
-            # Pattern #4: this class carries no NestedModelSerializerMixin, so the
-            # local package subclass's own serializer has to be invoked explicitly.
-            result["packages"] = [pkg.model_dump(**kwargs) for pkg in self.packages]
-        return result
+    # packages are local subclasses: the wire serializer re-dumps them through their own.
+    _SERIALIZE_NESTED_MODELS: ClassVar[bool] = True
 
 
 class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
@@ -3504,7 +3466,7 @@ class ListTasksRequest(BuyerRequest, LibraryListTasksRequest):
     """
 
 
-class ListTasksResponse(LibraryListTasksResponse, AdcpResponse):
+class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, AdcpResponse):
     """Extends the pinned ListTasksResponse.
 
     Was a raw dict ``{tasks, total, offset, limit, has_more}`` -- six violations of
@@ -3521,18 +3483,9 @@ class ListTasksResponse(LibraryListTasksResponse, AdcpResponse):
     #: NOT redeclared as ``list[TaskSummary]``. The parent already types this
     #: ``list[Task]`` and ``TaskSummary`` extends ``Task``, so narrowing it would be an
     #: invariance error for no gain: what reaches the wire is decided by the OBJECTS the
-    #: tool builds and by ``model_dump`` below, not by the annotation.
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """Serialize nested tasks explicitly (CLAUDE.md pattern #4).
-
-        Load-bearing rather than ceremonial here: ``TaskSummary`` carries six non-spec
-        fields the parent's ``Task`` does not declare, and ``super().model_dump()`` walks
-        the DECLARED type, so without this the extras vanish from the wire silently.
-        """
-        result = super().model_dump(**kwargs)
-        if self.tasks:
-            result["tasks"] = [task.model_dump(**kwargs) for task in self.tasks]
-        return result
+    #: tool builds and by the nested-model serializer, not by the annotation:
+    #: ``TaskSummary`` carries six non-spec fields the parent's ``Task`` does not
+    #: declare, and serializing by the DECLARED type would drop them silently.
 
 
 class GetTaskStatusResponse(LibraryGetTaskStatusResponse, AdcpResponse):

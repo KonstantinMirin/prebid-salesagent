@@ -8,7 +8,6 @@ import logging
 from typing import Any
 
 from adcp.types import CreativeAsset
-from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -172,11 +171,9 @@ def _build_creative_data(creative: CreativeAsset, url: str | None) -> dict[str, 
     template_variables = getattr(creative, "template_variables", None)
     if template_variables:
         data["template_variables"] = template_variables
-    # Store AI provenance metadata (EU AI Act Article 50)
+    # Store AI provenance metadata (EU AI Act Article 50). The model goes in as it is:
+    # the JSON column type serializes it at flush.
     provenance = getattr(creative, "provenance", None)
     if provenance is not None:
-        if isinstance(provenance, BaseModel):
-            data["provenance"] = provenance.model_dump(mode="json")
-        elif isinstance(provenance, dict):
-            data["provenance"] = provenance
+        data["provenance"] = provenance
     return data

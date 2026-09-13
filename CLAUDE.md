@@ -120,7 +120,7 @@ class Product(LibraryProduct):
 **Rules:**
 - Import library types with `Library*` alias: `from adcp.types import X as LibraryX`
 - Extend with inheritance — don't copy fields from the parent class
-- Only redeclare parent fields when needed for nested serialization (Pattern #4)
+- Only redeclare a parent field to narrow it to a local subclass (Pattern #4 re-serializes the instance)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
 - **Enforced by:** `tests/unit/test_architecture_schema_inheritance.py`, which grades
@@ -182,21 +182,38 @@ need, add one; do not reach past it to the raw session.
 
 See [patterns-reference.md](docs/development/patterns-reference.md) §§1–2 for both patterns in full — canonical repository files, worked correct/wrong examples, and how to add a repository.
 
-### 4. Pydantic: explicit nested serialization
-Parent models must override `model_dump()` to serialize nested children:
+### 4. Pydantic: one serializer per model, and serialization only at the edges
+A model is serialized in three ways — `model_dump()`, `model_dump_json()`, and
+`pydantic_core.to_json` (which the JSON column type and every nested parent use) — and
+only a `@model_serializer` runs on all three. A `def model_dump(self, **kwargs)` override
+runs on one, so a shape written there exists on one path and not the others. **Never
+override `model_dump`.** Wire shaping goes on the one serializer seat,
+`WireSerializerMixin` (`src/core/schemas/_base.py`):
 
 ```python
-class GetCreativesResponse(AdCPBaseModel):
-    creatives: list[Creative]
+class Product(WireSerializerMixin, LibraryProduct):
+    _INTERNAL_ONLY_FIELDS = frozenset({"expires_at"})      # never on the wire
 
-    def model_dump(self, **kwargs):
-        result = super().model_dump(**kwargs)
-        if "creatives" in result and self.creatives:
-            result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        return result
+    def _finish_wire(self, data, info):                    # the class's last word
+        if "formats" in data:
+            data["format_ids"] = data.pop("formats")
+        return strip_none_deep(data)
+
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
+    creatives: list[SyncCreativeResult]   # a local subclass: re-dumped through its own serializer
 ```
 
-**Why**: Pydantic doesn't auto-call custom `model_dump()` on nested models.
+`NestedModelSerializerMixin` re-serializes children by their INSTANCE rather than the
+declared (library) type, which is what keeps a local subclass's extra fields on the wire.
+
+**And business logic never calls `model_dump()` at all.** A model is the value; a dict built
+from it mid-flow is a second representation that drifts. Serialization happens at three
+edges, each with one owner: the wire (`src/core/tools/_wire.py`), outbound HTTP to another
+agent or a webhook target (the registries and webhook services), and the idempotency
+payload hash. Persistence is not an edge that needs a call: hand the model to the
+`JSONType` column and the engine serializes it through the same serializer. Repositories and
+the context manager may normalize a stored DOCUMENT they compose; a tool, helper or
+validator may not.
 
 ### 5. Transport boundary: one path to every implementation
 All tools have two layers: a **transport** (MCP, A2A, REST) that parses a request and writes

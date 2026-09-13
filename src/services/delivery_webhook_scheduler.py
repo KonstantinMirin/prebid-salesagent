@@ -217,13 +217,13 @@ class DeliveryWebhookScheduler:
 
             if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
                 logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
+                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response!r}"
                 )
                 return
 
             if delivery_response.errors is not None:
                 logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
+                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have received an error in the result. Result is {delivery_response!r}"
                 )
                 return
 
