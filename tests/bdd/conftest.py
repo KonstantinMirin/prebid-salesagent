@@ -488,23 +488,15 @@ _XFAIL_TAGS: dict[str, str] = {
     "production populates >=DEFAULT_AGENT over real transports (mock limitation, not a spec-production gap). "
     "ALSO upstream adcp#7338 on e2e_rest: the response asset oneOf omits pixel_tracker, which the reference "
     "formats declare -- see the _SELECTIVE_XFAIL block for the evidence",
-    # T-UC-005-main: TWO different failures under one tag, and the reason used to name only
-    # the first. In-process it is a real spec-production gap (some formats, e.g. audio-spot,
-    # carry no asset_requirements or render_capabilities). On e2e_rest it is DORMANCY, not a
-    # gap: the Given "the creative agent registry has formats across multiple categories" asks
-    # for fmt_47/fmt_48/fmt_49, none of which is among the 57 in
-    # tests/fixtures/creative_formats/reference_formats.json, so the env raises
-    # E2EUnsupportedSetup before anything is graded. The strict-xfail misclassification
-    # detector caught exactly that and said so; recording it as a production gap would have
-    # been the lie it refused. Fixing it means registering those three in the creative agent
-    # and running `make creative-formats-refresh` -- test wiring, not production work.
-    # ONE obligation now, and it is a real production gap. The scenario used to carry two
-    # more Thens that graded `type` -- "a name and type category" and "sorted by format type
-    # then name" -- a field adcp 3.12 removed from Format. Sorting has its own scenario
-    # (@T-UC-005-inv-031-2-holds, graduated above), so it is no longer suppressed by this tag.
-    "T-UC-005-main": "in-process: some formats (e.g. audio-spot) lack asset_requirements and "
-    "render_capabilities — spec-production gap. e2e_rest: DORMANT — the Given requests "
-    "fmt_47/48/49, which are not in the reference fixture, so the scenario grades nothing",
+    # Graduated: T-UC-005-main. Both halves of its old reason were the Given, not
+    # production: it minted fmt_N formats, which carry no assets (so "asset requirements"
+    # graded nothing in-process and read as a spec-production gap) and which the live
+    # stack cannot serve (E2EUnsupportedSetup on e2e_rest, flagged by the misclassification
+    # detector). The Given now draws three reference-catalog formats (given_entities.py),
+    # so the scenario grades POST-S1/S2 for real on a2a, mcp and rest. On e2e_rest the live
+    # server answers with the WHOLE catalog, pixel_tracker assets included, and the
+    # compliance Then fails on adcp#7338 exactly as its siblings do -- that one node is on
+    # tests/bdd/e2e_rest_known_failures.txt under the #7338 block, not parked by tag.
     # Partially graduated: dispatch fix landed; error code mismatch remains
     # FIXME: production raises AUTH_REQUIRED, spec expects TENANT_REQUIRED
     "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",

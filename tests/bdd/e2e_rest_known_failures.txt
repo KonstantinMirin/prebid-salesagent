@@ -167,3 +167,15 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 #     (test_architecture_e2e_rest_escape_hatches.py), not listed here.
 #   - set_adapter_channels stays in-process-only (e2e_unsupported): no
 #     production test_behavior channel overrides reported default_channels.
+
+# --- upstream adcp#7338 on the live catalog (1) ---
+# Added 2026-09-13 when @T-UC-005-main's Given moved from minted fmt_N ids to three
+# reference-catalog formats (the tag-level strict xfail that parked all four transports
+# is gone; in-process the scenario now grades POST-S1/S2 for real). Over e2e_rest the
+# live server answers with the WHOLE reference catalog, and "the response is compliant
+# with the list_creative_formats spec" fails on the pixel_tracker assets the pinned
+# core/format.json assets union does not admit -- the same defect the #7338 rows in
+# tests/bdd/conftest.py's _SELECTIVE_XFAIL block record for the UC-005 outlines.
+# Graduates when adcp#7338 lands and the pin moves, or when production stops serving
+# assets the pin does not admit (salesagent-i5znm).
+tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]

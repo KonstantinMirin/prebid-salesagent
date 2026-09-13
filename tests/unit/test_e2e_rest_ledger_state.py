@@ -82,6 +82,12 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]",
         "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]",
         "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]",
+        # Added 2026-09-13: @T-UC-005-main's Given moved from minted fmt_N ids to
+        # reference-catalog formats, which retired its tag-level xfail on every
+        # transport; over e2e_rest the live catalog carries pixel_tracker assets the
+        # pinned Format.assets union does not admit (adcp#7338), so the compliance
+        # Then fails there for the same reason as the three UC-005 rows above.
+        "tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]",
         # The 3 uc018 rows of this block GRADUATED 2026-08-31 on main (#1858): their
         # Givens seed through the factories into the live server's own database, so
         # the block's "injected cross-principal creatives" clause stopped describing
