@@ -32,7 +32,7 @@ db_session = gam_db_session
 
 
 require_sync_api_key = require_api_key_auth(
-    env_var="SYNC_API_KEY",
+    setting="sync_api_key",
     config_key="api_key",
     header="X-API-Key",
 )

@@ -41,11 +41,11 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
-import os
 from urllib.parse import urlparse
 
 from adcp.types import TaskType
 
+from src.core.config import get_settings
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.egress.policy import EgressPolicy
 
@@ -60,8 +60,8 @@ UNPARSEABLE_WEBHOOK_URL_FOR_LOG = "<unparseable-url>"
 
 
 def _adcp_testing() -> bool:
-    """True when ADCP_TESTING allows localhost/HTTP for capture servers."""
-    return os.environ.get("ADCP_TESTING") == "true"
+    """True when a buyer webhook may target localhost over plain HTTP (a capture server)."""
+    return get_settings().loopback_webhooks_allowed
 
 
 def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE_FALLBACK) -> str:

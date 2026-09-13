@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -14,6 +13,7 @@ from src.adapters.gam_inventory_discovery import GAMInventoryDiscovery
 from src.adapters.gam_reporting_service import GAMReportingService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, GAMLineItem, GAMOrder, Tenant
@@ -186,11 +186,11 @@ def detect_gam_network(tenant_id):
 
         # Get OAuth credentials from validated configuration
         try:
-            from src.core.config import get_gam_oauth_config
-
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
-            client_secret = gam_config.client_secret
+            gam_auth = get_settings().auth
+            if not gam_auth.gam_oauth_configured:
+                raise ValueError("GAM OAuth credentials not configured")
+            client_id = gam_auth.gam_oauth_client_id
+            client_secret = gam_auth.gam_oauth_client_secret
 
         except Exception as e:
             return (
@@ -639,9 +639,10 @@ def get_gam_custom_targeting_keys(tenant_id):
                 return jsonify({"error": gam_error}), 400
 
             # Create OAuth2 client
+            gam_auth = get_settings().auth
             oauth2_client = oauth2.GoogleRefreshTokenClient(
-                client_id=os.environ.get("GAM_OAUTH_CLIENT_ID"),
-                client_secret=os.environ.get("GAM_OAUTH_CLIENT_SECRET"),
+                client_id=gam_auth.gam_oauth_client_id,
+                client_secret=gam_auth.gam_oauth_client_secret,
                 refresh_token=adapter_config.gam_refresh_token,
             )
 
@@ -808,7 +809,7 @@ def create_service_account(tenant_id):
 
     try:
         # Get GCP project ID from environment or configuration
-        gcp_project_id = os.environ.get("GCP_PROJECT_ID")
+        gcp_project_id = get_settings().auth.gcp_project_id
         if not gcp_project_id:
             return (
                 jsonify(
@@ -857,7 +858,7 @@ def get_service_account_email(tenant_id):
     Returns the service account email if one has been created for this tenant.
     """
     try:
-        gcp_project_id = os.environ.get("GCP_PROJECT_ID")
+        gcp_project_id = get_settings().auth.gcp_project_id
         if not gcp_project_id:
             return jsonify({"error": "GCP_PROJECT_ID not configured"}), 500
 
@@ -904,9 +905,10 @@ def test_gam_connection(tenant_id):
             else:
                 auth_method = "service_account"
 
-        # Get OAuth credentials from environment variables
-        client_id = os.environ.get("GAM_OAUTH_CLIENT_ID")
-        client_secret = os.environ.get("GAM_OAUTH_CLIENT_SECRET")
+        # Get OAuth credentials from the settings
+        gam_auth = get_settings().auth
+        client_id = gam_auth.gam_oauth_client_id
+        client_secret = gam_auth.gam_oauth_client_secret
 
         oauth2_client = None
 

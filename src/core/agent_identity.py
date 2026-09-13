@@ -38,11 +38,11 @@ exists to remove.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from src.core.config import get_settings
 from src.core.domain_config import _get_protocol_for_domain, get_sales_agent_domain
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -102,11 +102,12 @@ def canonical_agent_url(tenant: Tenant) -> str:
         return f"{_get_protocol_for_domain(host)}://{host}"
 
     # Deployment-level base: single-tenant installs with no per-tenant host.
-    if deployment_base := os.environ.get("ADCP_AGENT_URL"):
-        return deployment_base.rstrip("/")
+    runtime = get_settings().runtime
+    if runtime.adcp_agent_url:
+        return runtime.adcp_agent_url.rstrip("/")
 
     # Development default — the port the sales agent serves on locally.
-    return f"http://localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
+    return runtime.local_base_url
 
 
 def agent_origin_host(tenant: Tenant) -> str:

@@ -44,10 +44,10 @@ def validate_startup_requirements() -> None:
     This is useful for health checks and lightweight validation.
     """
     try:
-        from src.core.config import get_config
+        from src.core.config import get_settings
 
-        # Just check that config can be loaded
-        get_config()
+        # Just check that the settings can be loaded
+        get_settings()
 
         # Note: SUPER_ADMIN_EMAILS is no longer required at startup.
         # Per-tenant OIDC with Setup Mode is the default authentication flow.

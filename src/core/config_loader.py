@@ -9,11 +9,11 @@ Environment variables:
 
 import json
 import logging
-import os
 from typing import Any
 
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 
@@ -30,7 +30,7 @@ def validate_multi_tenant_config() -> list[str]:
 
     if not is_single_tenant_mode():
         # Multi-tenant mode requires SALES_AGENT_DOMAIN
-        if not os.environ.get("SALES_AGENT_DOMAIN"):
+        if not get_settings().runtime.sales_agent_domain:
             errors.append("SALES_AGENT_DOMAIN is required for multi-tenant mode")
 
     return errors
@@ -175,21 +175,9 @@ def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = No
         raise
 
 
-def get_secret(key: str, default: str | None = None) -> str | None:
-    """Get a secret from environment or config."""
-    return os.environ.get(key, default)
-
-
 def is_single_tenant_mode() -> bool:
-    """Check if the system is running in single-tenant mode.
-
-    Single-tenant mode is the default. Multi-tenant mode must be explicitly enabled
-    via ADCP_MULTI_TENANT=true environment variable.
-
-    Returns:
-        True if single-tenant mode (default), False if multi-tenant mode
-    """
-    return os.environ.get("ADCP_MULTI_TENANT", "false").lower() != "true"
+    """Single-tenant mode is the default; multi-tenant is ``ADCP_MULTI_TENANT=true``."""
+    return get_settings().runtime.is_single_tenant
 
 
 def ensure_default_tenant_exists() -> dict[str, Any] | None:
@@ -220,13 +208,9 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             # Create default tenant for single-tenant deployments
             logger.info("Single-tenant mode: Creating default tenant...")
 
-            # Get super admin email for initial authorization
-            super_admin_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
-            authorized_emails = [e.strip() for e in super_admin_emails.split(",") if e.strip()]
-
-            # Get super admin domains for initial authorization
-            super_admin_domains = os.environ.get("SUPER_ADMIN_DOMAINS", "")
-            authorized_domains = [d.strip() for d in super_admin_domains.split(",") if d.strip()]
+            # The super admins are the initial authorization
+            authorized_emails = get_settings().auth.super_admin_email_list
+            authorized_domains = get_settings().auth.super_admin_domain_list
 
             from datetime import UTC, datetime
 

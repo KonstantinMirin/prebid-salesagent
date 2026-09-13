@@ -66,9 +66,9 @@ def _background_schedulers_enabled() -> bool:
     webhooks, so an accidental disable is logged at WARNING (below) to make it
     visible in production logs.
     """
-    import os
+    from src.core.config import get_settings
 
-    return os.getenv("ADCP_RUN_BACKGROUND_SCHEDULERS", "true").lower() != "false"
+    return get_settings().runtime.adcp_run_background_schedulers
 
 
 # Lifespan context manager for FastMCP startup/shutdown

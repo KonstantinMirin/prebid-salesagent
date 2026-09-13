@@ -1160,13 +1160,13 @@ class MockAdServer(AdServerAdapter):
         The live server's Mock adapter reads it here so in-process and e2e
         return byte-identical payloads. No row -> None -> legacy behavior.
 
-        Gated behind ADCP_TESTING: the table has no production writer, so the
-        per-poll DB read is pure test plumbing — a production deployment must
-        not query it at all (#1430: simulation-read gating).
+        Read only where the deployment allows it: the table has no production writer, so
+        the per-poll DB read is pure test plumbing — a production deployment must not
+        query it at all (#1430: simulation-read gating).
         """
-        import os
+        from src.core.config import get_settings
 
-        if os.environ.get("ADCP_TESTING", "").lower() != "true":
+        if not get_settings().mock_delivery_seed_enabled:
             return None
         if not self.tenant_id:
             return None

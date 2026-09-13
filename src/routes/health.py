@@ -5,10 +5,9 @@ standard FastAPI routes so they are served by the unified FastAPI app.
 """
 
 import logging
-import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 
@@ -26,13 +25,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def require_testing_mode() -> None:
-    """FastAPI dependency that restricts access to testing environments only."""
-    if os.environ.get("ADCP_TESTING") != "true":
-        raise HTTPException(status_code=404, detail="Not found")
-
-
-debug_router = APIRouter(dependencies=[Depends(require_testing_mode)])
+# The routes on this router exist only where the deployment allows them: ``src/app.py``
+# includes it when ``get_settings().debug_routes_enabled`` says so, and nowhere else does it
+# exist at all. No per-request check: a route that is not mounted cannot be reached.
+debug_router = APIRouter()
 
 
 @router.get("/health")
@@ -41,18 +37,14 @@ async def health(request: Request):
     return JSONResponse({"status": "healthy", "service": "mcp"})
 
 
-@router.post("/_internal/reset-db-pool")
+@debug_router.post("/_internal/reset-db-pool")
 async def reset_db_pool(request: Request):
     """Reset database connection pool after external data changes.
 
-    This is a testing-only endpoint that flushes the SQLAlchemy connection pool,
-    ensuring fresh connections see recently committed data. Only works when
-    ADCP_TESTING environment variable is set to 'true'.
+    A testing-only endpoint that flushes the SQLAlchemy connection pool, so fresh
+    connections see recently committed data. On the debug router, so it exists only where
+    the deployment mounts that router.
     """
-    if os.getenv("ADCP_TESTING") != "true":
-        logger.warning("Attempted to reset DB pool outside testing mode")
-        return JSONResponse({"error": "This endpoint is only available in testing mode"}, status_code=403)
-
     try:
         from src.core.database.database_session import reset_engine
 

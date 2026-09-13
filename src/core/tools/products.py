@@ -5,7 +5,6 @@ shared implementation pattern from CLAUDE.md.
 """
 
 import logging
-import os
 import time
 from typing import Any, cast
 
@@ -17,6 +16,7 @@ from adcp.types import PropertyListReference
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_principal
+from src.core.config import get_settings
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
@@ -227,9 +227,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     if not offering:
         offering = "Generic product inquiry"
 
-    # Skip strict validation in test environments (allow simple test values)
-
-    is_test_mode = os.getenv("ADCP_TESTING") == "true"
+    # Under test, simple placeholder values pass where a real brand would be demanded.
+    is_test_mode = get_settings().relaxed_brand_validation
 
     # Note: brand_manifest validation is handled by Pydantic schema, no need for runtime validation here
 

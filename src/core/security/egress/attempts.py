@@ -12,12 +12,12 @@ that called them in sequence was written twice (salesagent-tbrk.2).
 from __future__ import annotations
 
 import logging
-import os
 import random
 from collections.abc import Iterator
 from enum import Enum, auto
 from typing import ClassVar
 
+from src.core.config import get_settings
 from src.core.errors.details import OutboundDeliveryDetails
 from src.core.exceptions import AdCPServiceUnavailableError, clamp_retry_after
 from src.core.security.egress.policy import OutboundError
@@ -27,14 +27,10 @@ logger = logging.getLogger(__name__)
 # Retry backoff. BR-RULE-029 INV-3: a retried delivery waits 1s, 2s, 4s, each
 # plus jitter, so a fleet of clients retrying the same failed endpoint does not
 # thunder back in lockstep. That is production's schedule, and it is decided
-# here rather than at any call site.
-_BACKOFF_BASE_SECONDS = 1.0
-
-# Test-speed override for the base only — the shape (x2 per attempt) and the
-# jitter are not negotiable. Deliberately absent from tox.ini pass_env and from
-# both compose files: no deployed or CI environment has any business shortening
-# production backoff.
-_BACKOFF_BASE_ENV = "ADCP_OUTBOUND_BACKOFF_BASE_SECONDS"
+# here rather than at any call site. The BASE alone is a settings knob
+# (``limits.adcp_outbound_backoff_base_seconds``, ADCP_OUTBOUND_BACKOFF_BASE_SECONDS, a
+# test-speed override deliberately absent from tox.ini pass_env and both compose files);
+# the shape (x2 per attempt) and the jitter are not negotiable.
 
 # The most of a counterparty's Retry-After this seam will actually wait. The
 # header is a request, not an instruction: honouring an unbounded value lets any
@@ -61,38 +57,6 @@ _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 _DELIVERY_FAILED_MESSAGE = "Outbound request to the supplied URL could not be delivered."
 
 
-def env_float(name: str, default: float) -> float:
-    """Read a positive float env knob, falling back loudly.
-
-    Public because it is the ONE reader of this shape. A verbatim copy lived in
-    ``src/services/webhook_delivery_service.py`` with the env name and default
-    closed over as module constants; the two had already drifted apart by one
-    word of warning text, which is what a second copy is for.
-
-    Read at CALL time: tests flip these with ``monkeypatch.setenv`` and an
-    import-time read would freeze the first value.
-
-    The value must be STRICTLY positive. Zero is rejected rather than honoured
-    because "no base delay, jitter only" is not a schedule this module offers,
-    and silently substituting the production default for it would surprise in
-    exactly the direction this seam exists to close. Every rejection is logged
-    at WARNING naming the variable — an operator who cannot see which knob was
-    ignored cannot fix it.
-    """
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        logger.warning("%s=%r is not a number — using %ss", name, raw, default)
-        return default
-    if value <= 0:
-        logger.warning("%s=%r is not strictly positive — using %ss", name, raw, default)
-        return default
-    return value
-
-
 def _should_retry_status(status: int) -> bool:
     return status in _RETRYABLE_STATUSES
 
@@ -114,7 +78,7 @@ def _backoff_seconds(attempt: int) -> float:
     attribute, pin the SAME object this function reads — a ``from``-import
     would bind a separate name the patch never touches.
     """
-    base = env_float(_BACKOFF_BASE_ENV, _BACKOFF_BASE_SECONDS)
+    base = get_settings().limits.adcp_outbound_backoff_base_seconds
     return base * (2 ** (attempt - 1)) + random.uniform(0, 1)
 
 

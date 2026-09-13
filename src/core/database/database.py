@@ -1,10 +1,10 @@
-import os
 from datetime import UTC, datetime
 from typing import cast
 
 from sqlalchemy import func, select
 
 from scripts.ops.migrate import run_migrations
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
@@ -24,16 +24,15 @@ def init_db(exit_on_error=False):
         exit_on_error: If True, exit process on migration error. If False, raise exception.
                       Default False for test compatibility.
     """
-    # Skip migrations if requested (for testing)
-    if os.environ.get("SKIP_MIGRATIONS") != "true":
+    testing = get_settings().testing
+    if not testing.skip_migrations:
         # Run migrations first - this creates all tables
         print("Applying database migrations...")
         run_migrations(exit_on_error=exit_on_error)
 
-    # Check if demo tenant should be created
-    # CREATE_DEMO_TENANT=false (default) for production deployments
-    # CREATE_DEMO_TENANT=true creates a fully configured demo with mock adapter
-    create_demo_tenant = os.environ.get("CREATE_DEMO_TENANT", "false").lower() == "true"
+    # A demo tenant is a fully configured tenant with the mock adapter; production
+    # deployments start blank.
+    create_demo_tenant = testing.create_demo_tenant
 
     # Check if we need to create a default tenant
     with get_db_session() as db_session:
@@ -137,7 +136,7 @@ def init_db(exit_on_error=False):
                 db_session.add(auth_config)
 
             # Only create additional sample advertisers if this is a development environment
-            if create_demo_tenant and os.environ.get("CREATE_SAMPLE_DATA", "false").lower() == "true":
+            if create_demo_tenant and testing.create_sample_data:
                 principals_data = [
                     {
                         "principal_id": "acme_corp",
@@ -228,7 +227,7 @@ def init_db(exit_on_error=False):
 
         # Create sample products if CREATE_SAMPLE_DATA is set and products don't exist
         # This runs regardless of whether tenant was just created or already existed
-        if os.environ.get("CREATE_SAMPLE_DATA", "false").lower() == "true":
+        if testing.create_sample_data:
             # Check if products already exist
             stmt_products = select(func.count()).select_from(Product).where(Product.tenant_id == "default")
             existing_products_count = db_session.scalar(stmt_products)

@@ -56,6 +56,7 @@ from google.cloud import iam_admin_v1
 from google.cloud.iam_admin_v1 import types
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig
 
@@ -90,7 +91,8 @@ class GCPServiceAccountService:
 
         Handles GOOGLE_APPLICATION_CREDENTIALS_JSON secret for cloud deployments.
         """
-        creds_json = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+        auth_settings = get_settings().auth
+        creds_json = auth_settings.google_application_credentials_json
         if creds_json:
             # Write credentials to temp file for GCP client library
             # This is needed because the client library expects a file path
@@ -99,8 +101,8 @@ class GCPServiceAccountService:
                 self._temp_creds_file = f.name
                 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = f.name
             logger.info("GCP credentials loaded from GOOGLE_APPLICATION_CREDENTIALS_JSON")
-        elif os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
-            logger.info(f"Using GCP credentials from file: {os.environ['GOOGLE_APPLICATION_CREDENTIALS']}")
+        elif creds_file := auth_settings.google_application_credentials:
+            logger.info(f"Using GCP credentials from file: {creds_file}")
         else:
             logger.warning("No explicit GCP credentials provided - relying on Application Default Credentials")
 

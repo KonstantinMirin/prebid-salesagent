@@ -5,8 +5,9 @@ by both MCP and A2A protocols.
 """
 
 import logging
-import os
 from typing import TYPE_CHECKING, Any
+
+from src.core.config import get_settings
 
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
@@ -23,8 +24,8 @@ from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
 
-# Enable verbose auth logging only in development
-_VERBOSE_AUTH_LOG = not (os.environ.get("FLY_APP_NAME") or os.environ.get("PRODUCTION"))
+# Verbose auth logging is a development affordance
+_VERBOSE_AUTH_LOG = get_settings().verbose_auth_log
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:

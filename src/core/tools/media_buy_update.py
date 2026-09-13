@@ -9,7 +9,6 @@ Handles media buy updates including:
 """
 
 import logging
-import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -19,6 +18,7 @@ from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, val
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 
+from src.core.config import get_settings
 from src.core.tools.media_buy_list import _compute_status
 
 if TYPE_CHECKING:
@@ -28,9 +28,8 @@ if TYPE_CHECKING:
 # Financial policy constants (F-05)
 # ---------------------------------------------------------------------------
 
-#: Absolute upper bound for any campaign-level budget update.
-#: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
-MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
+#: Absolute upper bound for any campaign-level budget update (MAX_CAMPAIGN_BUDGET_USD).
+MAX_CAMPAIGN_BUDGET: Decimal = get_settings().limits.max_campaign_budget_usd
 
 from sqlalchemy import select
 

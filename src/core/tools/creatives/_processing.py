@@ -333,10 +333,9 @@ def _update_existing_creative(
                     )
 
                     # Get Gemini API key from config
-                    from src.core.config import get_config
+                    from src.core.config import get_settings
 
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
+                    gemini_api_key = get_settings().integrations.gemini_api_key
 
                     if not gemini_api_key:
                         error_msg = (
@@ -713,10 +712,9 @@ def _create_new_creative(
                     )
 
                     # Get Gemini API key from config
-                    from src.core.config import get_config
+                    from src.core.config import get_settings
 
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
+                    gemini_api_key = get_settings().integrations.gemini_api_key
 
                     if not gemini_api_key:
                         error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"

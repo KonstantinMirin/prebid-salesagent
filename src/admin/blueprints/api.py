@@ -8,6 +8,7 @@ from sqlalchemy import func, select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, Product
 
@@ -88,12 +89,12 @@ def oauth_status():
     try:
         # Check for GAM OAuth credentials using validated configuration
         try:
-            from src.core.config import get_gam_oauth_config
             from src.core.logging_config import oauth_structured_logger
 
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
-            client_secret = gam_config.client_secret
+            gam_auth = get_settings().auth
+            if not gam_auth.gam_oauth_configured:
+                raise ValueError("GAM OAuth credentials not configured")
+            client_id = gam_auth.gam_oauth_client_id
 
             # Log configuration check
             oauth_structured_logger.log_gam_oauth_config_load(
@@ -293,11 +294,10 @@ def test_gam_connection():
         if not refresh_token:
             return jsonify({"error": "Refresh token is required"}), 400
 
-        # Get OAuth credentials from environment variables
-        import os
-
-        client_id = os.environ.get("GAM_OAUTH_CLIENT_ID")
-        client_secret = os.environ.get("GAM_OAUTH_CLIENT_SECRET")
+        # Get OAuth credentials from the settings
+        gam_auth = get_settings().auth
+        client_id = gam_auth.gam_oauth_client_id
+        client_secret = gam_auth.gam_oauth_client_secret
 
         if not client_id or not client_secret:
             return (

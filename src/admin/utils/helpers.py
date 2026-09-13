@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
@@ -13,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant, TenantManagementConfig, User
 from src.core.logging_config import log_safe
@@ -28,12 +28,10 @@ logger = logging.getLogger(__name__)
 def is_admin_production() -> bool:
     """Return True when admin should behave in production-safe mode.
 
-    Treats both PRODUCTION=true and ENVIRONMENT=production as authoritative
-    so security-sensitive checks do not drift between deployment styles.
+    One answer for every spelling of "production", so security-sensitive checks
+    do not drift between deployment styles.
     """
-    return (
-        os.environ.get("PRODUCTION", "").lower() == "true" or os.environ.get("ENVIRONMENT", "").lower() == "production"
-    )
+    return get_settings().runtime.is_production
 
 
 def parse_json_config(config_str):
@@ -159,23 +157,18 @@ def is_super_admin(email):
         # No session context available (e.g., outside request context)
         pass
 
-    # 1. FIRST: Check environment variables (most reliable)
-    env_emails = os.environ.get("SUPER_ADMIN_EMAILS", "")
-    if env_emails:
-        env_emails_list = [e.strip().lower() for e in env_emails.split(",") if e.strip()]
-        if email_lower in env_emails_list:
-            logger.debug(f"Super admin access granted via environment: {email}")
-            _cache_admin_status(email_lower, True)
-            return True
+    # 1. FIRST: Check the configured lists (most reliable)
+    auth_settings = get_settings().auth
+    if email_lower in auth_settings.super_admin_email_list:
+        logger.debug(f"Super admin access granted via environment: {email}")
+        _cache_admin_status(email_lower, True)
+        return True
 
-    env_domains = os.environ.get("SUPER_ADMIN_DOMAINS", "")
-    if env_domains:
-        env_domains_list = [d.strip().lower() for d in env_domains.split(",") if d.strip()]
-        email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
-        if email_domain in env_domains_list:
-            logger.debug(f"Super admin access granted via environment domain: {email}")
-            _cache_admin_status(email_lower, True)
-            return True
+    email_domain = email_lower.split("@")[1] if "@" in email_lower else ""
+    if email_domain and email_domain in auth_settings.super_admin_domain_list:
+        logger.debug(f"Super admin access granted via environment domain: {email}")
+        _cache_admin_status(email_lower, True)
+        return True
 
     # 2. FALLBACK: Check database configuration
     try:
@@ -265,7 +258,7 @@ def require_auth(admin_only=False):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             # Check for test mode
-            test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+            test_mode = get_settings().testing.adcp_auth_test_mode
             if test_mode and "test_user" in session:
                 g.user = session["test_user"]
                 return f(*args, **kwargs)
@@ -313,8 +306,8 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # Check for test mode (global env var OR per-tenant auth_setup_mode)
-            test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+            # Check for test mode (global setting OR per-tenant auth_setup_mode)
+            test_mode = get_settings().testing.adcp_auth_test_mode
 
             # Also check per-tenant auth_setup_mode if test_user is in session
             if not test_mode and "test_user" in session:

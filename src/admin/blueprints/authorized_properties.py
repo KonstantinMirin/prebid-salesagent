@@ -2,7 +2,6 @@
 
 import json
 import logging
-import os
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -13,6 +12,7 @@ from werkzeug.wrappers import Response
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, Tenant
@@ -222,14 +222,14 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
 
 def _construct_agent_url(tenant_id: str, request: Any) -> str:
     """Construct the agent URL using existing tenant resolution logic."""
-    import os
-
     from src.core.database.models import Tenant
 
     logger.info(f"🏗️ Constructing agent URL for tenant: {tenant_id}")
 
+    runtime = get_settings().runtime
+
     # Check if we have an explicit override for testing
-    override_url = os.environ.get("ADCP_AGENT_URL")
+    override_url = runtime.adcp_agent_url
     if override_url:
         logger.info(f"🔧 Using ADCP_AGENT_URL override: {override_url}")
         return override_url
@@ -248,7 +248,7 @@ def _construct_agent_url(tenant_id: str, request: Any) -> str:
         logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
 
         # In production, use the existing virtual host system
-        if os.environ.get("PRODUCTION") == "true":
+        if runtime.is_production:
             if virtual_host:
                 url = f"https://{virtual_host}"
                 logger.info(f"🌐 Production: using virtual_host -> {url}")
@@ -262,16 +262,14 @@ def _construct_agent_url(tenant_id: str, request: Any) -> str:
                 # If SALES_AGENT_DOMAIN not configured, fall through to development mode
 
         # For development, use MCP server port
-        mcp_port = os.environ.get("ADCP_SALES_PORT", "8080")
-        url = f"http://localhost:{mcp_port}"
+        url = runtime.local_base_url
         logger.info(f"🛠️ Development: using localhost -> {url}")
         return url
 
     except Exception as e:
         # Fallback if tenant context unavailable
         logger.warning(f"⚠️ Failed to get tenant context: {e}")
-        mcp_port = os.environ.get("ADCP_SALES_PORT", "8080")
-        url = f"http://localhost:{mcp_port}"
+        url = runtime.local_base_url
         logger.info(f"🆘 Fallback: using localhost -> {url}")
         return url
 
@@ -320,7 +318,7 @@ def list_authorized_properties(tenant_id: str) -> str | Response:
             logger.info("Rendering template...")
 
             # Get environment info for dev/production detection
-            is_production = os.environ.get("PRODUCTION") == "true"
+            is_production = get_settings().runtime.is_production
 
             return render_template(
                 "authorized_properties_list.html",
@@ -563,7 +561,7 @@ def verify_all_properties(tenant_id: str) -> Response:
     try:
         # In production, always construct agent URL from tenant context
         # Dev overrides only allowed in development
-        is_production = os.environ.get("PRODUCTION") == "true"
+        is_production = get_settings().runtime.is_production
 
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
@@ -777,7 +775,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
         # In production, always construct agent URL from tenant context
         # Dev overrides only allowed in development
-        is_production = os.environ.get("PRODUCTION") == "true"
+        is_production = get_settings().runtime.is_production
         logger.info(f"🏭 Environment: {'PRODUCTION' if is_production else 'DEVELOPMENT'}")
 
         if is_production:

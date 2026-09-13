@@ -5,12 +5,12 @@ to help new users understand what they need to do before taking their first orde
 """
 
 import logging
-import os
 import time
 from typing import Any
 
 from sqlalchemy import func, select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AuthorizedProperty,
@@ -35,7 +35,7 @@ def _is_multi_tenant_mode() -> bool:
     In single-tenant mode, SSO is critical because each deployment needs
     its own authentication configuration.
     """
-    return os.environ.get("ADCP_MULTI_TENANT", "").lower() == "true"
+    return not get_settings().runtime.is_single_tenant
 
 
 # Simple time-based cache for setup status (5 minute TTL)
@@ -354,10 +354,8 @@ class SetupChecklistService:
                     config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
             elif tenant.ad_server == "mock":
                 # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
+                # But allow it in testing environments
+                if get_settings().mock_adapter_counts_as_configured:
                     ad_server_fully_configured = True
                     config_details = "Mock adapter configured (test mode)"
                 else:
@@ -784,10 +782,8 @@ class SetupChecklistService:
                 config_details = "GAM configured - Test connection to verify"
             elif tenant.ad_server == "mock":
                 # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
+                # But allow it in testing environments
+                if get_settings().mock_adapter_counts_as_configured:
                     ad_server_fully_configured = True
                     config_details = "Mock adapter configured (test mode)"
                 else:

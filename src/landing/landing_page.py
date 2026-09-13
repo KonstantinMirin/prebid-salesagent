@@ -6,6 +6,7 @@ import os
 from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from src.core.config import get_settings
 from src.core.domain_config import (
     extract_subdomain_from_host,
     get_sales_agent_url,
@@ -37,7 +38,7 @@ def _determine_base_url(virtual_host: str | None = None) -> str:
         Base URL for generating endpoint URLs
     """
     # Check if we're in production
-    if os.getenv("PRODUCTION") == "true":
+    if get_settings().runtime.is_production:
         if virtual_host:
             return f"https://{virtual_host}"
         # Fallback to production domain (if configured)
@@ -52,8 +53,7 @@ def _determine_base_url(virtual_host: str | None = None) -> str:
         return f"{scheme}://{virtual_host}"
 
     # Local development fallback (should rarely be reached)
-    port = os.getenv("ADCP_SALES_PORT", "8080")
-    return f"http://localhost:{port}"
+    return get_settings().runtime.local_base_url
 
 
 def _extract_tenant_subdomain(tenant: dict, virtual_host: str | None = None) -> str | None:
@@ -256,7 +256,7 @@ def generate_tenant_landing_page(tenant: dict, virtual_host: str | None = None) 
         is_external_domain = virtual_host and not is_sales_agent_domain(virtual_host)
         if is_external_domain and tenant_subdomain:
             # External domain: Point admin to tenant subdomain
-            if os.getenv("PRODUCTION") == "true":
+            if get_settings().runtime.is_production:
                 admin_url = f"{get_tenant_url(tenant_subdomain)}/admin/"
             else:
                 # Local dev: Use localhost with subdomain simulation
@@ -279,7 +279,7 @@ def generate_tenant_landing_page(tenant: dict, virtual_host: str | None = None) 
         "adcp_docs_url": "https://adcontextprotocol.org",
         # Virtual host info
         "virtual_host": virtual_host,
-        "is_production": os.getenv("PRODUCTION") == "true",
+        "is_production": get_settings().runtime.is_production,
         # Additional context
         "page_title": f"{tenant.get('name', 'Publisher')} Sales Agent",
         "version": get_version(),

@@ -61,12 +61,11 @@ class GAMAuthManager:
     def _get_oauth_credentials(self):
         """Get OAuth credentials using refresh token and Pydantic configuration."""
         try:
-            from src.core.config import get_gam_oauth_config
+            from src.core.config import get_settings
 
-            # Get validated configuration
-            gam_config = get_gam_oauth_config()
-            client_id = gam_config.client_id
-            client_secret = gam_config.client_secret
+            auth = get_settings().auth
+            client_id = auth.gam_oauth_client_id
+            client_secret = auth.gam_oauth_client_secret
 
         except AdCPSalesAgentError:
             # A typed error already names its own fault; flattening it here would

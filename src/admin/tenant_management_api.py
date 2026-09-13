@@ -1,7 +1,6 @@
 """Tenant Management API for managing tenants - Using direct SQL queries."""
 
 import logging
-import os
 import uuid
 from datetime import UTC, datetime
 
@@ -11,6 +10,7 @@ from sqlalchemy import delete, func, select
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
@@ -31,7 +31,7 @@ tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix=
 
 
 require_tenant_management_api_key = require_api_key_auth(
-    env_var="TENANT_MANAGEMENT_API_KEY",
+    setting="tenant_management_api_key",
     config_key="tenant_management_api_key",
     header="X-Tenant-Management-API-Key",
 )
@@ -298,7 +298,7 @@ def create_tenant():
                 "name": data["name"],
                 "subdomain": data["subdomain"],
                 "admin_ui_url": (
-                    f"http://{data['subdomain']}.localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
+                    f"http://{data['subdomain']}.localhost:{get_settings().runtime.adcp_sales_port}"
                     f"/admin/tenant/{tenant_id}"
                 ),
             }

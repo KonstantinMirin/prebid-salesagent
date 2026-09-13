@@ -10,9 +10,10 @@ stays in the repository; policy changes never touch SQL.
 from __future__ import annotations
 
 import math
-import os
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
+
+from src.core.config import get_settings
 
 if TYPE_CHECKING:
     from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
@@ -21,15 +22,17 @@ if TYPE_CHECKING:
 # (tenant, principal, account) scope. Each keyed create stores one row for the
 # replay TTL, so a buyer minting fresh keys is bounded to this many creates per
 # window; the probe rejects the excess as RATE_LIMITED with retry_after set to
-# when the oldest row expires. Env-tunable; looked up at call time so tests can patch it.
-MAX_ACTIVE_ATTEMPTS_PER_SCOPE = int(os.getenv("IDEMPOTENCY_MAX_ACTIVE_ATTEMPTS_PER_SCOPE") or "1000")
+# when the oldest row expires. Tunable via IDEMPOTENCY_MAX_ACTIVE_ATTEMPTS_PER_SCOPE;
+# looked up at call time so tests can patch it.
+MAX_ACTIVE_ATTEMPTS_PER_SCOPE = get_settings().limits.idempotency_max_active_attempts_per_scope
 
 # Insert-RATE limit per (tenant, principal, account) scope — the spec's MUST is
 # a rate limit on cache inserts (the row count above is the derived storage
 # bound). The window/ceiling follow the spec's SHOULD-level burst numbers
-# (300 inserts per 10s). Env-tunable; looked up at call time so tests can patch them.
-INSERT_RATE_WINDOW = timedelta(seconds=int(os.getenv("IDEMPOTENCY_INSERT_RATE_WINDOW_SECONDS") or "10"))
-MAX_INSERTS_PER_WINDOW = int(os.getenv("IDEMPOTENCY_MAX_INSERTS_PER_WINDOW") or "300")
+# (300 inserts per 10s). Tunable via IDEMPOTENCY_INSERT_RATE_WINDOW_SECONDS and
+# IDEMPOTENCY_MAX_INSERTS_PER_WINDOW; looked up at call time so tests can patch them.
+INSERT_RATE_WINDOW = timedelta(seconds=get_settings().limits.idempotency_insert_rate_window_seconds)
+MAX_INSERTS_PER_WINDOW = get_settings().limits.idempotency_max_inserts_per_window
 
 
 def enforce_insert_ceiling(
