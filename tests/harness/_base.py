@@ -551,8 +551,8 @@ class BaseTestEnv:
           env principal's token, scoped to the env's tenant (or unscoped), and nothing for
           anything else. Read by ``_resolve_identity``.
         - ``src.core.config_loader.get_tenant_by_id`` serves ``TenantFactory.make_tenant``
-          with this env's overrides, so ``LazyTenantContext`` loads the same dict the env
-          used to hand over pre-built. Read by ``LazyTenantContext._resolve``.
+          with this env's overrides, so ``TenantContext.load`` builds the same tenant the
+          env used to hand over pre-built. Read by the resolver.
 
         Installed BEFORE ``EXTERNAL_PATCHES`` so an env that patches one of these itself
         keeps its own answer. Not entered into ``self.mock``: that dict is the env's own
@@ -562,14 +562,17 @@ class BaseTestEnv:
         """
         from tests.factories import TenantFactory
 
-        def _principal_from_token(token: str, tenant_id: str | None = None) -> tuple[str | None, Any]:
-            principal = self._unit_principal()
-            if token == principal.access_token and tenant_id in (None, self._tenant_id):
-                return principal.principal_id, None
-            return None, None
-
         def _tenant_by_id(tenant_id: str) -> dict[str, Any]:
             return TenantFactory.make_tenant(tenant_id=tenant_id, **self._tenant_overrides)
+
+        def _principal_from_token(token: str, tenant_id: str) -> Any:
+            # Scoped to the tenant addressed, as the real lookup is.
+            from src.core.schemas import Principal as SchemaPrincipal
+
+            principal = self._unit_principal()
+            if token == principal.access_token and tenant_id == self._tenant_id:
+                return SchemaPrincipal.from_row(principal)
+            return None
 
         for name, target, substitute in (
             ("tenant_id_for", "src.core.config_loader.tenant_id_for", lambda **_kw: None),
@@ -605,7 +608,7 @@ class BaseTestEnv:
         A direct ``_impl`` call takes a ``ResolvedIdentity`` by definition; a wire leg has no
         parameter to receive one, it presents ``credential()`` and the resolver builds the
         identity. Supports direct override via ``env._identity = ...`` for integration tests
-        that create tenants in the DB and need a specific LazyTenantContext.
+        that create tenants in the DB and need a specific tenant context.
         """
         direct = self.__dict__.get("_identity")
         if direct is not None:
@@ -1154,10 +1157,11 @@ class BaseTestEnv:
             return
         if self.use_real_db:
             self._ensure_tenant_for_audit(tenant_id)
-        from src.core.config_loader import set_current_tenant
-        from src.core.tenant_context import LazyTenantContext
+        from src.core.config_loader import get_tenant_by_id, set_current_tenant
 
-        set_current_tenant(LazyTenantContext(tenant_id))
+        row = get_tenant_by_id(tenant_id)
+        if row:
+            set_current_tenant(row)
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).

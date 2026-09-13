@@ -52,14 +52,6 @@ class TestDuplicateProductValidation:
 
         # Mock the dependencies that still exist on the module
         with (
-            patch(
-                "src.core.helpers.context_helpers.ensure_tenant_context",
-                return_value=mock_tenant,
-            ),
-            patch(
-                "src.core.auth.get_principal_object",
-                return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
-            ),
             patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
         ):
             # Create packages with duplicate product_id
@@ -121,14 +113,6 @@ class TestDuplicateProductValidation:
 
         # Mock the dependencies that still exist on the module
         with (
-            patch(
-                "src.core.helpers.context_helpers.ensure_tenant_context",
-                return_value=mock_tenant,
-            ),
-            patch(
-                "src.core.auth.get_principal_object",
-                return_value=MagicMock(principal_id="test_principal", name="Test Principal"),
-            ),
             patch("src.core.tools.media_buy_create.get_context_manager", return_value=mock_ctx_manager),
         ):
             # Create packages with multiple duplicates

@@ -2105,11 +2105,16 @@ class CreativePolicy(LibraryCreativePolicy):
 
 
 class Principal(SalesAgentBaseModel):
-    """Principal object containing authentication and adapter mapping information."""
+    """The buyer a credential resolved to, with its adapter mappings."""
 
     principal_id: str
     name: str
     platform_mappings: dict[str, Any]
+
+    @classmethod
+    def from_row(cls, row: Any) -> "Principal":
+        """Build from the ``Principal`` ORM row, the one shape a principal is loaded from."""
+        return cls(principal_id=row.principal_id, name=row.name, platform_mappings=row.platform_mappings)
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal."""

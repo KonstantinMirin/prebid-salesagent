@@ -158,7 +158,6 @@ def _identity() -> ResolvedIdentity:
     return PrincipalFactory.make_identity(
         principal_id="principal_1",
         tenant_id="test_tenant",
-        auth_token="test-token",
         protocol="mcp",
         tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
         testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),

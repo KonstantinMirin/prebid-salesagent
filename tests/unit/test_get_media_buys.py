@@ -391,20 +391,13 @@ def patched_internals():
     """
     with (
         patch("src.core.tools.media_buy_list.MediaBuyUoW") as m_uow,
-        # Patched on src.core.auth, not re-exported into the tool module:
-        # media_buy_list now calls the shared resolve_principal_or_raise()
-        # rather than open-coding the lookup (#1651). This is
-        # the same target the sibling media-buy wrapper tests already use.
-        patch("src.core.auth.get_principal_object") as m_principal,
         patch("src.core.tools.media_buy_list._fetch_target_media_buys") as m_buys,
         patch("src.core.tools.media_buy_list._fetch_packages") as m_packages,
         patch("src.core.tools.media_buy_list._fetch_creative_approvals") as m_approvals,
     ):
-        m_principal.return_value = MagicMock(principal_id="principal_1")
         m_approvals.return_value = {}
         yield SimpleNamespace(
             uow=m_uow,
-            principal=m_principal,
             buys=m_buys,
             packages=m_packages,
             approvals=m_approvals,

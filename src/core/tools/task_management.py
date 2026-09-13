@@ -17,7 +17,7 @@ from adcp.types.generated_poc.protocol.get_task_status_response import HistoryIt
 from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal_id, require_tenant
+from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.errors.details import ConflictDetails, ValidationDetails
 from src.core.exceptions import (
@@ -249,7 +249,9 @@ async def _list_tasks_impl(
     # context is forwarded so a refusal ECHOES the buyer's context object, as it does on
     # every other tool -- available here now that this tool builds a request.
     tenant = require_tenant(identity, context=req.context)
-    principal_id = require_principal_id(identity, context=req.context)  # F-03: authenticated principal required
+    principal_id = require_principal(
+        identity, context=req.context
+    ).principal_id  # F-03: authenticated principal required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -326,7 +328,7 @@ async def _get_task_status_impl(
 
     tenant = require_tenant(identity, context=req.context)
     # F-03: an authenticated (non-anonymous) principal is required
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None
@@ -444,7 +446,9 @@ async def _complete_task_impl(
     error_message = req.error_message
 
     tenant = require_tenant(identity, context=req.context)
-    principal_id = require_principal_id(identity, context=req.context)  # F-03: an authenticated principal is required
+    principal_id = require_principal(
+        identity, context=req.context
+    ).principal_id  # F-03: an authenticated principal is required
 
     with WorkflowUoW(tenant["tenant_id"]) as uow:
         assert uow.workflows is not None

@@ -12,7 +12,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict
 
-from src.core.tenant_context import LazyTenantContext
+from src.core.schemas import Principal
+from src.core.tenant_context import TenantContext
 from src.core.testing_hooks import AdCPTestContext
 
 logger = logging.getLogger(__name__)
@@ -45,25 +46,21 @@ class ResolvedIdentity(BaseModel):
     Immutable after creation — identity should not change during request processing.
     """
 
-    # LazyTenantContext is a plain slotted class, not a pydantic model, so it needs an
-    # explicit pass. Keeping the field TYPED is the point -- it was ``Any`` with a comment
-    # reading "TenantContext | dict[str, Any] | None (transitional)", which is how a dict
-    # ended up flowing where a context was meant.
-    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+    # ``extra="forbid"`` so a caller still passing ``principal_id=`` or ``tenant_id=`` fails at
+    # construction instead of silently building an anonymous identity: both are derived.
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    principal_id: str | None = None
-    tenant_id: str | None = None
-    # ONE tenant type, not a union. Production builds it at the boundary (id now, row on
-    # first field access, cached). A caller that already holds the row -- a test factory with
-    # no database, or code that just read it -- hands over the SAME type via
-    # ``LazyTenantContext.already(row)``, which resolves immediately and never queries.
-    # Laziness is about when the row loads, not about which type flows.
-    #
-    # What the annotation excludes is both the dict and the hydrated ``TenantContext``. It
-    # used to be ``Any``, commented "TenantContext | dict[str, Any] | None (transitional)",
-    # and that union is how dict-shaped tenant handling spread through production.
-    tenant: LazyTenantContext | None = None
-    auth_token: str | None = None
+    # The principal the credential resolved to, built once from the row the lookup
+    # selected. None for the anonymous caller of a public tool.
+    principal: Principal | None = None
+    # The tenant the request names, its row loaded by the resolver. ONE type, never a
+    # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
+    # (transitional)", and that union is how dict-shaped tenant handling spread.
+    tenant: TenantContext | None = None
+    # Whether an ``Authorization: Bearer`` value was present. The pinned enum keys
+    # AUTH_MISSING versus AUTH_INVALID on header presence, a fact only the header reader
+    # knows, so it travels; the secret itself does not.
+    credential_presented: bool = False
     protocol: TransportProtocol = TransportProtocol.MCP
     testing_context: AdCPTestContext | None = None
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
@@ -71,9 +68,12 @@ class ResolvedIdentity(BaseModel):
     # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
 
     @property
-    def is_authenticated(self) -> bool:
-        """Check if this identity has a resolved principal."""
-        return self.principal_id is not None and self.principal_id != ""
+    def principal_id(self) -> str | None:
+        return self.principal.principal_id if self.principal is not None else None
+
+    @property
+    def tenant_id(self) -> str | None:
+        return self.tenant.tenant_id if self.tenant is not None else None
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -102,7 +102,7 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     """The tenant_id this request names, by four header strategies. NO row is loaded.
 
     Identification only. The token check is scoped by tenant_id, so which tenant cannot be
-    deferred; the tenant's FIELDS can be, and ``LazyTenantContext`` defers them.
+    deferred; the row is loaded once by ``TenantContext.load`` after the tenant is known.
 
     Every strategy used to call a ``get_tenant_by_*`` helper ending in
     ``serialize_tenant_to_dict``, so identification loaded the entire row -- which
@@ -222,36 +222,22 @@ def _resolve_identity(
 
         raise AdCPAuthRequiredError()
 
-    # Step 3: Detect tenant from headers
+    # Step 3: the seller this request addresses, identified from the host and loaded. The
+    # tenant comes first because a principal is a row in a tenant: a credential is only
+    # ever verified inside the tenant the request reached, never looked up across tenants.
     tenant_id = _detect_tenant(headers)
+    tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
 
-    # Step 4: Validate token → principal_id (and discover tenant from token if needed)
-    principal_id = None
-    if auth_token:
-        principal_id, token_tenant = get_principal_from_token(auth_token, tenant_id)
+    # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
+    principal: Principal | None = None
+    if auth_token and tenant is not None:
+        principal = get_principal_from_token(auth_token, tenant.tenant_id)
+    if require_valid_token and principal is None:
+        # Presented, and not a principal of the tenant addressed: AUTH_INVALID. A public
+        # tool treats a rejected credential as absent and proceeds anonymously.
+        from src.core.exceptions import AdCPAuthenticationError
 
-        if principal_id is None:
-            if require_valid_token:
-                from src.core.exceptions import AdCPAuthenticationError
-
-                raise AdCPAuthenticationError()
-            # For discovery endpoints, continue without auth
-        elif not tenant_id and token_tenant:
-            # Tenant discovered from the token lookup when no header identified one. Only
-            # its ID is taken: the row it carries is hydration, and hydration is the lazy
-            # context's job.
-            tenant_id = token_tenant.get("tenant_id") or tenant_id
-
-    # The identity always carries the tenant_id; the tenant's FIELDS load lazily, once.
-    #
-    # Identification cannot be deferred -- step 4 above scopes the token check by tenant_id,
-    # so we must know WHICH tenant before we can verify a credential. Hydration can: a
-    # LazyTenantContext holds the id immediately and loads the row on first access to any
-    # other field, caching the result. This used to build a fully-hydrated TenantContext from
-    # whatever dict detection happened to return, so every request paid for the whole row
-    # whether or not anything read a field off it, and LazyTenantContext was dead weight
-    # everywhere except the ToolContext path.
-    tenant_model: LazyTenantContext | None = LazyTenantContext(tenant_id) if tenant_id else None
+        raise AdCPAuthenticationError()
 
     # Step 5: the testing context rides the same headers. Thirteen readers under
     # src/core/tools branch on ``identity.testing_context`` for dry-run and delivery
@@ -259,10 +245,9 @@ def _resolve_identity(
     testing_context = AdCPTestContext.from_headers(dict(headers))
 
     return ResolvedIdentity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant_model,
-        auth_token=auth_token,
+        principal=principal,
+        tenant=tenant,
+        credential_presented=auth_token is not None,
         protocol=protocol,
         testing_context=testing_context,
     )

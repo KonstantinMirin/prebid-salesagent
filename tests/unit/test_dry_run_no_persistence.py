@@ -86,7 +86,6 @@ class TestUpdateMediaBuyDryRunNoPersistence:
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context") as mock_tenant,
             patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update._verify_principal"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_manager,
@@ -95,10 +94,6 @@ class TestUpdateMediaBuyDryRunNoPersistence:
             patch("src.core.database.database_session.get_db_session") as mock_db,
         ):
             # Setup mocks
-            mock_tenant.return_value = {
-                "tenant_id": "test_tenant",
-                "name": "Test Tenant",
-            }
             mock_principal.return_value = MagicMock(
                 principal_id="principal_123",
                 name="Test Principal",

@@ -32,7 +32,7 @@ from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import run_async_in_sync_context
 
 from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
@@ -167,7 +167,7 @@ def _defer_ai_review(
     creative_repo: CreativeRepository,
     *,
     creative_id: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     webhook_url: str | None,
     principal_id: str,
 ) -> None:
@@ -219,7 +219,7 @@ def _update_existing_creative(
     creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     webhook_url: str | None,
     context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
@@ -667,7 +667,7 @@ def _create_new_creative(
     creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     webhook_url: str | None,
     context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],

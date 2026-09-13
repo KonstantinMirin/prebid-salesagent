@@ -54,11 +54,11 @@ def resolve_account(
     # Self-defending entry guard: reject a falsy principal_id up front so neither
     # variant runs a scoped query before rejection. The natural-key path skips the
     # access-scope join on a None principal and could otherwise disclose a
-    # tenant-wide match count; require_principal_id raises AUTH_MISSING first
+    # tenant-wide match count; require_principal raises AUTH_MISSING first
     # (#1417; split per v3.1.1 error-code.json — #2092).
-    from src.core.auth import require_principal_id
+    from src.core.auth import require_principal
 
-    require_principal_id(identity)
+    require_principal(identity)
 
     inner = account_ref.root
 
@@ -103,12 +103,12 @@ def _require_account_access(identity: ResolvedIdentity, account_id: str, repo: A
     """Raise if the agent's principal lacks access to the account.
 
     Self-defending: a falsy principal_id is rejected as AUTH_MISSING via
-    require_principal_id, independent of any caller-side guard, so the access
+    require_principal, independent of any caller-side guard, so the access
     check can never be silently skipped by an empty/None principal (#1417).
     """
-    from src.core.auth import require_principal_id
+    from src.core.auth import require_principal
 
-    principal_id = require_principal_id(identity)
+    principal_id = require_principal(identity).principal_id
     if not repo.has_access(principal_id, account_id):
         raise AdCPAuthorizationError(
             details=EntityRefDetails(principal_id=principal_id, account_id=account_id),

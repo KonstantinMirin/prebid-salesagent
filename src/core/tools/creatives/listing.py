@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from typing import Any, cast
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal_id, require_tenant
+from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import EntityRefDetails
@@ -226,7 +226,7 @@ def _list_creatives_impl(
     # Authentication - REQUIRED (creatives contain sensitive data)
     # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
     # which are principal-specific and must be access-controlled
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
     tenant = require_tenant(identity, context=req.context)
 
     creatives = []

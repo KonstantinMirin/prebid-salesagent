@@ -14,15 +14,13 @@ if TYPE_CHECKING:
     from src.adapters import AdServerAdapter
     from src.adapters.base import TargetingCapabilities
     from src.core.database.models import Tenant as DBTenant
-    from src.core.tenant_context import LazyTenantContext, TenantContext
+    from src.core.tenant_context import TenantContext
     from src.core.testing_hooks import TestingContext
 
-    #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py), which is a
-    #: tenant CONTEXT -- hydrated or lazy. The lazy one is what the boundary builds on every
-    #: request: it carries tenant_id and loads the row on first access to any other field.
-    #: ``dict`` stays only for the call sites that still pass raw rows; identity.tenant is
-    #: never a dict.
-    IdentityTenant = TenantContext | LazyTenantContext | dict[str, object]
+    #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py): the tenant
+    #: context the resolver loaded. ``dict`` stays only for the call sites that still pass
+    #: raw rows; identity.tenant is never a dict.
+    IdentityTenant = TenantContext | dict[str, object]
     #: IdentityTenant plus the raw ORM row some call sites pass directly (e.g.
     #: media_buy_create.py's session.scalars(...).first()) instead of routing
     #: through identity.tenant.

@@ -64,7 +64,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -97,7 +96,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -147,7 +145,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -189,7 +186,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -243,7 +239,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),
@@ -292,7 +287,6 @@ class TestSyncCreativesFormatValidation:
         mock_uow, mock_creative_repo = _make_creative_uow()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context", return_value=mock_tenant),
             patch("src.core.tools.creatives._sync.CreativeUoW") as mock_uow_cls,
             patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry_getter,
             patch("src.core.tools.creatives._workflow.get_audit_logger"),

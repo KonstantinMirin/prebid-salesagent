@@ -9,7 +9,7 @@ from typing import Any
 from adcp.types import CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
-from src.core.auth import require_principal_id, require_tenant
+from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
@@ -17,7 +17,7 @@ from src.core.helpers import enum_value, log_tool_activity
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.schemas.creative import SyncCreativesRequest
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
@@ -68,7 +68,7 @@ def _sync_creatives_impl(
     carried the outer request's ``idempotency_key`` into a function that had no business
     seeing it, and inherited an auth check that had already run. They call the SERVICE now.
     """
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
     tenant = require_tenant(identity, context=req.context)
     return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
 
@@ -78,7 +78,7 @@ def sync_creatives(
     *,
     identity: ResolvedIdentity,
     principal_id: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 

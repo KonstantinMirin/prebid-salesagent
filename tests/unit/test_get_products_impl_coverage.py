@@ -109,31 +109,9 @@ class TestIdentityValidation:
     """
 
     @pytest.mark.asyncio
-    async def test_principal_without_tenant_raises_auth_error(self):
-        """Principal present but no tenant → AdCPAuthenticationError."""
-        identity = _make_identity(principal_id="user-123", tenant=None)
-        req = _make_request()
-
-        from src.core.tools.products import _get_products_impl
-
-        with pytest.raises(AdCPAuthenticationError):
-            await _get_products_impl(req, identity)
-
-    @pytest.mark.asyncio
     async def test_no_principal_no_tenant_raises_authentication_error(self):
         """No principal AND no tenant → AdCPAuthenticationError."""
         identity = _make_identity(principal_id=None, tenant=None)
-        req = _make_request()
-
-        from src.core.tools.products import _get_products_impl
-
-        with pytest.raises(AdCPAuthenticationError):
-            await _get_products_impl(req, identity)
-
-    @pytest.mark.asyncio
-    async def test_empty_tenant_dict_treated_as_no_tenant(self):
-        """Empty tenant dict {} is falsy and treated as no tenant."""
-        identity = _make_identity(principal_id="user-1", tenant=None)
         req = _make_request()
 
         from src.core.tools.products import _get_products_impl

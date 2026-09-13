@@ -48,7 +48,6 @@ AUTH_HELPERS = frozenset(
     {
         "require_principal_id",
         "require_tenant",
-        "resolve_principal_or_raise",
         "_verify_principal",
     }
 )

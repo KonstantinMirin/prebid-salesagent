@@ -120,9 +120,8 @@ from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
 from src.core.auth import (
-    require_principal_id,
+    require_principal,
     require_tenant,
-    resolve_principal_or_raise,
 )
 from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
@@ -187,8 +186,8 @@ def _get_media_buys_impl(
     # unauthenticated request at the boundary and already return the two-layer
     # envelope -- which is why get_media_buys was the ONE tool of 16 answering a
     # fatal auth failure with HTTP 200 and isError:false (#1651).
-    principal_id = require_principal_id(identity, context=req.context)
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
+    principal = require_principal(identity, context=req.context)
 
     # require_tenant raises the canonical auth envelope instead of a raw TypeError
     # if no tenant resolved (the principal guards above take precedence).

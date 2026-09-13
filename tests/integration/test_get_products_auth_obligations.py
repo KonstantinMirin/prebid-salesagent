@@ -13,7 +13,7 @@ import pytest
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv
@@ -26,11 +26,11 @@ def _lazy_identity(
     principal_id: str | None = None,
     protocol: str = "mcp",
 ) -> ResolvedIdentity:
-    """Create a ResolvedIdentity using LazyTenantContext for real DB tenant lookup."""
-    return ResolvedIdentity(
+    """An identity carrying the tenant row the database holds for *tenant_id*."""
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=LazyTenantContext(tenant_id),
+        tenant=TenantContext.load(tenant_id),
         protocol=protocol,
         testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
     )

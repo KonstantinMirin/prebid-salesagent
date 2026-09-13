@@ -788,6 +788,12 @@ class Creative(Base):
 
     # Relationships
     tenant = relationship("Tenant", backref="creatives")
+    principal = relationship(
+        "Principal",
+        foreign_keys=[tenant_id, principal_id],
+        primaryjoin="and_(Creative.tenant_id==Principal.tenant_id, Creative.principal_id==Principal.principal_id)",
+        overlaps="tenant",
+    )
     reviews = relationship("CreativeReview", back_populates="creative", cascade="all, delete-orphan")
 
     __table_args__ = (

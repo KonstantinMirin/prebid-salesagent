@@ -23,7 +23,6 @@ no-credential refusal is graded on the wire by BDD.
 import pytest
 
 from src.core.exceptions import AdCPAuthenticationError
-from src.core.resolved_identity import ResolvedIdentity
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.creative_test_helpers import creative_payload, sync_creatives_request
@@ -41,7 +40,7 @@ class TestAuthenticationRequirements:
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # ResolvedIdentity with None principal_id (simulates invalid token)
-        invalid_identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
+        invalid_identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="test_tenant")
 
         creatives = [
             {
@@ -101,7 +100,7 @@ class TestAuthenticationRequirements:
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # ResolvedIdentity with None principal_id (invalid token scenario)
-        identity = ResolvedIdentity(principal_id=None, tenant_id="test_tenant")
+        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="test_tenant")
 
         # A SPEC-LEGAL item (core/creative-asset.json requires format_id and non-empty
         # assets). The stub that was here never crossed a request boundary, so it graded the
@@ -116,7 +115,7 @@ class TestAuthenticationRequirements:
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
         # ResolvedIdentity with empty principal_id
-        identity = ResolvedIdentity(principal_id="", tenant_id="test_tenant")
+        identity = PrincipalFactory.make_identity(principal_id="", tenant_id="test_tenant")
 
         # A SPEC-LEGAL item (core/creative-asset.json requires format_id and non-empty
         # assets). The stub that was here never crossed a request boundary, so it graded the

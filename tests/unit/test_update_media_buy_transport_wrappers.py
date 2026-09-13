@@ -64,7 +64,6 @@ def _common_patches(mock_uow, protocol: str = "mcp"):
     identity.protocol = protocol
     return (
         patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
-        patch("src.core.auth.get_principal_object", return_value=principal),
         patch(f"{MODULE}.get_adapter", return_value=adapter),
         patch(f"{MODULE}.get_context_manager", return_value=ctx_manager),
         patch(f"{MODULE}.get_audit_logger", return_value=MagicMock()),

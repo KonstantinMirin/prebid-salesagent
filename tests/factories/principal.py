@@ -9,6 +9,8 @@ from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import Principal
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.schemas import Principal as SchemaPrincipal
+from src.core.tenant_context import TenantContext
 from src.core.testing_hooks import AdCPTestContext
 from tests.factories.core import TenantFactory
 
@@ -35,8 +37,8 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         tenant_id: str = "test_tenant",
         protocol: str = "mcp",
         dry_run: bool = False,
-        auth_token: str | None = None,
-        tenant: Any = _UNSET,
+        credential_presented: bool = True,
+        tenant: TenantContext | None | Any = _UNSET,
         testing_context: AdCPTestContext | None | Any = _UNSET,
         account_id: str | None = None,
         **tenant_overrides: object,
@@ -44,7 +46,8 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         """Build a ResolvedIdentity without DB persistence.
 
         Auto-derives tenant dict via TenantFactory.make_tenant().
-        Pass explicit tenant=None for auth-error tests.
+        A principal always has a tenant: ``tenant=None`` is accepted only for the anonymous
+        caller (``principal_id=None``), and ``ResolvedIdentity`` refuses the other pairing.
         Pass **tenant_overrides for domain fields (approval_mode, etc).
 
         ``account_id`` is DECLARED, not left to **tenant_overrides. It is a
@@ -56,27 +59,32 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass testing_context to override the default (e.g. set
         test_session_id for harness routing).
 
-        ``tenant`` accepts whatever a test has to hand -- a dict, a ``TenantContext``, a
-        ``LazyTenantContext``, or None -- and normalizes it. THIS IS THE ONE NORMALIZER.
-        ``ResolvedIdentity.tenant`` is typed ``LazyTenantContext | None``, a single type
-        rather than a union, so a dict and a hydrated ``TenantContext`` both fail
+        ``tenant`` accepts whatever a test has to hand -- a dict or a ``TenantContext`` --
+        and normalizes it. THIS IS THE ONE NORMALIZER. ``ResolvedIdentity.tenant`` is
+        typed ``TenantContext | None``, a single type rather than a union, so a dict fails
         validation at construction. Tests are not asked to know that: they pass data and
         this converts it, which is why inline ``ResolvedIdentity(...)`` in a test is capped
         by ``tests/unit/test_architecture_resolved_identity_inline_cap.py``. An inline site
         carries its own copy of the conversion below, and 98 copies is how the previous
         shape broke -- the union widened to fit them instead of them narrowing to fit it.
         """
-        resolved_tenant = (
+        resolved_tenant: TenantContext | None = (
             TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
         )
-        if resolved_tenant is not None:
-            from src.core.tenant_context import LazyTenantContext, TenantContext
-
-            if isinstance(resolved_tenant, dict):
-                resolved_tenant = TenantContext.from_dict(resolved_tenant)
-            if isinstance(resolved_tenant, TenantContext):
-                # ``already`` wraps a row the caller already holds, so nothing queries.
-                resolved_tenant = LazyTenantContext.already(resolved_tenant)
+        if principal_id and resolved_tenant is None:
+            raise TypeError("a principal always belongs to a tenant; tenant=None is only for the anonymous caller")
+        # The principal the resolver would have loaded for this caller: the factory's own
+        # shape (name and the mock platform mapping), so what a tool reads off
+        # ``identity.principal`` is what a row would have given it.
+        principal = (
+            SchemaPrincipal(
+                principal_id=principal_id,
+                name=f"Test Advertiser {principal_id}",
+                platform_mappings={"mock": {"advertiser_id": "test_adv"}},
+            )
+            if principal_id
+            else None
+        )
         # An explicit ``testing_context=None`` MEANS none, and is not the same as omitting
         # the argument. The sentinel keeps them apart: without it, a caller converted from
         # an inline ``ResolvedIdentity(..., testing_context=None)`` silently acquired the
@@ -90,10 +98,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
                 test_session_id=None,
             )
         return ResolvedIdentity(
-            principal_id=principal_id,
-            tenant_id=tenant_id,
+            principal=principal,
             tenant=resolved_tenant,
-            auth_token=auth_token,
+            credential_presented=credential_presented,
             protocol=protocol,
             testing_context=testing_context,
             account_id=account_id,

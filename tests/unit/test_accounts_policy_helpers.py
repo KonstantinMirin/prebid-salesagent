@@ -95,7 +95,7 @@ class TestCheckBillingPolicy:
         assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
     def test_tenant_none_accepts(self):
-        identity = PrincipalFactory.make_identity(tenant_id="t1", tenant=None)
+        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1", tenant=None)
         assert _check_billing_policy("operator", identity) is None
 
     def test_tenantcontext_access_works(self):

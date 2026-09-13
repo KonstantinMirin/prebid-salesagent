@@ -16,7 +16,7 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object, require_tenant
+from src.core.auth import require_tenant
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
@@ -195,8 +195,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     tenant = require_tenant(identity, context=req.context)
     logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
 
-    # Get the Principal object with ad server mappings
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
+    # The principal the resolver loaded with the token; None for the anonymous caller.
+    principal = identity.principal
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).

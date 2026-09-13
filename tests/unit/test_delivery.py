@@ -176,17 +176,9 @@ def _standard_patches(
     mock_uow.media_buys = MagicMock()
 
     return {
-        "principal_obj": patch(
-            "src.core.auth.get_principal_object",
-            return_value=principal_obj,
-        ),
         "adapter": patch(
             f"{_PATCH_PREFIX}.get_adapter",
             return_value=adapter,
-        ),
-        "tenant": patch(
-            "src.core.helpers.context_helpers.ensure_tenant_context",
-            return_value={"tenant_id": "test_tenant", "name": "Test"},
         ),
         "target_buys": patch(
             f"{_PATCH_PREFIX}._get_target_media_buys",
@@ -235,9 +227,7 @@ def _run_impl_with_patches(
     mock_inner_session.scalars.return_value.all.return_value = []
 
     with (
-        patches["principal_obj"],
         patches["adapter"],
-        patches["tenant"],
         patches["target_buys"],
         patches["pricing_options"],
         patches["uow"],

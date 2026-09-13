@@ -46,7 +46,6 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
     MODULE = "src.core.tools.media_buy_delivery"
     EXTERNAL_PATCHES = {
         "uow": f"{MODULE}.MediaBuyUoW",
-        "principal": "src.core.auth.get_principal_object",
         "adapter": f"{MODULE}.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
         "circuit_open": f"{MODULE}._is_circuit_breaker_open",
@@ -60,12 +59,6 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         self._uow_instance: MagicMock | None = None
 
     def _configure_mocks(self) -> None:
-        # Principal: return a valid mock principal
-        self.mock["principal"].return_value = MagicMock(
-            principal_id=self._principal_id,
-            name="Test Principal",
-        )
-
         # UoW: replace mock class with make_mock_uow
         uow_cls, self._uow_instance = make_mock_uow()
         self.mock["uow"].return_value = self._uow_instance

@@ -50,11 +50,11 @@ def enrich_identity_with_account(
     # Account resolution runs at the transport boundary ahead of the _impl auth gate;
     # without this guard an unauthenticated caller (tenant resolved, principal_id=None)
     # reaches natural-key resolution, which skips the access-scope join and discloses the
-    # tenant-wide match count via ACCOUNT_AMBIGUOUS. require_principal_id raises
+    # tenant-wide match count via ACCOUNT_AMBIGUOUS. require_principal raises
     # AUTH_REQUIRED first, uniformly across every transport that funnels through here.
-    from src.core.auth import require_principal_id
+    from src.core.auth import require_principal
 
-    require_principal_id(identity)
+    require_principal(identity)
 
     if identity.tenant_id is None:
         return identity

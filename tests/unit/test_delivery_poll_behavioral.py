@@ -19,7 +19,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -275,26 +275,6 @@ class TestMissingPrincipalIdReturnsError:
 
         with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity)
-
-
-class TestMissingTenantRaisesAuthError:
-    """_get_media_buy_delivery_impl raises AdCPAuthenticationError when tenant is None.
-
-    Covers line 132 of media_buy_delivery.py.
-    """
-
-    def test_none_tenant_raises_auth_error(self):
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=None,
-        )
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
-
-        with patch("src.core.auth.get_principal_object", return_value=MagicMock()):
-            with pytest.raises(AdCPAuthenticationError):
-                _get_media_buy_delivery_impl(req, identity)
 
 
 class TestStatusFilterRawString:

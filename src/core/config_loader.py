@@ -185,14 +185,14 @@ def get_tenant_config(key: str, default=None):
 def set_current_tenant(tenant_data: Any) -> None:
     """Set the current tenant context.
 
-    Normalizes TenantContext / LazyTenantContext to a plain dict before
+    Normalizes a TenantContext to a plain dict before
     storing in the ContextVar.  This is the SINGLE conversion point —
     callers pass whatever they have and this function ensures the ContextVar
     always holds dict[str, Any].
     """
-    from src.core.tenant_context import LazyTenantContext, TenantContext
+    from src.core.tenant_context import TenantContext
 
-    if isinstance(tenant_data, (TenantContext, LazyTenantContext)):
+    if isinstance(tenant_data, TenantContext):
         tenant_data = dict(tenant_data)
     current_tenant.set(tenant_data)
 
@@ -273,8 +273,8 @@ def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = No
 
     Identification, not hydration. The token check is scoped by tenant_id
     (``get_principal_from_token(auth_token, tenant_id)``), so knowing WHICH tenant cannot be
-    deferred -- but knowing its FIELDS can, and a LazyTenantContext defers them until one is
-    read.
+    deferred; the row itself is loaded once by ``TenantContext.load`` after the tenant is
+    known.
 
     Its siblings ``get_tenant_by_virtual_host`` / ``get_tenant_by_subdomain`` end in
     ``serialize_tenant_to_dict`` and hand back the whole row, so identification paid for

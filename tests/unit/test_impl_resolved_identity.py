@@ -201,5 +201,5 @@ class TestResolvedIdentityPassthrough:
             protocol="mcp",
         )
         assert identity.principal_id is None
-        assert identity.is_authenticated is False
+        assert identity.principal is None
         assert identity.tenant_id == "default"

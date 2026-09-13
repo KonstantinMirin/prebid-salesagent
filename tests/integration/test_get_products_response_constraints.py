@@ -88,8 +88,7 @@ class TestRelevanceThresholdIntegration:
 
         Covers: CONSTR-RELEVANCE-THRESHOLD-01
         """
-        from src.core.resolved_identity import ResolvedIdentity
-        from src.core.tenant_context import LazyTenantContext
+        from src.core.tenant_context import TenantContext
         from src.core.testing_hooks import AdCPTestContext
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
@@ -113,10 +112,10 @@ class TestRelevanceThresholdIntegration:
                 ]
             )
 
-            env._identity = ResolvedIdentity(
+            env._identity = PrincipalFactory.make_identity(
                 principal_id="p1",
                 tenant_id="thresh-t1",
-                tenant=LazyTenantContext("thresh-t1"),
+                tenant=TenantContext.load("thresh-t1"),
                 protocol="mcp",
                 testing_context=AdCPTestContext(
                     dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None

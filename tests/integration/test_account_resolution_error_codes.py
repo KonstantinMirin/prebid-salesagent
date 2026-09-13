@@ -21,6 +21,8 @@ from src.core.exceptions import (
 )
 from src.core.helpers.account_helpers import _require_account_access, resolve_account
 from src.core.resolved_identity import ResolvedIdentity
+from src.core.tenant_context import TenantContext
+from tests.factories.principal import PrincipalFactory
 from tests.harness._base import IntegrationEnv
 from tests.harness.transport import Transport
 from tests.helpers import assert_envelope_shape
@@ -40,10 +42,10 @@ class _AccountResolutionEnv(IntegrationEnv):
 
 
 def _make_identity(tenant_id: str, principal_id: str = "agent_001") -> ResolvedIdentity:
-    return ResolvedIdentity(
-        tenant_id=tenant_id,
+    return PrincipalFactory.make_identity(
         principal_id=principal_id,
-        auth_token="test-token",
+        tenant_id=tenant_id,
+        tenant=TenantContext.load(tenant_id),
     )
 
 

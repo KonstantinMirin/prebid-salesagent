@@ -109,10 +109,8 @@ from sqlalchemy.exc import SQLAlchemyError
 from src.core import schemas
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
-    get_principal_object,
-    require_principal_id,
+    require_principal,
     require_tenant,
-    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus
@@ -1184,17 +1182,11 @@ def execute_approved_media_buy(
                 logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
-            # Get the Principal object (needed for adapter). Capture the id while
-            # the session is open — media_buy detaches (attributes expired) when
-            # this block commits, and the creative reload below runs in a later UoW.
-            from src.core.auth import get_principal_object
-
+            # The buy's owner, off the row's relationship while the session is open:
+            # media_buy detaches (attributes expired) when this block commits, and the
+            # creative reload below runs in a later UoW.
             buy_principal_id = media_buy.principal_id
-            principal = get_principal_object(buy_principal_id, tenant_id=tenant_id)
-            if not principal:
-                error_msg = f"Principal {buy_principal_id} not found"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return ApprovalResult.failed(error_msg)
+            principal = schemas.Principal.from_row(media_buy.principal)
 
             # Create testing context (dry_run should be False for approved buys)
             testing_ctx = TestingContext(dry_run=False, test_session_id=None)
@@ -1523,10 +1515,7 @@ def push_creative_to_existing_buy(
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
-            principal = get_principal_object(creative.principal_id, tenant_id=tenant_id)
-            if not principal:
-                return False, f"Principal {creative.principal_id} not found"
-
+            principal = schemas.Principal.from_row(creative.principal)
             adapter = get_adapter(principal, dry_run=False, tenant=tenant_obj)
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
@@ -2043,7 +2032,7 @@ async def _create_media_buy_impl(
     testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
 
     # Authentication and tenant setup
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
@@ -2080,7 +2069,7 @@ async def _create_media_buy_impl(
 
     # Validate principal exists BEFORE creating context (foreign key constraint).
     # Cannot create context or workflow step without a valid principal.
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+    principal = require_principal(identity, context=req.context)
 
     # No second webhook-URL verdict here: the stored-then-fetched URLs already
     # got their correctable refusal at the registration gate above, before any

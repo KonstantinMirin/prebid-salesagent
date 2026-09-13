@@ -63,7 +63,7 @@ from src.core.schemas.capability_declarations import (
     DEFAULT_SUPPORTED_PROTOCOLS,
     CapabilityDeclarations,
 )
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -156,7 +156,7 @@ def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable
         return default
 
 
-def _build_adcp_block(tenant: LazyTenantContext | None) -> Adcp:
+def _build_adcp_block(tenant: TenantContext | None) -> Adcp:
     """Build the top-level adcp.* envelope -- single source for both the
     no-tenant minimal response and the tenant-resolved full response
     (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
@@ -181,7 +181,7 @@ def _build_adcp_block(tenant: LazyTenantContext | None) -> Adcp:
     )
 
 
-def _build_account_block(tenant: LazyTenantContext) -> AccountCapabilities | None:
+def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
     """Build the account block from real tenant config -- never fabricated.
 
     Returns None when the seller supports NO billing model. The block is

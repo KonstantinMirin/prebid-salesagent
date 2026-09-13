@@ -16,7 +16,6 @@ class TestNoRelativePathOpens:
             "tests/unit/test_shared_header_util.py",
             "tests/unit/test_media_buy_tenant_context.py",
             "tests/unit/test_no_duplicate_auth_functions.py",
-            "tests/unit/test_lazy_tenant_no_contextvar_mutation.py",
         ],
     )
     def test_no_relative_open(self, rel_path):

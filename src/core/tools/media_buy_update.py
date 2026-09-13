@@ -56,9 +56,8 @@ from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
-    require_principal_id,
+    require_principal,
     require_tenant,
-    resolve_principal_or_raise,
 )
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
@@ -311,7 +310,7 @@ def _verify_principal(
         AdCPMediaBuyNotFoundError: Media buy not found
         AdCPAuthorizationError: Principal doesn't own media buy
     """
-    principal_id = require_principal_id(identity, context=context)
+    principal_id = require_principal(identity, context=context).principal_id
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=context)
@@ -354,7 +353,7 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
 
     # Tenant is resolved at the transport boundary (resolve_identity_from_context)
     tenant = require_tenant(identity, context=req.context)
@@ -485,7 +484,7 @@ def _update_media_buy_impl(
                     request_data=req,
                 )
 
-            principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+            principal = require_principal(identity, context=req.context)
 
             adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
             today = date.today()

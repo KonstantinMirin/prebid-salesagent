@@ -4,18 +4,13 @@ Replaces the fragile dict[str, Any] tenant representation with a typed,
 validated Pydantic model. All tenant fields are explicitly defined with
 appropriate defaults.
 
-Constructed at the transport boundary (resolve_identity / resolve_identity_from_context)
-and passed through ResolvedIdentity to _impl functions.
+The resolver (``src/core/resolved_identity._resolve_identity``) loads it once per request
+and hands it on as ``ResolvedIdentity.tenant``. Nothing downstream loads a tenant again.
 
 Supports dict-like access for backward compatibility with existing code:
     tenant["tenant_id"]     # works (backward compat)
     tenant.get("field")     # works (backward compat)
     tenant.tenant_id        # preferred for new code
-
-Two variants:
-    TenantContext       — fully loaded (all fields populated from DB)
-    LazyTenantContext   — holds tenant_id immediately, defers DB load
-                          until a non-tenant_id field is accessed
 """
 
 import logging
@@ -94,6 +89,19 @@ class TenantContext(BaseModel):
     # --- Construction helpers ---
 
     @classmethod
+    def load(cls, tenant_id: str) -> "TenantContext | None":
+        """The tenant row for *tenant_id* from the database, or ``None`` when no such tenant.
+
+        The one place a tenant is loaded by id. The resolver calls it for the tenant the
+        request names; a background path that starts from a stored row's ``tenant_id``
+        (delivery reporting for a media buy) calls it for the same reason.
+        """
+        from src.core.config_loader import get_tenant_by_id
+
+        row = get_tenant_by_id(tenant_id)
+        return cls.from_dict(row) if row else None
+
+    @classmethod
     def from_orm_model(cls, tenant: Any) -> "TenantContext":
         """Construct from database Tenant ORM model.
 
@@ -143,153 +151,3 @@ class TenantContext(BaseModel):
         # Filter to only known fields
         known = cls.model_fields.keys()
         return cls(**{k: v for k, v in data.items() if k in known})
-
-
-class LazyTenantContext:
-    """Lazy-loading tenant context — defers DB query until needed.
-
-    Holds tenant_id immediately. The first access to any other field triggers
-    a DB load, producing a full TenantContext. Subsequent accesses use the
-    cached result.
-
-    Supports the same dict-like and attribute access as TenantContext:
-        tenant.tenant_id        # immediate (no DB)
-        tenant["tenant_id"]     # immediate (no DB)
-        tenant.approval_mode    # triggers DB load on first access
-        tenant["name"]          # triggers DB load on first access
-        "field" in tenant       # no DB (checks known field names)
-        bool(tenant)            # always True (no DB)
-
-    Call ensure_resolved() at transport boundaries to populate the
-    tenant ContextVar for legacy code that reads get_current_tenant().
-    """
-
-    __slots__ = ("_tenant_id", "_resolved")
-
-    def __init__(self, tenant_id: str) -> None:
-        object.__setattr__(self, "_tenant_id", tenant_id)
-        object.__setattr__(self, "_resolved", None)
-
-    @classmethod
-    def already(cls, tenant: TenantContext) -> "LazyTenantContext":
-        """A lazy context that is already resolved, so it never queries.
-
-        There is ONE tenant type on ``ResolvedIdentity`` -- this one. Laziness is about WHEN
-        the row loads, not about which type flows: a caller holding the row already (a test
-        factory with no database, or code that just read it) still hands the same type
-        onward, and every consumer keeps one annotation.
-
-        Without this the field had to be a union of hydrated-or-lazy, which spread into ten
-        consumer signatures each re-spelling it, and a dict-coercing validator besides.
-        """
-        obj = cls(tenant.tenant_id)
-        object.__setattr__(obj, "_resolved", tenant)
-        return obj
-
-    def _resolve(self) -> TenantContext:
-        """Load full tenant from DB on first access. Cache the result.
-
-        Does NOT mutate the tenant ContextVar. That must happen at
-        explicit transport boundaries via ensure_resolved().
-        """
-        resolved = self._resolved
-        if resolved is not None:
-            return resolved
-
-        from sqlalchemy.exc import SQLAlchemyError
-
-        from src.core.config_loader import get_tenant_by_id
-
-        try:
-            tenant_dict = get_tenant_by_id(self._tenant_id)
-            if tenant_dict:
-                resolved = TenantContext.from_dict(tenant_dict)
-                object.__setattr__(self, "_resolved", resolved)
-                return resolved
-        except (SQLAlchemyError, RuntimeError) as e:
-            logger.debug(f"Could not load tenant from database: {e}")
-
-        # Fallback: minimal TenantContext (unit tests, DB unavailable)
-        resolved = TenantContext(tenant_id=self._tenant_id)
-        object.__setattr__(self, "_resolved", resolved)
-        return resolved
-
-    @property
-    def is_loaded(self) -> bool:
-        """Check if the full tenant has been loaded from DB."""
-        return self._resolved is not None
-
-    def ensure_resolved(self) -> "TenantContext":
-        """Force DB load and ContextVar population.
-
-        Call at the transport boundary to guarantee that downstream code
-        reading from get_current_tenant() sees a valid tenant dict.
-        This is the ONLY place where LazyTenantContext sets the ContextVar.
-        """
-        resolved = self._resolve()
-
-        from src.core.config_loader import get_tenant_by_id, set_current_tenant
-
-        # Set the ContextVar at this explicit boundary call
-        tenant_dict = get_tenant_by_id(self._tenant_id)
-        if tenant_dict:
-            set_current_tenant(tenant_dict)
-
-        return resolved
-
-    # --- tenant_id is always available without DB ---
-
-    @property
-    def tenant_id(self) -> str:
-        return self._tenant_id
-
-    # --- Attribute access: delegate to resolved TenantContext ---
-
-    def __getattr__(self, name: str) -> Any:
-        # __slots__ attrs (_tenant_id, _resolved) are handled by the descriptor
-        # protocol, so __getattr__ is only called for other attributes.
-        return getattr(self._resolve(), name)
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        raise AttributeError("LazyTenantContext is immutable")
-
-    # --- Dict-like access for backward compat ---
-
-    def __getitem__(self, key: str) -> Any:
-        if key == "tenant_id":
-            return self._tenant_id
-        return self._resolve()[key]
-
-    def get(self, key: str, default: Any = None) -> Any:
-        if key == "tenant_id":
-            return self._tenant_id
-        return self._resolve().get(key, default)
-
-    def keys(self) -> list[str]:
-        return list(TenantContext.model_fields.keys())
-
-    def __contains__(self, key: object) -> bool:
-        return isinstance(key, str) and key in TenantContext.model_fields
-
-    def __iter__(self):
-        return iter(TenantContext.model_fields.keys())
-
-    def __bool__(self) -> bool:
-        return True  # A lazy tenant is always truthy (tenant_id exists)
-
-    def __repr__(self) -> str:
-        if self._resolved is not None:
-            return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=True)"
-        return f"LazyTenantContext(tenant_id={self._tenant_id!r}, loaded=False)"
-
-
-#: A tenant context, hydrated or lazy -- what ``ResolvedIdentity.tenant`` carries.
-#:
-#: The boundary builds the LAZY one on every request (tenant_id now, row on first access to
-#: any other field, cached once). A hydrated ``TenantContext`` is equally valid and is what
-#: tests supply with no database. Both answer the same reads, so a consumer that accepts a
-#: tenant should accept either -- and say so once, here, rather than each re-spelling the
-#: union and drifting. Notably NOT a dict: identity.tenant never is one.
-#: Retained as a name for the one tenant type, so consumers need not import the class
-#: under two spellings. It is NOT a union: identity.tenant is a LazyTenantContext.
-AnyTenantContext = LazyTenantContext

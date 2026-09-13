@@ -33,7 +33,7 @@ from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal_id, require_tenant
+from src.core.auth import require_principal, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKey, NaturalKeyConflict
 from src.core.database.repositories.account_serialization import as_json_dict
@@ -52,7 +52,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
     SyncResponseAccount,
 )
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
@@ -205,7 +205,7 @@ def _list_accounts_impl(
         req = ListAccountsRequest()
 
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
     tenant = require_tenant(identity, context=req.context)
     tenant_id = tenant["tenant_id"]
 
@@ -823,7 +823,7 @@ def _provisioning_gates(
     billing_val: str | None,
     identity: ResolvedIdentity,
     sandbox: bool | None,
-    tenant: LazyTenantContext | None,
+    tenant: TenantContext | None,
     index: int,
     entry: SyncEntry,
     proof_failures: dict[int, list[GateFailure]],
@@ -937,7 +937,7 @@ def _extract_natural_key(entry: SyncEntry) -> NaturalKey:
     return NaturalKey.from_parts(brand_domain, brand_id, operator, entry.sandbox)
 
 
-def _check_sandbox_capability(entry_sandbox: bool | None, tenant: LazyTenantContext | None) -> list[GateFailure] | None:
+def _check_sandbox_capability(entry_sandbox: bool | None, tenant: TenantContext | None) -> list[GateFailure] | None:
     """Reject sandbox provisioning when the seller has not declared account.sandbox support.
 
     Mirrors the ``_check_billing_policy`` per-entry gate shape.
@@ -1445,7 +1445,7 @@ async def _sync_accounts_impl(
         SyncAccountsResponse with per-account action results.
     """
     # BR-RULE-055: sync requires auth (consistent with list_accounts).
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
     tenant = require_tenant(identity, context=req.context)
     tenant_id = tenant["tenant_id"]
 

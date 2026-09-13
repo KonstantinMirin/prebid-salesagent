@@ -19,8 +19,6 @@ from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
-from fastmcp.server.context import Context
-from fastmcp.server.dependencies import get_http_headers
 from pydantic import BaseModel, ConfigDict, field_validator
 
 logger = logging.getLogger(__name__)
@@ -178,34 +176,6 @@ class AdCPTestContext(BaseModel):
             slow_mode=slow_mode,
             debug_mode=debug_mode,
         )
-
-    @classmethod
-    def from_context(cls, context: Context) -> "TestContext":
-        """Extract testing context from FastMCP context headers."""
-        if not context:
-            return cls()
-
-        # Get headers using the recommended FastMCP approach
-        headers = None
-        try:
-            headers = get_http_headers()
-        except Exception:
-            logger.debug("get_http_headers() unavailable in testing hooks", exc_info=True)
-
-        # If get_http_headers() returned empty dict or None, try context.meta fallback
-        # This is necessary for sync tools where get_http_headers() may not work
-        if not headers:
-            if hasattr(context, "meta") and context.meta and "headers" in context.meta:
-                headers = context.meta["headers"]
-            elif hasattr(context, "headers"):
-                headers = context.headers
-            elif hasattr(context, "_headers"):
-                headers = context._headers
-
-        if not headers:
-            return cls()
-
-        return cls.from_headers(headers) or cls()
 
 
 # Backwards compatibility aliases
@@ -582,11 +552,6 @@ class DeliverySimulator:
 
 # Global instances
 _session_manager = TestSessionManager()
-
-
-def get_testing_context(context: Context) -> TestContext:
-    """Get testing context from a FastMCP context's headers."""
-    return TestContext.from_context(context)
 
 
 def get_session_manager() -> TestSessionManager:

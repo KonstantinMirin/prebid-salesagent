@@ -19,6 +19,7 @@ from rich.console import Console
 from src.core.errors.codes import AppErrorCode, ErrorCode
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import (
+    AdCPConfigurationError,
     AdCPInternalError,
     AdCPSalesAgentError,
     AdCPValidationError,
@@ -67,7 +68,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_request import (
     AttributionWindow,
 )
 
-from src.core.schemas import Error
+from src.core.schemas import Error, Principal
 
 # Seller platform default attribution model (BR-RULE-092). The AdCP response
 # AttributionWindow requires a non-null ``model``; when the buyer does not
@@ -80,7 +81,7 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
-from src.core.auth import require_principal_id, require_tenant, resolve_principal_or_raise
+from src.core.auth import require_principal, require_tenant
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
@@ -99,12 +100,11 @@ from src.core.schemas import (
     PackageDelivery,
     PlacementBreakdown,
     PricingModel,
-    Principal,
 )
 from src.core.schemas import (
     ReportingPeriod as MediaBuyReportingPeriod,
 )
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.testing_hooks import AdCPTestContext, DeliverySimulator, TimeSimulator, apply_testing_hooks
 from src.core.tools._media_buy_status import (
     CANONICAL_STATUSES,
@@ -163,11 +163,11 @@ def _get_media_buy_delivery_impl(
     # (cross-field constraint the schema can't express, so it reaches us as valid).
     _validate_attribution_window(req.attribution_window)
 
-    principal_id = require_principal_id(identity, context=req.context)
+    principal_id = require_principal(identity, context=req.context).principal_id
 
     return get_media_buy_delivery(
         req,
-        principal=resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context),
+        principal=require_principal(identity, context=req.context),
         principal_id=principal_id,
         # Tenant is resolved at the transport boundary (resolve_identity_from_context)
         tenant=require_tenant(identity, context=req.context),
@@ -193,6 +193,10 @@ def delivery_for_media_buy(
     database, so an ended campaign must still report rather than come back "not found".
     ``pending_start`` is excluded -- a future-dated buy has no delivery to report.
     """
+    tenant = TenantContext.load(media_buy.tenant_id)
+    if tenant is None:
+        # A stored media buy names its tenant by foreign key; no row is broken data.
+        raise AdCPConfigurationError()
     return get_media_buy_delivery(
         GetMediaBuyDeliveryRequest(
             media_buy_ids=[media_buy.media_buy_id],
@@ -201,9 +205,9 @@ def delivery_for_media_buy(
             end_date=end_date,
             context=None,
         ),
-        principal=resolve_principal_or_raise(media_buy.principal_id, tenant_id=media_buy.tenant_id),
+        principal=Principal.from_row(media_buy.principal),
         principal_id=media_buy.principal_id,
-        tenant=LazyTenantContext(media_buy.tenant_id),
+        tenant=tenant,
         testing_ctx=AdCPTestContext(),
     )
 
@@ -213,7 +217,7 @@ def get_media_buy_delivery(
     *,
     principal: "Principal",
     principal_id: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     testing_ctx: AdCPTestContext,
 ) -> GetMediaBuyDeliveryResponse:
     """Gather delivery for the buys *req* names, for an already-resolved caller.
