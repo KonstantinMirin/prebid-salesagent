@@ -43,19 +43,6 @@ _MAX_HONOURED_RETRY_AFTER_SECONDS = 60.0
 # damage.
 _RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
-# Spec point 6: one fixed diagnostic for every DELIVERY-failure refusal (a
-# destination reached but not delivered). It is this seam's own authored text,
-# so under ADR-010 it rides ``internal_detail`` — server log only, never
-# serialized — while the buyer-facing sentence is
-# ``CODE_TABLE[SERVICE_UNAVAILABLE].message``, a function of the code rather
-# than of this raise site. Kept as a module constant, not inlined, because it is
-# the one diagnostic all four raise sites share.
-#
-# The dial-time ADDRESS/SCHEME refusal lives in egress/policy.py, beside the
-# OutboundRequestBlocked raise sites that use it; this one is a different
-# failure mode entirely (a destination that WAS reached).
-_DELIVERY_FAILED_MESSAGE = "Outbound request to the supplied URL could not be delivered."
-
 
 def _should_retry_status(status: int) -> bool:
     return status in _RETRYABLE_STATUSES
@@ -155,10 +142,13 @@ class OutboundDeliveryFailed(OutboundError, AdCPServiceUnavailableError):
         # object and models no such member inside ``details``, so moving it into
         # the details block would both invent a key and change the backoff the
         # buyer reads.
+        # No internal_detail: the class IS the failure mode and ``details`` carries the
+        # facts. ``internal_detail`` is for provenance-bearing text this seller did not
+        # author (a raw third-party exception); an authored sentence there says nothing
+        # the code and the class do not.
         super().__init__(
             details=OutboundDeliveryDetails(attempts=attempts, last_status=http_status),
             retry_after=retry_after,
-            internal_detail=_DELIVERY_FAILED_MESSAGE,
         )
         self.attempts = attempts
         self.http_status = http_status
