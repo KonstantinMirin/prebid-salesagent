@@ -115,16 +115,28 @@ Feature: BR-UC-019 Query Media Buys
     # POST-F2: Error explains authentication is missing
     # POST-F3: Recovery classification indicates how to fix
 
-  @T-UC-019-ext-b @extension @ext-b @error
-  Scenario: Principal ID missing - identity resolved but principal_id absent
-    Given an authenticated identity with no principal_id
-    When the Buyer Agent sends a get_media_buys request
-    Then the response is compliant with the get_media_buys spec
-    And the response should include an empty media_buys array
-    And the response errors array should include error code "principal_id_missing"
-    And the error should include a "suggestion" field
-    # POST-F1: Buyer knows no results were returned
-    # POST-F2: Error explains principal_id is missing
+  # REMOVED: "Principal ID missing - identity resolved but principal_id absent".
+  #
+  # It asked for an identity that is resolved and carries no principal, answered with an
+  # empty media_buys array and an errors[] entry coded "principal_id_missing". Three
+  # independent reasons, each checkable:
+  #
+  # 1. The state is unconstructible. get_media_buys declares ResolvedIdentity
+  #    (src/core/tools/media_buy_list.py:147), on which the principal is not optional, so
+  #    "resolved but without a principal" is not a state the boundary can hand a tool. The
+  #    harness said so directly: the Given failed constructing Principal with
+  #    principal_id=None, and the run reported it as MISCLASSIFIED strict-xfail — wiring
+  #    dormancy recorded as a production gap.
+  # 2. The code is not in the protocol. adcp 3.1.1 enums/error-code.json declares 92 codes,
+  #    none containing "PRINCIPAL", and every one is upper snake case; "principal_id_missing"
+  #    is neither a member nor the shape of a member. No site under src/ emits it.
+  # 3. The shape contradicts the pin. An empty array beside an advisory is a success
+  #    document; the two refusals the pin defines for this situation carry recoveries that
+  #    forbid reading them that way — AUTH_INVALID is terminal, AUTH_MISSING correctable.
+  #
+  # The real behaviour it was reaching for is graded, on every transport, by the principal
+  # scoping boundary outline below: a presented credential that resolves to no principal is
+  # refused hard with AUTH_INVALID, and no credential at all with AUTH_MISSING.
     # POST-F3: Buyer can infer corrective action
 
   @T-UC-019-ext-c @extension @ext-c @error

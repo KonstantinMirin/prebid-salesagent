@@ -3148,7 +3148,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # AUTH_INVALID split — was previously stale on AUTH_TOKEN_INVALID/
             # AUTH_REQUIRED.
             # Extension errors — error code mismatches / not implemented.
-            "T-UC-019-ext-b",
+            # T-UC-019-ext-b is gone with its scenario, not graduated: it asked for an
+            # identity resolved without a principal, which ResolvedIdentity makes
+            # unconstructible, and for an errors[] code ("principal_id_missing") that is
+            # not among the pin's 92 and is not even their shape. The reasoning is in
+            # BR-UC-019-query-media-buys.feature where the scenario stood, and the real
+            # refusals are graded by the principal scoping boundary outline.
             "T-UC-019-ext-c",
             # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected at
             # request construction (GetMediaBuysRequest) and translated at the
