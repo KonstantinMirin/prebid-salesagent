@@ -1,0 +1,59 @@
+# internal_detail carries the caught exception, never an authored sentence (salesagent-3cs7o.13).
+#
+# `AdCPSalesAgentError.internal_detail` is the non-wire slot for the exception a raise site
+# caught (ADR-010 point 5). The parameter is typed `BaseException | None`, so mypy refuses a
+# string at every site it type-checks -- but mypy runs over src/ alone, and the harness under
+# tests/ kept authoring f-strings into it. An authored sentence there says nothing the error
+# CODE, the exception CLASS and the typed details do not already say; a fact (an id, a count,
+# a status) belongs on the declared details class, and a caught exception is passed as itself.
+#
+# WHY AST-GREP AND NOT RUFF. TID251 bans a NAME that is imported; a keyword argument's VALUE
+# being a string literal is a structural fact about the call site, which only a syntax rule
+# can state. The rule matches the keyword argument `internal_detail=` (and the attribute
+# assignment `x.internal_detail =`) whose value is a string, an f-string, an implicitly
+# concatenated string, or one of those in parentheses. `internal_detail=e` and
+# `internal_detail=None` match nothing.
+#
+# Files: src/, scripts/ AND tests/ -- the last is the scope mypy does not cover.
+id: internal-detail-is-an-exception
+language: Python
+severity: error
+message: >-
+  internal_detail takes the caught exception (BaseException), never an authored string.
+  Pass the exception you caught, put a fact on the declared details class, or pass nothing
+  (ADR-010 point 5, salesagent-3cs7o.13).
+files:
+  - "src/**/*.py"
+  - "scripts/**/*.py"
+  - "tests/**/*.py"
+utils:
+  authored-string:
+    any:
+      - kind: string
+      - kind: concatenated_string
+      - kind: parenthesized_expression
+        has:
+          any:
+            - kind: string
+            - kind: concatenated_string
+rule:
+  any:
+    - kind: keyword_argument
+      all:
+        - has:
+            field: name
+            regex: ^internal_detail$
+        - has:
+            field: value
+            matches: authored-string
+    - kind: assignment
+      all:
+        - has:
+            field: left
+            kind: attribute
+            has:
+              field: attribute
+              regex: ^internal_detail$
+        - has:
+            field: right
+            matches: authored-string

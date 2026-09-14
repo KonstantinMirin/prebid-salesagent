@@ -528,27 +528,24 @@ def _rest_transport_fault(envelope: dict[str, Any], raw_response: Any) -> Transp
     ``wire_error_envelope`` to hold and ``derive_error_status`` classifies the
     result a transport fault rather than an ``adcp_error``.
 
-    The error object carries INTERNAL_ERROR and puts the HTTP status and body in
-    ``internal_detail``, the sanctioned destination for text whose provenance we
-    do not control (``AdCPSalesAgentError``'s class note). It deliberately does
-    NOT guess an AdCP class from the status: that map — 400 -> validation,
-    404 -> not found, and five more — is deleted from the harness, because a
-    status is not a code and a guess is not evidence of what the buyer received
-    (see ``BaseTestEnv.parse_rest_error_envelope``).
+    The error object carries INTERNAL_ERROR and nothing else: the HTTP status and
+    body are on ``raw_response``, which the result already holds, and
+    ``internal_detail`` takes only a caught exception (``AdCPSalesAgentError``'s
+    class note), of which there is none here. It deliberately does NOT guess an
+    AdCP class from the status: that map — 400 -> validation, 404 -> not found,
+    and five more — is deleted from the harness, because a status is not a code
+    and a guess is not evidence of what the buyer received (see
+    ``BaseTestEnv.parse_rest_error_envelope``).
     """
     from src.core.errors.codes import AppErrorCode
     from src.core.exceptions import AdCPSalesAgentError
 
-    body_text = raw_response.text or "(empty body)"
     return TransportResult(
         # The HTTP response was received; its body just carries no AdCP
         # envelope. Bytes crossed the wire, so has_wire is True.
         has_wire=True,
         envelope={**envelope, "status": derive_error_status(None)},
-        error=AdCPSalesAgentError(
-            error_code=AppErrorCode.INTERNAL_ERROR,
-            internal_detail=f"HTTP {raw_response.status_code}: {body_text}",
-        ),
+        error=AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR),
         raw_response=raw_response,
     )
 

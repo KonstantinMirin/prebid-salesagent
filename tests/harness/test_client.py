@@ -298,10 +298,9 @@ class TestClientE2eRestDelivery:
 
         # ADR-010: ``AdCPSalesAgentError.__init__`` is keyword-only and has no
         # ``message`` parameter — ``message``/``suggestion``/``recovery``/``status_code``
-        # are read-only properties resolved from CODE_TABLE, and the authored
-        # diagnostic sentence goes to ``internal_detail`` (server-side only, never
-        # serialized onto the wire).
-        wire_body = envelope_for(AdCPAuthRequiredError(internal_detail="no credentials"))
+        # are read-only properties resolved from CODE_TABLE, so the class alone
+        # yields the envelope.
+        wire_body = envelope_for(AdCPAuthRequiredError())
         captured = {}
 
         class _FakeResponse:

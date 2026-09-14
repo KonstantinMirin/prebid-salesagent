@@ -301,8 +301,8 @@ _OPERATOR_LEVERS = (
     "deployment's egress policy allows the address."
 )
 
-# The cause half of the sentence is the raise site's ``internal_detail``, NOT
-# ``AdCPConfigurationError.message``. Per ADR-010 ``message`` is a read-only
+# The cause half of the sentence is the text of the raise site's ``internal_detail``
+# (the exception it caught), NOT ``AdCPConfigurationError.message``. Per ADR-010 ``message`` is a read-only
 # property over ``CODE_TABLE`` -- a function of the code -- so it reads
 # "Configuration error" for a handshake refusal, an egress refusal and an
 # unparseable answer alike, naming no lever. ``internal_detail`` is barred from
@@ -317,8 +317,8 @@ _CONFIG_FAILURE_SENTENCE = f"Connection failed: Endpoint refused the handshake. 
 # The non-configuration branch has the SAME obligation and had the same blindness:
 # ``str()`` of a typed error is its ``CODE_TABLE`` message, which reads "Service
 # temporarily unavailable" for an unreachable endpoint, a rate-limited one and an
-# undelivered request alike. ``raise_mapped_mcp_error`` puts the sentence naming
-# WHICH one into ``internal_detail``. No advice is appended here, unlike the
+# undelivered request alike. ``raise_mapped_mcp_error`` carries the exception naming
+# WHICH one in ``internal_detail``. No advice is appended here, unlike the
 # configuration branch: none of the operator's levers is known to be the cause.
 # Written out in full rather than composed from the detail the dial raises, for
 # the same reason as above -- an expectation derived from the input would hold
@@ -331,7 +331,9 @@ class TestProbeResultFailureShape:
 
     @pytest.mark.asyncio
     async def test_creative_configuration_failure_names_every_operator_lever(self, creative_row):
-        dial = _raising_dial(AdCPConfigurationError(internal_detail="Endpoint refused the handshake."))
+        dial = _raising_dial(
+            AdCPConfigurationError(internal_detail=ConnectionRefusedError("Endpoint refused the handshake."))
+        )
         with patch(_SEAM_DIAL, dial):
             result = await CreativeAgentRegistry().probe_agent(creative_row)
 
@@ -342,7 +344,9 @@ class TestProbeResultFailureShape:
 
     @pytest.mark.asyncio
     async def test_signals_configuration_failure_names_every_operator_lever(self, signals_row):
-        dial = _raising_dial(AdCPConfigurationError(internal_detail="Endpoint refused the handshake."))
+        dial = _raising_dial(
+            AdCPConfigurationError(internal_detail=ConnectionRefusedError("Endpoint refused the handshake."))
+        )
         with patch(_SEAM_DIAL, dial):
             result = await SignalsAgentRegistry().probe_agent(signals_row)
 
@@ -361,7 +365,9 @@ class TestProbeResultFailureShape:
         one shared function; the parity case below covers both.
         """
         dial = _raising_dial(
-            AdCPServiceUnavailableError(internal_detail="creative agent Optable Creative is unreachable.")
+            AdCPServiceUnavailableError(
+                internal_detail=ConnectionError("creative agent Optable Creative is unreachable.")
+            )
         )
         with patch(_SEAM_DIAL, dial):
             result = await CreativeAgentRegistry().probe_agent(creative_row)
@@ -421,7 +427,7 @@ class TestBothRegistriesReportFailureIdentically:
     @pytest.mark.parametrize(
         "exc",
         [
-            AdCPConfigurationError(internal_detail="Endpoint refused the handshake."),
+            AdCPConfigurationError(internal_detail=ConnectionRefusedError("Endpoint refused the handshake.")),
             RuntimeError("socket exploded"),
         ],
         ids=["configuration", "unexpected"],

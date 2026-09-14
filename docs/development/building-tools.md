@@ -455,7 +455,10 @@ and the HTTP status. The published codes are loaded from the pinned schema bundl
 nothing else. It goes to the server-side record and never to the wire. Forty-five raise sites
 used to put an authored sentence there. None of those sentences said anything the code,
 the class, and the typed details did not already say. When you catch an exception and raise
-a typed one, pass the caught exception.
+a typed one, pass the caught exception and raise `from` it: the boundary's
+`record_boundary_error` writes the cause once, as the traceback of the `from` chain, and
+nothing logs `internal_detail` separately. `.ast-grep/rules/internal-detail-is-an-exception.yml`
+refuses a string there under `src/`, `scripts/` and `tests/`, where mypy does not look.
 
 The two authentication errors are the resolver's alone. `ruff-boundary.toml` bans importing
 `AdCPAuthRequiredError` and `AdCPAuthenticationError` outside `src/core/resolved_identity.py`.

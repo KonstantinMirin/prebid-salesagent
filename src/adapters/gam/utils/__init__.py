@@ -25,7 +25,6 @@ from .error_handler import (
     GAMOperationTracker,
     RetryConfig,
     map_gam_exception,
-    validate_gam_response,
     with_retry,
 )
 from .formatters import (
@@ -66,7 +65,6 @@ __all__ = [
     "GAMOperationTracker",
     "map_gam_exception",
     "with_retry",
-    "validate_gam_response",
     # Logging
     "GAMOperation",
     "GAMLogContext",

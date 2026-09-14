@@ -273,6 +273,25 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 |------|---------|------------|
 | `media_buy_delivery.py` | `PricingOption.id.in_(string_list)` | salesagent-mq3n |
 
+### internal_detail is an exception
+
+**Files:** `.ast-grep/rules/internal-detail-is-an-exception.yml`
+
+**What it enforces:** `AdCPSalesAgentError.internal_detail` takes the caught exception
+and nothing else. The rule matches the keyword argument `internal_detail=` and the
+attribute assignment `x.internal_detail =` whose value is a string, an f-string, an
+implicitly concatenated string, or one of those in parentheses, under `src/`,
+`scripts/` and `tests/`. The parameter is typed `BaseException | None`, so mypy
+already refuses a string under `src/`; the rule is what covers the harness and the
+tests, which mypy does not check.
+
+**Why it matters:** An authored sentence there says nothing the error code, the
+exception class and the typed details do not already say, and it reopens the door
+ADR-010 closed: the wire fields are functions of the code. A fact (an id, a count, a
+status) belongs on the declared details class. The boundary's `record_boundary_error`
+writes the cause once, through the `from` chain; there is no second log record for
+`internal_detail` (salesagent-3cs7o.24).
+
 ### Serialize only at the edges
 
 **Files:** `ruff-serialization.toml` and `.ast-grep/rules/serialize-only-at-the-edges.yml`

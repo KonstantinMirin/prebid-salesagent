@@ -59,10 +59,10 @@ MUTATED_SCENARIO_TAGS = (
 #: from ``CODE_TABLE`` per read. So the 500 is not asserted by the fixture — it is
 #: DERIVED: ``AdCPInternalError`` IS ``AppErrorCode.INTERNAL_ERROR`` by class
 #: identity, and the table classifies that code as status 500, recovery=transient.
-#: The authored diagnostic is provenance-bearing text, so it goes to the non-wire
-#: ``internal_detail`` slot rather than into buyer-facing ``message``.
+#: The injected fault is the exception the seller would have caught, so it rides the
+#: non-wire ``internal_detail`` slot as itself, never as a sentence.
 _INJECTED_500 = AdCPInternalError(
-    internal_detail="injected fault: sync_creatives blew up inside the seller",
+    internal_detail=RuntimeError("injected fault: sync_creatives blew up inside the seller"),
 )
 
 #: The envelope a real boundary would have put on the wire for that exception —

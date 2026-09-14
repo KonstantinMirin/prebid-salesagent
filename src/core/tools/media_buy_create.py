@@ -929,11 +929,9 @@ def execute_approved_media_buy(
                 # defect and is refused (No Quiet Failures), not given a stand-in; the
                 # census of such rows is a ticket question, not a code path.
                 if buy_account_id is None:
-                    raise AdCPPersistedStateError(
-                        internal_detail=ValueError(
-                            f"media buy {media_buy_id} has no account_id; cannot act on its account"
-                        )
-                    )
+                    # The buy's id is a fact, so it rides the declared details class;
+                    # nothing here was caught, so there is no cause to chain.
+                    raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
                 if not raw_request_data.get("account"):
                     raw_request_data["account"] = {"account_id": buy_account_id}
 
