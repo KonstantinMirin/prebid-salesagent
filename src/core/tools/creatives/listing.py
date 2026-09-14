@@ -5,9 +5,11 @@ import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from adcp.types import AssignedPackage, Assignments
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
+from src.core.database.models import CreativeAssignment as DBCreativeAssignment
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import EntityRefDetails
@@ -19,6 +21,7 @@ from src.core.schemas import (
     Error,
     ListCreativesRequest,
     ListCreativesResponse,
+    canonical_agent_url,
 )
 from src.core.tools.creatives._assets import ASSET_MAP
 
@@ -136,6 +139,22 @@ def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = ""
     return coerced
 
 
+def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignment]], creative_id: str) -> Assignments:
+    """The creative's package assignments in the shape the response schema declares.
+
+    ``assignment_count`` is REQUIRED on the block (list-creatives-response.json), so a
+    creative with no assignments carries a zero rather than being silently omitted — the
+    buyer asked whether this creative is assigned anywhere, and "nowhere" is an answer.
+    ``assigned_date`` comes from the assignment row's own created_at, the only timestamp
+    that records when the assignment was made.
+    """
+    rows = assignments_by_creative.get(creative_id, [])
+    return Assignments(
+        assignment_count=len(rows),
+        assigned_packages=[AssignedPackage(package_id=row.package_id, assigned_date=row.created_at) for row in rows],
+    )
+
+
 def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> str:
     """Operator-attribution suffix appended to a blob-coercion drop warning.
 
@@ -197,12 +216,27 @@ def _list_creatives_impl(
     # placeholder back onto the filter — that would report the row as confirmed
     # `processing`. Graded by
     # tests/integration/test_list_creatives_unrecognized_status.py::TestFilteredReadExcludesTheUnreadableRow.
-    status = enum_value(req_filters.statuses[0]) if req_filters and req_filters.statuses else None
+    statuses = [enum_value(s) for s in req_filters.statuses] if req_filters and req_filters.statuses else None
     tags = req_filters.tags if req_filters else None
+    tags_any = req_filters.tags_any if req_filters else None
+    creative_ids = req_filters.creative_ids if req_filters else None
+    # format_id is an object (core/format-id.json); the repository matches both members, and
+    # the agent_url half goes through the ONE canonicalization the spec makes a MUST before
+    # two references may be treated as the same format.
+    format_ids = (
+        [(canonical_agent_url(f.agent_url), f.id) for f in req_filters.format_ids]
+        if req_filters and req_filters.format_ids
+        else None
+    )
     created_after_dt = req_filters.created_after if req_filters else None
     created_before_dt = req_filters.created_before if req_filters else None
     search = req_filters.name_contains if req_filters else None
-    effective_media_buy_ids = list(req_filters.media_buy_ids) if req_filters and req_filters.media_buy_ids else []
+    # Deduplicated, order preserved: a buyer may name the same media buy twice and the
+    # filter that gets APPLIED names it once — which is what query_summary.filters_applied
+    # then reports (POST-S7), and what keeps the assignment join from multiplying rows.
+    effective_media_buy_ids = (
+        list(dict.fromkeys(req_filters.media_buy_ids)) if req_filters and req_filters.media_buy_ids else []
+    )
     # v3.1 concept_ids filter has no flat equivalent — it arrives only via the structured
     # filters object and must be threaded into the DB query (not merely reported in
     # filters_applied), or it would be silently dropped. (#1493)
@@ -238,9 +272,12 @@ def _list_creatives_impl(
         assert uow.creatives is not None
         result = uow.creatives.get_by_principal(
             principal_id,
-            status=status,
+            statuses=statuses,
             format=None,
             tags=tags,
+            tags_any=tags_any,
+            creative_ids=creative_ids,
+            format_ids=format_ids,
             created_after=created_after_dt,
             created_before=created_before_dt,
             search=search,
@@ -253,6 +290,14 @@ def _list_creatives_impl(
         )
         db_creatives = result.creatives
         total_count = result.total_count
+
+        # include_assignments DEFAULTS TO TRUE (list-creatives-request.json), so the block
+        # is built unless the buyer switched it off, and one query answers the whole page.
+        assignments_by_creative = (
+            uow.creatives.assignments_by_creative([row.creative_id for row in db_creatives], principal_id)
+            if req.include_assignments is not False
+            else {}
+        )
 
         # Convert to schema objects
         for db_creative in db_creatives:
@@ -406,6 +451,9 @@ def _list_creatives_impl(
                 concept_name=_coerce_blob_scalar(
                     data_blob.get("concept_name"), "concept_name", log_context=row_log_context
                 ),
+                assignments=_assignments_block(assignments_by_creative, db_creative.creative_id)
+                if req.include_assignments is not False
+                else None,
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
@@ -418,14 +466,18 @@ def _list_creatives_impl(
     # Build filters_applied list from structured filters (typed CreativeFilters model)
     filters_applied: list[str] = []
     if req.filters:
-        if req.filters.media_buy_ids:
-            filters_applied.append(f"media_buy_ids={','.join(req.filters.media_buy_ids)}")
+        if effective_media_buy_ids:
+            filters_applied.append(f"media_buy_ids={','.join(effective_media_buy_ids)}")
         if req.filters.statuses:
             filters_applied.append(f"statuses={','.join(str(s) for s in req.filters.statuses)}")
         if req.filters.format_ids:
             filters_applied.append(f"format_ids={','.join(str(f) for f in req.filters.format_ids)}")
         if req.filters.tags:
             filters_applied.append(f"tags={','.join(req.filters.tags)}")
+        if req.filters.tags_any:
+            filters_applied.append(f"tags_any={','.join(req.filters.tags_any)}")
+        if req.filters.creative_ids:
+            filters_applied.append(f"creative_ids={','.join(req.filters.creative_ids)}")
         if req.filters.concept_ids:
             filters_applied.append(f"concept_ids={','.join(req.filters.concept_ids)}")
         if req.filters.created_after:
@@ -435,10 +487,13 @@ def _list_creatives_impl(
         if req.filters.name_contains:
             filters_applied.append(f"search={req.filters.name_contains}")
 
-    # Build sort_applied dict from structured sort
-    sort_applied = None
-    if req.sort and req.sort.field and req.sort.direction:
-        sort_applied = {"field": req.sort.field.value, "direction": req.sort.direction.value}
+    # The sort that was APPLIED, which is never nothing: list-creatives-request.json gives
+    # sort.field the default created_date and sort.direction the default desc, so a request
+    # carrying no sort object is still answered in a definite order. This used to report
+    # sort_applied only when the buyer named BOTH members, which left the buyer unable to
+    # tell the default ordering from an unspecified one (query_summary.sort_applied is
+    # "Sort order that was applied", and POST-S7 is the buyer knowing it).
+    sort_applied = {"field": sort_by, "direction": valid_sort_order}
 
     # Audit logging
     audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
@@ -483,6 +538,13 @@ def _list_creatives_impl(
         creatives=creatives,
         format_summary=None,
         status_summary=None,
+        # BR-RULE-209 INV-4/INV-5. The field's pinned meaning is "this response contains
+        # simulated data from sandbox mode", so it is emitted only when the account the
+        # request named IS a sandbox account, and is absent for every other account — a
+        # response that is not simulated makes no claim either way. list_creatives calls no
+        # ad platform at all, so sandbox mode has nothing to suppress here (INV-2); what the
+        # flag reports is the mode of the account whose library the buyer is reading.
+        sandbox=True if identity.account is not None and identity.account.sandbox else None,
         errors=unreadable_status_advisories or None,
         message=(
             f"Found {len(creatives)} creative{'s' if len(creatives) != 1 else ''}."

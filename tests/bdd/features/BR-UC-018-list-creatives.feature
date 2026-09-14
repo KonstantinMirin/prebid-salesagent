@@ -108,9 +108,16 @@ Feature: BR-UC-018 List Creatives
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a list_creatives request
     Then the error is compliant with the AdCP error spec
-    And the operation should fail with error code "AUTH_REQUIRED"
-    And the error code should be "AUTH_REQUIRED"
+    And the operation should fail with error code "AUTH_MISSING"
+    And the error code should be "AUTH_MISSING"
     And the error should include a "suggestion" field
+    # Was AUTH_REQUIRED, and before that this feature's header lists TENANT_REQUIRED —
+    # a code enums/error-code.json does not carry at 3.1.1. The pinned enum DOES carry
+    # AUTH_MISSING, whose own enumMetadata suggestion is "provide credentials via the auth
+    # header and retry", and that is what the request expresses: this Given sends NO
+    # HEADERS AT ALL, so the seller is told neither who is calling nor which tenant. There
+    # being no pinned code for an unresolvable tenant, the seller reports the
+    # authentication state it can see, which is the same one the ext-a scenario asserts.
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains tenant context could not be determined
     # POST-F3: Suggestion advises ensuring credentials map to a valid tenant
@@ -132,7 +139,7 @@ Feature: BR-UC-018 List Creatives
       | description                  | invalid_param                          | error_detail     |
       | invalid status enum          | statuses filter "unknown"              | status           |
       | empty statuses array         | statuses filter as empty array         | statuses         |
-      | non-integer max_results      | max_results as "abc"                   | max_results      |
+      | non-integer max_results      | pagination max_results "abc"           | max_results      |
       | empty fields array           | fields as empty array                  | fields           |
       | unknown field enum           | fields containing "thumbnail"          | field            |
       | empty tags array             | tags filter as empty array             | tags             |
@@ -144,8 +151,14 @@ Feature: BR-UC-018 List Creatives
     Given the Buyer is authenticated
     When the Buyer Agent sends a list_creatives request with <date_field> as "<value>"
     Then the error is compliant with the AdCP error spec
-    And the operation should fail with error code "VALIDATION_ERROR"
+    And the operation should fail with error code "INVALID_REQUEST"
     And the error code should be "INVALID_REQUEST"
+    # The two lines above asked for two DIFFERENT codes for one refusal, so no
+    # implementation could satisfy the scenario. Reconciled to INVALID_REQUEST: a value
+    # that is not a date-time violates a SCHEMA CONSTRAINT on
+    # core/creative-filters.json's created_after/created_before (format: date-time),
+    # which pinned 3.1.1 assigns to INVALID_REQUEST ("violates schema constraints"),
+    # not to VALIDATION_ERROR ("beyond schema validation").
     And the error field should contain "<date_field>"
     And the error should include a "suggestion" field
     # POST-F1: Buyer knows the operation failed
@@ -197,6 +210,10 @@ Feature: BR-UC-018 List Creatives
       | All 5 statuses explicitly listed — includes archived  | statuses filter ["processing", "approved", "rejected", "pending_review", "archived"] | all 5 creatives including archived returned               |
 
   @T-UC-018-partition-pagination @partition @pagination-sorting
+  # max_results is a member of the pagination OBJECT (core/pagination-request.json), and
+  # sort is an object of field + direction; the rows below name them that way. The flat
+  # max_results / sort_by / sort_order / limit spellings they used to carry are not in
+  # AdCP 3.1.1 at all, so no row could have graded a spec obligation through them.
   Scenario Outline: Pagination and sorting -- <partition>
     Given the authenticated principal has 60 approved creatives
     When the Buyer Agent sends a list_creatives request with <request_params>
@@ -206,9 +223,9 @@ Feature: BR-UC-018 List Creatives
     Examples: Valid partitions
       | partition                      | request_params                               | outcome                                                       |
       | default_pagination             | no pagination params                         | 50 creatives returned (default page size)                      |
-      | explicit_pagination            | max_results 20                               | 20 creatives returned                                          |
-      | boundary_min_limit             | max_results 1                                | 1 creative returned                                            |
-      | schema_max_limit               | max_results 100                              | 60 creatives returned (all available, below cap)                |
+      | explicit_pagination            | pagination max_results 20                    | 20 creatives returned                                          |
+      | boundary_min_limit             | pagination max_results 1                     | 1 creative returned                                            |
+      | schema_max_limit               | pagination max_results 100                   | 60 creatives returned (all available, below cap)                |
       | default_sort                   | no sort params                               | creatives sorted by created_date descending                     |
       | explicit_sort                  | sort field "name" direction "asc"            | creatives sorted by name ascending                              |
 
@@ -245,13 +262,17 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # The three rows this outline used to carry for FLAT filter params — flat_only,
+    # flat_and_structured_no_conflict and flat_and_structured_conflict — are deleted, not
+    # rewritten. AdCP 3.1.1 list-creatives-request.json declares no top-level status or
+    # tags, so "the flat param takes precedence" is a precedence rule between a spec field
+    # and a field that does not exist: there is no obligation for a row to grade, and the
+    # DTO refuses the undeclared key rather than ranking it. The structured behaviour they
+    # approximated is graded by structured_only and tags_and_semantics below.
     Examples: Valid partitions
       | partition                        | request_params                                                                     | outcome                                                              |
       | no_filters                       | no filter parameters                                                               | all non-archived creatives returned                                   |
-      | flat_only                        | flat status "approved"                                                             | only approved creatives returned                                      |
       | structured_only                  | structured filters with statuses ["approved"] and name_contains "nike"             | only approved creatives matching "nike" returned                      |
-      | flat_and_structured_no_conflict  | flat tags ["q1"] and structured name_contains "nike"                               | creatives matching both tag "q1" AND name "nike" returned             |
-      | flat_and_structured_conflict     | flat status "approved" and structured statuses ["rejected"]                        | approved creatives returned (flat param takes precedence)             |
       | media_buy_ids_multi              | structured filters with media_buy_ids ["mb1", "mb2"]                               | creatives for both mb1 and mb2 returned (deduplicated)                |
       | tags_and_semantics               | tags filter ["q1", "brand"]                                                        | only creatives with BOTH q1 AND brand tags returned                   |
       | tags_or_semantics                | tags_any filter ["q1", "brand"]                                                    | creatives with EITHER q1 OR brand tag returned                        |
@@ -264,6 +285,11 @@ Feature: BR-UC-018 List Creatives
       | creative_ids_over_limit  | creative_ids with 101 items                | error "INVALID_REQUEST" with suggestion             |
 
   @T-UC-018-boundary-filters @boundary @filter-semantics
+  # The flat-versus-structured conflict row is deleted for the reason given on the
+  # partition outline above, and the singular media_buy_id row is restated as a duplicate
+  # MEMBER of filters.media_buy_ids: the plural array is the only media-buy filter
+  # core/creative-filters.json declares, and a repeated member is the boundary the
+  # deduplication claim is actually about.
   Scenario Outline: Filter semantics boundary -- <boundary_point>
     Given the authenticated principal has creatives with various tags, media buy associations, and creation dates
     When the Buyer Agent sends a list_creatives request with <request_params>
@@ -276,8 +302,7 @@ Feature: BR-UC-018 List Creatives
       | tags_any=['single_tag'] (minimum OR match)                           | tags_any filter ["single_tag"]                                               | creatives with tag "single_tag" returned                               |
       | creative_ids with 100 items (maxItems boundary)                      | creative_ids with exactly 100 items                                          | creatives matching those IDs returned                                  |
       | creative_ids with 101 items (above maxItems)                         | creative_ids with 101 items                                                  | error "INVALID_REQUEST" with suggestion                               |
-      | Flat status='approved' + structured statuses=['rejected'] (conflict) | flat status "approved" and structured statuses ["rejected"]                  | approved creatives returned (flat wins)                                |
-      | media_buy_id='mb1' + media_buy_ids=['mb1'] (duplicate, deduplicated) | singular media_buy_id "mb1" and plural media_buy_ids ["mb1"]                 | creatives for mb1 returned (deduplicated, no duplicate results)        |
+      | media_buy_ids=['mb1','mb1'] (duplicate member, deduplicated)         | structured filters with media_buy_ids ["mb1", "mb1"]                         | creatives for mb1 returned (deduplicated, no duplicate results)        |
       | created_after='2024-01-01T00:00:00Z' (valid ISO 8601)               | created_after "2024-01-01T00:00:00Z"                                         | creatives created after the date returned                              |
       | created_after='yesterday' (invalid date format)                      | created_after "yesterday"                                                    | error "INVALID_REQUEST" with suggestion                            |
 
@@ -363,12 +388,18 @@ Feature: BR-UC-018 List Creatives
     And pagination shows has_more as true
 
   @T-UC-018-inv-147-2-holds @invariant @BR-RULE-147
-  Scenario: BR-RULE-147 INV-2 holds -- limit exceeding 1000 is capped
+  Scenario: BR-RULE-147 INV-2 holds -- a page never exceeds the schema maximum of 100
     Given the authenticated principal has 60 approved creatives
-    When the Buyer Agent sends a list_creatives request with limit 5000
+    When the Buyer Agent sends a list_creatives request with pagination max_results 100
     Then the response is compliant with the list_creatives spec
-    And the effective page size is at most 1000
-    And the response does not contain more than 1000 creatives
+    And 60 creatives returned (all available)
+    And the pagination shows has_more as false
+    # Was "limit exceeding 1000 is capped". There is no `limit` in AdCP 3.1.1 and no
+    # 1000-item cap anywhere in it: core/pagination-request.json types max_results with
+    # minimum 1 and MAXIMUM 100, so the page ceiling a buyer can ask for is 100 and a
+    # larger value is refused (graded by the boundary outline's max_results=101 row).
+    # This invariant now grades the ceiling that exists — a request at the maximum is
+    # answered, and with fewer creatives available it returns all of them.
 
   @T-UC-018-inv-147-3-holds @invariant @BR-RULE-147
   Scenario: BR-RULE-147 INV-3 holds -- no sort defaults to created_date descending
@@ -379,28 +410,39 @@ Feature: BR-UC-018 List Creatives
     And the query_summary shows sort_applied as "created_date desc"
 
   @T-UC-018-inv-147-4-holds @invariant @BR-RULE-147
-  Scenario: BR-RULE-147 INV-4 holds -- invalid sort_order coerced to desc
+  Scenario: BR-RULE-147 INV-4 holds -- a sort direction outside the enum is refused
     Given the authenticated principal has creatives created on different dates
-    When the Buyer Agent sends a list_creatives request with sort_order "random"
-    Then the response is compliant with the list_creatives spec
-    And the creatives are ordered descending (default coercion)
-    And no error is returned
+    When the Buyer Agent sends a list_creatives request with sort direction "random"
+    Then the error is compliant with the AdCP error spec
+    And error "INVALID_REQUEST" with suggestion
+    # Was "invalid sort_order coerced to desc". Two things in that are not in the pin:
+    # the flat sort_order key, and the coercion. sort.direction $refs
+    # enums/sort-direction.json, a CLOSED two-member enum, so "random" violates a schema
+    # constraint and must be refused; silently ordering by desc would answer a question
+    # the buyer did not ask. The seller cannot know which direction was meant.
 
   @T-UC-018-inv-147-5-holds @invariant @BR-RULE-147
-  Scenario: BR-RULE-147 INV-5 holds -- invalid sort_by coerced to created_date
+  Scenario: BR-RULE-147 INV-5 holds -- a sort field outside the enum is refused
     Given the authenticated principal has creatives created on different dates
-    When the Buyer Agent sends a list_creatives request with sort_by "unknown_field"
-    Then the response is compliant with the list_creatives spec
-    And the creatives are ordered by created_date (default coercion)
-    And no error is returned
+    When the Buyer Agent sends a list_creatives request with sort field "unknown_field"
+    Then the error is compliant with the AdCP error spec
+    And error "INVALID_REQUEST" with suggestion
+    # Was "invalid sort_by coerced to created_date", and the same reconciliation applies:
+    # sort.field $refs enums/creative-sort-field.json, a closed five-member enum.
 
   @T-UC-018-inv-148-1-holds @invariant @BR-RULE-148
-  Scenario: BR-RULE-148 INV-1 holds -- flat params take precedence over structured on conflict
+  Scenario: BR-RULE-148 INV-1 holds -- the statuses filter selects exactly the statuses it names
     Given the authenticated principal has 3 approved and 2 rejected creatives
-    When the Buyer Agent sends a list_creatives request with flat status "approved" and structured statuses ["rejected"]
+    When the Buyer Agent sends a list_creatives request with structured statuses ["approved"]
     Then the response is compliant with the list_creatives spec
     And the response contains 3 creatives
     And all returned creatives have status "approved"
+    # Was "flat params take precedence over structured on conflict". There are no flat
+    # filter params in AdCP 3.1.1 list-creatives-request.json, so the conflict this
+    # invariant ranked cannot arise: filters is the only place statuses is declared, and
+    # an undeclared top-level status is refused rather than preferred. What remains of the
+    # invariant is the half that IS a spec obligation — the named statuses are the ones
+    # returned — with its counter-example in the sibling scenario below.
 
   @T-UC-018-inv-148-1-violated @invariant @BR-RULE-148
   Scenario: BR-RULE-148 INV-1 context -- no conflict when only structured filters used
@@ -434,11 +476,15 @@ Feature: BR-UC-018 List Creatives
     And the response contains 2 creatives
 
   @T-UC-018-inv-148-4-holds @invariant @BR-RULE-148
-  Scenario: BR-RULE-148 INV-4 holds -- singular media_buy_id merged into plural array
+  Scenario: BR-RULE-148 INV-4 holds -- media_buy_ids returns the creatives of every buy it names
     Given the authenticated principal has creatives associated with media buys "mb1" and "mb2"
-    When the Buyer Agent sends a list_creatives request with media_buy_id "mb1" and media_buy_ids ["mb2"]
+    When the Buyer Agent sends a list_creatives request with structured filters with media_buy_ids ["mb1", "mb2"]
     Then the response is compliant with the list_creatives spec
     And the response contains creatives from both "mb1" and "mb2"
+    # Was "singular media_buy_id merged into plural array". core/creative-filters.json
+    # declares media_buy_ids (an array) and no singular sibling, so there is no merge to
+    # grade; the obligation is that every named buy's creatives come back, and only those
+    # (the Given seeds a third creative on a buy the request does not name).
 
   @T-UC-018-inv-148-6-holds @invariant @BR-RULE-148
   Scenario: BR-RULE-148 INV-6 holds -- invalid date format raises validation error
@@ -505,12 +551,20 @@ Feature: BR-UC-018 List Creatives
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-149-6-holds @invariant @BR-RULE-149
-  Scenario: BR-RULE-149 INV-6 holds -- unrecognized DB status mapped to pending_review
+  Scenario: BR-RULE-149 INV-6 holds -- unrecognized DB status reported as processing
     Given the authenticated principal has a creative with database status "draft" (not in protocol enum)
     When the Buyer Agent sends a list_creatives request
     Then the response is compliant with the list_creatives spec
-    And the creative is returned with status "pending_review"
+    And the creative is returned with status "processing"
     And no error is raised
+    # Was "mapped to pending_review". The pin does not choose a placeholder — status is
+    # REQUIRED and $refs a closed enum with no "unknown" member — so the choice is the
+    # seller's, and this seller's is `processing`: the only member that asserts no
+    # completed evaluation and no seller obligation. pending_review is the one member that
+    # would be a second untruth, claiming processing succeeded and a decision is owed.
+    # The row that reads the stored value is unchanged, and the buyer is additionally told
+    # in errors[] that the record is unreadable
+    # (src/core/tools/creatives/listing.py; tests/integration/test_list_creatives_unrecognized_status.py).
 
   @T-UC-018-inv-034-1-holds @invariant @BR-RULE-034
   Scenario: BR-RULE-034 INV-1 holds -- query always scoped by principal
@@ -556,12 +610,16 @@ Feature: BR-UC-018 List Creatives
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-edge-duplicate-dedup @invariant @BR-RULE-148 @edge-case
-  Scenario: Singular media_buy_id duplicate in plural array is deduplicated
+  Scenario: A media_buy_id repeated inside media_buy_ids is deduplicated
     Given the authenticated principal has a creative associated with media buy "mb1"
-    When the Buyer Agent sends a list_creatives request with media_buy_id "mb1" and media_buy_ids ["mb1"]
+    When the Buyer Agent sends a list_creatives request with structured filters with media_buy_ids ["mb1", "mb1"]
     Then the response is compliant with the list_creatives spec
     And the filter resolves to media_buy_ids ["mb1"] (deduplicated)
     And the creative for "mb1" is returned exactly once
+    # The duplicate is a repeated MEMBER of the one array the spec declares, not a
+    # singular key merged into it — core/creative-filters.json has no singular
+    # media_buy_id. The two obligations are unchanged: the applied filter names the buy
+    # once, and the assignment join does not multiply the creative's row.
 
   @T-UC-018-edge-valid-date @main-flow @edge-case
   Scenario: Valid ISO 8601 date with timezone offset accepted
@@ -584,6 +642,9 @@ Feature: BR-UC-018 List Creatives
       | all_enum_values    | fields with all 13 enum values                         | all 13 fields included in response               |
 
   @T-UC-018-partition-sort-field @partition @creative-sort-field
+  # sort is an OBJECT of field + direction (list-creatives-request.json); the flat sort_by
+  # these rows used to name is not in AdCP 3.1.1, and its enum is closed, so a value
+  # outside it is refused rather than coerced to the default.
   Scenario Outline: Creative sort field partition -- <partition>
     Given the authenticated principal has approved creatives
     When the Buyer Agent sends a list_creatives request with <request_params>
@@ -592,12 +653,12 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Valid partitions
       | partition          | request_params                  | outcome                                    |
-      | updated_date       | sort_by "updated_date"          | creatives sorted by updated_date           |
-      | assignment_count   | sort_by "assignment_count"      | creatives sorted by assignment_count       |
+      | updated_date       | sort field "updated_date"       | creatives sorted by updated_date           |
+      | assignment_count   | sort field "assignment_count"   | creatives sorted by assignment_count       |
 
     Examples: Invalid partitions
       | partition          | request_params                  | outcome                                          |
-      | unknown_value      | sort_by "format"                | creatives sorted by created_date (coerced)        |
+      | unknown_value      | sort field "format"             | error "INVALID_REQUEST" with suggestion           |
 
   @T-UC-018-boundary-legacy-fields @boundary @list-creatives-fields
   Scenario Outline: List creatives fields boundary -- <boundary_point>
@@ -615,6 +676,8 @@ Feature: BR-UC-018 List Creatives
       | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "INVALID_REQUEST" with suggestion   |
 
   @T-UC-018-boundary-sort-field @boundary @creative-sort-field
+  # Same reconciliation as the partition outline above: sort.field, not flat sort_by, and
+  # a value outside enums/creative-sort-field.json is refused.
   Scenario Outline: Creative sort field boundary -- <boundary_point>
     Given the authenticated principal has approved creatives
     When the Buyer Agent sends a list_creatives request with <request_params>
@@ -623,10 +686,10 @@ Feature: BR-UC-018 List Creatives
 
     Examples: Boundary values
       | boundary_point                              | request_params                  | outcome                                         |
-      | created_date (first enum value, also default) | sort_by "created_date"          | creatives sorted by created_date                 |
-      | assignment_count (last enum value, v3.1 highest-index sort field) | sort_by "assignment_count" | creatives sorted by assignment_count   |
+      | created_date (first enum value, also default) | sort field "created_date"       | creatives sorted by created_date                 |
+      | assignment_count (last enum value, v3.1 highest-index sort field) | sort field "assignment_count" | creatives sorted by assignment_count |
       | Not provided (defaults to created_date)     | no sort params                  | creatives sorted by created_date (default)       |
-      | format (not in enum)                        | sort_by "format"                | creatives sorted by created_date (coerced)       |
+      | format (not in enum)                        | sort field "format"             | error "INVALID_REQUEST" with suggestion          |
 
   @T-UC-018-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account list_creatives returns simulated results with sandbox flag
@@ -656,11 +719,20 @@ Feature: BR-UC-018 List Creatives
     Given the request targets a sandbox account
     When the Buyer Agent sends a list_creatives request with invalid status filter
     Then the error is compliant with the AdCP error spec
-    And the response should indicate a validation error
-    And the error should be a real validation error, not simulated
+    And error "INVALID_REQUEST" with suggestion
+    And the error field should contain "statuses"
     And the error should include a suggestion for how to fix the issue
     # BR-RULE-209 INV-7: sandbox validation errors are real
     # POST-F3: suggestion field present
+    #
+    # The first two Then lines used to be "the response should indicate a validation error"
+    # and "the error should be a real validation error, not simulated", both of which pin
+    # the code VALIDATION_ERROR. A status outside enums/creative-status.json violates a
+    # SCHEMA CONSTRAINT, and the pinned taxonomy assigns that to INVALID_REQUEST ("Request
+    # is malformed or violates schema constraints"), so no conformant seller could satisfy
+    # them here. INV-7's obligation — the refusal is real, not simulated for a sandbox
+    # account — is graded on the wire instead, and more strictly: the code and its recovery
+    # class, plus the FIELD the seller says it rejected, which a faked refusal does not know.
 
   @T-UC-018-inv-225-1-holds @invariant @BR-RULE-225 @error
   Scenario: BR-RULE-225 INV-1 holds -- include_pricing without account is rejected
@@ -668,8 +740,13 @@ Feature: BR-UC-018 List Creatives
     When the Buyer Agent sends a list_creatives request with include_pricing true and no account reference
     Then the error is compliant with the AdCP error spec
     And the operation should fail with error code "INVALID_REQUEST"
-    And the error code should be "VALIDATION_ERROR"
+    And the error code should be "INVALID_REQUEST"
     And the error should include a "suggestion" field
+    # The two code lines above named two different codes for one refusal, so nothing could
+    # satisfy the scenario. Reconciled to INVALID_REQUEST: list-creatives-request.json
+    # makes account conditionally REQUIRED in an allOf branch (if include_pricing is true,
+    # then required: [account]), so the request violates a schema constraint — which
+    # pinned 3.1.1 assigns to INVALID_REQUEST, not to VALIDATION_ERROR.
     # POST-F1, POST-F2, POST-F3
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
@@ -898,4 +975,10 @@ Feature: BR-UC-018 List Creatives
       | boundary_point                                  | account_kind                          | outcome                                          |
       | sandbox: true in response (sandbox account)     | a sandbox account                     | the response should include sandbox equals true   |
       | sandbox absent in response (production account) | a production account                  | the response should not include a sandbox field   |
-      | sandbox: false in response (explicit production) | a production account with sandbox false | the response should include sandbox equals false  |
+      | sandbox omitted for an explicitly non-sandbox account | a production account                | the response should not include a sandbox field   |
+    # The third row asked for an explicit `sandbox: false`. The pinned response schema
+    # defines only what TRUE means — "this response contains simulated data from sandbox
+    # mode" — and attaches no obligation to the false case, while BR-RULE-209 INV-5 says a
+    # production account's response omits the field. So on this seller's wire an
+    # explicitly-non-sandbox account is indistinguishable from one that says nothing: both
+    # omit the flag, which is what the row now asserts.

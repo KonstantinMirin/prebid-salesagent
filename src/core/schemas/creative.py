@@ -698,6 +698,21 @@ class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    @model_validator(mode="after")
+    def _account_required_when_pricing_requested(self) -> "ListCreativesRequest":
+        """``include_pricing: true`` requires ``account`` — the request schema's own condition.
+
+        3.1.1 list-creatives-request.json carries it as an allOf branch (``if``
+        include_pricing is ``const: true``, ``then required: [account]``), and
+        include_pricing's own description repeats it: "Requires account to be provided."
+        A generated model cannot express a JSON-Schema if/then, so the condition is
+        asserted on the DTO — the one shape every transport validates into — rather than
+        in a tool body, where the other two transports would each need their own copy.
+        """
+        if self.include_pricing and self.account is None:
+            raise ValueError("account is required when include_pricing is true (pricing comes from its rate card)")
+        return self
+
 
 class QuerySummary(LibraryQuerySummary):
     """Extends library QuerySummary with non-None defaults.
