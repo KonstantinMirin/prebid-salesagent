@@ -417,8 +417,8 @@ def _credential_for_token_state(ctx: dict) -> Any:
 
     - no      → nothing presented, tenant still addressed (tenant Given holds)
     - valid   → env default (the principal row's token)
-    - invalid → a token matching no Principal row; the real chain refuses or
-                treats it as absent on every transport alike
+    - invalid → a token matching no Principal row; the real chain refuses it with
+                AUTH_INVALID on every transport alike (presented, not verified)
     """
     from tests.harness._base import INVALID_TOKEN
 
@@ -1252,7 +1252,7 @@ def then_state_unchanged(ctx: dict) -> None:
 def then_auth_outcome(ctx: dict, outcome: str) -> None:
     if outcome == "success":
         # A success outcome is a non-error completed discovery envelope: no wire
-        # error envelope was produced (auth accepted / treated-as-absent) and the
+        # error envelope was produced (credential accepted, or none presented) and the
         # spec-required top-level blocks are on the wire (top-level required is
         # [adcp, supported_protocols]). The fuller section shape is graded by the
         # companion "a success outcome should carry ..." Then.
@@ -1293,39 +1293,6 @@ def then_dual_call_identity(ctx: dict) -> None:
             data.pop(volatile, None)
         dumps.append(data)
     assert dumps[0] == dumps[1], f"auth state changed response data: {dumps[0]} != {dumps[1]}"
-
-
-@then("the response should be a success carrying adcp.major_versions, adcp.idempotency and supported_protocols")
-def then_mcp_invalid_token_success(ctx: dict) -> None:
-    # Requires a payload: require_payload raises, naming the recorded error, when
-    # the dispatch errored instead of succeeding.
-    require_payload(ctx)
-    for path in ("adcp.major_versions", "adcp.idempotency", "supported_protocols"):
-        wire_field(ctx, path)
-
-
-@then("the response should carry the tenant's normal capabilities, not gated on the invalid token")
-def then_capabilities_not_gated_on_token(ctx: dict) -> None:
-    """INV-4 (AdCP v3.1.1, salesagent-dn2s): capability discovery describes
-    the SELLER, not the caller — an invalid/absent token must not degrade
-    adapter-derived data. Channels are tenant-resolved (get_adapter_class_for_tenant)
-    regardless of whether the presented token resolved a principal, so they
-    must equal the harness's tenant-level adapter seed, unaffected by the
-    invalid token.
-
-    audience_targeting/conversion_tracking are asserted absent because
-    production doesn't emit them at all yet (separate #1592 gap) — NOT
-    because a principal is missing.
-    """
-    from tests.harness.capabilities import DEFAULT_ADAPTER_CHANNELS
-
-    for path in ("media_buy.audience_targeting", "media_buy.conversion_tracking"):
-        wire_absent(ctx, path)
-    channels = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert channels == DEFAULT_ADAPTER_CHANNELS, (
-        f"adapter-derived channels degraded by an invalid token (INV-4 violation): "
-        f"expected {DEFAULT_ADAPTER_CHANNELS!r}, got {channels!r}"
-    )
 
 
 @then(

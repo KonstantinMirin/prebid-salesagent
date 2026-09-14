@@ -222,9 +222,11 @@ filed under is `identity.account.account_id`.
 
 **The credential policy is the annotation.** `ToolSpec.requires_credential()` answers `True`
 when the implementation annotates `ResolvedIdentity` or `AccountIdentity`, and `False` for
-`PublicIdentity`. The resolver refuses a missing credential with `AUTH_MISSING` and a rejected
-one with `AUTH_INVALID` before a protected implementation runs. A seller's policy can add a
-requirement. When the DTO declares `brand` and the tenant's `brand_manifest_policy` is
+`PublicIdentity`. The resolver refuses a missing credential with `AUTH_MISSING` before a
+protected implementation runs. A rejected credential is refused with `AUTH_INVALID` before
+any implementation runs, public or protected: the pinned enum's MUST for that code keys on
+"an `Authorization` header was present but verification failed" and names no task, so the
+policy decides the absent case only. A seller's policy can add a requirement. When the DTO declares `brand` and the tenant's `brand_manifest_policy` is
 `require_auth`, `requires_credential(tenant)` answers `True`. The resolver loads the tenant
 first, asks that question, and refuses the anonymous caller the same way. The tool never sees
 the difference: `get_products` keeps `identity: PublicIdentity` and receives a
@@ -278,7 +280,8 @@ The resolver reads the headers once and resolves in this order:
    the anonymous caller here, with the same `AUTH_MISSING`.
 4. **The principal**, looked up inside that tenant by the hash of the presented token. A
    principal is a row in exactly one tenant, so a token minted for one tenant never acts on
-   another. No tenant, no lookup.
+   another. No tenant, no lookup. A presented token that resolves to no principal is refused
+   with `AUTH_INVALID` on every row, public tools included.
 5. **The account**, when the request names one, resolved for that principal through
    `find_account` in `src/core/database/repositories/account_lookup.py`. Naming an account is
    itself a claim that needs a credential, so a request that carries `account` requires a

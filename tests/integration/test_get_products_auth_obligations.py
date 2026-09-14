@@ -10,11 +10,11 @@ Covers obligations:
 """
 
 import pytest
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import TenantContext
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv
 
@@ -39,8 +39,11 @@ def _lazy_identity(
 class TestDiscoveryEndpointAuthentication:
     """BR-RULE-041-01: Discovery endpoint authentication.
 
-    Auth is optional for discovery. Invalid tokens are treated as missing
-    (anonymous) in MCP. Data is not scoped by identity for unrestricted products.
+    Auth is optional for discovery: an absent credential is served anonymously. A presented
+    credential that does not resolve is refused with AUTH_INVALID by the resolver before the
+    implementation runs (BR-SECURITY-002); the "invalid token" test below builds the identity
+    the implementation would see only if it did run, which is the anonymous one. Data is not
+    scoped by identity for unrestricted products.
     """
 
     @pytest.mark.asyncio

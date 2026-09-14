@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 
 class TestBaseClassContract:
     """BaseTestEnv must work in both integration (use_real_db=True) and unit modes."""
@@ -265,21 +267,22 @@ class TestBaseClassContract:
 
     def test_unit_env_resolves_its_own_credential_on_the_wire(self):
         """The real resolver, over the substitutes, builds the env's identity from credential()."""
-        from src.core.resolved_identity import TransportProtocol, _resolve_identity
+        from src.core.exceptions import AdCPAuthenticationError
+        from src.core.resolved_identity import _resolve_identity
         from tests.harness._base import INVALID_TOKEN, BaseTestEnv
 
-        mcp = TransportProtocol.MCP
         with BaseTestEnv(principal_id="p1", tenant_id="t1") as env:
-            identity = _resolve_identity(env.credential(), require_valid_token=True, protocol=mcp)
+            identity = _resolve_identity(env.credential(), require_valid_token=True)
             assert identity.principal_id == "p1"
             assert identity.tenant_id == "t1"
 
-            anonymous = _resolve_identity(env.credential(token=None), require_valid_token=False, protocol=mcp)
+            anonymous = _resolve_identity(env.credential(token=None), require_valid_token=False)
             assert anonymous.principal_id is None
             assert anonymous.tenant_id == "t1"
 
-            rejected = _resolve_identity(env.credential(token=INVALID_TOKEN), require_valid_token=False, protocol=mcp)
-            assert rejected.principal_id is None
+            # Presented and rejected: AUTH_INVALID on a public row too, per the pinned enum.
+            with pytest.raises(AdCPAuthenticationError):
+                _resolve_identity(env.credential(token=INVALID_TOKEN), require_valid_token=False)
 
     def test_identity_backward_compat(self):
         """env.identity still works and defaults to the mcp protocol."""
