@@ -19,11 +19,11 @@ from adcp import CreativeFilters, GetProductsResponse, Product
 # FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas.
 from adcp.types import (
     BrandReference,
-    PushNotificationConfig,
     ReportingWebhook,
 )
 from pydantic import BaseModel
 
+from src.core.schemas.notification import PushNotificationConfig
 from src.core.schemas.product import GetProductsRequest
 from src.core.validation_helpers import adcp_validation_boundary
 

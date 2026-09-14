@@ -857,17 +857,18 @@ def given_unknown_targeting_field(ctx: dict, field_name: str) -> None:
     kwargs["packages"][0].setdefault("targeting_overlay", {})[field_name] = "value"
 
 
-@given("a package targeting_overlay sets a managed-only dimension")
-def given_managed_targeting_dimension(ctx: dict) -> None:
-    """Set a managed-only targeting dimension.
+@given("a package targeting_overlay sets a targeting dimension the pin does not declare")
+def given_undeclared_targeting_dimension(ctx: dict) -> None:
+    """Set a targeting dimension the pinned core/targeting.json does not declare.
 
-    Uses key_value_pairs which is a real managed-only dimension per
-    validate_overlay_targeting() in targeting_capabilities.py.
+    ``key_value_pairs`` was this seller's own "managed-only" field until
+    salesagent-3cs7o.22 deleted it; the pin never declared it, so the payload is now
+    exactly an undeclared field, refused at model construction under CLAUDE.md pattern 7.
     """
     kwargs = _ensure_request_defaults(ctx)
     assert kwargs.get("packages"), (
         "No packages in request — step claims 'a package targeting_overlay sets a "
-        "managed-only dimension' but no package exists to set it on"
+        "targeting dimension the pin does not declare' but no package exists to set it on"
     )
     kwargs["packages"][0]["targeting_overlay"] = {"key_value_pairs": {"section": "sports"}}
 
@@ -1835,7 +1836,8 @@ def given_targeting_overlay_partition(ctx: dict, partition: str) -> None:
     elif partition == "unknown_field":
         _set_targeting_overlay(ctx, overlay={"weather_targeting": "sunny"})
 
-    elif partition == "managed_only_dimension":
+    elif partition == "undeclared_dimension":
+        # key_value_pairs: deleted from Targeting (salesagent-3cs7o.22), undeclared by the pin.
         _set_targeting_overlay(ctx, overlay={"key_value_pairs": {"section": "sports"}})
 
     elif partition == "geo_overlap":
@@ -1915,7 +1917,8 @@ def given_targeting_overlay_boundary(ctx: dict, config: str) -> None:
     elif config == "weather=sunny":
         _set_targeting_overlay(ctx, overlay={"weather": "sunny"})
 
-    elif config == "managed dimension":
+    elif config == "key_value_pairs":
+        # Deleted from Targeting (salesagent-3cs7o.22); the pin never declared it.
         _set_targeting_overlay(ctx, overlay={"key_value_pairs": {"section": "sports"}})
 
     elif config == "US in both lists":

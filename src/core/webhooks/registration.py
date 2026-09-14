@@ -41,16 +41,16 @@ import logging
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from adcp.types import PushNotificationConfig
-from adcp.types.generated_poc.core.push_notification_config import Authentication
-from adcp.types.generated_poc.core.push_notification_config import (
-    Authentication as LibraryAuthentication,
-)
 from pydantic import ValidationError
 
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPValidationError
 from src.core.schema_helpers import require_push_notification_config, to_push_notification_config
+
+# The push-config spelling of the block, as a narrowing subtype of the one Authentication
+# concept (src/core/schemas/notification.py): this module builds and validates PUSH
+# registrations, whose pin requires credentials, so it names the subtype.
+from src.core.schemas.notification import PushAuthentication, PushNotificationConfig
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 
 logger = logging.getLogger(__name__)
@@ -90,7 +90,7 @@ def _construct_stored_config(document: dict[str, Any]) -> PushNotificationConfig
     fields = dict(document)
     auth_block = fields.get("authentication")
     if isinstance(auth_block, dict):
-        fields["authentication"] = Authentication.model_construct(**auth_block)
+        fields["authentication"] = PushAuthentication.model_construct(**auth_block)
     return PushNotificationConfig.model_construct(**fields)
 
 
@@ -270,7 +270,7 @@ class ValidatedWebhookRegistration:
         # Deleting the resolved-auth field removed the type-level guarantee that a
         # held value is deliverable, so this gate is what replaces it — the two
         # changes are one requirement and neither is safe without the other.
-        # Using LibraryAuthentication rather than a hand-written re-check keeps
+        # Using PushAuthentication rather than a hand-written re-check keeps
         # ingest, the seam and rehydration from holding three definitions of what
         # a valid block is.
         auth_block = document.get("authentication")
@@ -281,7 +281,7 @@ class ValidatedWebhookRegistration:
                 # building from the raw document would discard the case-folding and
                 # leave `hmac-sha256` in a value whose whole job is to be the one
                 # answer to "what was registered".
-                validated = LibraryAuthentication.model_validate(auth_block)
+                validated = PushAuthentication.model_validate(auth_block)
             except ValidationError as exc:
                 # Name the SPECIFIC sub-field pydantic objected to, not just the
                 # block: "…authentication.credentials" tells the owner what to fix,

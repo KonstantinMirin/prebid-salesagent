@@ -607,8 +607,8 @@ serialization edges, each with one owner. They are the wire, outbound bodies to 
 or a webhook target, the idempotency hash, and the documents repositories compose.
 Persistence is not an edge that
 needs a call, as [Persistence](#persistence) describes.
-`tests/unit/test_architecture_no_model_dump_in_impl.py` fails the build on a `.model_dump()`
-in an implementation's call graph.
+`ruff-serialization.toml` and `.ast-grep/rules/serialize-only-at-the-edges.yml` fail the build
+on a serialization call outside the edge modules, under any spelling.
 
 A wire model does not shape its own output. There is one serializer seat,
 `WireSerializerMixin` in `src/core/schemas/_base.py`, because pydantic runs only the first

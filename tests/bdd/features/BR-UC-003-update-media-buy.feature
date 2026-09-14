@@ -1688,7 +1688,7 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Invalid partitions
       | partition                    | overlay_value                                                                          | outcome                                      |
       | unknown_field                | {"nonexistent_field": ["value"]}                                                       | error "INVALID_REQUEST" with suggestion       |
-      | managed_only_dimension       | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion       |
+      | undeclared_dimension         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion       |
       | geo_overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion       |
       | device_type_overlap          | {"device_type": ["mobile"], "device_type_exclude": ["mobile"]}                         | error "INVALID_REQUEST" with suggestion       |
       | proximity_method_conflict    | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving", "radius": 10}]}    | error "INVALID_REQUEST" with suggestion       |
@@ -1716,7 +1716,7 @@ Feature: BR-UC-003 Update Media Buy
       | empty {} overlay                             | {}                                                                                     | success                                  |
       | valid known fields                           | {"geo_countries": ["US"]}                                                              | success                                  |
       | unknown field name                           | {"nonexistent_field": ["value"]}                                                       | error "INVALID_REQUEST" with suggestion  |
-      | managed-only dimension                       | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion  |
+      | undeclared dimension                         | {"publisher_managed_dim": ["value"]}                                                   | error "INVALID_REQUEST" with suggestion  |
       | geo include/exclude overlap                  | {"geo_countries": ["US"], "geo_countries_exclude": ["US"]}                              | error "INVALID_REQUEST" with suggestion  |
       | device_type include/exclude overlap           | {"device_type": ["mobile"], "device_type_exclude": ["mobile"]}                        | error "INVALID_REQUEST" with suggestion  |
       | geo_proximity with travel_time only          | {"geo_proximity": [{"travel_time": 30, "transport_mode": "driving"}]}                  | success                                  |

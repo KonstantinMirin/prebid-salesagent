@@ -184,7 +184,6 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "no_toolerror_in_impl",
         "transport_agnostic_impl",
         "impl_resolved_identity",
-        "no_model_dump_in_impl",
         "inspect_bdd_steps",
         "ruff_egress_bans",
     ],

@@ -96,7 +96,8 @@ Calling `_impl` directly is still correct where the obligation is about what
 `_impl` returns or raises: use `env.call_impl(...)` and assert against the
 returned DTO or, with `pytest.raises`, the error class. That is the oracle —
 `_impl` has no other output form (its return types are annotated and
-`test_architecture_no_model_dump_in_impl` keeps serialization at the boundary).
+the serialization rules in `ruff-serialization.toml` and
+`.ast-grep/rules/serialize-only-at-the-edges.yml` keep serialization at the edges).
 What is gone is the pretence that doing so is a transport.
 
 ### Symbol index

@@ -55,6 +55,7 @@ from pydantic import (
     AwareDatetime,
     ConfigDict,
     Field,
+    RootModel,
     field_validator,
     model_validator,
 )
@@ -69,6 +70,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     Targeting,
 )
+from src.core.schemas.notification import PushNotificationConfig
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
 #:
@@ -233,6 +235,23 @@ class Creative(LibraryCreative):
     # dict[str, Any] because the JSON column stores what the buyer sent; the row-to-model
     # read (listing.py) now validates the stored value into the typed map instead.
 
+    @field_validator("assets", mode="before")
+    @classmethod
+    def _adopt_sibling_assets(cls, v: Any) -> Any:
+        """A sync request carries the SIBLING generated ``Assets`` list; this field is the listing's.
+
+        The pinned ``core/creative-asset.json`` list shape is generated twice -- under the
+        sync input as ``core.creative_asset.Assets`` and under the listing response as
+        ``list_creatives_response.Assets`` -- as two ``RootModel`` classes over one list.
+        Pydantic validates a model-typed slot by instance, so the sync input's instance
+        would be refused here. Its ``root`` is the list the two share, and validating that
+        list builds this field's own class: a model-to-model step, never a dump, the same
+        way ``provenance`` adopts the library ``Provenance`` below.
+        """
+        if isinstance(v, dict):
+            return {key: item.root if isinstance(item, RootModel) else item for key, item in v.items()}
+        return v
+
     # === AI Provenance (EU AI Act Article 50) ===
     provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
 
@@ -382,6 +401,9 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Narrowed to the local class; see CreateMediaBuyRequest in _base.py.
+    push_notification_config: PushNotificationConfig | None = None
 
     # account and idempotency_key are REQUIRED by AdCP 3.1.1
     # (creative/sync-creatives-request.json /required = [idempotency_key, account,

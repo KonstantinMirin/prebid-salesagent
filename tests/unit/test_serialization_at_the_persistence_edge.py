@@ -1,8 +1,10 @@
-"""Tests for model_dump removal from _impl functions.
+"""Serialization happens at the persistence edge, not in business logic.
 
-Validates that serialization happens at repository/transport boundaries,
-not inside business logic. These tests drive the fix for .
-
+A repository serializes the request model it stores (``create_from_request``), the
+context manager accepts a model for a workflow step and serializes it itself, and an
+implementation reads ``push_notification_config`` off the request rather than taking a
+serialized copy as a parameter (CLAUDE.md pattern 4; ruff-serialization.toml and
+.ast-grep/rules/serialize-only-at-the-edges.yml enforce the rule these tests illustrate).
 """
 
 from datetime import UTC, datetime, timedelta
@@ -143,8 +145,8 @@ class TestContextManagerAcceptsModel:
         assert "request_data" in sig.parameters
 
 
-class TestImplNoModelDump:
-    """_create_media_buy_impl must not accept BaseModel for push_notification_config."""
+class TestImplReadsPushNotificationConfigOffTheRequest:
+    """_create_media_buy_impl takes no push_notification_config parameter; it reads ``req``."""
 
     def test_impl_takes_no_push_notification_config_parameter(self):
         """_impl reads push_notification_config off ``req``, so it has no parameter for it.

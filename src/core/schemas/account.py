@@ -20,10 +20,16 @@ from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
+from adcp.types.generated_poc.account.sync_accounts_request import (
+    Accounts as LibrarySyncAccountInput,
+)
+from adcp.types.generated_poc.account.sync_accounts_request import (
+    Accounts1 as LibrarySettingsUpdateAccountInput,
+)
 from adcp.types.generated_poc.account.sync_accounts_response import (
     Account as LibraryAccount,
 )  # TODO: no stable alias in adcp.types
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
@@ -32,6 +38,7 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     validate_idempotency_key_shape,
 )
+from src.core.schemas.notification import NotificationConfig, PushNotificationConfig
 
 # ---------------------------------------------------------------------------
 # Core domain Account (used in ListAccountsResponse.accounts)
@@ -96,6 +103,37 @@ class ListAccountsRequest(BuyerRequest, LibraryListAccountsRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
+class SyncAccountInput(LibrarySyncAccountInput):
+    """The provisioning entry of ``sync_accounts`` (brand / operator / billing), per the pin.
+
+    Redeclares only ``notification_configs``, narrowed to the local ``NotificationConfig``
+    so the authentication block an entry carries is the ONE class every registration site
+    names (src/core/schemas/notification.py). The parent's ``maxItems: 16`` is restated
+    because the element type changed.
+    """
+
+    # The [assignment] ignore is the expected cost of narrowing a list element type (invariance).
+    notification_configs: list[NotificationConfig] | None = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=16,
+        description=LibrarySyncAccountInput.model_fields["notification_configs"].description,
+    )
+
+
+class SettingsUpdateAccountInput(LibrarySettingsUpdateAccountInput):
+    """The account-reference (settings-update) entry of ``sync_accounts``, per the pin.
+
+    Same single redeclaration as :class:`SyncAccountInput`, for the same reason.
+    """
+
+    # The [assignment] ignore is the expected cost of narrowing a list element type (invariance).
+    notification_configs: list[NotificationConfig] | None = Field(  # type: ignore[assignment]
+        default=None,
+        max_length=16,
+        description=LibrarySettingsUpdateAccountInput.model_fields["notification_configs"].description,
+    )
+
+
 class SyncAccountsRequest(BuyerRequest, LibrarySyncAccountsRequest):
     """Extends library SyncAccountsRequest.
 
@@ -112,6 +150,20 @@ class SyncAccountsRequest(BuyerRequest, LibrarySyncAccountsRequest):
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # The two entry shapes, narrowed to the local subclasses above so every
+    # notification_configs entry validates into the local NotificationConfig. Required and
+    # ``maxItems: 1000`` as the parent declares; restated because the element types changed.
+    # The [assignment] ignore is the expected cost of narrowing a list element type (invariance).
+    accounts: list[SyncAccountInput | SettingsUpdateAccountInput] = Field(  # type: ignore[assignment]
+        ...,
+        max_length=1000,
+        description=LibrarySyncAccountsRequest.model_fields["accounts"].description,
+    )
+
+    # Narrowed to the local class, like the media-buy and creative requests; see
+    # CreateMediaBuyRequest in _base.py.
+    push_notification_config: PushNotificationConfig | None = None
 
     # idempotency_key is INHERITED as required. The optional override that used to sit here
     # argued the field was "inert until sync_accounts consumes it through the
@@ -235,6 +287,8 @@ __all__ = [
     "Account",
     "ListAccountsRequest",
     "ListAccountsResponse",
+    "SettingsUpdateAccountInput",
+    "SyncAccountInput",
     "SyncAccountsRequest",
     "SyncAccountsResponse",
     "SyncResponseAccount",

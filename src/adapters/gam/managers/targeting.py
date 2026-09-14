@@ -816,19 +816,6 @@ class GAMTargetingManager:
         if targeting_overlay.custom and "gam" in targeting_overlay.custom:
             custom_targeting.update(targeting_overlay.custom["gam"].get("key_values", {}))
 
-        # AEE signal integration via key-value pairs (managed-only)
-        if targeting_overlay.key_value_pairs:
-            logger.info("Adding AEE signals to GAM key-value targeting")
-            for key_name, value in targeting_overlay.key_value_pairs.items():
-                # Resolve key name to GAM key ID
-                try:
-                    key_id = self.resolve_custom_targeting_key_id(key_name)
-                    custom_targeting[key_id] = value
-                    logger.info(f"  {key_name} (ID: {key_id}): {value}")
-                except AdCPConfigurationError:
-                    logger.error(f"Failed to resolve custom targeting key '{key_name}'")
-                    raise
-
         # AXE segment targeting (AdCP pre-3.0 axe_include_segment/axe_exclude_segment;
         # deprecated in 3.0.x in favor of TMP provider fields)
         # Per AdCP spec, three separate keys are required for include, exclude, and macro segments

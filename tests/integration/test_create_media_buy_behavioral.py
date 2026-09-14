@@ -45,6 +45,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -67,7 +68,6 @@ from src.core.schemas import (
     CreateMediaBuySuccess,
     PricingOption,
 )
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
@@ -1594,23 +1594,6 @@ class TestExtensionObligations:
 
         offending = {err["loc"][0] for err in exc_info.value.errors()}
         assert offending == {"mood", "weather"}
-
-    @pytest.mark.asyncio
-    async def test_managed_only_dimension_rejected(self):
-        """Managed-only dimension (key_value_pairs) is rejected.
-
-        Covers: UC-002-EXT-F-02
-        """
-        # Build a targeting object with key_value_pairs set
-        from src.core.schemas import Targeting
-        from src.services.targeting_capabilities import managed_only_dimensions
-
-        targeting = Targeting(key_value_pairs={"segment": "premium"})
-
-        # Exact equality on the DIMENSION NAME. This asserted substrings of a rendered
-        # sentence ("managed" in v.lower()) until salesagent-3dawm.9 made the wording
-        # CODE_TABLE's and the validator's return the offending dimension.
-        assert managed_only_dimensions(targeting) == ["key_value_pairs"]
 
     @pytest.mark.asyncio
     async def test_unregistered_creative_agent_rejected(self):

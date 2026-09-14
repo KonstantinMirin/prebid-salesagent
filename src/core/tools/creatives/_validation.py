@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from adcp.types import CreativeAsset
-from pydantic_core import to_jsonable_python
 
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPValidationError
@@ -62,11 +61,10 @@ def _validate_creative_input(
         "creative_id": creative.creative_id or str(uuid.uuid4()),
         "name": creative.name,
         "format_id": creative.format_id,
-        # The sync input and the listing model type the asset map with two DIFFERENT
-        # generated ``Assets`` classes for the one pinned shape (core/creative-asset.json
-        # versus creative/list-creatives-response.json), and pydantic will not coerce one
-        # RootModel instance into the other. Re-validate from the JSON shape they share.
-        "assets": to_jsonable_python(creative.assets),
+        # Handed through as the model it is. The sync input types the asset map with a
+        # different generated ``Assets`` class from the listing model's; the receiving
+        # ``Creative.assets`` adopts the sibling instance (see the validator there).
+        "assets": creative.assets,
         # Internal fields (added by sales agent)
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),

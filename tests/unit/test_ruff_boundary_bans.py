@@ -34,7 +34,11 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFIGS = (REPO_ROOT / "ruff-boundary.toml", REPO_ROOT / "ruff-ownership.toml")
+CONFIGS = (
+    REPO_ROOT / "ruff-boundary.toml",
+    REPO_ROOT / "ruff-ownership.toml",
+    REPO_ROOT / "ruff-serialization.toml",
+)
 
 
 def _banned_names() -> list[tuple[Path, str]]:

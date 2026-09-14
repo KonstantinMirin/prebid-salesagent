@@ -15,7 +15,6 @@ from typing import Any
 
 from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
 from adcp.types import FormatId as LibraryFormatId
-from pydantic import BaseModel
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
@@ -27,19 +26,6 @@ from src.core.validation_helpers import run_async_in_sync_context
 # What callers may hand the identity helpers: a structured reference, a bare
 # dict off the wire, or a legacy string id.
 FormatRef = str | LibraryFormatId | Mapping[str, Any]
-
-
-def _as_ref(value: FormatRef) -> Any:
-    """Normalize a reference to the shape the SDK predicates accept.
-
-    A local ``FormatId`` subclass is rebuilt as the LIBRARY type from its attributes:
-    pydantic model equality is by class, so a subclass instance never compares equal to
-    the library instance the SDK builds, and the predicate would report every format
-    as different. The value survives, the class does not, which is the whole point.
-    """
-    if isinstance(value, BaseModel):
-        return LibraryFormatId.model_validate(value, from_attributes=True)
-    return value
 
 
 logger = logging.getLogger(__name__)
@@ -129,9 +115,10 @@ def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:
     supported format can satisfy a narrower request), which is why the SDK gives
     it its own predicate rather than reusing equivalence — and why this one
     delegates to ``adcp.canonical_formats.format_is_supported`` rather than to
-    the identity pair, which cannot express direction.
+    the identity pair, which cannot express direction. The SDK predicate reads
+    attributes, so a local ``FormatId`` subclass is handed over as is.
     """
-    return format_is_supported(_as_ref(requested), _as_ref(supported))
+    return format_is_supported(requested, supported)
 
 
 def find_format(formats: Iterable[Format], format_id: FormatRef) -> Format | None:

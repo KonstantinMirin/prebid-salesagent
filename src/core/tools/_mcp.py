@@ -11,13 +11,13 @@ from src.core.tools._wire import to_wire
 def mcp_result(response: ProtocolEnvelope, content: str | None = None) -> ToolResult:
     """Build a ``ToolResult`` with a spec-compliant ``structured_content``.
 
-    ``structured_content`` must be a plain dict via ``model_dump()``: FastMCP's
-    ``ToolResult`` serializes non-dict ``structured_content`` via
-    ``pydantic_core.to_jsonable_python()``, which bypasses ``model_dump()``
-    overrides (Pattern #4 nested serialization) and ``AdCPBaseModel``'s
-    ``exclude_none=True`` default -- so protocol/spec-optional fields the model
-    leaves unset would otherwise serialize as invalid wire ``null`` instead of
-    being omitted.
+    ``structured_content`` must be a plain dict via ``to_wire``: FastMCP's
+    ``ToolResult`` serializes non-dict ``structured_content`` through pydantic_core's
+    generic JSON conversion, which does not apply ``AdCPBaseModel``'s
+    ``exclude_none=True`` ``model_dump`` default -- so protocol/spec-optional fields
+    the model leaves unset would otherwise serialize as invalid wire ``null`` instead
+    of being omitted. The model's own wrap serializer runs on both paths; only that
+    default is at stake.
 
     The parameter is bound to ``ProtocolEnvelope``, not ``pydantic.BaseModel``, because two
     contracts ride on it: that class subclasses ``AdCPBaseModel``, whose ``exclude_none=True``

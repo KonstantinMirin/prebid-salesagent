@@ -499,7 +499,9 @@ class XandrAdapter(AdServerAdapter):
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",
-                {"request": request.dict(), "principal": self.principal.name, "advertiser_id": self.advertiser_id},
+                # The model, handed through: the task details are read for media_buy_id only,
+                # and nothing serializes them (CLAUDE.md pattern 4).
+                {"request": request, "principal": self.principal.name, "advertiser_id": self.advertiser_id},
             )
 
             return self._build_create_success(

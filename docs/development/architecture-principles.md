@@ -102,9 +102,9 @@ typed at the boundary and stay typed until the boundary serializes them.
   (`src/core/security/outbound_http.py`), which owns the wire-level concerns.
 
 **Illustration.** A `model_dump()` inside `_impl` signals the violation: it
-means business logic is deciding a wire or storage format. The guard
-`tests/unit/test_architecture_no_model_dump_in_impl.py` bans the call outright
-— its allowlist is empty.
+means business logic is deciding a wire or storage format. `ruff-serialization.toml`
+and `.ast-grep/rules/serialize-only-at-the-edges.yml` ban the call everywhere under
+`src/` except the named edge modules — there is no allowlist.
 
 **Consequence.** Serialization decisions (aliases, exclusions, spec-pinned
 nullable fields) are made once, at boundaries that every transport shares, instead

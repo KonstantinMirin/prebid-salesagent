@@ -123,6 +123,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     _details_to_wire,
 )
+from src.core.schemas.notification import PushNotificationConfig
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
 LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
@@ -390,7 +391,7 @@ def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
 
 
 class WireSerializerMixin:
-    """The single ``@model_serializer(mode="wrap")`` seat for wire shaping.
+    """The single wrap ``model_serializer`` seat for wire shaping.
 
     Pydantic runs only the FIRST model serializer it finds in the MRO and silently
     drops the rest — two mixins that each declare one do not compose, they shadow.
@@ -954,7 +955,7 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     # That is the same silent-omission class as GH #1900, which is why this PR exists.
     # It was invisible until now only because the field could never be null.
 
-    # Replaces a second @model_serializer that used to live on this class. Two wrap
+    # Replaces a second wrap serializer that used to live on this class. Two wrap
     # serializers in one model means only one runs, so composing the always-include
     # mixin above had NO effect until the duplicate was removed -- confirmed_at was
     # still dropped. Its packages special-case (exclude platform_line_item_id) was
@@ -1092,7 +1093,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  # type: ignore[misc]
+class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  # type: ignore[misc]
     """Successful update_media_buy response, extending the SDK success branch.
 
     Extends the official adcp UpdateMediaBuySuccess type.
@@ -1178,33 +1179,12 @@ class UpdateMediaBuySuccess(AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  #
         """
         return _mirror_media_buy_status(self)
 
-    @model_serializer(mode="wrap")
-    def _serialize_model(self, serializer, info):
-        """Serialize model, excluding internal fields by default."""
-        # Get base serialization
-        data = serializer(self)
-
-        # Explicitly serialize affected_packages to ensure AffectedPackage.model_dump() is called
-        # This ensures internal fields (changes_applied, buyer_package_ref) are excluded via exclude=True
-        if "affected_packages" in data and self.affected_packages:
-            data["affected_packages"] = [pkg.model_dump(mode=info.mode) for pkg in self.affected_packages]
-
-        # Auto-handle other nested Pydantic models
-        for field_name in self.__class__.model_fields:
-            if field_name == "affected_packages":
-                continue  # Already handled above
-
-            field_value = getattr(self, field_name, None)
-            if field_value is None:
-                continue
-
-            if isinstance(field_value, list) and field_value:
-                if isinstance(field_value[0], BaseModel):
-                    data[field_name] = [item.model_dump(mode=info.mode) for item in field_value]
-            elif isinstance(field_value, BaseModel):
-                data[field_name] = field_value.model_dump(mode=info.mode)
-
-        return data
+    # MRO NOTE. NestedModelSerializerMixin is listed FIRST in the bases so its wrap serializer
+    # is the one pydantic runs: pydantic keeps only the first model serializer it finds in the
+    # MRO and silently drops the rest (see WireSerializerMixin). A hand-written wrap serializer
+    # used to live here and duplicated _apply_nested_models line for line -- a second seat,
+    # kept so AffectedPackage's exclude=True fields stayed off the wire. The mixin re-dumps
+    # every nested model by its instance, affected_packages included, so the copy is gone.
 
 
 class UpdateMediaBuyError(AdCPUpdateMediaBuyError, UpdateMediaBuyResult):  # type: ignore[misc]
@@ -1639,11 +1619,13 @@ class FrequencyCap(LibraryFrequencyCap):
 class TargetingCapability(SalesAgentBaseModel):
     """Defines targeting dimension capabilities and restrictions."""
 
-    dimension: str  # e.g., "geo_country", "key_value"
-    access: Literal["overlay", "managed_only", "both", "removed"] = "overlay"
+    dimension: str  # e.g., "geo_country"
+    # No "managed_only": the pinned targeting overlay declares no managed-only dimension,
+    # and the rows that carried the value described fields nothing declares
+    # (salesagent-3cs7o.22).
+    access: Literal["overlay", "both", "removed"] = "overlay"
     description: str | None = None
     allowed_values: list[str] | None = None  # For restricted value sets
-    axe_signal: bool | None = False  # Whether this is an AXE signal dimension
 
 
 # Mapping from device_platform (OS-level, AdCP TargetingOverlay) to the form factors
@@ -1732,13 +1714,12 @@ class Targeting(TargetingOverlay):
     # Platform-specific custom targeting
     custom: dict[str, Any] | None = None  # Platform-specific targeting options
 
-    # Key-value targeting (managed-only for AXE signals). Set by the orchestrator/AXE and
-    # read by adapters; never on the wire, so excluded at its declaration. The internal
-    # bookkeeping that used to sit next to it (tenant_id, created_at, updated_at, metadata)
-    # was read by nothing and is gone.
-    key_value_pairs: dict[str, str] | None = Field(
-        default=None, exclude=True, description='Internal: e.g. {"aee_segment": "high_value", "aee_score": "0.85"}'
-    )
+    # No seller-managed key/value targeting field. The pinned core/targeting.json declares no
+    # such field and no managed-only concept; the one that lived here had no writer under
+    # src/, and Field(exclude=True) kept it off the wire, off persistence and out of the
+    # idempotency hash alike, so it could never round-trip. A seller-side value that must
+    # persist belongs on a repository-owned carrier, not on a wire model (CLAUDE.md pattern
+    # 4; salesagent-3cs7o.22).
 
     @property
     def device_form_factors(self) -> list[str] | None:
@@ -2120,6 +2101,11 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    # Narrowed to the local class, so the authentication block a request carries is the ONE
+    # class every registration site names (src/core/schemas/notification.py). Same
+    # nullability and default as the parent.
+    push_notification_config: PushNotificationConfig | None = None
+
     # account and idempotency_key are REQUIRED by AdCP 3.1.1
     # (media-buy/create-media-buy-request.json /required = [account, brand, end_time,
     # idempotency_key, start_time]) and are inherited as required from the library type.
@@ -2462,6 +2448,9 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Narrowed to the local class; see CreateMediaBuyRequest.
+    push_notification_config: PushNotificationConfig | None = None
 
     # account and idempotency_key are REQUIRED by AdCP 3.1.1
     # (media-buy/update-media-buy-request.json /required = [idempotency_key, account,
