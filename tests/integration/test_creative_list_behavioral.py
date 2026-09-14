@@ -41,6 +41,22 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 _make_identity = make_identity  # Canonical version from tests.harness
 
 
+def _seed_tagged(tenant, principal, *, creative_id: str, name: str, tags: list[str]):
+    """One approved creative carrying *tags* where a creative's tags live: the data blob.
+
+    There is no tags column, and list_creatives reads them back from ``data["tags"]``, so
+    that is where a tags-filter fixture has to put them.
+    """
+    return CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        creative_id=creative_id,
+        name=name,
+        approved=True,
+        data={"assets": build_assets(image_spec("banner")), "tags": tags},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Auth Tests — Covers: UC-006-EXT-A-01, UC-006-EXT-B-01
 # ---------------------------------------------------------------------------
@@ -210,31 +226,73 @@ class TestListPrincipalIsolation:
 
 
 class TestListTagsFilter:
-    """Tags filter exercises line 128 (tags → name.contains)."""
+    """The tags filter asks about the creative's TAGS, and asks for all of them.
 
-    def test_tags_filter_returns_matching(self, integration_db):
-        """Spec: list_creatives tags filter matches creatives by name substring."""
+    core/creative-filters.json: ``tags`` is "Filter by creative tags (all tags must
+    match)" — a creative's own tags, which this schema keeps on the JSON data blob and
+    list_creatives reads back from there. The filter used to be implemented as
+    ``Creative.name.contains(tag)`` and this test asserted that as if it were the spec
+    ("matches creatives by name substring"), which is a different question and one
+    ``name_contains`` already asks.
+    """
+
+    def test_tags_filter_matches_the_creatives_tags(self, integration_db):
+        """A single-member tags filter returns the creatives carrying that tag."""
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
 
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                creative_id="c_summer",
-                name="Summer Campaign Banner",
-            )
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                creative_id="c_winter",
-                name="Winter Campaign Video",
-            )
+            _seed_tagged(tenant, principal, creative_id="c_summer", name="Banner one", tags=["summer"])
+            _seed_tagged(tenant, principal, creative_id="c_winter", name="Video two", tags=["winter"])
 
-            response = env.call_impl(filters=CreativeFilters(tags=["Summer"]))
+            response = env.call_impl(filters=CreativeFilters(tags=["summer"]))
 
-        assert len(response.creatives) == 1
-        assert response.creatives[0].creative_id == "c_summer"
+        assert [creative.creative_id for creative in response.creatives] == ["c_summer"]
+
+    def test_tags_filter_requires_every_tag(self, integration_db):
+        """All tags must match: one of two is not enough."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            _seed_tagged(tenant, principal, creative_id="c_both", name="Banner one", tags=["q1", "brand"])
+            _seed_tagged(tenant, principal, creative_id="c_one", name="Banner two", tags=["q1"])
+
+            response = env.call_impl(filters=CreativeFilters(tags=["q1", "brand"]))
+
+        assert [creative.creative_id for creative in response.creatives] == ["c_both"]
+
+    def test_tags_any_filter_matches_either_tag(self, integration_db):
+        """``tags_any`` is the OR sibling: "any tag must match"."""
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            _seed_tagged(tenant, principal, creative_id="c_q1", name="Banner one", tags=["q1"])
+            _seed_tagged(tenant, principal, creative_id="c_brand", name="Banner two", tags=["brand"])
+            _seed_tagged(tenant, principal, creative_id="c_other", name="Banner three", tags=["evergreen"])
+
+            response = env.call_impl(filters=CreativeFilters(tags_any=["q1", "brand"]))
+
+        assert {creative.creative_id for creative in response.creatives} == {"c_q1", "c_brand"}
+
+    def test_a_name_substring_is_not_a_tag(self, integration_db):
+        """The counter-example the old implementation could not tell apart.
+
+        The creative's NAME contains "summer" and its tags do not, so a tags filter must
+        not return it — while ``name_contains`` must.
+        """
+        with CreativeListEnv() as env:
+            tenant = TenantFactory(tenant_id="test_tenant")
+            principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
+
+            _seed_tagged(tenant, principal, creative_id="c_named", name="Summer Campaign Banner", tags=["evergreen"])
+
+            by_tag = env.call_impl(filters=CreativeFilters(tags=["Summer"]))
+            by_name = env.call_impl(filters=CreativeFilters(name_contains="Summer"))
+
+        assert by_tag.creatives == []
+        assert [creative.creative_id for creative in by_name.creatives] == ["c_named"]
 
 
 class TestListDateFilters:
