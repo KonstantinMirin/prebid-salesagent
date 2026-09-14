@@ -37,6 +37,11 @@ from tests.bdd.steps.domain.uc_get_products_inventory import _call_get_products
 
 _CODE = "VERSION_UNSUPPORTED"
 
+# An account id no Given seeds, in either the in-process database or the live server's. A
+# scenario that names it is answered on the account the moment the boundary resolves one
+# before judging the pin, so the expected VERSION_UNSUPPORTED cannot be reached by accident.
+_UNKNOWN_ACCOUNT_ID = "acct-no-such-account-protocol-001"
+
 
 def _pinned_release() -> str:
     """The release-precision version the pinned SDK says this build speaks: "3.1"."""
@@ -88,6 +93,23 @@ def when_products_with_bad_release_good_major(ctx: dict, version: str) -> None:
 def when_products_with_good_release_bad_major(ctx: dict, major: int) -> None:
     """The mirror: a serveable release alongside a major this build does not serve."""
     _call_get_products(ctx, adcp_version=_pinned_release(), adcp_major_version=major)
+
+
+@when(parsers.parse("the buyer requests products naming an unknown account and pinning adcp_major_version {major:d}"))
+def when_products_with_account_and_major(ctx: dict, major: int) -> None:
+    """An unserveable major on a request that also names an account.
+
+    The account is what makes this scenario different from its sibling above: naming one
+    requires a credential and makes the boundary resolve it, so a negotiation that runs after
+    identity resolution answers this request on the account rather than on the pin.
+    """
+    _call_get_products(ctx, adcp_major_version=major, account={"account_id": _UNKNOWN_ACCOUNT_ID})
+
+
+@when(parsers.parse('the buyer requests products naming an unknown account and pinning adcp_version "{version}"'))
+def when_products_with_account_and_release(ctx: dict, version: str) -> None:
+    """The release-precision form of the same ordering claim."""
+    _call_get_products(ctx, adcp_version=version, account={"account_id": _UNKNOWN_ACCOUNT_ID})
 
 
 # ── Then steps ──────────────────────────────────────────────────────
