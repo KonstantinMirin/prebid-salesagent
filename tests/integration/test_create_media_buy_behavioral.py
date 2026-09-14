@@ -1605,23 +1605,6 @@ class TestExtensionObligations:
         assert offending == {"mood", "weather"}
 
     @pytest.mark.asyncio
-    async def test_managed_only_dimension_rejected(self):
-        """Managed-only dimension (key_value_pairs) is rejected.
-
-        Covers: UC-002-EXT-F-02
-        """
-        # Build a targeting object with key_value_pairs set
-        from src.core.schemas import Targeting
-        from src.services.targeting_capabilities import managed_only_dimensions
-
-        targeting = Targeting(key_value_pairs={"segment": "premium"})
-
-        # Exact equality on the DIMENSION NAME. This asserted substrings of a rendered
-        # sentence ("managed" in v.lower()) until salesagent-3dawm.9 made the wording
-        # CODE_TABLE's and the validator's return the offending dimension.
-        assert managed_only_dimensions(targeting) == ["key_value_pairs"]
-
-    @pytest.mark.asyncio
     async def test_unregistered_creative_agent_rejected(self):
         """Unregistered creative agent in format_ids is rejected.
 

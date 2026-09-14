@@ -119,7 +119,7 @@ def _mcp_status_error(status: int, *, retry_after: str | None = None) -> MCPConn
         request=httpx.Request("POST", "https://operator.test/mcp"),
     )
     wrapped = httpx.HTTPStatusError(f"{status} error", request=response.request, response=response)
-    seam_error = MCPConnectionError(internal_detail="Failed to connect to MCP agent after 3 attempts")
+    seam_error = MCPConnectionError(internal_detail=wrapped)
     seam_error.__cause__ = wrapped
     return seam_error
 

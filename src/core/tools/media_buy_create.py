@@ -955,11 +955,9 @@ def execute_approved_media_buy(
                 # defect and is refused (No Quiet Failures), not given a stand-in; the
                 # census of such rows is a ticket question, not a code path.
                 if buy_account_id is None:
-                    raise AdCPPersistedStateError(
-                        internal_detail=ValueError(
-                            f"media buy {media_buy_id} has no account_id; cannot act on its account"
-                        )
-                    )
+                    # The buy's id is a fact, so it rides the declared details class;
+                    # nothing here was caught, so there is no cause to chain.
+                    raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
                 if not raw_request_data.get("account"):
                     raw_request_data["account"] = {"account_id": buy_account_id}
 
@@ -1563,7 +1561,7 @@ def _validate_pricing_model_selection(
     """Validate pricing model selection for a package against product's pricing options.
 
     Args:
-        package: Package with optional pricing_model and bid_price
+        package: Package naming a pricing_option_id, with an optional bid_price
         product: Product database model with pricing_options relationship
         campaign_currency: Optional campaign-level currency
 
@@ -1583,28 +1581,26 @@ def _validate_pricing_model_selection(
     from decimal import Decimal
 
     # Log pricing validation details at debug level
-    # Use getattr for legacy pricing_model field (deprecated - use pricing_option_id instead)
-    legacy_pricing_model = getattr(package, "pricing_model", None)
     logger.debug(
         f"[PRICING] Package {package.product_id}: pricing_option={package.pricing_option_id}, "
-        f"model={legacy_pricing_model}, bid_price={package.bid_price}, budget={package.budget}"
+        f"bid_price={package.bid_price}, budget={package.budget}"
     )
 
     # All products must have pricing_options
     if not product.pricing_options or len(product.pricing_options) == 0:
         raise AdCPConfigurationError(details=ConfigurationDetails(product_id=product.product_id))
 
-    # Determine which pricing option to use
-    # Priority: pricing_option_id (AdCP spec) > pricing_model (legacy)
+    # Which pricing option to use. pricing_option_id is the pin's only selector
+    # (media-buy/package-request.json /required, AdCP 3.1.1); the legacy pricing_model
+    # alias that used to be consulted as a fallback is gone with the field.
     pricing_option_id = package.pricing_option_id
-    pricing_model_fallback = getattr(package, "pricing_model", None)  # Legacy field
 
     # Helper to unwrap RootModel - adcp 2.14.0+ uses RootModel wrapper
     def unwrap_option(opt: Any) -> Any:
         return getattr(opt, "root", opt)
 
-    # If neither specified, use first pricing option from product
-    if not pricing_option_id and not pricing_model_fallback:
+    # Not specified: use the product's first pricing option
+    if not pricing_option_id:
         first_option = unwrap_option(product.pricing_options[0])
         # The option's own terms, plus the one field it cannot supply: a currency-less
         # option falls back to the campaign's, which is a property of this request.
@@ -1619,16 +1615,8 @@ def _validate_pricing_model_selection(
         # The stored id -- the same one get_products announced and the buyer sent back.
         option_id = opt_inner.pricing_option_id
 
-        # Try matching by pricing_option_id first (AdCP spec)
-        if pricing_option_id and pricing_option_id.lower() == option_id.lower():
-            selected_option = opt_inner
-            break
-
-        # Fallback: match by pricing_model (legacy)
-        if pricing_model_fallback and opt_inner.pricing_model == pricing_model_fallback.value:
-            # If campaign currency specified, must match
-            if campaign_currency and opt_inner.currency != campaign_currency:
-                continue
+        # Match by pricing_option_id, the id get_products announced
+        if pricing_option_id.lower() == option_id.lower():
             selected_option = opt_inner
             break
 
@@ -1643,14 +1631,16 @@ def _validate_pricing_model_selection(
         # what the buyer needs, so they travel as structured detail instead. The sibling
         # below (bid_price/floor_price) already relocates the same way.
         raise AdCPValidationError(
-            field="pricing_option_id" if pricing_option_id else "pricing_model",
+            # Reached only with a pricing_option_id in hand: an absent one returned the
+            # product's first option above, so the pointer names that field unconditionally.
+            field="pricing_option_id",
             # The three conditional spreads named one fact three ways -- which
             # requested value was not found. `rejected_value` is that fact, and
             # to_wire() drops it when unset, so the conditionals are unnecessary.
             details=PricingValidationDetails(
                 product_id=product.product_id,
                 available_pricing_options=available_options,
-                rejected_value=str(pricing_option_id or pricing_model_fallback or campaign_currency or ""),
+                rejected_value=pricing_option_id,
             ),
         )
 
@@ -1800,7 +1790,7 @@ async def _validate_and_convert_format_ids(
                 field=field,
                 details=AdapterFailureDetails(**where, agent_url=agent_url, format_id=format_id),
                 internal_detail=e,
-            )
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})
@@ -2308,22 +2298,11 @@ async def _create_media_buy_impl(
                     def unwrap_po(po: Any) -> Any:
                         return getattr(po, "root", po)
 
-                    # Find the pricing option matching the package's pricing_model (legacy field)
-                    first_package_pricing_model = getattr(first_package, "pricing_model", None)
-                    if first_package_pricing_model and pricing_options:
-                        matching_option = next(
-                            (
-                                unwrap_po(po)
-                                for po in pricing_options
-                                if unwrap_po(po).pricing_model == first_package_pricing_model
-                            ),
-                            None,
-                        )
-                        if matching_option:
-                            request_currency = matching_option.currency
-
-                    # If no pricing_model specified, use first pricing option's currency
-                    if not request_currency and pricing_options:
+                    # The product's first pricing option supplies the currency. The branch
+                    # that used to precede this one looked the option up by the package's
+                    # legacy pricing_model, a field the pin does not declare and nothing
+                    # produced; it went with the field.
+                    if pricing_options:
                         request_currency = unwrap_po(pricing_options[0]).currency
 
             # Fallback to deprecated/legacy sources

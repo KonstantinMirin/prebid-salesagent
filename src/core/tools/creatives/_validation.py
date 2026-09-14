@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 from typing import Any
 
 from adcp.types import CreativeAsset
-from pydantic_core import to_jsonable_python
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -69,11 +68,10 @@ def _validate_creative_input(
         "creative_id": creative.creative_id or str(uuid.uuid4()),
         "name": creative.name,
         "format_id": creative.format_id,
-        # The sync input and the listing model type the asset map with two DIFFERENT
-        # generated ``Assets`` classes for the one pinned shape (core/creative-asset.json
-        # versus creative/list-creatives-response.json), and pydantic will not coerce one
-        # RootModel instance into the other. Re-validate from the JSON shape they share.
-        "assets": to_jsonable_python(creative.assets),
+        # Handed through as the model it is. The sync input types the asset map with a
+        # different generated ``Assets`` class from the listing model's; the receiving
+        # ``Creative.assets`` adopts the sibling instance (see the validator there).
+        "assets": creative.assets,
         # Internal fields (added by sales agent)
         "principal_id": principal_id,
         "created_date": datetime.now(UTC),
@@ -195,8 +193,11 @@ def check_provenance_policy(
     """
     if creative_policy is None:
         return
-    policy = creative_policy if isinstance(creative_policy, dict) else creative_policy.model_dump(mode="json")
-    if not policy.get("provenance_required"):
+    # Read off whichever shape arrived. The repository hands back the persisted document
+    # for a stored policy and the model for a typed one, and neither is serialized here:
+    # a model dumped to inspect one field is a second representation of the same value
+    # (CLAUDE.md pattern 4, serialize-only-at-the-edges).
+    if not _get_field(creative_policy, "provenance_required"):
         return
 
     details = EntityRefDetails(creative_id=creative.creative_id)
@@ -206,13 +207,13 @@ def check_provenance_policy(
             return
         raise AdCPProvenanceRequiredError(field="provenance", details=details)
 
-    requirements = policy.get("provenance_requirements") or {}
-    if requirements.get("require_digital_source_type") and provenance.digital_source_type is None:
+    requirements = _get_field(creative_policy, "provenance_requirements") or {}
+    if _get_field(requirements, "require_digital_source_type") and provenance.digital_source_type is None:
         raise AdCPProvenanceDigitalSourceTypeMissingError(field="provenance.digital_source_type", details=details)
-    if requirements.get("require_disclosure_metadata"):
+    if _get_field(requirements, "require_disclosure_metadata"):
         disclosure = provenance.disclosure
         required = getattr(disclosure, "required", None)
         if required is None or (required is True and not getattr(disclosure, "jurisdictions", None)):
             raise AdCPProvenanceDisclosureMissingError(field="provenance.disclosure", details=details)
-    if requirements.get("require_embedded_provenance") and not provenance.embedded_provenance:
+    if _get_field(requirements, "require_embedded_provenance") and not provenance.embedded_provenance:
         raise AdCPProvenanceEmbeddedMissingError(field="provenance.embedded_provenance", details=details)

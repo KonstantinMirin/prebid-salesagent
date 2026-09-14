@@ -126,11 +126,12 @@ wins, and only then is the row loaded once:
 **4. Principal resolution** (`get_principal_from_token` in
 `src/core/auth_utils.py`): the token is looked up *inside the detected
 tenant*, never globally. A principal is a row in exactly one tenant, so
-without a tenant there is no lookup. If the tool requires a credential and
-the presented one resolves to no principal of that tenant, raise
-`AdCPAuthenticationError` (`AUTH_INVALID`). A public tool (`auth: "optional"`
-on its registry row) raises neither: a rejected credential is treated as
-absent and the request proceeds anonymously.
+without a tenant there is no lookup. If a credential was presented and it
+resolves to no principal of that tenant, raise `AdCPAuthenticationError`
+(`AUTH_INVALID`), whether or not the tool requires a credential: the pinned
+enum's MUST keys on "an `Authorization` header was present but verification
+failed" and names no task. A public tool differs only in the absent case,
+where the request proceeds anonymously.
 
 ```mermaid
 flowchart TD
@@ -140,8 +141,8 @@ flowchart TD
     missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant → Apx-Incoming-Host → localhost\nTenantContext.load"]
     tenant --> principal["4. Principal inside that tenant\n(get_principal_from_token)"]
     principal --> valid{"resolved?"}
-    valid -->|"no, tool requires one"| ai["AdCPAuthenticationError (AUTH_INVALID)"]
-    valid -->|"yes, or public tool"| rid["Frozen ResolvedIdentity"]
+    valid -->|"no, credential was presented"| ai["AdCPAuthenticationError (AUTH_INVALID)"]
+    valid -->|"yes, or nothing presented on a public tool"| rid["Frozen ResolvedIdentity"]
 ```
 
 The result is one of three frozen types, and the type carries the boundary's

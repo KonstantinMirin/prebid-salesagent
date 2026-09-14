@@ -89,28 +89,6 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
         dimension="audience_segment", access="overlay", description="Third-party audience segments"
     ),
     "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
-    # ── Removed dimensions ───────────────────────────────────────────────
-    "geo_city": TargetingCapability(
-        dimension="geo_city",
-        access="removed",
-        description="City-level targeting (removed in v3, no adapter supports it)",
-    ),
-    # ── Managed-only (AEE signal integration) ────────────────────────────
-    "key_value_pairs": TargetingCapability(
-        dimension="key_value_pairs",
-        access="managed_only",
-        description="Key-value pairs for AEE signal integration",
-        axe_signal=True,
-    ),
-    "aee_segment": TargetingCapability(
-        dimension="aee_segment", access="managed_only", description="AEE-computed audience segments", axe_signal=True
-    ),
-    "aee_score": TargetingCapability(
-        dimension="aee_score", access="managed_only", description="AEE effectiveness scores", axe_signal=True
-    ),
-    "aee_context": TargetingCapability(
-        dimension="aee_context", access="managed_only", description="AEE contextual signals", axe_signal=True
-    ),
 }
 
 
@@ -119,25 +97,8 @@ def get_overlay_dimensions() -> list[str]:
     return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access in ["overlay", "both"]]
 
 
-def get_managed_only_dimensions() -> list[str]:
-    """Get list of dimensions that are managed-only."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "managed_only"]
-
-
-def get_removed_dimensions() -> list[str]:
-    """Get list of dimensions that have been removed."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "removed"]
-
-
-def get_aee_signal_dimensions() -> list[str]:
-    """Get list of dimensions used for AEE signals."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.axe_signal]
-
-
 # Explicit mapping from Targeting field names to capability dimension names.
-# Used by managed_only_dimensions() to check access control (managed-only
-# vs overlay) on known fields.  Both inclusion and exclusion variants map to
-# the same capability dimension.
+# Both inclusion and exclusion variants map to the same capability dimension.
 #
 # AdCP TargetingOverlay defines only the geo fields, frequency_cap, axe
 # segments, and property_list.  The device/OS/browser/media/audience fields
@@ -172,11 +133,6 @@ FIELD_TO_DIMENSION: dict[str, str] = {
     "audiences_any_of": "audience_segment",
     "audiences_none_of": "audience_segment",
     "custom": "custom",
-    # ── Removed dimensions ───────────────────────────────────────────────
-    "geo_city_any_of": "geo_city",
-    "geo_city_none_of": "geo_city",
-    # ── Managed-only (not exposed via overlay) ───────────────────────────
-    "key_value_pairs": "key_value_pairs",
 }
 
 
@@ -322,22 +278,6 @@ def raise_if_property_targeting_violations(violations: list[str]) -> None:
         )
 
 
-def managed_only_dimensions(targeting: Targeting) -> list[str]:
-    """Validate that targeting only uses allowed overlay dimensions.
-
-    Checks the Targeting model's fields directly instead of iterating a
-    serialized dict.  This makes the validation actually effective — the
-    previous dict-based approach missed managed-only fields (excluded by
-    model_dump) and removed fields (consumed by the normalizer).
-
-    Returns DIMENSION NAMES rather than sentences (salesagent-3dawm.9). Split from the
-    removed-dimension check that used to share this function: the two are different
-    reasons and the buyer should be able to tell them apart in ``details``.
-    """
-    # key_value_pairs is a seller extension, not settable via overlay
-    return ["key_value_pairs"] if targeting.key_value_pairs is not None else []
-
-
 # Geo inclusion/exclusion field pairs for same-value overlap detection.
 # Per adcp PR #1010: sellers SHOULD reject when the same value appears in both
 # the inclusion and exclusion field at the same level.
@@ -395,16 +335,15 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
 def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """Assemble every targeting-overlay violation into buyer-facing ``details``.
 
-    THE one place the three per-dimension validators are composed. Both tools that
-    validate an overlay -- create_media_buy and update_media_buy -- called all three by
-    hand and concatenated the results, which meant the same logical operation lived in two
-    places and a fourth validator would have to be wired into both (DRY, CLAUDE.md).
-    Neither call site read what it collected: both raised and discarded it.
+    THE one place the per-dimension validators are composed. Both tools that validate an
+    overlay -- create_media_buy and update_media_buy -- called them by hand and
+    concatenated the results, which meant the same logical operation lived in two places
+    and a new validator would have to be wired into both (DRY, CLAUDE.md). Neither call
+    site read what it collected: both raised and discarded it.
 
     Returns a mapping suitable for ``AdCPInvalidRequestError(details=...)``, carrying only
     the keys that actually have content so the buyer can tell the reasons apart:
 
-        managed_only_dimensions   dimensions the seller manages, not settable via overlay
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
 
@@ -415,8 +354,10 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     construction (``Targeting`` resolves ``extra`` through ``get_pydantic_extra_mode()`` --
     ``forbid`` in dev/CI, ``ignore`` in production), so it never reaches business logic.
     A ``model_extra`` scan lived here until salesagent-3dawm.9 and could not fire in
-    either mode; BR-UC-002 @ext-f is ledgered for exactly that reason ("unknown targeting
-    field caught by Pydantic (VALIDATION_ERROR), not business logic (INVALID_REQUEST)").
+    either mode. A "managed-only dimension" check lived here too, over a single seller
+    key/value field the pinned core/targeting.json does not declare; the field and the
+    check are gone (salesagent-3cs7o.22), and such a request is refused as an undeclared
+    field, at model construction, like any other.
 
     Values, never sentences: the buyer-facing sentence is a function of the error CODE
     through CODE_TABLE, and a sentence in ``details`` is that message smuggled back in
@@ -425,7 +366,6 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     so ``details`` is what distinguishes them, not the code.
     """
     candidates: dict[str, object] = {
-        "managed_only_dimensions": managed_only_dimensions(targeting),
         "geo_overlaps": geo_overlap_conflicts(targeting),
     }
     return {key: value for key, value in candidates.items() if value}

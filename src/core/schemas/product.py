@@ -14,7 +14,6 @@ from adcp.types import Product as LibraryProduct
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
 from adcp.types import ProductFilters as LibraryFilters
-from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -30,24 +29,6 @@ from src.core.schemas._base import (
 # `PricingOption` import here would re-export the pricing wrapper over the legacy
 # flat PricingOption that src.core.schemas still exposes (see pricing.py's naming note).
 from src.core.schemas.pricing import PricingOption as _PricingOption
-
-
-def _default_reporting_capabilities() -> LibraryReportingCapabilities:
-    """Minimal reporting_capabilities for callers that haven't populated it yet.
-
-    core/product.json requires the field unconditionally, so Product supplies a
-    validated default rather than leaving the attribute None and fabricating a
-    value at serialization time. Returns a fresh instance per call — the field's
-    default_factory — so no lists are shared between products.
-    """
-    return LibraryReportingCapabilities(
-        available_reporting_frequencies=["daily"],
-        expected_delay_minutes=1440,
-        timezone="UTC",
-        supports_webhooks=False,
-        available_metrics=["impressions"],
-        date_range_support="date_range",
-    )
 
 
 class ProductCard(LibraryProductCard):
@@ -102,10 +83,12 @@ class Product(LibraryProduct):
     - Automatic updates when library Product changes
     """
 
-    # AdCP 3.1.1 makes reporting_capabilities required (product.json /required). Callers that don't know it
-    # yet get a validated default from the factory below, so the attribute, the
-    # wire and the persisted row always agree and None is unconstructible.
-    reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)
+    # reporting_capabilities is INHERITED as required (core/product.json /required). It used
+    # to be redeclared here with a default, which relaxed a spec-required field -- the axis
+    # the inheritance guard names -- so a wire model fabricated a value the row did not hold.
+    # The default lives at the row-to-model edge instead (src/core/product_conversion.py
+    # default_reporting_capabilities), for the rows that still store NULL; the NOT NULL
+    # migration that retires it is salesagent-3cs7o.21.
 
     # Narrowed to the local pricing wrapper (src.core.schemas.pricing) so every
     # member carries our extra policy and the derived is_fixed property. Same

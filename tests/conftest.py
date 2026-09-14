@@ -183,7 +183,6 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "no_toolerror_in_impl",
         "transport_agnostic_impl",
         "impl_resolved_identity",
-        "no_model_dump_in_impl",
         "inspect_bdd_steps",
         "ruff_egress_bans",
     ],
@@ -388,6 +387,14 @@ def test_environment(monkeypatch, request):
     # Set testing flags
     monkeypatch.setenv("ADCP_TESTING", "true")
     monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
+
+    # The settings are read once and cached (src/core/config.py). Drop the cached object
+    # so this test's first read sees the environment above, and let monkeypatch restore
+    # the previous object afterwards so no stale settings leak between tests. A test that
+    # changes the environment mid-test calls load_settings() (or resets this again).
+    import src.core.config as config_module
+
+    monkeypatch.setattr(config_module, "_settings", None)
 
     # Check if this is a test that needs the database
     is_integration_test = "integration" in str(request.fspath) or "bdd" in str(request.fspath)

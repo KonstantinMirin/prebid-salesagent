@@ -26,12 +26,13 @@ class TestRequireConfig:
 
     def test_missing_value_raises_configuration_error_with_field(self):
         with pytest.raises(AdCPConfigurationError) as exc_info:
-            AdServerAdapter._require_config(_SELF, None, field="api_key", operator_detail="api_key is missing")
+            AdServerAdapter._require_config(_SELF, None, field="api_key")
 
         assert exc_info.value.error_code == "CONFIGURATION_ERROR"
         assert exc_info.value.field == "api_key"
-        # The operator diagnostic is server-side only: on internal_detail, never the wire.
-        assert exc_info.value.internal_detail == "api_key is missing"
+        # The class, the code and ``field`` are the whole diagnosis: nothing was
+        # caught, so nothing rides internal_detail.
+        assert exc_info.value.internal_detail is None
 
     def test_missing_value_uses_default_message_naming_the_field(self):
         with pytest.raises(AdCPConfigurationError) as exc_info:

@@ -714,7 +714,7 @@ class BroadstreetAdapter(AdServerAdapter):
             )
 
         # Should not reach here - all actions are handled above
-        return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[], implementation_date=today)
+        return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
 
     async def get_available_inventory(self) -> dict[str, Any]:
         """Fetch available inventory (zones) from Broadstreet.

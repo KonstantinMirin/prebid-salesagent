@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
-from adcp.types import BrandReference, NotificationConfig
+from adcp.types import BrandReference
 from adcp.types.generated_poc.core.account import (
     CreditLimit,
     GovernanceAgent,
@@ -42,6 +42,11 @@ from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
 from src.core.json_validators import JSONValidatorMixin
+
+# The ONE NotificationConfig, whose authentication block is the one Authentication class
+# (src/core/schemas/notification.py): a stored row reads back as the same type the request
+# chain carries, so nothing downstream holds two spellings of the block.
+from src.core.schemas.notification import NotificationConfig
 
 logger = logging.getLogger(__name__)
 

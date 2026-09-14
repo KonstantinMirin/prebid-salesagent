@@ -227,7 +227,7 @@ def derived_body_model_for(tool, *, extra_fields=None) -&gt; type[BaseModel]:
   <pre><code><span class="del">- return result.model_dump()          </span><span class="cm"># impl decides the wire shape → four wire shapes</span>
 <span class="add">+ return GetProductsResult(...)       </span><span class="cm"># impl decides the FACTS; transport renders them</span></code></pre>
   <p>The moment an <code>_impl</code> hands back a dict, three things become possible again: the transports serialize it differently, the type checker stops seeing the contract, and a field can be dropped without anything noticing. All three have happened here.</p>
-  <div class="note">One wrinkle worth knowing: Pydantic does not auto-call a custom <code>model_dump()</code> on nested models, so a parent whose children override it must override too. That is Pattern #4 in <code>CLAUDE.md</code>, and it is the one place the rule needs a hand.</div>
+  <div class="note">One wrinkle worth knowing: Pydantic serializes a nested child by its declared (library) type, so a parent whose children are local subclasses opts into <code>NestedModelSerializerMixin</code>, the one serializer seat, to re-dump them by instance. That is Pattern #4 in <code>CLAUDE.md</code>; no model overrides <code>model_dump()</code>.</div>
 </section>
 
 <section>

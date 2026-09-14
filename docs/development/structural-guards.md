@@ -273,43 +273,55 @@ The fix is to cast at the boundary: `[int(x) for x in pricing_option_ids]`.
 |------|---------|------------|
 | `media_buy_delivery.py` | `PricingOption.id.in_(string_list)` | salesagent-mq3n |
 
-### No model_dump() in _impl guard
+### internal_detail is an exception
 
-**File:** `tests/unit/test_architecture_no_model_dump_in_impl.py`
+**Files:** `.ast-grep/rules/internal-detail-is-an-exception.yml`
 
-**What it enforces:** `_impl` functions must not call `.model_dump()`.
-Serialization is the boundary's job.
+**What it enforces:** `AdCPSalesAgentError.internal_detail` takes the caught exception
+and nothing else. The rule matches the keyword argument `internal_detail=` and the
+attribute assignment `x.internal_detail =` whose value is an authored string in any
+spelling: a string or f-string literal, an implicitly concatenated string, a `+` with a
+string on either side, `%` formatting of a string, `.format(...)` on a string, `str(...)`,
+a conditional expression with a string arm, or any of those in parentheses, nested to any
+depth, under `src/`, `scripts/` and `tests/`. The parameter is typed
+`BaseException | None`, so mypy already refuses a string under `src/`; the rule is what
+covers the harness and the tests, which mypy does not check.
 
-**Why it matters:** When business logic calls `model_dump()`, it takes on
-responsibility for serialization format (JSON mode, aliases, exclude rules).
-This couples the _impl layer to a specific output format. The transport
-wrapper should receive a model object and decide how to serialize it.
+**Why it matters:** An authored sentence there says nothing the error code, the
+exception class and the typed details do not already say, and it reopens the door
+ADR-010 closed: the wire fields are functions of the code. A fact (an id, a count, a
+status) belongs on the declared details class. The boundary's `record_boundary_error`
+writes one record per failure, with the traceback attached when the error has a
+`__cause__` or an `internal_detail`; there is no second log record for `internal_detail`
+(salesagent-3cs7o.24, proven by `tests/unit/test_tool_error_logging.py`).
 
-#### How it works
+### Serialize only at the edges
 
-The guard scans all `*_impl()` functions under `src/core/tools/` using AST,
-looking for method calls where the method name is `model_dump`.
+**Files:** `ruff-serialization.toml` and `.ast-grep/rules/serialize-only-at-the-edges.yml`
 
-#### Tests
+**What it enforces:** a model is serialized at a named edge and nowhere else. The
+ruff config bans the two bare-call spellings that are importable names,
+`pydantic_core.to_jsonable_python` and `pydantic_core.to_json`, everywhere under
+`src/` and `scripts/`, with per-file-ignores for exactly the edge modules. The
+ast-grep rule matches the method-call spellings, `.model_dump(...)` and
+`.model_dump_json(...)`, under `src/` with the same edge list as its `ignores`,
+because a method call on an instance imports nothing and ruff cannot see it. The
+edge list is the definition of "edge"; it lives in those two files and nowhere else.
 
-| Test | What it checks |
-|------|---------------|
-| `test_no_new_model_dump_violations` | No new `.model_dump()` calls beyond the allowlist |
-| `test_known_violations_not_stale` | Allowlisted violations haven't been fixed (stale entry detection) |
-| `test_violation_count_documented` | Total count matches allowlist (catches both directions) |
+**Why it matters:** When business logic serializes, it takes on the serialization
+format (JSON mode, aliases, exclude rules) and produces a second representation of
+the value that drifts from the model. The model is handed through; the edge that
+owns the format serializes it once.
 
-#### Current known violations (29)
+#### What it replaced
 
-| File | Count | Primary use |
-|------|-------|-------------|
-| `media_buy_update.py` | 23 | `response_data=X.model_dump()` for workflow step storage |
-| `media_buy_create.py` | 4 | `raw_request=req.model_dump()` for DB storage + workflow |
-| `products.py` | 1 | `filters.model_dump()` in logging |
-| `creatives/listing.py` | 1 | `filters.model_dump()` for dict conversion |
-
-20 of the 29 violations are `response_data=response.model_dump(mode="json")`
-calls that serialize workflow step responses for DB storage. These should be
-replaced with typed repository methods that accept model objects directly.
+An AST guard under `tests/unit/` walked from `*_impl` entrypoints under
+`src/core/tools/` and saw only calls named `model_dump`. A call
+reached through a helper outside that walk, or spelled `to_jsonable_python`, was a
+hole, and `src/core/tools/creatives/_validation.py` escaped it that way. Its
+allowlist was already empty. The ruff table is proven live by
+`tests/unit/test_ruff_boundary_bans.py`; the ast-grep rule by a manual fire probe,
+recorded on salesagent-3cs7o.12.
 
 ### Repository pattern guard
 

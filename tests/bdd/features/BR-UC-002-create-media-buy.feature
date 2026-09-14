@@ -274,15 +274,24 @@ Feature: BR-UC-002 Create Media Buy
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue
 
+  # Retargeted (salesagent-3cs7o.22): this used to send key_value_pairs as "a managed-only
+  # dimension", a concept the pinned core/targeting.json does not declare and a field it
+  # does not have. The field is deleted; the same payload is now exactly a targeting
+  # dimension the pin does not declare, and the boundary answers it under CLAUDE.md
+  # pattern 7 as measured on every in-process transport: INVALID_REQUEST, recovery
+  # "correctable", suggestion present. In production mode (extra="ignore") the field is
+  # dropped and the buy is created; the harness has no production-mode Given, so that
+  # half is recorded for the reconciliation ticket rather than graded here.
   @T-UC-002-ext-f-managed @extension @ext-f @error
-  Scenario: Targeting overlay sets a managed-only dimension
+  Scenario: Targeting overlay sets a targeting dimension the pin does not declare
     Given a valid create_media_buy request
     And the account exists and is active
-    But a package targeting_overlay sets a managed-only dimension
+    But a package targeting_overlay sets a targeting dimension the pin does not declare
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field
 
   @T-UC-002-ext-f-geo @extension @ext-f @error
@@ -1249,7 +1258,7 @@ Feature: BR-UC-002 Create Media Buy
     Examples: Invalid partitions
       | partition                          | outcome                                      |
       | unknown_field                      | error INVALID_REQUEST with suggestion          |
-      | managed_only_dimension             | error INVALID_REQUEST with suggestion          |
+      | undeclared_dimension               | error INVALID_REQUEST with suggestion          |
       | geo_overlap                        | error INVALID_REQUEST with suggestion          |
       | device_type_overlap                | error INVALID_REQUEST with suggestion          |
       | proximity_method_conflict          | error INVALID_REQUEST with suggestion          |
@@ -1740,7 +1749,7 @@ Feature: BR-UC-002 Create Media Buy
       | empty {} overlay                                  | empty                 | targeting validation passes                  |
       | valid known fields                                | geo_countries=US      | targeting validation passes                  |
       | unknown field name                                | weather=sunny         | error INVALID_REQUEST with suggestion          |
-      | managed-only dimension                            | managed dimension     | error INVALID_REQUEST with suggestion          |
+      | undeclared dimension (key_value_pairs)            | key_value_pairs       | error INVALID_REQUEST with suggestion          |
       | geo include/exclude overlap                       | US in both lists      | error INVALID_REQUEST with suggestion          |
       | device_type include/exclude overlap               | mobile in both        | error INVALID_REQUEST with suggestion          |
       | geo_proximity with travel_time only               | travel_time=30m       | targeting validation passes                  |

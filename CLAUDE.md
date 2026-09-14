@@ -58,7 +58,9 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Account resolved by the resolver alone | `src.core.database.repositories.account_lookup` is importable only by the resolver, which builds the identity with the request's account inside; tools read `identity.account` | `ruff-boundary.toml` (TID251) |
 | Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
-| No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
+| Serialize only at the edges | No `.model_dump()`, `.model_dump_json()`, `pydantic_core.to_json` or `to_jsonable_python` outside the named edge modules; a tool hands the model through | `ruff-serialization.toml` (TID251) + `.ast-grep/rules/serialize-only-at-the-edges.yml` |
+| Environment read once | No `os.environ` / `os.getenv` under `src/` or `scripts/` outside the settings loader (`src/core/config.py`) and the two writes of variables another library reads; a composition root calls `load_settings()` and everything else reads a named fact off the object | `ruff-environment.toml` (TID251) + `test_ruff_boundary_bans.py` |
+| internal_detail is an exception | `internal_detail=` (and `x.internal_detail =`) never takes an authored string in any spelling (literal, f-string, `+`, `%`, `.format`, `str()`, conditional), under `src/`, `scripts/` or `tests/`; the parameter is typed `BaseException \| None`, and the boundary writes one record per failure with the traceback attached when the error has a `__cause__` or an `internal_detail` | `.ast-grep/rules/internal-detail-is-an-exception.yml` + mypy on `src/` + `test_tool_error_logging.py` |
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
 | Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
@@ -216,13 +218,33 @@ model entirely (an adapter's carrier type, not a wire field). A field that must 
 model and not on the wire is `Field(exclude=True)` at its declaration, nowhere else.
 
 **And business logic never calls `model_dump()` at all.** A model is the value; a dict built
-from it mid-flow is a second representation that drifts. Serialization happens at three
+from it mid-flow is a second representation that drifts. Serialization happens at named
 edges, each with one owner: the wire (`src/core/tools/_wire.py`), outbound HTTP to another
-agent or a webhook target (the registries and webhook services), and the idempotency
-payload hash. Persistence is not an edge that needs a call: hand the model to the
-`JSONType` column and the engine serializes it through the same serializer. Repositories and
-the context manager may normalize a stored DOCUMENT they compose; a tool, helper or
-validator may not.
+agent or a webhook target (the agent registries, the webhook services, the registration
+gate), the idempotency payload hash (`src/core/idempotency_canonical.py`), the persistence
+edge, the admin UI's JSON responses (`src/admin/blueprints`), a wire that `to_wire` does
+not own, the two error helpers that project issues and details to their wire shape
+(`src/core/errors/issues.py`, `src/core/errors/details.py`), and the two schema modules that
+re-dump a nested child inside the one serializer seat (`src/core/schemas/_base.py`) or
+coerce a library `RootModel` (`src/core/schemas/pricing.py`). The persistence edge is
+precisely: the engine's JSON serializer registered in
+`src/core/database/database_session.py` behind the `JSONType` column (hand the model to
+the column and it serializes through that serializer; a tool never calls anything), the
+ORM `@validates` hooks in
+`src/core/json_validators.py` that normalize a column document, and the documents the
+repositories and the context manager compose or compare (`workflow.py`, `media_buy.py`,
+`account_serialization.py`, `idempotency_attempt.py`, `context_manager.py`). A tool, a
+helper, or a pydantic validator on a wire model may not serialize; "validator" in that
+prohibition means a pydantic field or model validator, never the ORM hooks. A receiving
+model adopts a sibling generated class by reading its attributes (`from_attributes=True`,
+or a `mode="before"` validator reading a `RootModel`'s `root`), never by a dump in the
+caller. A field that is off the wire but must persist has no spelling on a wire model:
+`Field(exclude=True)` strips it from the wire, from persistence and from the idempotency
+hash alike, so such a field belongs on a repository-owned carrier.
+**Enforced by:** `ruff-serialization.toml` (TID251 on `pydantic_core.to_jsonable_python` and
+`pydantic_core.to_json`, per-file-ignores for exactly the edge modules) and
+`.ast-grep/rules/serialize-only-at-the-edges.yml` (`.model_dump(...)` and
+`.model_dump_json(...)` outside the same edge list). The edge list lives in those two files.
 
 ### 5. Transport boundary: one path to every implementation
 All tools have two layers: a **transport** (MCP, A2A, REST) that parses a request and writes
@@ -312,7 +334,10 @@ fetch(apiUrl, { credentials: 'same-origin' });
 Never hardcode `/api/endpoint` — it breaks behind an nginx prefix.
 
 ### 7. Schema validation: environment-based
-- **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)
+- **Production**: `extra="ignore"` (forward compatible). Production is any one of the three
+  spellings a deployment sets: `PRODUCTION=true`, `ENVIRONMENT=production`, or a Fly app name
+  (`FLY_APP_NAME`). `RuntimeSettings.is_production` in `src/core/config.py` is the one predicate;
+  nothing compares the environment string itself.
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
 **THE DTO IS THE ACCEPTED SHAPE. `additionalProperties: true` IN THE PIN DOES NOT WIDEN IT.**

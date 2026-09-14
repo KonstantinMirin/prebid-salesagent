@@ -265,7 +265,7 @@ def get_user_tenant_access(email: str) -> dict:
 
 
 #: The two mutations this helper multiplexes. A named alias rather than an inline Literal,
-#: matching the convention in src/core/exceptions.py and src/core/protocol_envelope.py.
+#: matching the convention in src/core/exceptions.py.
 AuthorizedListOp = Literal["add", "remove"]
 
 

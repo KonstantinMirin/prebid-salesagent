@@ -441,7 +441,7 @@ class GAMOrdersManager:
                 raise AdCPConfigurationError()
 
             # Add custom targeting from product config
-            # IMPORTANT: Merge without overwriting buyer's targeting (e.g., AEE signals from key_value_pairs)
+            # IMPORTANT: Merge without overwriting the buyer's own custom targeting
             if impl_config.get("custom_targeting_keys"):
                 if "customTargeting" not in line_item_targeting:
                     line_item_targeting["customTargeting"] = {}

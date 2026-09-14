@@ -21,13 +21,7 @@ from datetime import UTC
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 from adcp.types import BrandReference as LibraryBrandReference
-from adcp.types import NotificationConfig, PaginationRequest, PaginationResponse
-from adcp.types.generated_poc.account.sync_accounts_request import (
-    Accounts as SyncAccountInput,  # SDK 5.7: Account → Accounts
-)
-from adcp.types.generated_poc.account.sync_accounts_request import (
-    Accounts1 as SettingsUpdateAccountInput,  # the account-reference / settings-update branch
-)
+from adcp.types import PaginationRequest, PaginationResponse
 from adcp.types.generated_poc.core.account_ref import AccountReference1, AccountReference2
 from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
@@ -51,10 +45,13 @@ from src.core.schemas.account import (
     Account,
     ListAccountsRequest,
     ListAccountsResponse,
+    SettingsUpdateAccountInput,
+    SyncAccountInput,
     SyncAccountsRequest,
     SyncAccountsResponse,
     SyncResponseAccount,
 )
+from src.core.schemas.notification import NotificationConfig
 from src.core.tenant_context import TenantContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service

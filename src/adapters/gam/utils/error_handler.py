@@ -24,7 +24,6 @@ from functools import wraps
 from typing import Any, TypeVar
 
 from src.core.exceptions import (
-    AdCPAdapterError,
     AdCPAdapterResourceNotFoundError,
     AdCPAuthorizationError,
     AdCPConfigurationError,
@@ -210,10 +209,14 @@ def with_retry(
 
                         time.sleep(delay)
                     else:
-                        # The error's own code identifies the fault; the upstream
-                        # text is on internal_detail, which the boundary logs.
+                        # The error's own code identifies the fault. A mapped error is
+                        # raised ``from`` the upstream fault so the boundary's one record
+                        # carries its traceback; an already-typed error is re-raised as
+                        # itself (``raise e from e`` would chain it to itself).
                         logger.error(f"{op_name} failed with {adcp_error.error_code}")
-                        raise adcp_error
+                        if adcp_error is e:
+                            raise
+                        raise adcp_error from e
 
             # All retries exhausted
             if last_exception is None:
@@ -298,25 +301,3 @@ class GAMOperationTracker:
                 for step in self.steps
             ],
         }
-
-
-def validate_gam_response(response: Any, expected_fields: list[str]) -> None:
-    """
-    Validate GAM API response has expected structure.
-
-    Args:
-        response: The API response
-        expected_fields: List of field names that should be present
-
-    Raises:
-        AdCPAdapterError: If the response is empty or missing expected fields.
-    """
-    if not response:
-        # The ad server returned nothing where a payload was required. That is an
-        # upstream fault, not a buyer input problem, so it is not VALIDATION_ERROR.
-        raise AdCPAdapterError()
-
-    if any(field not in response for field in expected_fields):
-        # The response body is a third party's and never reaches the buyer, and
-        # which of its fields are absent is not a cause: the class is the diagnosis.
-        raise AdCPAdapterError()

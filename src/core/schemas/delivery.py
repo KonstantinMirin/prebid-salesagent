@@ -151,9 +151,10 @@ class DeviceTypeBreakdown(LibraryByDeviceTypeItem):
 
 # Why the six ``# type: ignore[assignment]`` below, and why they are not suppression.
 #
-# Each one redeclares an inherited field with a SUBCLASS of the SDK's element type, so the
-# local model's own ``model_dump`` runs for nested children (critical pattern #4) and a
-# response rebuilt from a replay cache comes back as the local class rather than the parent.
+# Each one redeclares an inherited field with a SUBCLASS of the SDK's element type, so
+# ``NestedModelSerializerMixin`` re-dumps nested children as the local class (critical
+# pattern #4) and a response rebuilt from a replay cache comes back as the local class rather
+# than the parent.
 # ``list`` is invariant, so ``list[PlacementBreakdown]`` is not assignable to
 # ``list[ByPlacementItem]`` even though every element is one -- a limitation of the
 # annotation, not a defect in the value.
@@ -166,8 +167,8 @@ class DeviceTypeBreakdown(LibraryByDeviceTypeItem):
 class PackageDelivery(LibraryByPackageItem):
     """Metrics broken down by package, extending the pinned ``by_package`` item.
 
-    Redeclares only the three breakdown lists, to point them at the local models that
-    carry their own ``model_dump`` (Pattern #4). Everything else -- including
+    Redeclares only the three breakdown lists, to point them at the local models, which
+    are re-dumped by ``NestedModelSerializerMixin`` (Pattern #4). Everything else -- including
     ``pricing_model``, ``rate`` and ``currency``, which the pin lists in ``required``
     and types non-nullable -- is inherited.
 
@@ -216,8 +217,8 @@ MediaBuyDeliveryStatus = LibraryMediaBuyDeliveryStatus
 class MediaBuyDeliveryData(LibraryMediaBuyDelivery):
     """Delivery data for a single media buy, extending the pinned ``media_buy_deliveries`` item.
 
-    Redeclares only the three nested collections, to point them at the local models that
-    carry their own ``model_dump`` (Pattern #4). Everything else is inherited, which is how
+    Redeclares only the three nested collections, to point them at the local models, which
+    are re-dumped by ``NestedModelSerializerMixin`` (Pattern #4). Everything else is inherited, which is how
     ``finalized_at``, ``is_final``, ``windows`` and ``buyer_campaign_ref`` become expressible
     -- the hand-written version declared ten fields and could emit none of those.
 

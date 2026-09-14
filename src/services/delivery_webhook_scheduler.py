@@ -31,10 +31,6 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
 
-# 1 hour because AdCP protocol has frequency options hourly, daily and monthly
-# Configurable via DELIVERY_WEBHOOK_INTERVAL for testing
-SLEEP_INTERVAL_SECONDS = get_settings().limits.delivery_webhook_interval
-
 
 class DeliveryWebhookScheduler:
     """Scheduler for sending delivery reports via webhooks."""
@@ -44,6 +40,9 @@ class DeliveryWebhookScheduler:
         self.is_running = False
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
+        # 1 hour because AdCP protocol has frequency options hourly, daily and monthly;
+        # DELIVERY_WEBHOOK_INTERVAL shortens it for testing. Read when the scheduler starts.
+        self._sleep_interval_seconds = 3600
 
     async def start(self) -> None:
         """Start the scheduler background task."""
@@ -52,6 +51,7 @@ class DeliveryWebhookScheduler:
                 logger.warning("Delivery webhook scheduler is already running")
                 return
 
+            self._sleep_interval_seconds = get_settings().limits.delivery_webhook_interval
             self.is_running = True
             self._task = asyncio.create_task(self._run_scheduler())
             logger.info("Delivery webhook scheduler started")
@@ -86,7 +86,7 @@ class DeliveryWebhookScheduler:
                 logger.error(f"Error in delivery webhook scheduler: {e}", exc_info=True)
             finally:
                 # Wait before next batch
-                await asyncio.sleep(SLEEP_INTERVAL_SECONDS)
+                await asyncio.sleep(self._sleep_interval_seconds)
 
     async def _send_reports(self) -> None:
         """Send reports for all active media buys with configured webhooks."""

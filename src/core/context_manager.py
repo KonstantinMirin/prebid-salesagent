@@ -250,7 +250,7 @@ class ContextManager(DatabaseManager):
         self,
         step_id: str,
         status: str | None = None,
-        response_data: dict[str, Any] | Any | None = None,
+        response_data: BaseModel | dict[str, Any] | None = None,
         error_message: str | None = None,
         transaction_details: dict[str, Any] | None = None,
         add_comment: dict[str, str] | None = None,
@@ -261,23 +261,19 @@ class ContextManager(DatabaseManager):
         Args:
             step_id: The step ID
             status: New status
-            response_data: Response/result data. Accepts Pydantic models (serialized
-                automatically) or plain dicts. Callers should NOT call .model_dump()
-                — pass the model directly.
+            response_data: Response/result data: the response MODEL, or a document a
+                caller composed (``record_step_result`` composes response plus request
+                into one; the approval services write small status documents). A caller
+                holding a model hands it over as is and never calls ``.model_dump()``.
             error_message: Error message if failed
             transaction_details: Actual API calls made
             add_comment: Optional comment to add {user, comment}
             tenant_id: Tenant scope — joins through Context for isolation.
                 If provided, the step must belong to this tenant or no update occurs.
         """
-        # Infrastructure-boundary serialization: _impl functions pass Pydantic
-        # models, this method serializes to dict for DB storage.
-        # MIGRATION IN PROGRESS: pre-refactor callers still pass pre-serialized
-        # dicts. As _impl callers migrate (tracked by the shrinking allowlist in
-        # test_architecture_no_model_dump_in_impl), the dict branch becomes dead.
-        # When allowlist hits zero, tighten the type to BaseModel-only and remove
-        # the isinstance branch.
-        if response_data is not None and hasattr(response_data, "model_dump"):
+        # The persistence edge: a model becomes the stored document HERE, by type, and
+        # nowhere upstream (CLAUDE.md pattern 4). A composed dict is stored as composed.
+        if isinstance(response_data, BaseModel):
             response_data = response_data.model_dump(mode="json")
         session = self.session
         try:

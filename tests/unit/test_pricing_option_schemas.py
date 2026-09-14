@@ -94,29 +94,39 @@ class TestWrapperCoercion:
         member = CpmPricingOption(**_cpm_kwargs())
         assert PricingOption(member).root is member
 
-    def test_sdk_member_instance_is_revalidated_into_local_member(self):
-        from adcp.types import CpmPricingOption as LibraryCpmPricingOption
+    # The two tests that lived here graded a coercion that no longer exists: an SDK member
+    # instance and the SDK's own wrapper were each revalidated into a local member by a
+    # mode="before" validator that dumped them. The validator is deleted, so an SDK instance
+    # is refused instead of coerced, and a test asserting the coercion would be asserting
+    # against the rule. The refusal is graded below.
 
-        sdk_member = LibraryCpmPricingOption(**_cpm_kwargs())
-        assert type(PricingOption(sdk_member).root) is CpmPricingOption
+    def test_sdk_instance_is_refused_rather_than_coerced(self):
+        """An SDK-typed member is not a local member, and nothing converts it.
 
-    def test_sdk_wrapper_instance_is_unwrapped_and_revalidated(self):
-        from adcp.types import CpmPricingOption as LibraryCpmPricingOption
-        from adcp.types.generated_poc.core.pricing_option import (
-            PricingOption as LibraryPricingOptionWrapper,
-        )
+        This replaces an assertion that could not fail. It used to construct the SDK
+        instance with an undeclared ``rate`` and demand ``ValidationError`` matching
+        "rate", on the theory that the deleted validator's dump re-applied this project's
+        extra policy. But the input's repr appears inside pydantic's model_type error, so
+        "rate" matched whether the rejection came from extra=forbid or from the union
+        refusing the instance outright -- the test passed either way and could not tell
+        which mechanism it had exercised.
 
-        sdk_wrapped = LibraryPricingOptionWrapper(LibraryCpmPricingOption(**_cpm_kwargs()))
-        assert type(PricingOption(sdk_wrapped).root) is CpmPricingOption
-
-    def test_sdk_instance_carrying_undeclared_extras_is_drift(self):
-        """extras riding on an extra="allow" SDK instance must not slip through."""
+        What actually holds is stronger and is asserted by TYPE: the root is a discriminated
+        union over the LOCAL members, so an SDK instance fails the union's instance check
+        with ``model_type``. That check precedes any extra handling, which is why extras are
+        irrelevant here and why the refusal does not depend on the extra mode -- the
+        undeclared field cannot leak because the object carrying it is never admitted.
+        """
         assert get_pydantic_extra_mode() == "forbid"
         from adcp.types import CpmPricingOption as LibraryCpmPricingOption
 
-        sdk_member = LibraryCpmPricingOption(**_cpm_kwargs(rate=5.0))
-        with pytest.raises(ValidationError, match="rate"):
-            PricingOption(sdk_member)
+        for kwargs in (_cpm_kwargs(), _cpm_kwargs(rate=5.0)):
+            sdk_member = LibraryCpmPricingOption(**kwargs)
+            with pytest.raises(ValidationError) as exc_info:
+                PricingOption(sdk_member)
+            assert [e["type"] for e in exc_info.value.errors()] == ["model_type"], (
+                f"expected the union to refuse the SDK instance, got {exc_info.value.errors()}"
+            )
 
 
 class TestProductIntegration:

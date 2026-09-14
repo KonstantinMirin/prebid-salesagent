@@ -12,6 +12,7 @@ everything else lives in ``src.core.schemas._base``.
 # pricing exports the local pricing member subclasses (CpmPricingOption, ...) and their union;
 # _base's legacy flat PricingOption keeps that one package-level name (pricing's __all__ omits it).
 from src.core.schemas._base import *  # noqa: F401, F403
+from src.core.schemas.notification import *  # noqa: F401, F403
 from src.core.schemas.pricing import *  # noqa: F401, F403
 from src.core.schemas._base import GetMediaBuysPackage as _GetMediaBuysPackage
 from src.core.schemas._base import PackageRequest as _PackageRequest

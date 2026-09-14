@@ -261,25 +261,23 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
 
 class TestDiscoveryEndpointsInvalidAuth:
-    """Test that discovery endpoints fail with invalid token (don't silently fall back to anonymous).
+    """Discovery implementations serve the ANONYMOUS caller: no credential was presented.
 
-    When a token IS provided but is invalid, discovery endpoints should either:
-    - Raise an error (strict mode), or
-    - Fall back to anonymous (lenient mode with require_valid_token=False)
-
-    The current implementation uses require_valid_token=False for discovery endpoints
-    at the transport boundary (resolve_identity), which means invalid tokens are treated
-    like missing tokens. _impl functions receive a ResolvedIdentity with principal_id=None.
-    This test documents that behavior and verifies it's consistent across all discovery endpoints.
+    A presented credential that does not resolve never reaches an implementation: the
+    resolver refuses it with AUTH_INVALID on every row (pinned enum, "an `Authorization`
+    header was present but verification failed"), graded by BR-SECURITY-002 and the
+    invalid row of BR-UC-010 @T-UC-010-auth. What these tests build is the identity a
+    public tool receives when NOTHING was presented, principal None, and they verify each
+    discovery implementation takes it.
     """
 
     @pytest.mark.asyncio
-    async def test_get_products_with_invalid_token_falls_back_to_anonymous(self):
-        """get_products with invalid token resolves to anonymous identity (require_valid_token=False at boundary)."""
+    async def test_get_products_with_no_token_is_served_anonymously(self):
+        """get_products with no credential presented receives the anonymous identity."""
         from src.core.tools.products import _get_products_impl
 
-        # With require_valid_token=False at the transport boundary, invalid tokens
-        # result in an anonymous ResolvedIdentity (principal_id=None)
+        # Nothing presented on a public row: the resolver builds an identity with
+        # principal None, and the tool runs with it.
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = PrincipalFactory.make_identity(
             principal_id=None,
@@ -309,12 +307,12 @@ class TestDiscoveryEndpointsInvalidAuth:
             # Verify the identity was anonymous (principal_id=None)
             assert identity.principal_id is None
 
-    def test_list_creative_formats_with_invalid_token_gets_anonymous_identity(self):
-        """list_creative_formats with invalid token gets anonymous identity at the boundary."""
+    def test_list_creative_formats_with_no_token_gets_anonymous_identity(self):
+        """list_creative_formats with no credential presented receives the anonymous identity."""
         from src.core.tools.creative_formats import _list_creative_formats_impl
 
-        # At the boundary, require_valid_token=False means invalid tokens
-        # produce an anonymous ResolvedIdentity (principal_id=None)
+        # Nothing presented on a public row: the resolver builds an identity with
+        # principal None, and the tool runs with it.
         mock_tenant = {"tenant_id": "test-tenant"}
         identity = _make_identity(principal_id=None, tenant=mock_tenant)
 

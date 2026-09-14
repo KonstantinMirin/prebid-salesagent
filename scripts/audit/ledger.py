@@ -23,13 +23,13 @@ never ``storyboard_id``.
 
 from __future__ import annotations
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from scripts.audit import storyboard_spec
+from src.core.config import ToolingSettings
 
 # Ledger ids are `protocol::track::storyboard::step` (the protocol segment arrived
 # with A2A grading). Storyboard is the THIRD segment; a three-group pattern silently
@@ -133,8 +133,8 @@ def ledger_path(repo: Path) -> Path:
     ledger with entries in it
     (``tests/integration/test_storyboard_ledger_fitness_real_session.py``).
     """
-    override = os.environ.get("STORYBOARD_LEDGER_PATH")
-    return Path(override) if override else repo / LEDGER
+    override = ToolingSettings().storyboard_ledger_path  # STORYBOARD_LEDGER_PATH
+    return override if override else repo / LEDGER
 
 
 # The runner-level synthetic. `test_storyboard_conformance` emits this row when

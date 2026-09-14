@@ -248,7 +248,7 @@ class TestOperatorAgentFailureIsClassifiedTerminalByCode:
 
         response = httpx.Response(404, request=httpx.Request("POST", "https://signals.operator.test/mcp"))
         wrapped = httpx.HTTPStatusError("404 Not Found", request=response.request, response=response)
-        seam_error = MCPConnectionError(internal_detail="Failed to connect to MCP agent after 3 attempts")
+        seam_error = MCPConnectionError(internal_detail=wrapped)
         seam_error.__cause__ = wrapped
 
         agent = SignalsAgent(agent_url="https://signals.operator.test", name="operator-signals-agent")

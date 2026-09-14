@@ -7,10 +7,11 @@ changed (``AnyUrl != str``).
 
 They live at the data layer, not in ``src/core/tools/accounts.py``, because that is
 what they are: persistence normalization. Keeping them next to ``_sync_accounts_impl``
-put ``.model_dump()`` inside the business-logic call graph, which is precisely what
-``tests/unit/test_architecture_no_model_dump_in_impl.py`` exists to prevent -- and it
-went unnoticed because that guard matched function NAMES rather than the call graph
-(#1721 review F5).
+put ``.model_dump()`` inside the business-logic call graph, which is precisely what the
+serialization edge rules (``ruff-serialization.toml``,
+``.ast-grep/rules/serialize-only-at-the-edges.yml``) exist to prevent -- and it went
+unnoticed because the guard those rules replaced matched function NAMES rather than the
+call graph (#1721 review F5).
 
 The reverse direction lives here too: ``account_from_row`` is the ONE place a persisted
 ``Account`` row becomes the schema ``Account``, and the write-only-field scrubbers it
@@ -26,9 +27,10 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING
 
-from adcp.types import NotificationConfig
 from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
+
+from src.core.schemas.notification import NotificationConfig
 
 if TYPE_CHECKING:
     from src.core.database.models import Account as AccountRow

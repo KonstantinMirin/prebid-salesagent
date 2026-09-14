@@ -7,13 +7,9 @@ by both MCP and A2A protocols.
 import logging
 from typing import Any
 
-from src.core.config import get_settings
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 
 logger = logging.getLogger(__name__)
-
-# Verbose auth logging is a development affordance
-_VERBOSE_AUTH_LOG = get_settings().verbose_auth_log
 
 
 def get_push_notification_config_from_headers(headers: dict[str, str] | None) -> dict[str, Any] | None:

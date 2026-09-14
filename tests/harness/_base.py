@@ -894,10 +894,9 @@ class BaseTestEnv:
                 envelope = _wire_envelope(extract_data_from_artifact(task_result.artifacts[0]))
                 if envelope is not None:
                     raise WireError(envelope)
-            raise AdCPSalesAgentError(
-                error_code=AppErrorCode.INTERNAL_ERROR,
-                internal_detail=f"A2A task failed: {task_result.status}",
-            )
+            # A failed task with no envelope artifact: nothing was caught, so there is
+            # no exception to hand to ``internal_detail``; the code is the diagnosis.
+            raise AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
 
         if task_result.status.state == TaskState.TASK_STATE_SUBMITTED:
             # Async manual-approval path: the server returns a submitted Task with NO

@@ -4,9 +4,8 @@ Tests that validate_geo_overlap composes correctly through the real
 _create_media_buy_impl call path — Pydantic parsing → model_dump → validation
 → error response. No mocked validators.
 
-Note: managed_only_dimensions / removed_dimensions and the pydantic shape check
-are effectively guarded by the Pydantic model layer (Targeting.model_dump excludes
-managed-only fields; extra="forbid" rejects unknown fields before validators run).
+Note: removed_dimensions and the pydantic shape check are effectively guarded by the
+Pydantic model layer (extra="forbid" rejects unknown fields before validators run).
 
 Covers: (PR review #10).
 """

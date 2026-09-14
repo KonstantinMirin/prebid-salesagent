@@ -39,6 +39,7 @@ from __future__ import annotations
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
 
 #: The two tenants and the product each one alone owns. Ids are literals rather than
@@ -90,29 +91,63 @@ def given_two_tenants(ctx: dict) -> None:
     _, principal_a = _seed_tenant(ctx, TENANT_A, PRINCIPAL_A, PRODUCT_A)
     _, principal_b = _seed_tenant(ctx, TENANT_B, PRINCIPAL_B, PRODUCT_B)
     ctx["env"]._commit_factory_data()
-    # The tokens the factories minted. Read from the rows rather than assumed, so the
-    # credential presented is the one the database will be asked about.
-    ctx["token_a"] = principal_a.access_token
-    ctx["token_b"] = principal_b.access_token
+    # The tokens the factories minted. The row stores only the hash, so the plaintext is
+    # derived the way the factory derived it (``plaintext_token_for``), from the id read
+    # back off the row: the credential presented is the one the database will be asked about.
+    ctx["token_a"] = plaintext_token_for(principal_a.principal_id)
+    ctx["token_b"] = plaintext_token_for(principal_b.principal_id)
+
+
+@given('tenant "A" serves discovery to anyone while tenant "B" requires a credential')
+def given_policies_differ(ctx: dict) -> None:
+    """One tenant per brand_manifest_policy, so a Then that holds on both is policy-independent.
+
+    ``tenants.brand_manifest_policy`` defaults to ``require_auth``; A is switched to
+    ``public``. Written on the rows the Background seeded, through the env's session, the
+    same way ``configure_tenant_field`` writes the env's own tenant.
+    """
+    from src.core.database.models import Tenant
+
+    env = ctx["env"]
+    for tenant_id, policy in ((TENANT_A, "public"), (TENANT_B, "require_auth")):
+        tenant = env.get_one(Tenant, tenant_id=tenant_id)
+        assert tenant is not None, f"Background did not seed {tenant_id!r}"
+        tenant.brand_manifest_policy = policy
+    env.get_session().commit()
 
 
 # ── When ────────────────────────────────────────────────────────────
 
 
+def _request_products(ctx: dict, *, token: str, target: str) -> None:
+    """Dispatch get_products presenting *token*, addressed to tenant *target* ("A" or "B")."""
+    tenant_id = TENANT_A if target == "A" else TENANT_B
+    dispatch_request(ctx, credential=credential_headers(token=token, tenant=tenant_id), brief="video ads")
+
+
 @when(parsers.parse('the buyer requests products with tenant "{tenant}" credentials'))
 def when_request_products_as(ctx: dict, tenant: str) -> None:
     """Present a tenant's own credential, addressed to that same tenant."""
-    token = ctx["token_a"] if tenant == "A" else ctx["token_b"]
-    tenant_id = TENANT_A if tenant == "A" else TENANT_B
-    dispatch_request(ctx, credential=credential_headers(token=token, tenant=tenant_id), brief="video ads")
+    _request_products(ctx, token=ctx["token_a"] if tenant == "A" else ctx["token_b"], target=tenant)
 
 
 @when(parsers.parse('the buyer presents tenant "{holder}" credentials addressed to tenant "{target}"'))
 def when_request_products_cross_tenant(ctx: dict, holder: str, target: str) -> None:
     """Present one tenant's credential while addressing the other."""
-    token = ctx["token_a"] if holder == "A" else ctx["token_b"]
-    tenant_id = TENANT_A if target == "A" else TENANT_B
-    dispatch_request(ctx, credential=credential_headers(token=token, tenant=tenant_id), brief="video ads")
+    _request_products(ctx, token=ctx["token_a"] if holder == "A" else ctx["token_b"], target=target)
+
+
+@when(parsers.parse('the buyer presents a credential no tenant issued, addressed to tenant "{target}"'))
+def when_request_products_with_rejected_token(ctx: dict, target: str) -> None:
+    """Present a token that hashes to no Principal row anywhere, addressed to one tenant.
+
+    ``INVALID_TOKEN`` is the harness's one spelling of "presented and rejected"
+    (``env.credential(token=INVALID_TOKEN)`` on the single-tenant envs); here the tenant is
+    the scenario's own, so the headers are built from the same producer directly.
+    """
+    from tests.harness._base import INVALID_TOKEN
+
+    _request_products(ctx, token=INVALID_TOKEN, target=target)
 
 
 # ── Then ────────────────────────────────────────────────────────────
@@ -133,28 +168,25 @@ def then_contains_own_products(ctx: dict, tenant: str) -> None:
     assert expected in returned, f"tenant {tenant}'s own product {expected!r} is missing; got {returned}"
 
 
-@then("the request is refused and no products are returned")
+@then("the request is refused with AUTH_INVALID and no products are returned")
 def then_refused_with_no_products(ctx: dict) -> None:
-    """The credential did not act on the tenant it was pointed at.
+    """The presented credential verified as nobody, and the tool did not run.
 
-    Deliberately does NOT pin an error code. The code is a separate obligation and, on a
-    public tool, currently a confused one: ``get_products`` is ``auth="optional"``, so a
-    rejected credential is downgraded to anonymous before the tool runs, and the tenant's
-    ``brand_manifest_policy="require_auth"`` then raises AUTH_MISSING -- telling a buyer who
-    DID present a credential that none was presented. Filed separately; asserting it here
-    would freeze a diagnosis this scenario has no opinion about.
+    The code is pinned on the wire through the harness's one error assertion
+    (``assert_wire_error`` -> ``assert_envelope_shape``): AUTH_INVALID, recovery terminal,
+    per the pinned enum -- "Sellers MUST return this code when an `Authorization` header was
+    present but verification failed". Not AUTH_MISSING: a credential WAS presented. Not a
+    success: a public row used to take a rejected credential as absent and serve the caller
+    anonymously, which is the "ignoring credentials entirely" the storyboard names.
 
-    What this scenario does have an opinion about is the security property, and it is
-    unambiguous: the request must not be SERVED. Both halves are checked, because a leak
-    could arrive as either tenant's data.
+    The security property is checked as well, on both halves, because a leak could arrive
+    as either tenant's data.
     """
     result = ctx["result"]
-    assert not result.is_success, (
-        f"a credential minted for one tenant was SERVED against another; payload={result.payload}"
-    )
+    result.assert_wire_error("AUTH_INVALID", recovery="terminal")
     for product_id in (PRODUCT_A, PRODUCT_B):
         assert product_id not in str(result.wire_response or result.envelope or ""), (
-            f"{product_id!r} appears in the response to a cross-tenant credential"
+            f"{product_id!r} appears in the response to a rejected credential"
         )
 
 

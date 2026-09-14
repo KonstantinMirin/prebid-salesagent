@@ -32,8 +32,7 @@ policy that means we also declare no signing capability -- see FIXME(#1291).
 
 import logging
 
-from adcp.types import NotificationConfig
-
+from src.core.schemas.notification import NotificationConfig
 from src.core.security.egress.policy import OutboundRequestBlocked, is_reserved_tld_host
 from src.core.security.outbound_http import asend
 

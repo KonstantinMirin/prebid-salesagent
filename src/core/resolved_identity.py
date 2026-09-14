@@ -46,9 +46,11 @@ class PublicIdentity(BaseModel):
 
     The resolver builds one for a registry row that does not require a credential
     (``get_products``, ``list_creative_formats``, ``get_adcp_capabilities``). A presented
-    credential that resolves fills ``principal``; an absent or rejected one leaves it
-    ``None``, and the tool branches on that itself. A protected tool never sees this type:
-    it takes :class:`ResolvedIdentity`, whose fields are not optional.
+    credential that resolves fills ``principal``; an absent one leaves it ``None``, and the
+    tool branches on that itself. A presented credential that does NOT resolve never reaches
+    the tool: the resolver refuses it with AUTH_INVALID on every row, public or protected.
+    A protected tool never sees this type: it takes :class:`ResolvedIdentity`, whose fields
+    are not optional.
 
     Immutable after creation; the identity does not change during request processing.
     """
@@ -304,8 +306,9 @@ def _resolve_identity(
     Args:
         headers: The request headers, as the transport's framework exposes them.
         require_valid_token: The TOOL's declaration (``ToolSpec.requires_credential()``).
-            If True, a missing or rejected credential raises. If False, a rejected
-            credential is treated like a missing one (discovery).
+            If True, a missing credential raises. If False, a missing credential resolves
+            anonymously (discovery). A PRESENTED credential that does not resolve raises
+            either way.
 
     Returns:
         ResolvedIdentity with all fields resolved
@@ -313,8 +316,8 @@ def _resolve_identity(
     Raises:
         AdCPAuthRequiredError: No credential was presented and require_valid_token=True
             (AUTH_MISSING).
-        AdCPAuthenticationError: A credential was presented and did not resolve, and
-            require_valid_token=True (AUTH_INVALID).
+        AdCPAuthenticationError: A credential was presented and did not resolve
+            (AUTH_INVALID), on every row: the pinned enum's MUST names no task.
 
     POSTCONDITION, relied on by every caller: when ``require_valid_token`` is True this
     either returns an identity with a resolved ``principal_id`` or raises. Callers do not
@@ -379,17 +382,28 @@ def _resolve_identity(
     if auth_token and tenant is not None:
         principal = get_principal_from_token(auth_token, tenant.tenant_id)
 
-    # A public tool takes whoever arrived: a rejected credential is treated as absent
-    # and the caller proceeds anonymously.
-    if not require_valid_token:
-        return PublicIdentity(principal=principal, tenant=tenant)
-
-    if tenant is None or principal is None:
-        # Presented, and not a principal of the tenant addressed: AUTH_INVALID. (No tenant
-        # means no lookup ran, which is the same outcome: nothing resolved.)
+    # Presented, and not a principal of the tenant addressed: AUTH_INVALID, on EVERY row.
+    # The pinned enum (3.1/enums/error-code.json, AUTH_INVALID) keys the MUST on one thing --
+    # "an `Authorization` header was present but verification failed" -- and names no task.
+    # The public-task carve-out in compliance/3.1.1/universal/security.yaml is "return 200
+    # WITHOUT credentials by design": it covers the absent credential, which step 2 already
+    # let through, and says nothing about a presented one. A public tool used to take a
+    # rejected credential as absent and serve the caller anonymously; the storyboard's own
+    # narrative calls an agent that 200s a bad credential one that "is ignoring credentials
+    # entirely". (No tenant means no lookup ran, which is the same outcome: nothing resolved.)
+    if auth_token and principal is None:
         from src.core.exceptions import AdCPAuthenticationError
 
         raise AdCPAuthenticationError()
+
+    # A public tool takes whoever arrived: a resolved caller, or -- with nothing presented
+    # -- nobody.
+    if not require_valid_token:
+        return PublicIdentity(principal=principal, tenant=tenant)
+
+    # A protected row: step 2 or 3b refused an absent credential and the check above refused
+    # a rejected one, so both rows resolved. The assert is the static narrowing of that.
+    assert tenant is not None and principal is not None
 
     if account_ref is None:
         return ResolvedIdentity(principal=principal, tenant=tenant)

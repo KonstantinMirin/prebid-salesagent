@@ -179,12 +179,16 @@ class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
         annotation is the policy, the resolver builds the type the annotation names, and the
         body reads the fields without a check.
 
-        What it means is fixed by the pinned graded contract:
-        ``dist/compliance/3.1.1/universal/security.yaml`` runs BOTH its unauth probe and its
-        invalid-credential probe against the PROTECTED probe task, and says why -- "public
-        tasks like get_adcp_capabilities return 200 without credentials by design". So a
-        protected tool refuses a missing credential (AUTH_MISSING) and a rejected one
-        (AUTH_INVALID); a public tool refuses neither and does not check.
+        What it means is fixed by the pinned enum, ``3.1/enums/error-code.json``: AUTH_MISSING
+        is "No credentials were presented. Sellers MUST return this code when no
+        `Authorization` header was included in the request", and AUTH_INVALID is "Sellers MUST
+        return this code when an `Authorization` header was present but verification failed".
+        The second MUST names no task, so it is not this policy's to waive: the resolver
+        refuses a rejected credential on every row. What this policy decides is the ABSENT
+        credential only -- a protected tool refuses it (AUTH_MISSING), a public tool serves
+        the caller anonymously, which is the case
+        ``dist/compliance/3.1.1/universal/security.yaml`` sets aside ("public tasks like
+        get_adcp_capabilities return 200 without credentials by design").
         """
         if issubclass(_declared_identity_type(self.impl), ResolvedIdentity):
             return True

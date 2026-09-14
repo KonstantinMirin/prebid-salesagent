@@ -3,12 +3,11 @@
 import logging
 from typing import Any
 
-from adcp import PushNotificationConfig
-
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import CreativeUoW, WorkflowUoW
 from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import CreativeStatusEnum
+from src.core.schemas.notification import PushNotificationConfig
 from src.core.tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)

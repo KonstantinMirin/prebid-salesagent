@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -62,7 +61,9 @@ ADCP_PIN = _read_adcp_pin()
 
 def _check_url_guard(url: str) -> None:
     """Refuse the live public host unless explicitly overridden (issue #1418)."""
-    if os.environ.get("ALLOW_LIVE_CREATIVE_AGENT") == "1":
+    from src.core.config import ToolingSettings
+
+    if ToolingSettings().allow_live_creative_agent:
         return
     if not url or PUBLIC_CREATIVE_AGENT_HOST in url:
         sys.exit(
@@ -74,10 +75,11 @@ def _check_url_guard(url: str) -> None:
 
 
 async def _capture_formats(url: str):
-    """Fetch the full catalog via the production registry path (ADCP_TESTING off)."""
-    # Disable the testing short-circuit so we hit the real fetch+validation pipeline.
-    os.environ["ADCP_TESTING"] = "false"
+    """Fetch the full catalog via the production registry path.
 
+    The registry is constructed directly, so the reference-formats short-circuit that
+    ``get_registry()`` selects under ``ADCP_TESTING`` never applies here.
+    """
     from src.core.creative_agent_registry import CreativeAgent, CreativeAgentRegistry
 
     registry = CreativeAgentRegistry()
@@ -132,10 +134,15 @@ def _build_fixture(formats, source_url: str) -> dict:
 
 
 def main() -> None:
+    from src.core.config import load_settings
+
+    # The environment, read once for this script.
+    settings = load_settings()
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--url",
-        default=os.environ.get("CREATIVE_AGENT_URL", ""),
+        default=settings.integrations.creative_agent_url or "",
         help="URL of the pinned reference creative agent (e.g. scripts/creative-agent-stack.sh url).",
     )
     args = parser.parse_args()

@@ -39,7 +39,6 @@ from adcp.types import (
 # runtime disagreed about what this model extends. Same adcp codegen defect as the pointer
 # problem documented on Creative below; unreported upstream.
 from adcp.types.generated_poc.core.creative_asset import CreativeAsset1 as LibraryCreativeAsset
-from adcp.types.generated_poc.core.provenance import AiTool  # TODO: no stable alias in adcp.types
 from adcp.types.generated_poc.core.provenance import Provenance as LibraryProvenance
 from adcp.types.generated_poc.creative.list_creatives_response import (
     Creative as LibraryCreative,
@@ -55,6 +54,7 @@ from pydantic import (
     AwareDatetime,
     ConfigDict,
     Field,
+    RootModel,
     field_validator,
     model_validator,
 )
@@ -69,6 +69,7 @@ from src.core.schemas._base import (
     SalesAgentBaseModel,
     Targeting,
 )
+from src.core.schemas.notification import PushNotificationConfig
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
 #:
@@ -92,27 +93,32 @@ from src.core.schemas._base import (
 DigitalSourceType = LibraryDigitalSourceType
 
 
-class Provenance(LibraryProvenance):
-    """AI provenance metadata for creative assets (extends the pinned ``core/provenance.json``).
-
-    Tracks the origin, AI involvement, and disclosure status of creative content per EU AI
-    Act Article 50 (enforcement Aug 2026). The sales agent is pass-through: it stores and
-    forwards what buyers and creative agents declare, it does not generate it.
-
-    Every field is inherited. The hand-written version declared eight of the pin's twelve --
-    missing ``declared_at``, ``embedded_provenance``, ``watermarks`` and ``ext`` entirely --
-    and typed four of the eight as scalars where the pin declares objects: ``c2pa``,
-    ``disclosure``, ``declared_by`` and ``human_oversight`` are models, and ``verification``
-    is a list of them, not a free dict.
-    """
-
-    @field_validator("ai_tool", mode="before")
-    @classmethod
-    def _coerce_ai_tool(cls, v: Any) -> Any:
-        """Accept a plain string, wrapping it as ``AiTool(name=v)``."""
-        if isinstance(v, str):
-            return AiTool(name=v)
-        return v
+#: AI provenance metadata for creative assets: the pinned ``core/provenance.json``, used
+#: directly. Tracks the origin, AI involvement and disclosure status of creative content
+#: per EU AI Act Article 50 (enforcement Aug 2026). The sales agent is pass-through -- it
+#: stores and forwards what buyers and creative agents declare, it does not generate it.
+#:
+#: An ALIAS rather than a subclass, for the same reason as ``DigitalSourceType`` above:
+#: there is nothing local to add. The subclass this replaces had a docstring and no body --
+#: identical field set, identical annotations, identical config, zero validators of its
+#: own -- so it conformed by inheritance and then existed only to be a DIFFERENT CLASS.
+#:
+#: That difference had a cost. Pydantic validates a model-typed slot by instance, and the
+#: one real arrival path (``src/core/tools/creatives/_validation.py``, which reads
+#: ``provenance`` off a ``CreativeAssetRequest`` and hands it to ``Creative``) delivers the
+#: LIBRARY class, so the subclass REFUSED the very object it was there to carry. A
+#: ``mode="before"`` validator existed purely to rebuild one from the other's attributes.
+#: Deleting the subclass deletes the cause, and the validator went with it.
+#:
+#: What the earlier hand-written version got wrong is recorded here because the pin is the
+#: only place that shape is now stated: it declared eight of the pin's twelve fields --
+#: missing ``declared_at``, ``embedded_provenance``, ``watermarks`` and ``ext`` entirely --
+#: and typed four of the eight as scalars where the pin declares objects (``c2pa``,
+#: ``disclosure``, ``declared_by``, ``human_oversight``), with ``verification`` a list of
+#: them rather than a free dict. It also wrapped a plain string ``ai_tool`` as
+#: ``AiTool(name=...)``, a tolerance the pin does not grant. Using the pinned class is what
+#: makes all of that unrepeatable.
+Provenance = LibraryProvenance
 
 
 class CreativeStatusEnum(Enum):
@@ -291,21 +297,34 @@ class Creative(LibraryCreative):
     # dict[str, Any] because the JSON column stores what the buyer sent; the row-to-model
     # read (listing.py) now validates the stored value into the typed map instead.
 
-    # === AI Provenance (EU AI Act Article 50) ===
-    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
-
-    @field_validator("provenance", mode="before")
+    @field_validator("assets", mode="before")
     @classmethod
-    def _adopt_library_provenance(cls, v: Any) -> Any:
-        """A request carries the LIBRARY ``Provenance``; this field is the local subclass.
+    def _adopt_sibling_assets(cls, v: Any) -> Any:
+        """A sync request carries the SIBLING generated ``Assets`` list; this field is the listing's.
 
-        Pydantic validates a model-typed field by instance, so the library instance would be
-        refused. Rebuilt from its attributes -- a model-to-model step, never a dump -- so a
-        creative asset's provenance passes through as the model it is.
+        The pinned ``core/creative-asset.json`` list shape is generated twice -- under the
+        sync input as ``core.creative_asset.Assets`` and under the listing response as
+        ``list_creatives_response.Assets`` -- as two ``RootModel`` classes over one list.
+        Pydantic validates a model-typed slot by instance, so the sync input's instance
+        would be refused here. Its ``root`` is the list the two share, and validating that
+        list builds this field's own class: a model-to-model step, never a dump.
+
+        This is NOT the shape ``provenance`` had below. There the two classes were the
+        library's and a local subclass of it with nothing added, so the fix was to delete
+        the subclass and type the field with the pinned class. Here both classes are the
+        library's own, generated twice from one schema, so there is no local class to
+        delete and the adoption is irreducible.
         """
-        if isinstance(v, LibraryProvenance) and not isinstance(v, Provenance):
-            return Provenance.model_validate(v, from_attributes=True)
+        if isinstance(v, dict):
+            return {key: item.root if isinstance(item, RootModel) else item for key, item in v.items()}
         return v
+
+    # === AI Provenance (EU AI Act Article 50) ===
+    # Typed with the PINNED class itself (``Provenance`` is an alias for it, see above), so
+    # the library instance a request carries satisfies this slot as it arrives. The
+    # ``mode="before"`` validator that used to rebuild one local instance from one library
+    # instance is gone with the subclass that made it necessary.
+    provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
@@ -440,6 +459,9 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
     )
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
+
+    # Narrowed to the local class; see CreateMediaBuyRequest in _base.py.
+    push_notification_config: PushNotificationConfig | None = None
 
     # account and idempotency_key are REQUIRED by AdCP 3.1.1
     # (creative/sync-creatives-request.json /required = [idempotency_key, account,

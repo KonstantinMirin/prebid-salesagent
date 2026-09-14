@@ -518,37 +518,22 @@ class TestSchemaInheritance:
             # in _SELLER_COMMITTED_STATUSES it was stamped and the non-null type held --
             # but the stamp was the defect.
             ("CreateMediaBuySuccess", "confirmed_at"),
-            # adcp 6.6 (spec 3.1.1) re-added status/changes/warnings/platform_id/assignment_errors/
-            # assigned_to to the library sync_creatives_response Creative — status/platform_id/
-            # assignment_errors/assigned_to are INHERITED (PR #1567). Internal review-routing
-            # state was renamed to `internal_status` (a non-parent field, excluded from the wire).
-            # changes/warnings/errors are deliberately REDECLARED with default_factory=list
-            # (PR #1567 round-2 item 3): spec 3.1.1 types them `array`, and the parent's None default
-            # serialized as null on the MCP structured_content path (bypasses model_dump strips).
-            # Those three, plus QuerySummary.filters_applied, keep the parent's SHAPE and
-            # requiredness and differ only in the DEFAULT — which is the axis a shape-and-
-            # requiredness rule cannot see, since is_required() is already False on both
-            # sides. They are rowed rather than admitted because replacing None with
-            # default_factory=list changes what an omitting caller puts on the wire, and
-            # that is a divergence from the pin whether or not it is an improvement.
-            ("SyncCreativeResult", "changes"),
-            ("SyncCreativeResult", "errors"),
-            ("SyncCreativeResult", "warnings"),
+            # QuerySummary.filters_applied keeps the parent's SHAPE and requiredness and
+            # differs only in the DEFAULT — the axis a shape-and-requiredness rule cannot
+            # see, since is_required() is already False on both sides. Rowed rather than
+            # admitted because replacing None with default_factory=list changes what an
+            # omitting caller puts on the wire, and that is a divergence from the pin whether
+            # or not it is an improvement. The three sync-creatives lists that sat beside it
+            # for the same reason are inherited now (the wrap serializer runs on every path,
+            # so the parent's None default is omitted on MCP, A2A and REST alike).
             ("QuerySummary", "filters_applied"),
             ("SyncCreativesRequest", "creatives"),
             # Creative overrides — listing base requires these fields, but we add
-            # defaults for partial construction and override assets to untyped dict
+            # defaults for partial construction. (assets is inherited as the library's
+            # typed map; the stored blob is validated into it at the row-to-model read.)
             ("Creative", "status"),
             ("Creative", "created_date"),
             ("Creative", "updated_date"),
-            # assets: widened to an untyped dict. Narrowing it to the pinned typed
-            # form is NOT a safe change on its own -- mock_creative_engine.py reads it
-            # with isinstance(value, dict), so typed values make that branch dead and
-            # silently disable the long-video suggestion. Field and consumer must be
-            # narrowed in the same change, and that change needs an oracle asserting
-            # the suggestion IS emitted for a >15s asset -- there is none today, which
-            # is why a green suite says nothing about this field.
-            ("Creative", "assets"),
             # Nested serialization — creative delivery uses local CreativeDeliveryData
             ("GetCreativeDeliveryResponse", "creatives"),
             # adcp 3.9 field overrides — library added fields we already had locally
@@ -570,7 +555,6 @@ class TestSchemaInheritance:
             # sync_accounts. No row here relaxes a spec-required field any more, and none
             # may be added: "our model does not require what the pin requires" is a defect
             # with three precedents, not an allowlistable exception.
-            ("Product", "reporting_capabilities"),  # optional override (not all products have it)
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
             # Pattern #4: the get_media_buys item chain. ALL THREE narrowings below are

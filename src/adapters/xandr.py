@@ -360,6 +360,7 @@ class XandrAdapter(AdServerAdapter):
                 PublisherPropertySelector1,
             )  # TODO: no stable alias in adcp.types
 
+            from src.core.product_conversion import default_reporting_capabilities
             from src.core.schemas import CpmPricingOption, FormatId
 
             # In Xandr, products map to placement groups or custom deals
@@ -390,6 +391,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -418,6 +420,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -446,6 +449,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -475,6 +479,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -499,7 +504,9 @@ class XandrAdapter(AdServerAdapter):
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
                 "create_media_buy",
-                {"request": request.dict(), "principal": self.principal.name, "advertiser_id": self.advertiser_id},
+                # The model, handed through: the task details are read for media_buy_id only,
+                # and nothing serializes them (CLAUDE.md pattern 4).
+                {"request": request, "principal": self.principal.name, "advertiser_id": self.advertiser_id},
             )
 
             return self._build_create_success(

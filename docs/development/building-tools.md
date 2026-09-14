@@ -88,8 +88,8 @@ order. That proof is why the DTO extends the SDK model rather than being rebuilt
 ### The accepted shape is the declared shape
 
 `SalesAgentBaseModel` in `src/core/schemas/_base.py` sets `extra` from the settings object:
-`forbid` outside production and `ignore` in production. `BuyerRequest` adds a `mode="before"`
-validator, `_accept_only_declared_fields`, that calls `deep_strip_to_schema` in
+`forbid` outside production and `ignore` in production. `BuyerRequest` adds a before-validator,
+`_accept_only_declared_fields`, that calls `deep_strip_to_schema` in
 `src/core/schemas/_accepted_shape.py`. That function is a recursive JSON Schema walk that
 keeps only the fields the DTO declares, at every nesting depth. The following table gives the
 outcome per environment.
@@ -222,9 +222,11 @@ filed under is `identity.account.account_id`.
 
 **The credential policy is the annotation.** `ToolSpec.requires_credential()` answers `True`
 when the implementation annotates `ResolvedIdentity` or `AccountIdentity`, and `False` for
-`PublicIdentity`. The resolver refuses a missing credential with `AUTH_MISSING` and a rejected
-one with `AUTH_INVALID` before a protected implementation runs. A seller's policy can add a
-requirement. When the DTO declares `brand` and the tenant's `brand_manifest_policy` is
+`PublicIdentity`. The resolver refuses a missing credential with `AUTH_MISSING` before a
+protected implementation runs. A rejected credential is refused with `AUTH_INVALID` before
+any implementation runs, public or protected: the pinned enum's MUST for that code keys on
+"an `Authorization` header was present but verification failed" and names no task, so the
+policy decides the absent case only. A seller's policy can add a requirement. When the DTO declares `brand` and the tenant's `brand_manifest_policy` is
 `require_auth`, `requires_credential(tenant)` answers `True`. The resolver loads the tenant
 first, asks that question, and refuses the anonymous caller the same way. The tool never sees
 the difference: `get_products` keeps `identity: PublicIdentity` and receives a
@@ -278,7 +280,8 @@ The resolver reads the headers once and resolves in this order:
    the anonymous caller here, with the same `AUTH_MISSING`.
 4. **The principal**, looked up inside that tenant by the hash of the presented token. A
    principal is a row in exactly one tenant, so a token minted for one tenant never acts on
-   another. No tenant, no lookup.
+   another. No tenant, no lookup. A presented token that resolves to no principal is refused
+   with `AUTH_INVALID` on every row, public tools included.
 5. **The account**, when the request names one, resolved for that principal through
    `find_account` in `src/core/database/repositories/account_lookup.py`. Naming an account is
    itself a claim that needs a credential, so a request that carries `account` requires a
@@ -449,10 +452,16 @@ and the HTTP status. The published codes are loaded from the pinned schema bundl
 `enumMetadata`, so the table cannot drift from the file it came from.
 
 `internal_detail` is typed `BaseException | None`, so it takes the caught exception and
-nothing else. It goes to the server-side record and never to the wire. Forty-five raise sites
+nothing else. It goes to the server-side record and never to the wire. Forty-seven raise sites
 used to put an authored sentence there. None of those sentences said anything the code,
 the class, and the typed details did not already say. When you catch an exception and raise
-a typed one, pass the caught exception.
+a typed one, pass the caught exception and raise `from` it. The boundary's
+`record_boundary_error` writes one record per failure and attaches the traceback when the
+error has a cause of either kind, a `__cause__` or an `internal_detail`; nothing logs
+`internal_detail` separately. `.ast-grep/rules/internal-detail-is-an-exception.yml` refuses
+an authored string there in every spelling (literal, f-string, `+`, `%`, `.format`, `str()`,
+a conditional with a string arm) under `src/`, `scripts/` and `tests/`, where mypy does not
+look.
 
 The two authentication errors are the resolver's alone. `ruff-boundary.toml` bans importing
 `AdCPAuthRequiredError` and `AdCPAuthenticationError` outside `src/core/resolved_identity.py`.
@@ -607,8 +616,8 @@ serialization edges, each with one owner. They are the wire, outbound bodies to 
 or a webhook target, the idempotency hash, and the documents repositories compose.
 Persistence is not an edge that
 needs a call, as [Persistence](#persistence) describes.
-`tests/unit/test_architecture_no_model_dump_in_impl.py` fails the build on a `.model_dump()`
-in an implementation's call graph.
+`ruff-serialization.toml` and `.ast-grep/rules/serialize-only-at-the-edges.yml` fail the build
+on a serialization call outside the edge modules, under any spelling.
 
 A wire model does not shape its own output. There is one serializer seat,
 `WireSerializerMixin` in `src/core/schemas/_base.py`, because pydantic runs only the first
@@ -713,32 +722,64 @@ that still carried those keys, once. Every touched row was copied to a backup ta
 the downgrade restores the exact prior document. A validator that reshapes input runs
 on every read forever and hides which rows are legacy; a migration answers the question once.
 
-**No input reshaping on a wire model.** The four `mode="before"` validators that mutated their
-input on `Creative`, `PackageRequest`, `UpdateMediaBuyRequest`, and `Targeting` are deleted,
-because the accepted shape is what the fields declare. The one adopt validator that remains
-is `Creative._adopt_library_provenance`, which rebuilds the library's `Provenance` instance
-into the local subclass from its attributes. Pydantic validates a model-typed field by
-instance, so pydantic refuses the library instance without it, and the rebuild is a
-model-to-model step, never a dump. `Creative.assets` is inherited as the library's typed asset
-map. The stored blob is validated into that map at the one place a row becomes a model,
-`_coerce_blob_assets` in `src/core/tools/creatives/listing.py`. A stored value that does not
-validate is dropped with a warning rather than crashing the whole listing on one bad row.
+**No input reshaping on a wire model.** A model never coerces an older or looser buyer
+spelling on the way in. The before-validators that once did so on `Creative`,
+`PackageRequest`, `UpdateMediaBuyRequest`, and `Targeting` are deleted, and so is the one that
+wrapped a plain string as a `Provenance` tool. An undeclared buyer field follows the accepted
+shape rule under [pattern 7](#the-accepted-shape-is-the-declared-shape): rejected in
+development, dropped in production. A legacy stored shape is migrated once in the rows, as
+migration `f7c3a9d21b64` did for the flat geo keys, never reshaped on read.
+
+The before-validators that remain adopt a sibling generated class, which is a model-to-model
+step and never a dump. Pydantic validates a model-typed slot by instance, so a generated
+instance of the wrong class is refused without one. Each names the split it bridges:
+`Creative._adopt_library_provenance` rebuilds the library `Provenance` into the local
+subclass; `Creative._adopt_sibling_assets` reads the sync input's `Assets` list into the
+listing's; `PushNotificationConfig._narrow_base_block` rebuilds the push subtype of the
+authentication block from the base; and the pricing wrapper revalidates an SDK member into
+the local one. `Creative.assets` is inherited as the library's typed asset map. The stored
+blob is validated into that map at the one place a row becomes a model, `_coerce_blob_assets`
+in `src/core/tools/creatives/listing.py`. A stored value that does not validate is dropped
+with a warning rather than crashing the whole listing on one bad row.
 
 ## Settings
 
-`src/core/config.py` is the one reader of the process environment. It loads a `Settings`
-object with named groups, `runtime`, `testing`, `database`, `auth`, `integrations`, and
-`limits`, and named derived properties. A bad numeric knob fails at startup instead of being
-logged and ignored. Business logic reads a fact off that object, never the environment. The
-three spellings of "production" collapse to one property, so a security-sensitive check
-cannot drift on the difference.
+`src/core/config.py` is the one reader of the process environment. Six `BaseSettings`
+groups read it, `RuntimeSettings`, `TestingSettings`, `DatabaseSettings`, `AuthSettings`,
+`IntegrationSettings`, and `LimitSettings`, and `Settings` is a plain frozen dataclass that
+holds them, with named derived properties. The composite is deliberately not a
+`BaseSettings`: as one, its six field names were environment variables, and a shell with
+`TESTING=1` could not start the process. An empty value is an unset value
+(`env_ignore_empty`), because CI and the compose files hand a process `ADCP_TESTING=""`.
+A bad numeric knob or a malformed credential fails at startup instead of being logged and
+ignored. Business logic reads a fact off that object, never the environment. The three
+spellings of "production" collapse to one property, so a security-sensitive check cannot
+drift on the difference.
+
+Each composition root calls `load_settings()` once: `src/app.py` at the top of the module,
+and it hands the object to `create_app(settings=...)`; the standalone admin server and
+`src/core/startup.py` do the same for their processes. Nothing builds `Settings` at import.
+The one runtime fact a module needs while its classes are being defined, the request DTOs'
+`extra` mode, is read through `get_pydantic_extra_mode()`, which constructs
+`RuntimeSettings` alone, so importing a schema is never where a bad credential fails. The
+audit logger reads its log directory the same way.
 
 `ADCP_TESTING` is never read by business code. Each allowance it implies has its own name,
 such as `debug_routes_enabled`, `reference_formats_only`, and `loopback_webhooks_allowed`.
 Where an allowance selects a component, the selection happens at composition. The debug
-router is mounted or absent, and the creative registry is the reference-formats registry or
-the live one. The `extra` mode of every request model is the settings object's
-`pydantic_extra_mode`.
+router is mounted or absent, the creative registry is the reference-formats registry or the
+live one, and the admin UI's test-credential login blueprint is registered or absent
+(`src/admin/blueprints/test_auth.py`; a request-time reader asks the app whether it was
+composed, through `test_login_composed()`). An allowance that gates one predicate inside one
+function, such as `loopback_webhooks_allowed` or `relaxed_brand_validation`, is read per call
+off the settings object: a swapped component would carry only that bool.
+
+`ruff-environment.toml` bans `os.environ` and `os.getenv` everywhere under `src/` and
+`scripts/` except the loader and two writes of variables another library reads (Werkzeug's
+flags in `src/admin/server.py`, `GOOGLE_APPLICATION_CREDENTIALS` in the GCP service). A
+script is a composition root of its own and calls `load_settings()` where it starts; a
+repo-tooling knob such as `ADCP_HOME` is a field on `ToolingSettings`, which is not part of
+`Settings` because nothing the application serves depends on it.
 
 ## Credentials
 
@@ -935,7 +976,8 @@ unbounded. Prefer, in order:
    parameter, so a raise site cannot author a sentence. `ToolSpec` refuses an identity
    annotation that disagrees with its DTO. An identity refuses a dict.
 2. **Ban the import or the call spelling with ruff.** `ruff-boundary.toml`,
-   `ruff-ownership.toml`, and `ruff-egress.toml` each run as their own quality line.
+   `ruff-ownership.toml`, `ruff-serialization.toml`, `ruff-environment.toml`, and
+   `ruff-egress.toml` each run as their own quality line.
    `tests/unit/test_ruff_boundary_bans.py` proves every banned name fires.
 3. **Write an AST guard only for what neither can express.** Write it against the call graph
    rather than a file list, and prove it non-vacuous by breaking the code on purpose.
@@ -973,7 +1015,7 @@ generator for each, not a list to edit.
 | REST routes | `src/routes/api_v1.py` |
 | Request base, response base, and strip | `src/core/schemas/_base.py`, `src/core/schemas/_accepted_shape.py` |
 | Errors and the code table | `src/core/exceptions.py`, `src/core/errors/codes.py` |
-| Import bans | `ruff-boundary.toml`, `ruff-ownership.toml`, `ruff-egress.toml` |
+| Import bans | `ruff-boundary.toml`, `ruff-ownership.toml`, `ruff-serialization.toml`, `ruff-environment.toml`, `ruff-egress.toml` |
 | Adapter result types | `src/adapters/base.py` |
 | The JSON column type | `src/core/database/json_type.py` |
 | Settings | `src/core/config.py` |

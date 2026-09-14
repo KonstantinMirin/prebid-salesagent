@@ -18,21 +18,18 @@ from src.core.config import get_settings
 if TYPE_CHECKING:
     from src.core.database.repositories.idempotency_attempt import IdempotencyAttemptRepository
 
-# Storage-abuse ceiling: active (non-expired) cached successes per
-# (tenant, principal, account) scope. Each keyed create stores one row for the
-# replay TTL, so a buyer minting fresh keys is bounded to this many creates per
-# window; the probe rejects the excess as RATE_LIMITED with retry_after set to
-# when the oldest row expires. Tunable via IDEMPOTENCY_MAX_ACTIVE_ATTEMPTS_PER_SCOPE;
-# looked up at call time so tests can patch it.
-MAX_ACTIVE_ATTEMPTS_PER_SCOPE = get_settings().limits.idempotency_max_active_attempts_per_scope
-
-# Insert-RATE limit per (tenant, principal, account) scope — the spec's MUST is
-# a rate limit on cache inserts (the row count above is the derived storage
-# bound). The window/ceiling follow the spec's SHOULD-level burst numbers
-# (300 inserts per 10s). Tunable via IDEMPOTENCY_INSERT_RATE_WINDOW_SECONDS and
-# IDEMPOTENCY_MAX_INSERTS_PER_WINDOW; looked up at call time so tests can patch them.
-INSERT_RATE_WINDOW = timedelta(seconds=get_settings().limits.idempotency_insert_rate_window_seconds)
-MAX_INSERTS_PER_WINDOW = get_settings().limits.idempotency_max_inserts_per_window
+# The two bounds, read off the settings inside enforce_insert_ceiling on each call rather
+# than snapshotted at import, so the value a test loads is the value the policy applies:
+#
+# - Storage-abuse ceiling (LimitSettings.idempotency_max_active_attempts_per_scope):
+#   active (non-expired) cached successes per (tenant, principal, account) scope. Each
+#   keyed create stores one row for the replay TTL, so a buyer minting fresh keys is
+#   bounded to this many creates per window; the probe rejects the excess as
+#   RATE_LIMITED with retry_after set to when the oldest row expires.
+# - Insert-RATE limit (idempotency_insert_rate_window_seconds and
+#   idempotency_max_inserts_per_window) per the same scope: the spec's MUST is a rate
+#   limit on cache inserts (the row count above is the derived storage bound). The
+#   defaults follow the spec's SHOULD-level burst numbers (300 inserts per 10s).
 
 
 def enforce_insert_ceiling(
@@ -50,11 +47,11 @@ def enforce_insert_ceiling(
     a fresh key would insert a new row. Two bounds, both on the spec's
     (tenant, principal, account) scope (no tool dimension):
 
-    - **insert rate** (the spec's MUST): at most :data:`MAX_INSERTS_PER_WINDOW`
-      rows created within the trailing :data:`INSERT_RATE_WINDOW`;
+    - **insert rate** (the spec's MUST): at most ``idempotency_max_inserts_per_window``
+      rows created within the trailing ``idempotency_insert_rate_window_seconds``;
       ``retry_after`` is when the oldest in-window insert leaves the window.
     - **active row count** (the derived storage bound): at most
-      :data:`MAX_ACTIVE_ATTEMPTS_PER_SCOPE` non-expired rows; ``retry_after``
+      ``idempotency_max_active_attempts_per_scope`` non-expired rows; ``retry_after``
       is when the oldest active row expires.
 
     Replays and conflicts are not rate-limited — they insert nothing.
@@ -62,16 +59,19 @@ def enforce_insert_ceiling(
     """
     from src.core.exceptions import AdCPRateLimitError, clamp_retry_after
 
+    settings = get_settings()
+    limits = settings.limits
     current = now or datetime.now(UTC)
 
     # Insert-rate bound: rows CREATED inside the trailing window, expired or not.
-    rate_limit = rate_ceiling if rate_ceiling is not None else MAX_INSERTS_PER_WINDOW
-    window_start = current - INSERT_RATE_WINDOW
+    rate_limit = rate_ceiling if rate_ceiling is not None else limits.idempotency_max_inserts_per_window
+    window = timedelta(seconds=limits.idempotency_insert_rate_window_seconds)
+    window_start = current - window
     recent, oldest_in_window = attempts.count_inserts_since(
         principal_id=principal_id, account_id=account_id, since=window_start
     )
     if recent >= rate_limit:
-        window_seconds = math.ceil(INSERT_RATE_WINDOW.total_seconds())
+        window_seconds = math.ceil(window.total_seconds())
         raw_wait = window_seconds - (current - oldest_in_window).total_seconds() if oldest_in_window else 1
         # The wait can never logically exceed the window itself; the bound
         # also absorbs DB-vs-app clock skew on created_at (server_default).
@@ -84,7 +84,7 @@ def enforce_insert_ceiling(
         )
 
     # Storage bound: ACTIVE (non-expired) rows.
-    limit = ceiling if ceiling is not None else MAX_ACTIVE_ATTEMPTS_PER_SCOPE
+    limit = ceiling if ceiling is not None else limits.idempotency_max_active_attempts_per_scope
     active, oldest_expiry = attempts.count_active(principal_id=principal_id, account_id=account_id, now=current)
     if active < limit:
         return

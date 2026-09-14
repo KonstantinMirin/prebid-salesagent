@@ -29,7 +29,6 @@ Utility scripts for setup, deployment, and operations.
 
 ### Root Level
 - `run_server.py` - MCP server runner (used by run_all_services.py)
-- `run_admin_ui.py` - Admin UI runner (production WSGI wrapper)
 - `generate_encryption_key.py` - Generate Fernet encryption keys
 - `generate_frontend_types.py` - Generate TypeScript types from Pydantic schemas
 - `gam_prerequisites_check.py` - Check GAM OAuth prerequisites

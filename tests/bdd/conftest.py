@@ -1010,8 +1010,8 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     (
         "T-UC-003-partition-targeting-overlay",
         {
-            # GRADUATED on every transport: unknown_field, managed_only_dimension and
-            # proximity_method_conflict. The recorded gap was "pydantic extra='forbid'
+            # GRADUATED on every transport: unknown_field, undeclared_dimension (formerly
+            # managed_only_dimension, salesagent-3cs7o.22) and proximity_method_conflict. The recorded gap was "pydantic extra='forbid'
             # raising a raw ValidationError before dispatch", i.e. a rejection that never
             # reached the buyer as an envelope. It does now.
             #

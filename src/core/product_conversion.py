@@ -14,6 +14,7 @@ V3 Migration Notes:
 import logging
 
 from adcp import EventType, TimeUnit
+from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from adcp.types._generated import MediaChannel
 from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
 
@@ -350,6 +351,25 @@ def _normalize_legacy_placement(placement: dict) -> dict:
     return normalized
 
 
+def default_reporting_capabilities() -> LibraryReportingCapabilities:
+    """The reporting_capabilities a row that stores NULL is served with.
+
+    core/product.json requires the field unconditionally, and ``Product`` inherits it as
+    required. The default therefore lives at the edges that build a Product from something
+    that may lack one -- the row-to-model read below and the adapters that assemble
+    products by hand -- never on the wire model. A fresh instance per call, so no lists
+    are shared between products. Retired by salesagent-3cs7o.21 (NOT NULL with a backfill).
+    """
+    return LibraryReportingCapabilities(
+        available_reporting_frequencies=["daily"],
+        expected_delay_minutes=1440,
+        timezone="UTC",
+        supports_webhooks=False,
+        available_metrics=["impressions"],
+        date_range_support="date_range",
+    )
+
+
 def convert_product_model_to_schema(product_model, adapter_type: str | None = None) -> Product:
     """Convert database Product model to Product schema.
 
@@ -467,9 +487,11 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         product_data["placements"] = [
             _normalize_legacy_placement(p) if isinstance(p, dict) else p for p in product_model.placements
         ]
-    if product_model.reporting_capabilities:
-        product_data["reporting_capabilities"] = product_model.reporting_capabilities
-    # else: leave unset — the Product field's default_factory supplies the validated default
+    # core/product.json requires reporting_capabilities; the column is still nullable
+    # (salesagent-3cs7o.21 makes it NOT NULL with a backfill). The default is supplied HERE,
+    # at the row-to-model edge, never by the wire model: Product inherits the field as
+    # required, so a NULL row is completed where the row is read and nowhere else.
+    product_data["reporting_capabilities"] = product_model.reporting_capabilities or default_reporting_capabilities()
 
     # Default is_custom to False if not set
     product_data["is_custom"] = product_model.is_custom if product_model.is_custom else False
@@ -489,6 +511,11 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         product_data["data_provider_signals"] = product_model.data_provider_signals
     if product_model.forecast is not None:
         product_data["forecast"] = product_model.forecast
+    # expires_at is a PINNED field (core/product.json /properties/expires_at, 3.1.1) and is
+    # emitted on get_products. The strip that hid it is gone; this copy is what puts a
+    # stored value on the wire. A NULL column stays absent (exclude_none).
+    if product_model.expires_at is not None:
+        product_data["expires_at"] = product_model.expires_at
 
     # Internal fields (not in AdCP spec, but in our extended Product schema)
     # Use effective_implementation_config to auto-resolve from inventory profile if set
