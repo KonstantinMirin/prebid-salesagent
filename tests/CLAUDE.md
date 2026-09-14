@@ -3,6 +3,40 @@
 This file is the authoritative guide to writing tests in this project.
 **Agents must read this before writing any test code.**
 
+## THE AUTHORITY ORDER — read this before changing any expectation
+
+**A test is truthful to the SPEC, not to production.** When a test and production
+disagree, the question is never "which one do I edit to get green" — it is "which one
+does the spec say is right". Resolve it in this order, and stop at the first level that
+answers:
+
+> **1. the pinned spec  →  2. the storyboard  →  3. the SDK  →  4. production**
+
+The pin is whatever `adcp==<version>` currently ships in
+`.venv/.../adcp/_schemas/<spec>/` (see [AdCP spec version](../docs/adcp-spec-version.md)).
+Where the spec is silent or ambiguous, the graded storyboard decides; where that is
+silent, the SDK; production is the last word only when the three above say nothing.
+Production being long-standing, reviewer-approved, or cited in an old ticket does not
+move it up this list.
+
+**Corollaries, each of which has been got wrong here:**
+
+- **A generated `.feature` file is EDITABLE and gets corrected in place.** It mirrors
+  upstream, but a scenario asserting a code the pinned enum contradicts is simply wrong,
+  and "wait for an upstream regen" is not a plan — there may never be one. Fix it now,
+  in this repo, and mirror the diff upstream if you can. Do not ledger a scenario as a
+  "spec-production gap" when the SPEC agrees with production and only the scenario is
+  stale.
+- **A test that passes because it encodes production's bug is a defect, not coverage.**
+  Four UC-003 scenarios asserted `CREATIVE_REJECTED` for three conditions the enum codes
+  differently; they passed for years because production emitted the same wrong code.
+- **Reverting a spec-correct change to restore consistency with a spec-incorrect one
+  makes the tree worse.** Half-compliant beats uniformly non-compliant. Finish the
+  change instead.
+- **Cite the level you used.** "The enum says X" is an argument. "#1417 decided X",
+  "production emits X", "the scenario expects X" are not — those are levels 4 and below,
+  and they are what you are checking, not what you are checking against.
+
 ## Contents
 
 - [The harness system (use this)](#the-harness-system-use-this) — environments, capabilities, and multi-transport dispatch

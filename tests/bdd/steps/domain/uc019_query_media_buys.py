@@ -327,45 +327,6 @@ def given_principal_owns_multiple(ctx: dict, principal_id: str, mb1: str, mb2: s
     env._commit_factory_data()
 
 
-@given(parsers.parse('the principal "{principal_id}" owns media buy "{mb_id}" with an active package "{pkg_id}"'))
-def given_principal_owns_with_package(ctx: dict, principal_id: str, mb_id: str, pkg_id: str) -> None:
-    """Create a media buy with an active package, verifying principal_id consistency."""
-    # Verify the stated principal_id matches the ctx principal
-    _register_principal(ctx, principal_id)
-    env = ctx["env"]
-    real_id = _generate_unique_id(mb_id)
-    mb = MediaBuyFactory(
-        tenant=ctx["tenant"],
-        principal=ctx["principal"],
-        media_buy_id=real_id,
-        status="active",
-    )
-    MediaPackageFactory(
-        media_buy=mb,
-        package_id=pkg_id,
-        package_config={
-            "package_id": pkg_id,
-            "product_id": "guaranteed_display",
-            "budget": 5000.0,
-            "status": "active",
-        },
-    )
-    env._commit_factory_data()
-    _register_media_buy(ctx, mb_id, mb)
-    ctx.setdefault("seeded_packages", {})[pkg_id] = mb
-
-
-@given(parsers.parse('the principal "{principal_id}" owns no media buys'))
-def given_principal_owns_none(ctx: dict, principal_id: str) -> None:
-    """No media buys exist for this principal (default state).
-
-    Validates that the principal_id matches the ctx principal (like other
-    principal-scoped Given steps).
-    """
-    _register_principal(ctx, principal_id)
-    ctx.setdefault("seeded_media_buys", {})
-
-
 @given(
     parsers.parse(
         'the principal "{principal_id}" owns media buy "{mb_id}" with start_date "{start}" '
@@ -660,21 +621,6 @@ def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
     )
 
 
-@given(parsers.parse('package "{pkg_id}" has a creative assignment referencing creative_id "{creative_id}"'))
-def given_package_creative_ref_nonexistent(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Record creative assignment referencing a potentially nonexistent creative.
-
-    FIXME: No CreativeAssignmentFactory — cannot seed real DB records.
-    """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
-        f"for '{creative_id}' on package '{pkg_id}'. "
-        f"FIXME: Create factory to seed real DB records."
-    )
-
-
 @given(parsers.parse('no snapshot data is available for package "{pkg_id}"'))
 def given_no_snapshot_for_package(ctx: dict, pkg_id: str) -> None:
     """Establish that no snapshot data exists for a package.
@@ -785,32 +731,6 @@ def given_adapter_reporting_no_data(ctx: dict, pkg_id: str) -> None:
         # Fallback: use first seeded media buy with empty snapshot
         first_mb = next(iter(seeded.values()))
         snapshot_data[first_mb.media_buy_id] = {}
-
-    _patch_adapter_with_snapshot(ctx, snapshot_data)
-
-
-@given(parsers.parse("the adapter supports realtime reporting and data for all pkgs"))
-def given_adapter_reporting_all_data(ctx: dict) -> None:
-    """Adapter supports reporting with snapshot data for every seeded package.
-
-    Builds snapshot entries for all packages across all seeded media buys,
-    so every package has data available when include_snapshot is requested.
-    """
-
-    snapshot_data: dict[str, dict] = {}
-    seeded = ctx.get("seeded_media_buys", {})
-    env = ctx["env"]
-
-    for _label, mb_obj in seeded.items():
-        real_id = mb_obj.media_buy_id
-        if env._session is not None:
-            from sqlalchemy import select
-
-            from src.core.database.models import MediaPackage as DBMediaPackage
-
-            pkgs = env._session.scalars(select(DBMediaPackage).filter_by(media_buy_id=real_id)).all()
-            for pkg in pkgs:
-                snapshot_data.setdefault(real_id, {})[pkg.package_id] = _make_test_snapshot()
 
     _patch_adapter_with_snapshot(ctx, snapshot_data)
 
@@ -982,25 +902,6 @@ def given_identity_no_principal(ctx: dict) -> None:
     Sets has_auth=True so the When step sends a real identity, but with
     principal_id=None so _impl can detect the missing principal and return
     an appropriate error response.
-    """
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    identity = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-    )
-    ctx.setdefault("query_kwargs", {})["identity"] = identity
-
-
-@given(parsers.parse("an authenticated identity with principal_id null"))
-@given(parsers.parse('an authenticated identity with principal_id ""'))
-def given_identity_principal_id_null_or_empty(ctx: dict) -> None:
-    """Simulate an identity with principal_id as null or empty string.
-
-    Both null and empty string are treated as "missing principal_id" by
-    production code. We set principal_id=None for both — the distinction
-    is in the Gherkin readability, not the implementation.
     """
     from tests.factories.principal import PrincipalFactory
 
@@ -1284,26 +1185,31 @@ def when_query_invalid_status_filter(ctx: dict) -> None:
 
 
 def _assert_flight_dates_present(pkg: Any) -> None:
-    """Assert flight date fields are present on a package.
+    """Assert the package carries its flight window.
 
-    Step text claims 'flight dates' — check start_date/end_date or
-    start_time/end_time (naming varies by schema version).
+    The pinned 3.1 ``core/package.json`` names these fields ``start_time`` and
+    ``end_time``. It does NOT declare ``start_date``/``end_date`` at all, so the
+    old "naming varies by schema version" alternative accepted a spelling the pin
+    has no concept of — a package answering with those would have satisfied a
+    check for fields the buyer's own schema would reject.
+
+    The fields are optional in the pin (``required`` is ``["package_id"]``), so this
+    is not a spec MUST; it is this seller echoing the flight window the buyer
+    supplied in the Given. Where production does not, the scenario is parked in
+    the ledger, not excused here: the xfail that stood in this function was keyed
+    on the outcome, so it could not fail in the one direction that matters.
     """
-    import pytest
 
     def _has(field: str) -> bool:
         if isinstance(pkg, dict):
             return field in pkg and pkg[field] is not None
         return getattr(pkg, field, None) is not None
 
-    has_dates = _has("start_date") and _has("end_date")
-    has_times = _has("start_time") and _has("end_time")
-    if not has_dates and not has_times:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: Package missing flight date fields "
-            "(start_date/end_date or start_time/end_time). Step claims "
-            "'flight dates' are included in package details."
-        )
+    missing = [f for f in ("start_time", "end_time") if not _has(f)]
+    assert not missing, (
+        f"package details must carry the flight window the buyer supplied; "
+        f"missing {missing} (pinned 3.1 core/package.json names them start_time/end_time)"
+    )
 
 
 def _get_media_buys(ctx: dict) -> list:
@@ -1339,7 +1245,6 @@ def then_response_includes_mb_with_status(ctx: dict, mb_id: str, status: str) ->
 )
 def then_package_details(ctx: dict) -> None:
     """Assert each media buy has package-level details including all claimed fields."""
-    import pytest
 
     buys = _get_media_buys(ctx)
     assert buys, "No media buys in response to check"
@@ -1371,19 +1276,21 @@ def then_package_details(ctx: dict) -> None:
                 )
             # Flight dates: step text explicitly claims these are present
             _assert_flight_dates_present(pkg)
-            # paused must be a boolean, not absent — collect gaps across ALL packages
+            # ``paused`` is declared in the pinned 3.1 core/package.json as
+            # {"type": "boolean", "default": false}. A DEFAULT means a parsed package can
+            # never legitimately carry None: absence resolves to False. So None is not a
+            # "field not present" gap to be excused, it is the local model failing to apply
+            # the pin's default, and that is worth failing on.
             if pkg.paused is None:
                 paused_gaps.append(f"package {pkg.package_id} in {mb_id}")
             else:
                 assert isinstance(pkg.paused, bool), f"Expected paused to be bool, got {type(pkg.paused)}"
     assert total_packages_checked > 0, "No packages checked despite media buys being present"
-    if paused_gaps:
-        pytest.xfail(
-            f"SPEC-PRODUCTION GAP: paused field not present on {len(paused_gaps)} of "
-            f"{total_packages_checked} package(s): {', '.join(paused_gaps)}. "
-            f"All other fields (budget, bid_price, product_id, flight dates) verified. "
-            f"FIXME"
-        )
+    assert not paused_gaps, (
+        f"paused is None on {len(paused_gaps)} of {total_packages_checked} package(s): "
+        f"{', '.join(paused_gaps)}. The pin declares it boolean with default false, so a "
+        f"parsed package resolves absence to False and never to None."
+    )
 
 
 @then("each package should include creative approval state when creatives are assigned")
@@ -1496,19 +1403,6 @@ def then_response_includes_one(ctx: dict, mb_id: str) -> None:
     buys = _get_media_buys(ctx)
     ids = {getattr(b, "media_buy_id", None) for b in buys}
     assert real_id in ids, f"Expected '{mb_id}' (real_id={real_id}) in response, got {ids}"
-
-
-@then(parsers.parse('the response package "{pkg_id}" should include a snapshot'))
-def then_package_has_snapshot(ctx: dict, pkg_id: str) -> None:
-    """Assert package includes snapshot data."""
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            if getattr(pkg, "package_id", None) == pkg_id:
-                snapshot = getattr(pkg, "snapshot", None)
-                assert snapshot is not None, f"Expected snapshot on package '{pkg_id}'"
-                return
-    raise AssertionError(f"Package '{pkg_id}' not found in response")
 
 
 @then("the snapshot should include as_of, staleness_seconds, impressions, and spend")
@@ -1704,28 +1598,6 @@ def then_error_invalid_status(ctx: dict, text: str) -> None:
     assert "status" in msg, (
         f"Expected 'status' to appear in error message (indicating this is a status validation error), got: {error}"
     )
-
-
-@then(parsers.parse('the response should include an empty media_buys array with error "{code}"'))
-def then_empty_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with specific error code in response."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty media_buys, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected error '{code}' in errors, got {codes}"
-
-
-@then(parsers.parse('empty media_buys with error "{code}"'))
-def then_empty_buys_with_error(ctx: dict, code: str) -> None:
-    """Assert empty media_buys with error (boundary table shorthand)."""
-    buys = _get_media_buys(ctx)
-    assert len(buys) == 0, f"Expected empty, got {len(buys)}"
-    resp = require_payload(ctx)
-    errors = getattr(resp, "errors", None) or []
-    codes = [e.get("code") if isinstance(e, dict) else getattr(e, "code", None) for e in errors]
-    assert code in codes, f"Expected '{code}' in response errors, got {codes}"
 
 
 def _current_suggestion(ctx: dict) -> str:
@@ -1933,38 +1805,6 @@ def then_rejection_reason_absent(ctx: dict) -> None:
                 actual_reason = getattr(approval, "rejection_reason", None)
                 assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
     assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse("rejection_reason should not be present in the approval entry"))
-def then_rejection_reason_not_present(ctx: dict) -> None:
-    """Assert rejection_reason is not present on ANY approval entry."""
-
-    buys = _get_media_buys(ctx)
-    checked = 0
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                checked += 1
-                actual_reason = getattr(approval, "rejection_reason", None)
-                assert actual_reason is None, f"Expected rejection_reason to not be present, got '{actual_reason}'"
-    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
-
-
-@then(parsers.parse("rejection_reason should be null or absent"))
-def then_rejection_reason_null_or_absent(ctx: dict) -> None:
-    """Assert rejection_reason is null or absent on ALL approval entries."""
-
-    buys = _get_media_buys(ctx)
-    checked = 0
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                checked += 1
-                actual_reason = getattr(approval, "rejection_reason", None)
-                assert actual_reason is None, f"Expected rejection_reason to be null or absent, got '{actual_reason}'"
-    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason null/absent"
 
 
 @then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))

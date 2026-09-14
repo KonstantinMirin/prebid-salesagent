@@ -22,6 +22,7 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
@@ -29,7 +30,8 @@ from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPConfigurationError,
-    AdCPCreativeRejectedError,
+    AdCPCreativeNotFoundError,
+    AdCPGoneError,
     AdCPProductNotFoundError,
     AdCPValidationError,
 )
@@ -55,7 +57,6 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories.media_buy import (
     default_request_packages,
@@ -879,7 +880,10 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative]
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            # VALIDATION_ERROR: a stored creative missing its required assets
+            # "violates business rules beyond schema validation" (3.1.1
+            # enums/error-code.json). Not CREATIVE_REJECTED — no policy review runs here.
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert exc_info.value.details.reasons is not None
@@ -909,10 +913,17 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+        # INVALID_STATE: "Operation is not permitted for the resource's current status"
+        # (3.1.1 enums/error-code.json). AdCPGoneError is this repo's carrier for it, and
+        # update_media_buy's gate splits terminal state from the field/format failures
+        # the same way. The STATE travels per creative, as a problem, not as a sentence.
+        with pytest.raises(AdCPGoneError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-        assert exc_info.value.details.reasons is not None
+        problems = exc_info.value.details.problems or []
+        assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
+            ("creative", mock_creative.creative_id, mock_creative.status)
+        ]
 
     def test_creative_rejected_state_rejected(self):
         """UC-002-C03: creative with status=rejected rejected.
@@ -939,10 +950,17 @@ class TestCreateMediaBuyCreativeValidation:
         session = MagicMock()
         session.scalars.return_value.all.return_value = [mock_creative]
 
-        with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+        # INVALID_STATE: "Operation is not permitted for the resource's current status"
+        # (3.1.1 enums/error-code.json). AdCPGoneError is this repo's carrier for it, and
+        # update_media_buy's gate splits terminal state from the field/format failures
+        # the same way. The STATE travels per creative, as a problem, not as a sentence.
+        with pytest.raises(AdCPGoneError) as exc_info:
             _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
-        assert exc_info.value.details.reasons is not None
+        problems = exc_info.value.details.problems or []
+        assert [(p.subject_type, p.subject_id, p.rejected_value) for p in problems] == [
+            ("creative", mock_creative.creative_id, mock_creative.status)
+        ]
 
     def test_creative_format_mismatch_rejected(self):
         """UC-002-C04: creative format not matching product format rejected.
@@ -991,7 +1009,7 @@ class TestCreateMediaBuyCreativeValidation:
             product_result.all.return_value = [mock_product]
             session.scalars.side_effect = [creative_result, product_result]
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             assert exc_info.value.details.reasons is not None
@@ -1069,7 +1087,7 @@ class TestCreateMediaBuyCreativeValidation:
             session = MagicMock()
             session.scalars.return_value.all.return_value = [mock_creative_1, mock_creative_2]
 
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
 
             # Both errors should be accumulated in a single exception
@@ -2327,7 +2345,7 @@ class TestUpdateMediaBuyCreativeIds:
             # No creatives found via repository.
             mock_uow.creatives.get_by_ids.return_value = []
 
-            with pytest.raises(AdCPCreativeRejectedError):
+            with pytest.raises(AdCPCreativeNotFoundError):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_creative_error_state_rejected(self):
@@ -2412,7 +2430,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
-            with pytest.raises(AdCPCreativeRejectedError) as _ei:
+            with pytest.raises(AdCPGoneError) as _ei:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
 
@@ -2498,7 +2516,7 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.creatives.get_by_ids.return_value = [mock_creative]
             mock_uow.products.get_by_id.return_value = mock_product
 
-            with pytest.raises(AdCPCreativeRejectedError):
+            with pytest.raises(AdCPValidationError):
                 _update_media_buy_impl(req=req, identity=identity)
 
     def test_change_set_computation(self):

@@ -51,7 +51,7 @@ class TestGenerativeCreatives:
                     "status": "draft",
                     "context_id": "ctx-123",
                     "creative_output": {
-                        "assets": {"headline": {"text": "Generated headline"}},
+                        "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
                         "output_format": {"url": "https://example.com/generated.html"},
                     },
                 },

@@ -8,10 +8,10 @@ exercised through the full _get_products_impl pipeline with real DB data.
 """
 
 import pytest
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import TenantContext
-from src.core.testing_hooks import AdCPTestContext
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv
 

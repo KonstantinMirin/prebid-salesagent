@@ -43,8 +43,9 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPCreativeRejectedError,
+    AdCPCreativeNotFoundError,
     AdCPFormatNotFoundError,
+    AdCPGoneError,
     AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
     AdCPPersistedStateError,
@@ -385,24 +386,29 @@ def _validate_creatives_before_adapter_call(
     if missing_ids:
         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
         logger.error(log_safe(error_msg))
-        # FIXME(#1598): pinned enum says CREATIVE_NOT_FOUND MUST be uniform for
-        # unowned creative_ids, but this surface emits CREATIVE_REJECTED (the
-        # BR-UC-003 ext-i storyboard cell grades it) — deferred pending
-        # upstream reconciliation.
-        raise AdCPCreativeRejectedError(
-            details=CreativeRejectionDetails(creative_ids=sorted(missing_ids)),
+        # 3.1.1 enums/error-code.json: "Sellers MUST return this code uniformly for any
+        # creative_id not owned by the calling account." The deferral that stood here
+        # cited the BR-UC-003 ext-i cell as grading CREATIVE_REJECTED; that cell asks for
+        # CREATIVE_NOT_FOUND, so the FIXME was resolved against a reading of the grader
+        # that the grader did not support.
+        raise AdCPCreativeNotFoundError(
+            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
+            field=PACKAGES_FIELD,
         )
 
     # Validate each creative has required fields
     validation_errors = []
+    # Terminal-state creatives are collected separately: the pinned enum codes
+    # "operation is not permitted for the resource's current status" as INVALID_STATE,
+    # a different condition from the field/format failures below, and update_media_buy
+    # already splits them the same way (_validate_creatives_for_assignment).
+    bad_state: list[Any] = []
     for creative in creatives_list:
         creative_data = creative.data or {}
 
         # BR-RULE-026: Reject creatives in terminal error states
         if hasattr(creative, "status") and creative.status in ("error", "rejected"):
-            validation_errors.append(
-                f"Creative {creative.creative_id} has status '{creative.status}' and cannot be used in a media buy"
-            )
+            bad_state.append(creative)
             continue
 
         # Get format specification from creative agent (uses in-memory cache with 30min TTL).
@@ -456,6 +462,20 @@ def _validate_creatives_before_adapter_call(
             validation_errors.append(
                 f"Reference creative {creative.creative_id} missing dimensions (width={width}, height={height})"
             )
+
+    if bad_state:
+        # The STATE per creative, not a joined sentence naming the ids: per-creative
+        # outcomes are per-ENTITY problems. Same shape and same code as the
+        # update_media_buy gate, so one condition reads identically on both tools.
+        raise AdCPGoneError(
+            details=InvalidStateDetails(
+                problems=[
+                    ErrorProblem(subject_type="creative", subject_id=c.creative_id, rejected_value=c.status)
+                    for c in bad_state
+                ]
+            ),
+            field=PACKAGES_FIELD,
+        )
 
     # --- Format compatibility check: creative format vs product accepted formats ---
     # Build creative_id -> format mapping from fetched creatives
@@ -511,8 +531,14 @@ def _validate_creatives_before_adapter_call(
             "The following creatives have validation errors:\n" + "\n".join(f"  • {err}" for err in validation_errors)
         )
         logger.error(f"[PRE-VALIDATION] {error_msg}")
-        raise AdCPCreativeRejectedError(
-            details=CreativeRejectionDetails(reasons=validation_errors),
+        # A stored creative missing its required assets, or carrying a format the
+        # product does not accept, "violates business rules beyond schema validation"
+        # (3.1.1 enums/error-code.json) -- VALIDATION_ERROR. Not CREATIVE_REJECTED,
+        # which that enum defines as a content-policy review failure and shapes as
+        # {policy_id, policy_url, reasons}; no policy review runs on this path.
+        raise AdCPValidationError(
+            details=ValidationDetails(reasons=validation_errors),
+            field=PACKAGES_FIELD,
         )
 
 
@@ -1705,13 +1731,17 @@ async def _validate_and_convert_format_ids(
     registry = CreativeAgentRegistry()
     validated_format_ids = []
 
-    # Get registered agents for this tenant
+    # Get registered agents for this tenant.
+    #
+    # Both sides of the registration check go through `canonical_agent_url` — the AdCP
+    # canonical form, which PRESERVES the path. This check used to run on
+    # `validation.normalize_agent_url`, which additionally stripped `/mcp`, `/a2a` and
+    # `/.well-known/adcp/sales`. Nothing in the pin asks for that, and it decided an
+    # AUTHORIZATION outcome: an agent registered at `https://x.com` also authorized
+    # `https://x.com/mcp`, and one host serving MCP at /mcp and A2A at /a2a read as a
+    # single agent.
     registered_agents = registry._get_tenant_agents(tenant_id)
-    # Normalize agent URLs for consistent comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-    # This ensures all URL variations match: "https://example.com/mcp/" -> "https://example.com"
-    from src.core.validation import normalize_agent_url
-
-    registered_agent_urls = {normalize_agent_url(agent.agent_url) for agent in registered_agents}
+    registered_agent_urls = {canonical_agent_url(agent.agent_url) for agent in registered_agents}
 
     for idx, fmt_id in enumerate(format_ids):
         # Every rejection here is per-package AND per-format, so the position and the
@@ -1740,10 +1770,9 @@ async def _validate_and_convert_format_ids(
                 field=field, details=ValidationDetails(**where, agent_url=agent_url, format_id=format_id)
             )
 
-        # VALIDATION: Check agent is registered
-        # Normalize incoming agent_url for comparison (strips /mcp, /a2a, /.well-known/*, trailing slashes)
-        normalized_agent_url = normalize_agent_url(agent_url)
-        if normalized_agent_url not in registered_agent_urls:
+        # VALIDATION: Check agent is registered. `agent_url` is already canonical (above),
+        # and so is every member of `registered_agent_urls` — one form, both sides.
+        if agent_url not in registered_agent_urls:
             raise AdCPAuthorizationError(field=field, details=EntityRefDetails(**where, agent_url=agent_url))
 
         # VALIDATION: Verify format exists on agent
@@ -1774,9 +1803,10 @@ from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
     ConfigurationDetails,
-    CreativeRejectionDetails,
+    CreativeRefDetails,
     EntityRefDetails,
     ErrorProblem,
+    InvalidStateDetails,
     PricingValidationDetails,
     ProductRefDetails,
     TimeWindowDetails,
@@ -3126,58 +3156,23 @@ async def _create_media_buy_impl(
 
             # If found and has format_ids, validate and use those
             if matching_package and matching_package.format_ids:
-                # Validate that requested formats are supported by product
-                # Format is composite key: (agent_url, id) per AdCP spec
-                product_format_keys: set[tuple[str | None, str]] = set()
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        normalized_url = canonical_agent_url(agent_url) if agent_url else None
-                        product_format_keys.add((normalized_url, fmt.id))
+                from src.core.format_resolver import (
+                    format_display,
+                    format_identity_or_none,
+                    product_format_identities,
+                )
 
-                # Build set of requested format keys for comparison
-                requested_format_keys: set[tuple[str | None, str]] = set()
-                for fmt in matching_package.format_ids:
-                    normalized_url = canonical_agent_url(fmt.agent_url) if fmt.agent_url else None
-                    requested_format_keys.add((normalized_url, fmt.id))
-
-                def format_display(url: str | None, fid: str) -> str:
-                    """Format a (url, id) pair for display, handling trailing slashes."""
-                    if not url:
-                        return fid
-                    # Remove trailing slash from URL to avoid double slashes
-                    # Convert to string in case it's an AnyUrl object
-                    clean_url = str(url).rstrip("/")
-                    return f"{clean_url}/{fid}"
-
-                def _has_supported_key(url: str | None, fid: str, keys: set = product_format_keys) -> bool:
-                    """Check if (url, fid) is supported, allowing an '/mcp' URL variant.
-
-                    This does not mutate any of the underlying key sets; it only checks
-                    for the presence of either the exact key or an alternative where
-                    '/mcp' is appended to the end of the URL path.
-
-                    Args:
-                        url: The format URL to check
-                        fid: The format ID to check
-                        keys: The set of supported (url, fid) tuples (bound at function definition)
-                    """
-                    # Exact match first
-                    if (url, fid) in keys:
-                        return True
-
-                    # If URL provided, also try with '/mcp' appended (idempotent if already present)
-                    if url:
-                        # Convert to string in case it's an AnyUrl object
-                        base = str(url).rstrip("/")
-                        mcp_url = base if base.endswith("/mcp") else f"{base}/mcp"
-                        if (mcp_url, fid) in keys:
-                            return True
-
-                    return False
+                # Validate that requested formats are supported by product.
+                # Identity is (canonical agent_url, id) per the pinned core/format-id.json,
+                # asked of format_resolver. This branch used to additionally accept a
+                # supported key with "/mcp" APPENDED to the requested URL — an unmandated
+                # widening that made one host's MCP endpoint and its bare origin the same
+                # agent; the path is part of the canonical form and stays part of it.
+                product_format_keys = product_format_identities(pkg_product.format_ids)
+                requested_format_keys = product_format_identities(matching_package.format_ids)
 
                 unsupported_formats = [
-                    format_display(url, fid) for url, fid in requested_format_keys if not _has_supported_key(url, fid)
+                    format_display(key) for key in sorted(requested_format_keys - product_format_keys)
                 ]
 
                 if unsupported_formats:
@@ -3189,35 +3184,27 @@ async def _create_media_buy_impl(
                             f"Please configure format_ids on the product or contact the publisher."
                         )
                     else:
-                        supported_formats_str = ", ".join(
-                            [format_display(url, fid) for url, fid in product_format_keys]
-                        )
+                        supported_formats_str = ", ".join(format_display(key) for key in sorted(product_format_keys))
                         error_msg = (
                             f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
                             f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
                         )
                     raise AdCPValidationError()
 
-                # Merge dimensions from product's format_ids if request format_ids don't have them
-                # This handles the case where buyer specifies format_id but not dimensions
-                # Build lookup of product format dimensions by (normalized_url, id)
-                product_format_dimensions: dict[tuple[str | None, str], tuple[int | None, int | None, float | None]]
+                # Merge dimensions from product's format_ids if request format_ids don't have them.
+                # This handles the case where buyer specifies a format but not dimensions.
+                # Keyed on the same federation identity the support check above compares on,
+                # so a format that PASSED that check cannot then miss its own dimensions.
+                product_format_dimensions: dict[tuple[str, str], tuple[int | None, int | None, float | None]]
                 product_format_dimensions = {}
-                if pkg_product.format_ids:
-                    for fmt in pkg_product.format_ids:
-                        agent_url = fmt.agent_url
-                        fmt_id = fmt.id
-                        normalized_url = canonical_agent_url(agent_url) if agent_url else None
-                        if fmt_id:
-                            product_format_dimensions[(normalized_url, fmt_id)] = (
-                                fmt.width,
-                                fmt.height,
-                                fmt.duration_ms,
-                            )
+                for fmt in pkg_product.format_ids or []:
+                    fmt_identity = format_identity_or_none(fmt)
+                    if fmt_identity:
+                        product_format_dimensions[fmt_identity] = (fmt.width, fmt.height, fmt.duration_ms)
 
                 # Process request format_ids, merging dimensions from product if missing
                 for req_fmt in matching_package.format_ids:
-                    normalized_url = canonical_agent_url(req_fmt.agent_url) if req_fmt.agent_url else None
+                    req_fmt_identity = format_identity_or_none(req_fmt)
                     # Check if request format has dimensions
                     if req_fmt.width is not None and req_fmt.height is not None:
                         # Request has dimensions, convert to our FormatId type
@@ -3232,7 +3219,7 @@ async def _create_media_buy_impl(
                         )
                     else:
                         # Try to get dimensions from product's format_ids
-                        product_dims = product_format_dimensions.get((normalized_url, req_fmt.id))
+                        product_dims = product_format_dimensions.get(req_fmt_identity) if req_fmt_identity else None
                         if product_dims and (product_dims[0] is not None or product_dims[1] is not None):
                             # Merge dimensions from product
                             format_ids_to_use.append(
@@ -3606,11 +3593,11 @@ async def _create_media_buy_impl(
                         error_msg = f"Creative IDs not found: {', '.join(sorted(missing_ids))}"
                         logger.error(error_msg)
                         ctx_manager.update_workflow_step(step.step_id, status="failed", error_message=error_msg)
-                        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
-                        # CREATIVE_NOT_FOUND uniformity MUST — deferred pending
-                        # upstream reconciliation.
-                        raise AdCPCreativeRejectedError(
-                            details=CreativeRejectionDetails(creative_ids=sorted(missing_ids)),
+                        # Same MUST as the pre-adapter gate above: uniform
+                        # CREATIVE_NOT_FOUND for any creative_id not owned by the caller.
+                        raise AdCPCreativeNotFoundError(
+                            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
+                            field=PACKAGES_FIELD,
                         )
 
                     # Validate creative formats against product formats BEFORE creating assignments
@@ -3662,12 +3649,16 @@ async def _create_media_buy_impl(
                                             ctx_manager.update_workflow_step(
                                                 step.step_id, status="failed", error_message=format_error
                                             )
-                                            # A creative whose format is not accepted by the product is a
-                                            # rejected creative (CREATIVE_REJECTED), not a generic request
-                                            # validation failure — matching the sibling pre-adapter
-                                            # validation raise. Carry a remediation suggestion (POST-F3).
-                                            raise AdCPCreativeRejectedError(
-                                                details=CreativeRejectionDetails(
+                                            # A format outside the product's declared set is a
+                                            # BUSINESS-RULE violation: adcp 3.1.1's error-code enum
+                                            # codes that VALIDATION_ERROR, and reserves
+                                            # CREATIVE_REJECTED for "Creative failed content policy
+                                            # review". The creative is fine; the ASSIGNMENT is what
+                                            # this product does not permit. Converged with the
+                                            # sync_creatives and update paths, which raise the same
+                                            # class for the identical condition.
+                                            raise AdCPValidationError(
+                                                details=ValidationDetails(
                                                     creative_id=creative_id, product_id=package.product_id
                                                 ),
                                             )

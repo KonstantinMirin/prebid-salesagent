@@ -763,9 +763,32 @@ def iter_architecture_guard_trees(
 # ---------------------------------------------------------------------------
 
 
+#: Third-party source copied into the tree. Excluded from every structural scan
+#: because these guards grade AUTHORSHIP decisions -- which repository to reach
+#: through, which error type to raise, whether a URL was rebuilt -- and nobody
+#: here made those decisions. ``src/vendor/__init__.py`` forbids editing the
+#: files, so a violation flagged in one could not be fixed anyway; the only
+#: honest response would be an allowlist entry, and these guards deliberately
+#: have none.
+#:
+#: This code was ALREADY in the dependency tree and already unscanned when it
+#: lived in site-packages. Copying it under ``src/`` for a version pin does not
+#: make it ours, and should not silently enrol it in checks it never passed.
+#: ``test_architecture_vendored_code.py`` keeps the exclusion from becoming a
+#: hiding place.
+VENDOR_DIR = "vendor"
+
+
 def src_python_files(repo: Path) -> Iterator[Path]:
-    """Every .py file under src/."""
-    yield from (repo / "src").rglob("*.py")
+    """Every .py file under src/, EXCEPT vendored third-party source.
+
+    See :data:`VENDOR_DIR`.
+    """
+    vendor_root = repo / "src" / VENDOR_DIR
+    for path in (repo / "src").rglob("*.py"):
+        if vendor_root in path.parents:
+            continue
+        yield path
 
 
 def iter_workflow_files(repo: Path) -> Iterator[Path]:
@@ -1511,7 +1534,15 @@ def scan_src(
     suppressed_exempt: dict[str, list[int]] = {}
     suppressed_prefix: dict[str, list[int]] = {}
 
+    vendor_prefix = f"src/{VENDOR_DIR}/"
     for tree, rel_path in iter_module_trees(scan_dirs if scan_dirs is not None else [root]):
+        # Vendored third-party source is out of scope for EVERY src-scanning guard, for
+        # the reasons on VENDOR_DIR. Silent rather than a `skip_prefixes` entry: that axis
+        # raises when a prefix flags nothing, which would force each guard to declare a
+        # boundary only some of them actually need. Bounded by
+        # tests/unit/test_architecture_vendored_code.py.
+        if rel_path.replace("\\", "/").startswith(vendor_prefix):
+            continue
         lines = detector(tree)
         if not lines:
             continue

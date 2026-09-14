@@ -32,11 +32,12 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPContextNotFoundError,
-    AdCPCreativeRejectedError,
+    AdCPCreativeNotFoundError,
     AdCPGoneError,
     AdCPInvalidRequestError,
     AdCPValidationError,
 )
+from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
@@ -58,7 +59,7 @@ from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.errors.details import (
     AdapterFailureDetails,
     CapabilityRefusalDetails,
-    CreativeRejectionDetails,
+    CreativeRefDetails,
     EntityRefDetails,
     ErrorProblem,
     InvalidStateDetails,
@@ -173,42 +174,41 @@ def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     return actions
 
 
-def _normalize_creative_agent_url(url: str | None) -> str | None:
-    """Normalize a creative/format agent_url for comparison.
-
-    Strips a trailing slash and an optional ``/mcp`` suffix so the two
-    URL variants a buyer may use compare equal.
-    """
-    if not url:
-        return None
-    return url.rstrip("/").removesuffix("/mcp")
-
-
 def _validate_creatives_for_assignment(
     creative_ids: list[str],
     *,
     uow: "MediaBuyUoW",
     principal_id: str,
     product: "DBProduct | None",
+    field: str,
     product_name: str | None = None,
 ) -> None:
     """Validate a set of creatives is assignable to a package.
 
     Shared by both the ``creative_ids`` and ``creative_assignments`` update
     paths so the existence / status / format-compatibility rules live in one
-    place (DRY). Checks run in order and raise ``AdCPCreativeRejectedError``
-    (wire code ``CREATIVE_REJECTED``, correctable) on the first failing
-    category, always carrying a ``suggestion`` for buyer recovery:
+    place (DRY). Checks run in order and raise on the first failing category,
+    each with the code adcp 3.1.1's ``enums/error-code.json`` defines for it --
+    three different conditions, so three different codes:
 
     1. Existence — every ``creative_id`` exists for this principal within the
-       tenant. The creatives PK is composite (creative_id, tenant_id,
-       principal_id): another principal's creative resolves to "not found"
-       (uniform, no field leak) — never passes this gate on their row, which
-       the assignment insert would then violate on the composite FK.
-    2. Status — none are in ``error`` or ``rejected`` state.
+       tenant. ``CREATIVE_NOT_FOUND``, which the enum makes uniform for any
+       creative_id not owned by the caller. The creatives PK is composite
+       (creative_id, tenant_id, principal_id): another principal's creative
+       resolves to "not found" — never passes this gate on their row, which the
+       assignment insert would then violate on the composite FK.
+    2. Status — none are in ``error`` or ``rejected`` state. ``INVALID_STATE``:
+       "Operation is not permitted for the resource's current status".
     3. Format compatibility — each creative's ``(agent_url, format)`` is
-       supported by the package's product ``format_ids``. A product with no
+       supported by the package's product ``format_ids``. ``VALIDATION_ERROR``:
+       "violates business rules beyond schema validation". A product with no
        declared formats imposes no restriction.
+
+    None of the three is ``CREATIVE_REJECTED``. The pin shapes that code's
+    details as ``{policy_id, policy_url, reasons}``
+    (``error-details/creative-rejected.json``) and describes it as "Creative
+    failed content policy review" — a policy outcome none of these paths reach.
+    All three emitted it before; see the commit that split them.
 
     Args:
         creative_ids: Creative IDs referenced by the package update.
@@ -216,12 +216,17 @@ def _validate_creatives_for_assignment(
         principal_id: The requesting buyer's principal (from ResolvedIdentity).
         product: The package's product ORM record (or ``None`` if the package
             has no resolvable product, in which case the format check is skipped).
+        field: JSON pointer to the array parameter the ids came from — the two
+            callers pass different ones (``packages[i].creative_ids`` vs
+            ``packages[i].creative_assignments``), and the spec asks the pointer
+            to name the array itself when the failure is about the collection.
         product_name: Display name for error messages (falls back to the
             product's name, then the product_id).
 
     Raises:
-        AdCPCreativeRejectedError: If any creative is not found, in a terminal
-            state, or has a format incompatible with the product.
+        AdCPCreativeNotFoundError: If any creative_id is not owned by this principal.
+        AdCPGoneError: If any creative is in a terminal (``error``/``rejected``) state.
+        AdCPValidationError: If any creative's format is not one the product declares.
     """
     if not creative_ids:
         return
@@ -234,18 +239,31 @@ def _validate_creatives_for_assignment(
     found_by_id = {c.creative_id: c for c in creatives_list}
     missing_ids = [cid for cid in requested_ids if cid not in found_by_id]
     if missing_ids:
-        # FIXME(#1598): CREATIVE_REJECTED here vs the pinned enum's
-        # CREATIVE_NOT_FOUND uniformity MUST — the BR-UC-003 ext-i storyboard
-        # cell grades CREATIVE_REJECTED; deferred pending upstream reconciliation.
-        raise AdCPCreativeRejectedError(details=CreativeRejectionDetails(creative_ids=missing_ids))
+        # The ids come back. The anti-enumeration MUST is about not distinguishing
+        # "exists elsewhere" from "does not exist" -- it is not a vow of silence, and
+        # 3.1.1 L3/error-handling.mdx says so: "Sellers MAY enumerate specific
+        # unresolvable elements in error.details -- but only when the elements were
+        # supplied verbatim by the caller." These were. Every unresolvable id is listed
+        # the SAME way, so a co-tenant's creative and a nonexistent one are
+        # indistinguishable in the response, which is what the MUST actually protects.
+        # `field` names the ARRAY parameter, per the same paragraph.
+        raise AdCPCreativeNotFoundError(
+            details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
+            field=field,
+        )
 
     # (b) Status — terminal-state creatives are not assignable.
     bad_state = [c for c in creatives_list if c.status in ("error", "rejected")]
     if bad_state:
-        raise AdCPCreativeRejectedError(
+        # INVALID_STATE: "Operation is not permitted for the resource's current status".
+        # NOT CREATIVE_REJECTED -- the pin shapes that code's details as
+        # {policy_id, policy_url, reasons} (error-details/creative-rejected.json), a
+        # content-policy review outcome this path cannot populate. AdCPGoneError is this
+        # repo's INVALID_STATE carrier (see the state-machine raises below).
+        raise AdCPGoneError(
             # The STATE per creative, not a joined sentence duplicating creative_ids.
             # Per-creative outcomes are per-ENTITY problems, not fields.
-            details=CreativeRejectionDetails(
+            details=InvalidStateDetails(
                 problems=[
                     ErrorProblem(subject_type="creative", subject_id=c.creative_id, rejected_value=c.status)
                     for c in bad_state
@@ -260,33 +278,35 @@ def _validate_creatives_for_assignment(
 
     display_name = product_name or getattr(product, "name", None) or getattr(product, "product_id", "")
 
-    # Build the set of supported (normalized_agent_url, format_id) pairs.
-    supported_formats: set[tuple[str | None, str]] = set()
-    for fmt in product.format_ids:
-        if isinstance(fmt, dict):
-            agent_url = fmt.get("agent_url")
-            format_id = fmt.get("id") or fmt.get("format_id")
-            if format_id:
-                supported_formats.add((_normalize_creative_agent_url(agent_url), format_id))
-
+    # Identity is (canonical agent_url, id) per the pinned core/format-id.json, asked of
+    # format_resolver so this path and the sync-creatives assignment path cannot disagree
+    # about whether a creative's format is one the product declares.
+    supported_formats = product_format_identities(product.format_ids)
     if not supported_formats:
         return  # No usable format restrictions — allow all.
 
     incompatible: list[str] = []
     for creative in creatives_list:
-        creative_pair = (_normalize_creative_agent_url(creative.agent_url), creative.format)
-        if creative_pair not in supported_formats:
-            display = f"{creative.agent_url}/{creative.format}" if creative.agent_url else str(creative.format)
+        creative_identity = format_identity_or_none({"agent_url": creative.agent_url, "id": creative.format})
+        if creative_identity is None or creative_identity not in supported_formats:
+            display = format_display(creative_identity) if creative_identity else str(creative.format)
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:
-        supported_display = ", ".join(
-            f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in sorted(supported_formats, key=lambda p: p[1])
-        )
-        raise AdCPCreativeRejectedError(
+        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats, key=lambda p: p[1]))
+        # A format outside the product's declared set is a BUSINESS-RULE violation, which
+        # adcp 3.1.1's enums/error-code.json codes as VALIDATION_ERROR ("violates business
+        # rules beyond schema validation"). It is not CREATIVE_REJECTED: that enum entry
+        # reads "Creative failed content policy review ... revise the creative per the
+        # seller's advertising_policies", and CREATIVE_VALUE_NOT_ALLOWED's own text calls
+        # it "generic content-policy failure". The creative here is fine; the ASSIGNMENT
+        # is what the product does not permit. (#1417 chose CREATIVE_REJECTED as canonical
+        # for a rejected creative, which is right for a content-policy outcome and wrong
+        # for this one; the class is the authority on the code, so the fix is the class.)
+        raise AdCPValidationError(
             # FIXME(#2099): the product's DISPLAY NAME is prose, and product_id already
             # identifies it. Preserved for now because removing it changes the wire.
-            details=CreativeRejectionDetails(accepted_values=[supported_display], product_id=display_name),
+            details=ValidationDetails(accepted_values=[supported_display], product_id=display_name),
         )
 
 
@@ -823,6 +843,7 @@ def _update_media_buy_impl(
                             uow=uow,
                             principal_id=principal_id,
                             product=product,
+                            field=package_field_path("creative_ids", pkg_index),
                         )
 
                         # Get existing assignments for this package
@@ -988,6 +1009,7 @@ def _update_media_buy_impl(
                             uow=uow,
                             principal_id=principal_id,
                             product=ca_product,
+                            field=package_field_path("creative_assignments", pkg_index),
                         )
 
                         # Validate placement_ids against product's available placements (adcp#208)

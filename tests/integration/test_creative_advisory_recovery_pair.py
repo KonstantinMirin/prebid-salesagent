@@ -456,20 +456,20 @@ class TestTypedErrorForwardingKeepsTheTriple:
 
     @pytest.mark.parametrize("transport", _ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_unknown_format_advisory_carries_code_recovery_and_field(self, integration_db, transport):
-        """An unknown format_id -> VALIDATION_ERROR / correctable / field=format_id."""
+        """An unknown format_id -> REFERENCE_NOT_FOUND / correctable / field=format_id."""
         creative_id = f"c_typed_{uuid.uuid4().hex[:8]}"
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             # The agent genuinely does not expose this format: fetch_format_spec
             # returns None and _validate_creative_input raises the typed
-            # AdCPValidationError(field="format_id") that _sync.py forwards.
+            # AdCPFormatNotFoundError(field="format_id") that _sync.py forwards.
             env.mock["registry"].return_value.get_format = AsyncMock(return_value=None)
 
             result = env.call_via(transport, creatives=[_creative(creative_id)])
 
             advisory = _advisory(result, creative_id)
-            _assert_pair(advisory, code="VALIDATION_ERROR", recovery="correctable")
+            _assert_pair(advisory, code="REFERENCE_NOT_FOUND", recovery="correctable")
             assert advisory.get("field") == "format_id", (
                 f"advisory.field={advisory.get('field')!r}, expected 'format_id' — the typed error's "
                 "own field is what names the input to fix; dropping it strands the buyer"

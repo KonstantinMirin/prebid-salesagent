@@ -21,6 +21,7 @@ from tests.factories.format import (
     make_fixed_renders,
     make_renders,
     make_responsive_renders,
+    pick_reference_format,
 )
 
 # ── Background steps (apply to every scenario) ──────────────────────
@@ -47,7 +48,6 @@ def given_tenant_resolvable(ctx: dict) -> None:
     ctx.setdefault("tenant_id", "test_tenant")
 
 
-@given("a tenant has completed setup checklist")
 @given("a tenant exists with completed setup checklist")
 def given_tenant_setup_complete(ctx: dict) -> None:
     """Tenant has completed all setup steps (Background)."""
@@ -75,11 +75,18 @@ def given_creative_agent_registered(ctx: dict) -> None:
 
 @given("the creative agent registry has formats across multiple categories")
 def given_registry_multi_categories(ctx: dict) -> None:
-    """Registry has formats spanning multiple categories (display, video, etc.)."""
+    """Registry has formats spanning multiple categories, drawn from the reference catalog.
+
+    Real formats rather than minted ids: the live e2e stack serves only the captured
+    reference catalog, so a minted ``fmt_N`` could never be realized there
+    (E2EUnsupportedSetup, the scenario graded nothing), and a minted format carries no
+    assets, so POST-S2 graded nothing in-process either. The three are chosen without
+    ``pixel_tracker`` assets, which the pinned Format.assets union does not admit
+    (adcp#7338); the catalog has no such audio format, so native stands in for it.
+    """
     ctx["registry_formats"] = [
-        FormatFactory.build(name="banner", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="pre-roll", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="audio-spot", type=CATEGORY_MAP["audio"]),
+        pick_reference_format(category, without_asset_type="pixel_tracker")
+        for category in ("display", "video", "native")
     ]
     _sync_registry(ctx)
 

@@ -266,6 +266,26 @@ async def invoke_tool(
     # IS what arrived. Nothing between here and the stamp may read it, pass it, or set it.
     echo = req.get_context()
 
+    # The INBOUND half of version negotiation, FIRST and before anything reads the database.
+    # A version pin is a property of the request in exactly the sense the account and the
+    # idempotency key are, so it belongs at the one chokepoint rather than inside a tool;
+    # AdCP 3.1.1 ``compliance/universal/error-compliance.yaml`` grades it on ``get_products``.
+    # A release this build does not speak ends the exchange, so a rejected pin must not
+    # resolve a credential, a tenant or an account, must not hash the request, and must not be
+    # answered from the replay cache. The pins are declared fields on the request (the SDK's
+    # ``AdcpVersionEnvelope``), so the validated object already carries them and nothing is
+    # parsed a second time.
+    #
+    # This check used to sit next to the OUTBOUND stamp, which reads well -- both concern the
+    # version -- and orders wrong: the stamp can only run last, so pairing them put the check
+    # after identity resolution, where 18d73f887 later moved the account load. A request that
+    # named an account was then answered on auth before its unsupported pin was ever read.
+    # ``_failed`` without an identity, the form ``validated_request`` uses: none is resolved yet.
+    try:
+        negotiate_adcp_version(req.get_adcp_version(), req.get_adcp_major_version())
+    except Exception as exc:
+        _failed(protocol, tool_name, exc, echo)
+
     # In a worker thread because ``_resolve_identity`` is SYNC and hits the database
     # (tenant detection, the principal lookup, and the account lookup when the request names
     # one); psycopg2 has no async path. Its own block, so ``identity`` is bound wherever it is
@@ -296,42 +316,14 @@ async def invoke_tool(
     # bans importing ToolError at all), and a2a's A2AError is raised by the A2A handler BEFORE
     # dispatch. Recorded HERE because this is the only place holding all three things a record
     # needs: the tool name, the resolved identity, and the exception.
+    #
+    # An implementation is called with the request and the caller, and nothing else. There is
+    # no per-transport channel here, so no transport can hand an implementation a value the
+    # others cannot.
     try:
-        return await _invoke_stamped(echo, tool_name, spec.impl, req, identity)
+        return _served(echo, await _invoke(tool_name, spec.impl, req, identity))
     except Exception as exc:
         _failed(protocol, tool_name, exc, echo, identity)
-
-
-async def _invoke_stamped(
-    echo: ContextObject | None,
-    tool_name: str,
-    impl: Callable[..., Any],
-    req: BuyerRequest,
-    identity: PublicIdentity,
-) -> AdcpResponse:
-    """Run ``tool_name`` for a request that arrived over a transport.
-
-    An implementation is called with the request and the caller, and nothing else. There is
-    no per-transport channel here, so no transport can hand an implementation a value the
-    others cannot.
-
-    The response comes back stamped with the release this build served. That is an envelope
-    field like any other -- every response model declares ``adcp_version``, inherited from the
-    SDK's ``AdcpVersionEnvelope`` -- and it is set HERE for the same reason the account and the
-    idempotency key are read here: it is a property of the seller and the call, not of the
-    work, so an implementation neither knows it nor should have to. AdCP 3.1.1
-    ``compliance/universal/version-negotiation.yaml`` grades it at the envelope root with
-    ``envelope_field_present`` and ``envelope_field_pattern`` (advisory at 3.1, MUST at 4.0).
-
-    The INBOUND half of that negotiation runs here too, and FIRST. A version pin is a property
-    of the request in exactly the sense the account and the key are, so it belongs at the one
-    chokepoint rather than inside a tool; ``compliance/universal/error-compliance.yaml`` grades
-    it on ``get_products``. Running before the account is enriched and before the request is
-    hashed is deliberate: a rejected pin should not resolve an account, touch the replay cache,
-    or be answered from it.
-    """
-    negotiate_adcp_version(req.get_adcp_version(), req.get_adcp_major_version())
-    return _served(echo, await _invoke(tool_name, impl, req, identity))
 
 
 def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) -> Served:
@@ -340,6 +332,15 @@ def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) 
     THE one assignment for both, on every outcome: a fresh run, a replayed one and a failure
     all pass through it, so a replay echoes the release that is serving it and the context of
     the caller being served, rather than the context of whichever request filled the cache.
+
+    The release is an envelope field like any other -- every response model declares
+    ``adcp_version``, inherited from the SDK's ``AdcpVersionEnvelope`` -- and it is set HERE
+    for the same reason the account and the idempotency key are read at the boundary: it is a
+    property of the seller and the call, not of the work, so an implementation neither knows
+    it nor should have to. AdCP 3.1.1 ``compliance/universal/version-negotiation.yaml`` grades
+    it at the envelope root with ``envelope_field_present`` and ``envelope_field_pattern``
+    (advisory at 3.1, MUST at 4.0). The INBOUND half of that negotiation is a precondition
+    rather than an envelope field, and runs at the top of ``invoke_tool``.
     """
     response.adcp_version = SERVED_ADCP_VERSION
     # ``object.__setattr__``, not assignment: ``AdcpResponse.__setattr__`` refuses ``context``

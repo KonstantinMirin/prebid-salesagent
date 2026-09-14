@@ -537,6 +537,7 @@ class TransportResult:
         mirror, because ``AdcpErrorResponse`` carries both and an emitter is
         free to carry only one.
         """
+        from tests.helpers import locate_envelope_errors
         from tests.helpers.pinned_schema import validator_for
 
         envelope = self.wire_error_envelope
@@ -546,7 +547,13 @@ class TransportResult:
             f"{type(self.error).__name__ if self.error else None}). The call either succeeded "
             f"or failed before reaching a transport, so there is no envelope to check."
         )
-        entries = envelope.get("errors") or ([envelope["adcp_error"]] if "adcp_error" in envelope else [])
+        # The payload-layer entries come through THE locator, never a local read of
+        # envelope["errors"]: a second parser here is free to drift from the one every
+        # other reader resolves through. The fallback below is not a duplicate of it --
+        # the pinned core/protocol-envelope.json declares ``adcp_error`` (singular, at the
+        # envelope level) and no ``errors`` at all, so a refusal carrying only the
+        # envelope-level object is pin-conformant and still has one entry to grade.
+        entries = locate_envelope_errors(envelope) or ([envelope["adcp_error"]] if "adcp_error" in envelope else [])
         assert entries, f"the error envelope carries neither errors[] nor adcp_error: {sorted(envelope)}"
 
         validator = validator_for("core/error.json")

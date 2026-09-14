@@ -567,71 +567,10 @@ class TestListCreativesResponseFormat:
 # ============================================================================
 
 
-class TestDeleteMissingWithCreativeIdsFilter:
-    """Test interaction between delete_missing and creative_ids filter.
-
-    This is a critical edge case: what happens when you use delete_missing=True
-    with a creative_ids filter? The behavior must be well-defined.
-    """
-
-    def test_schema_accepts_both_parameters(self):
-        """Schema should accept both delete_missing and creative_ids together."""
-        from src.core.schemas import FormatId, SyncCreativesRequest
-
-        creative = make_creative_asset_request(
-            creative_id="creative_1",
-            name="Test",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
-            assets=build_assets(image_spec("banner")),
-        )
-
-        # Both parameters together should be valid schema
-        request = SyncCreativesRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            creatives=[creative],
-            creative_ids=["creative_1"],
-            delete_missing=True,
-            dry_run=True,
-        )
-
-        assert request.creative_ids == ["creative_1"]
-        assert request.delete_missing is True
-
-    def test_delete_missing_scope_documentation(self):
-        """Document expected behavior of delete_missing with creative_ids.
-
-        Expected spec behavior (verify with implementation):
-        - delete_missing=True, creative_ids=None: Delete creatives NOT in payload
-        - delete_missing=True, creative_ids=[...]: Delete only within filtered scope
-
-        The second case is important: if creative_ids=["c1", "c2"] and payload
-        only has c1, should c2 be deleted? This depends on interpretation.
-        """
-        from src.core.schemas import FormatId, SyncCreativesRequest
-
-        # This test documents the expected behavior
-        # Implementation should handle this consistently
-        creative = make_creative_asset_request(
-            creative_id="c1",
-            name="Creative 1",
-            format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display"),
-            assets=build_assets(image_spec("banner")),
-        )
-
-        # Scoped delete: creative_ids filter with delete_missing
-        request = SyncCreativesRequest(
-            account={"account_id": "acct_test"},
-            idempotency_key="test-idem-key-0001",
-            creatives=[creative],  # Only c1 in payload
-            creative_ids=["c1", "c2"],  # Filter includes c2 not in payload
-            delete_missing=True,
-            dry_run=True,
-        )
-
-        # Schema valid - behavior is implementation concern
-        assert len(request.creatives) == 1
-        assert len(request.creative_ids) == 2
+# delete_missing together with creative_ids is REFUSED, not accepted: sync-creatives-
+# request.json says delete_missing is "Invalid when creative_ids is provided", and the
+# request model raises INVALID_REQUEST on the pair. The two tests that stood here
+# asserted the opposite; the BDD delete_missing scope boundary grades the refusal.
 
 
 # ============================================================================

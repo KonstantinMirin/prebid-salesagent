@@ -1,6 +1,6 @@
 """CreativeSyncEnv — integration test environment for _sync_creatives_impl.
 
-Patches: creative agent registry, run_async_in_sync_context, notifications, audit, config.
+Patches: creative agent registry, run_async_in_sync_context, notifications, audit; pins the Gemini key in the environment.
 Real: get_db_session, CreativeRepository, all validation/processing (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -41,17 +41,20 @@ Generative creative usage::
 Available mocks via env.mock:
     "registry"            -- get_creative_agent_registry (lazy import in _sync.py)
     "run_async"           -- run_async_in_sync_context (module-level import in _sync.py)
-    "send_notifications"  -- _send_creative_notifications (from _workflow)
+    "send_notifications"  -- _send_creative_notifications (from _workflow); runs the REAL
+                             function by default, so its webhook/approval-mode guard is graded
+    "slack_notifier"      -- get_slack_notifier (src.services.slack_notifier), the Slack sender
+                             that function reaches: "was Slack sent" is read off this mock
     "audit_log"           -- _audit_log_sync (from _workflow)
-    "config"              -- get_config (lazy import in _processing.py)
     "ai_review_executor"  -- _ai_review_executor (lazy import in _processing.py, ai-powered branch)
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from adcp.types import AccountReference
@@ -61,6 +64,7 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 from tests.harness.transport import DeliverResult
 from tests.helpers.creative_test_helpers import creative_payload
 
@@ -145,8 +149,12 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
         "run_async": "src.core.tools.creatives._sync.run_async_in_sync_context",
         "send_notifications": "src.core.tools.creatives._sync._send_creative_notifications",
+        # The Slack sender _send_creative_notifications reaches (a call-time import from
+        # src.services.slack_notifier). Patching it lets the real notification function
+        # run -- its "only require-human, only with a webhook" guard is what BR-RULE-037
+        # INV-2/INV-6 grade -- while nothing is posted anywhere.
+        "slack_notifier": "src.services.slack_notifier.get_slack_notifier",
         "audit_log": "src.core.tools.creatives._sync._audit_log_sync",
-        "config": "src.core.config.get_config",
         # The ai-powered branch of _processing.py hands a job to a real
         # ThreadPoolExecutor that opens its OWN AdminCreativeUoW, COMMITS a review
         # verdict, and then fires Slack + the push webhook
@@ -201,12 +209,18 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # run_async: execute the coroutine synchronously (return empty list)
         self.mock["run_async"].side_effect = lambda coro: []
 
-        # Notifications: no-op. The ordering observer is NOT installed here --
-        # it is a side_effect, and installing it by default would make every
-        # existing "was Slack called" scenario pay for two extra pooled-connection
-        # reads. observe_effects_at_notification() opts a scenario in, and returns
-        # None so those "was it called" assertions keep reading the same value.
-        self.mock["send_notifications"].return_value = None
+        # Notifications: the REAL _send_creative_notifications runs behind this mock, so
+        # the mock still records that the notification step was entered (INV-3 asserts
+        # its arguments) while the function's own guard decides whether Slack is
+        # reached -- readable off mock["slack_notifier"]. A bare no-op here made
+        # "no Slack sent without a webhook" (INV-6) ungradeable: the guard lives inside
+        # the function the no-op replaced. The ordering observer is NOT installed here --
+        # it is a side_effect, and installing it by default would make every existing
+        # "was Slack called" scenario pay for two extra pooled-connection reads.
+        # observe_effects_at_notification() opts a scenario in.
+        from src.core.tools.creatives._workflow import _send_creative_notifications
+
+        self.mock["send_notifications"].side_effect = _send_creative_notifications
         self.workflow_rows_at_notification = None
         self.assignment_count_at_notification = None
 
@@ -220,10 +234,32 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         self.ai_review_commit_observations = {}
         self.mock[self._AI_REVIEW_PATCH_NAME].submit.side_effect = self._observe_at_ai_review_submit
 
-        # Config: default with no gemini key (safe for static creatives)
-        mock_config = MagicMock()
-        mock_config.gemini_api_key = None
-        self.mock["config"].return_value = mock_config
+        # Gemini key: default None (safe for static creatives). Production reads it off
+        # the typed settings, and a composition root rebuilds those from the ENVIRONMENT
+        # whenever it starts -- the REST leg imports src.app, which mounts the admin app,
+        # which calls load_settings() -- so pinning the settings object would be undone
+        # by the first REST dispatch. The environment is what gets pinned, and the
+        # settings are rebuilt from it on every change and again on release, which is
+        # the contract load_settings() documents for a test that changes the environment.
+        self._gemini_env = patch.dict(os.environ)
+        self._gemini_env.start()
+        self._guard("gemini_api_key_env", self._release_gemini_env)
+        self._apply_gemini_api_key(None)
+
+    def _apply_gemini_api_key(self, value: str | None) -> None:
+        from src.core.config import load_settings
+
+        if value is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = value
+        load_settings()
+
+    def _release_gemini_env(self) -> None:
+        from src.core.config import load_settings
+
+        self._gemini_env.stop()
+        load_settings()
 
     def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
         """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
@@ -535,6 +571,23 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         registry.get_format = AsyncMock(return_value=mock_format)
         return {"agent_url": self.DEFAULT_AGENT_URL, "id": format_id}
 
+    @realize_e2e(
+        e2e_unsupported(
+            "a live creative agent answers a preview request for itself; it cannot be told to answer "
+            "with no previews, which is the rejection this configures"
+        )
+    )
+    def configure_agent_no_preview(self, *, format_id: str) -> dict[str, str]:
+        """A served static format whose preview request the agent answers with nothing.
+
+        With no image or video asset on the creative there is then no media_url to fall
+        back on, which production classifies as CREATIVE_REJECTED with ``reasons``
+        (src/core/tools/creatives/_processing.py).
+        """
+        fmt = self.configure_agent_served_creative(generative=False, format_id=format_id)
+        self.mock["registry"].return_value.preview_creative = AsyncMock(return_value={})
+        return fmt
+
     def setup_generative_build(
         self,
         format_id: str = "display_gen",
@@ -568,12 +621,14 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Configure run_async to return this format for list_all_formats
         self.set_run_async_result([mock_format])
 
-        # Configure build_creative return value
+        # Configure build_creative return value. The generated assets are spelled the
+        # way the pinned asset union spells them (core/assets/text-asset.json: asset_type
+        # + content), because production types the agent's output before storing it.
         default_build = {
             "status": "draft",
             "context_id": "ctx-test-123",
             "creative_output": {
-                "assets": {"headline": {"text": "Generated headline"}},
+                "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
                 "output_format": {"url": "https://generated.example.com/creative.html"},
             },
         }
@@ -617,7 +672,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         unconfigured server state. It cannot be realized (the key belongs to another
         process's configuration), so it says so rather than pretending.
         """
-        self.mock["config"].return_value.gemini_api_key = value
+        # The environment is under the patch.dict started in _configure_mocks, so this
+        # write lives exactly as long as the env and is undone with it.
+        self._apply_gemini_api_key(value)
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.
@@ -663,13 +720,26 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # gets [], because setdefault does not override an explicit value: that is how the
         # minItems rejection itself stays testable.
         kwargs.setdefault("creatives", [creative_payload()])
-        kwargs.setdefault("idempotency_key", self.DEFAULT_IDEMPOTENCY_KEY)
+        # A scenario that means to send NO key cannot say so by leaving the kwarg out --
+        # that is what every scenario that does not care about keys looks like, and those
+        # get the default. The sentinel is the create harness's own, so both tools spell
+        # "absent" the same way; the pin lists idempotency_key in /required, so what it
+        # buys is a request the schema rejects, graded as such.
+        if kwargs.get("idempotency_key") is OMIT_IDEMPOTENCY_KEY:
+            kwargs.pop("idempotency_key")
+        else:
+            kwargs.setdefault("idempotency_key", self.DEFAULT_IDEMPOTENCY_KEY)
         # ``with_account=False`` for the IMPL path. account is a field of the REQUEST, and
         # requests are built by transport wrappers -- _sync_creatives_impl does not take one.
         # Injecting it there makes every direct-impl test resolve an account before reaching
         # its subject, so a scenario about an unknown tenant answers AdCPAuthorizationError
         # from account resolution instead of the auth rejection it grades.
-        if with_account and kwargs.get("account") is None:
+        # Same sentinel discipline as the key: a scenario about the field's ABSENCE says so
+        # with OMIT_ACCOUNT (the create harness's own), and the pin lists account in
+        # /required, so what it buys is a request the schema rejects, graded as such.
+        if kwargs.get("account") is OMIT_ACCOUNT:
+            kwargs.pop("account")
+        elif with_account and kwargs.get("account") is None:
             identity = kwargs.get("identity") or self.identity
             account_id = getattr(identity, "account_id", None)
             if not account_id:

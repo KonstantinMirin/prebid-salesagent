@@ -550,6 +550,16 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "configure_agent_served_creative",
             "the out-of-transaction effects this configures are observed as CALLS on in-process mocks (registry.build_creative / preview_creative, and the _ai_review_executor submit). Over real HTTP those objects live in the server process, so the assertions have nothing to read and the real creative agent answers for itself -- the scenario would grade the agent, not the gates. Observing them e2e needs effect capture at the server (a request sink + a review-verdict read-back), which is its own build",
         ),
+        # The CREATIVE_REJECTED-with-reasons scenario: the rejection production makes when
+        # the agent answers a preview with nothing and the creative has no media_url. The
+        # "nothing" is an in-process mock answer; the live agent answers for itself. Same
+        # family and same reason as configure_agent_served_creative, which this composes.
+        (
+            "tests/harness/creative_sync.py",
+            "configure_agent_no_preview",
+            "a live creative agent answers a preview request for itself; it cannot be told to answer "
+            "with no previews, which is the rejection this configures",
+        ),
         # Added by prkv.16 (salesagent-aqqfx.6), noted against this pin's own
         # shrink-only direction of travel like the #1721 and prkv.18 precedents
         # above. The workflow-step write path (GH #2002) is graded by comparing
@@ -1008,7 +1018,6 @@ EXPECTED_ENV_MOCK_REACHES: frozenset[tuple[str, str]] = frozenset(
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "_assert_generative_build"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "_assert_standard_processing"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_agent_is_reachable"),
-        ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_agent_no_preview_urls"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_with_unknown_format"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "given_creative_with_unreachable_agent"),
         ("tests/bdd/steps/domain/uc006_sync_creatives.py", "then_creative_has_generated_content"),

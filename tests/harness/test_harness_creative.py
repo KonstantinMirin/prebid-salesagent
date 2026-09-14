@@ -28,7 +28,17 @@ class TestCreativeSyncEnvContract:
         # commits a review verdict, an effect that escapes the sync transaction
         # entirely. Patching it is what makes "a preview submitted no AI review" an
         # observable rather than a race.
-        expected_keys = {"registry", "run_async", "send_notifications", "audit_log", "config", "ai_review_executor"}
+        # slack_notifier: the Slack sender the real _send_creative_notifications reaches.
+        # Patching the sender (not the function) is what lets the function's own
+        # "require-human only, webhook only" guard be graded.
+        expected_keys = {
+            "registry",
+            "run_async",
+            "send_notifications",
+            "slack_notifier",
+            "audit_log",
+            "ai_review_executor",
+        }
         assert set(CreativeSyncEnv.EXTERNAL_PATCHES.keys()) == expected_keys
 
     def test_is_integration_env(self):
@@ -50,9 +60,14 @@ class TestCreativeSyncEnvContract:
             assert "run_async" in env.mock
             assert "ai_review_executor" in env.mock
             assert "send_notifications" in env.mock
+            assert "slack_notifier" in env.mock
             assert "audit_log" in env.mock
-            assert "config" in env.mock
             assert len(env.mock) == 6
+            # The Gemini key is a settings field, pinned on the settings object for the
+            # env's lifetime rather than mocked through a config accessor.
+            from src.core.config import get_settings
+
+            assert get_settings().integrations.gemini_api_key is None
 
     def test_identity_defaults(self):
         """Identity has sane defaults."""

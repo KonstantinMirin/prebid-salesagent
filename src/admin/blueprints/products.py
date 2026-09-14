@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, inspect, select
 from sqlalchemy.orm import joinedload
 
+from src.admin.form_validation import sanitize_form_data
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.database.database_session import get_db_session
@@ -21,7 +22,6 @@ from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.schemas import Format
-from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
 
 logger = logging.getLogger(__name__)

@@ -283,11 +283,11 @@ class TestSyncCreativeResultSchema:
     """
 
     def test_excludes_internal_fields(self):
-        """model_dump() must NOT include status or review_feedback.
+        """model_dump() must NOT include internal_status or review_feedback.
 
-        Spec: CONFIRMED -- sync-creatives-response.json per-creative result
-        does NOT include 'status' or 'review_feedback' fields.
-        Required fields are only creative_id + action.
+        sync-creatives-response.json's per-creative result carries the spec ``status``
+        (the advisory review-lifecycle state, a creative-status member) and nothing
+        internal; required fields are only creative_id + action.
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-08
         """
         result = SyncCreativeResult(
@@ -296,8 +296,8 @@ class TestSyncCreativeResultSchema:
             internal_status="approved",
             review_feedback="Looks good",
         )
-        data = result.model_dump()
-        assert "status" not in data
+        data = result.model_dump(mode="json")
+        assert data["status"] == "approved"
         assert "internal_status" not in data
         assert "review_feedback" not in data
         assert data["creative_id"] == "c_1"
@@ -889,24 +889,11 @@ class TestCreativeValidation:
             # suggestion are all read-only derivations from the class's code, so
             # there is nothing else on the instance this test could pin.
 
-    def test_unknown_format_raises_with_discovery_hint(self):
-        """Known agent but unknown format raises ValueError mentioning list_creative_formats.
-
-        Spec: UNSPECIFIED (implementation-defined error handling for format discovery).
-        Covers: UC-006-CREATIVE-FORMAT-VALIDATION-04
-        """
-        from src.core.tools.creatives._validation import _validate_creative_input
-
-        creative = _make_creative_asset()
-        mock_registry = MagicMock()
-
-        with patch(
-            "src.core.format_resolver.fetch_format_spec",
-            return_value=None,  # Format not found
-        ):
-            with pytest.raises(AdCPValidationError) as _ei:
-                _validate_creative_input(creative, mock_registry, "p1")
-            # The identifier is STRUCTURED now: details/field, not prose.
+    # The unknown-format outcome is graded on the wire by @T-UC-006-ext-f and the two
+    # format-validation outlines in BR-UC-006 (REFERENCE_NOT_FOUND on the creative's
+    # entry, every transport). The class-level test that stood here pinned the exception
+    # type _validate_creative_input raised, which is the one thing a wire assertion
+    # cannot get wrong and a class assertion cannot get right.
 
 
 class TestGetFieldHelper:
@@ -2382,9 +2369,9 @@ class TestDryRun:
         So "repo.create was not called" is no longer the promise and asserting it
         would pin the deleted mechanism. What this level CAN see is the request
         the impl makes of its unit of work, which is asserted here. That nothing
-        ends up persisted is graded where it is observable — against a real
-        database — by TestDryRunPreviewMatchesLiveRun and the UC-006
-        out-of-transaction scenarios.
+        ends up persisted is graded where it is observable — on the wire, against a
+        real database — by the UC-006 dry-run preview-parity scenarios
+        (local-uc006-dry-run-preview-parity.feature) and the out-of-transaction ones.
 
         Covers: UC-006-DRY-RUN-01
         """
@@ -3193,37 +3180,63 @@ class TestFormatCompatibility:
 
         return mock_uow, mock_media_buy
 
-    def test_format_match_after_url_normalization(self):
-        """agent_url trailing slashes and /mcp stripped before comparison.
-
-        Spec: UNSPECIFIED (implementation-defined format compatibility logic).
-        The normalize_url function in _assignments.py strips trailing '/' and '/mcp'
-        from agent URLs before comparison (lines 121-124).
-        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
-        """
+    def _assign(self, mock_db, *, creative_agent_url, product_agent_url):
+        """Run one strict assignment of a creative against a product's one format."""
         from src.core.tools.creatives._assignments import _process_assignments
 
+        self._setup_assignment_mocks(
+            mock_db,
+            creative_agent_url=creative_agent_url,
+            creative_format="display_300x250",
+            product_format_ids=[{"agent_url": product_agent_url, "id": "display_300x250"}],
+        )
+        from src.core.tenant_context import TenantContext
+
+        return _process_assignments(
+            assignments={"c1": ["pkg_1"]},
+            results=[SyncCreativeResult(creative_id="c1", action="created")],
+            tenant=TenantContext.from_dict({"tenant_id": "t1"}),
+            validation_mode="strict",
+            principal_id="principal_1",
+        )
+
+    def test_format_match_after_url_canonicalization(self):
+        """Spellings the AdCP canonical form collapses do not split format identity.
+
+        Spec: core/format-id.json — "Callers comparing two format-id values MUST
+        canonicalize agent_url per the AdCP URL canonicalization rules before
+        treating two formats as the same." Host case, the default port, and a
+        trailing slash are all spellings of ONE agent_url.
+        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
+        """
         with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
-            # Creative has URL without trailing slash; product has URL with /mcp suffix
-            self._setup_assignment_mocks(
+            assignment_list = self._assign(
                 mock_db,
                 creative_agent_url="https://creative.example.com",
-                creative_format="display_300x250",
-                product_format_ids=[{"agent_url": "https://creative.example.com/mcp/", "id": "display_300x250"}],
+                product_agent_url="https://Creative.Example.com:443/",
             )
 
-            results = [SyncCreativeResult(creative_id="c1", action="created")]
-            assignment_list = _process_assignments(
-                assignments={"c1": ["pkg_1"]},
-                results=results,
-                tenant={"tenant_id": "t1"},
-                validation_mode="strict",
-                principal_id="principal_1",
-            )
-
-            # URL normalization should strip /mcp and trailing / so formats match
             assert len(assignment_list) == 1
             assert assignment_list[0].creative_id == "c1"
+
+    def test_mcp_suffix_is_a_different_agent_url(self):
+        """`/mcp` is a path, and the canonical form preserves the path.
+
+        Two normalizers used to `removesuffix("/mcp")` before comparing, which made
+        one host's MCP endpoint and its bare origin the same agent — and this test
+        used to assert that. Nothing in the pin asks for it: a host may serve MCP at
+        /mcp and A2A at /a2a, and collapsing the path merges two agents into one.
+        Covers: UC-006-ASSIGNMENT-FORMAT-COMPATIBILITY-01
+        """
+        with patch("src.core.tools.creatives._assignments.CreativeUoW") as mock_db:
+            from src.core.exceptions import AdCPValidationError
+
+            with pytest.raises(AdCPValidationError):
+                self._assign(
+                    mock_db,
+                    creative_agent_url="https://creative.example.com",
+                    product_agent_url="https://creative.example.com/mcp/",
+                )
 
     def test_format_mismatch_lenient_logs_error(self):
         """Lenient mode: incompatible format skipped, added to assignment_errors.
@@ -4661,80 +4674,9 @@ class TestCreativePolicyExtension:
         assert policy.provenance_required is True
 
 
-class TestProvenanceValidation:
-    """Provenance validation in sync_creatives flow."""
-
-    def test_check_provenance_required_missing_provenance(self):
-        """check_provenance_required returns warning when provenance is missing."""
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(provenance=None)
-        policy = {
-            "co_branding": "optional",
-            "landing_page": "any",
-            "templates_available": False,
-            "provenance_required": True,
-        }
-
-        warning = check_provenance_required(creative, policy)
-        assert warning is not None
-        assert "provenance metadata is required" in warning
-
-    def test_check_provenance_required_with_provenance(self):
-        """check_provenance_required returns None when provenance is present."""
-        from src.core.schemas import DigitalSourceType
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(
-            provenance={"digital_source_type": DigitalSourceType.digital_creation, "ai_tool": "DALL-E"}
-        )
-        policy = {
-            "co_branding": "optional",
-            "landing_page": "any",
-            "templates_available": False,
-            "provenance_required": True,
-        }
-
-        warning = check_provenance_required(creative, policy)
-        assert warning is None
-
-    def test_check_provenance_not_required(self):
-        """check_provenance_required returns None when provenance is not required."""
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(provenance=None)
-
-        # Policy without provenance_required
-        policy_none = {"co_branding": "optional", "landing_page": "any", "templates_available": False}
-        assert check_provenance_required(creative, policy_none) is None
-
-        # Policy with provenance_required=False
-        policy_false = {
-            "co_branding": "optional",
-            "landing_page": "any",
-            "templates_available": False,
-            "provenance_required": False,
-        }
-        assert check_provenance_required(creative, policy_false) is None
-
-        # No policy at all
-        assert check_provenance_required(creative, None) is None
-
-    def test_check_provenance_with_creative_policy_model(self):
-        """check_provenance_required works with CreativePolicy model (not just dict)."""
-        from src.core.schemas import CreativePolicy
-        from src.core.tools.creatives._validation import check_provenance_required
-
-        creative = _make_creative(provenance=None)
-        policy = CreativePolicy(
-            co_branding="optional",
-            landing_page="any",
-            templates_available=False,
-            provenance_required=True,
-        )
-        warning = check_provenance_required(creative, policy)
-        assert warning is not None
-        assert "provenance metadata is required" in warning
+# The provenance policy check is a per-item PROVENANCE_* refusal now (check_provenance_policy,
+# core/creative-policy.json), graded by the BDD provenance boundary and partition outlines
+# and the storyboard provenance scenarios on every transport.
 
 
 # ============================================================================

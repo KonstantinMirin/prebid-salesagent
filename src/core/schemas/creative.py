@@ -211,6 +211,64 @@ class CreativeAssetRequest(LibraryCreativeAsset):
             raise PydanticCustomError("oneOf", "provide exactly one of format_id or format_kind")
         return self
 
+    @model_validator(mode="after")
+    def _trackers_bind_tracking_events(self) -> "CreativeAssetRequest":
+        """The two tracker-asset rules the pin states beyond what the SDK renders.
+
+        core/assets/vast-tracker-asset.json and daast-tracker-asset.json bind ``vast_event`` /
+        ``daast_event`` with ``not: {enum: [impression, clickTracking, ...]}`` -- an Impression
+        URL "MUST be modeled as a url asset with url_type tracker_pixel", the others belong to
+        VideoClicks, Error and ViewableImpression -- and require ``offset`` when the event is
+        ``progress`` (an ``allOf if/then``). datamodel-codegen renders the event as the whole
+        tracking-event enum and cannot express either, so the accepted shape states them here,
+        as the schema violations they are (INVALID_REQUEST). ``target`` needs nothing: the SDK
+        types it as the pin's two-member enum.
+
+        Raised as pydantic errors, like the oneOf above, so the boundary's one mapping
+        turns them into the INVALID_REQUEST envelope with ``issues[]``: the refused event is
+        an ``enum`` claim (the value is outside the set this field accepts), the missing
+        offset a ``required`` one (pydantic's ``missing``).
+        """
+        for slot, value in (self.assets or {}).items():
+            for asset in value if isinstance(value, list) else [value]:
+                inner = getattr(asset, "root", asset)
+                asset_type = getattr(inner, "asset_type", None)
+                if asset_type not in ("vast_tracker", "daast_tracker"):
+                    continue
+                event_field = "vast_event" if asset_type == "vast_tracker" else "daast_event"
+                event = getattr(inner, event_field, None)
+                event = getattr(event, "value", event)
+                if event in _NON_TRACKING_EVENTS:
+                    raise PydanticCustomError(
+                        "enum",
+                        "assets.{slot}.{field}: {event} is not a TrackingEvents event",
+                        {"slot": slot, "field": event_field, "event": event, "expected": "a TrackingEvents event"},
+                    )
+                if event == "progress" and getattr(inner, "offset", None) is None:
+                    raise PydanticCustomError(
+                        "missing",
+                        "assets.{slot}.offset is required when {field} is progress",
+                        {"slot": slot, "field": event_field},
+                    )
+        return self
+
+
+#: Events the pinned tracker assets refuse (vast-tracker-asset.json / daast-tracker-asset.json
+#: ``not: {enum: [...]}``): each belongs to another VAST/DAAST element, not TrackingEvents.
+_NON_TRACKING_EVENTS: frozenset[str] = frozenset(
+    {
+        "impression",
+        "clickTracking",
+        "customClick",
+        "error",
+        "viewable",
+        "notViewable",
+        "viewUndetermined",
+        "measurableImpression",
+        "viewableImpression",
+    }
+)
+
 
 # --- Creative Lifecycle ---
 class Creative(LibraryCreative):
@@ -418,6 +476,21 @@ class SyncCreativesRequest(BuyerRequest, LibrarySyncCreativesRequest):
         ..., min_length=1, max_length=100, description="Array of creative assets to sync (create or update)"
     )  # type: ignore[assignment]
 
+    @model_validator(mode="after")
+    def _delete_missing_needs_the_whole_library(self):
+        """Refuse delete_missing together with creative_ids, as the pin says to.
+
+        creative/sync-creatives-request.json @ AdCP 3.1.1, ``delete_missing``: "Invalid
+        when creative_ids is provided -- delete_missing applies to the entire library
+        scope, not a filtered subset." A request that says both is malformed as a whole,
+        which is INVALID_REQUEST; nothing about it is a per-creative outcome.
+        """
+        from src.core.exceptions import AdCPInvalidRequestError
+
+        if self.delete_missing and self.creative_ids:
+            raise AdCPInvalidRequestError(field="delete_missing")
+        return self
+
 
 class SyncSummary(SalesAgentBaseModel):
     """Summary of sync operation results."""
@@ -452,11 +525,11 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # warnings to the library parent (PR #1567, shrinking the schema-inheritance
     # allowlist). Our former local `status` held internal review-routing state, not the spec's
     # advisory CreativeStatus, so it is renamed to `internal_status` (excluded from the wire)
-    # rather than shadowing the inherited spec field. Per owner decision we inherit but do NOT
-    # populate the spec `status`: it stays None. On A2A/REST (model_dump with exclude_none) it
-    # is omitted; on MCP the response goes through structured_content -> to_jsonable_python,
-    # which BYPASSES the model_dump override, so the inherited `status` serializes as null —
-    # that broader None-serialization question is tracked separately.
+    # rather than shadowing the inherited spec field. The spec `status` is DERIVED from it in
+    # `_advisory_status_from_review_state` below: the row's review state is exactly the
+    # "advisory review-lifecycle state of the creative after this sync" the pin describes.
+    # An unset status is omitted on every transport: the library base dumps with
+    # exclude_none, and MCP serializes through the same model_dump.
     # platform_id/assigned_to/assignment_errors/changes/warnings/errors are inherited as-is,
     # with the parent's None defaults: an optional array the tool did not populate is
     # OMITTED by exclude_none on every path (the wire serializer runs on model_dump,
@@ -470,6 +543,26 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
+
+    @model_validator(mode="after")
+    def _advisory_status_from_review_state(self) -> "SyncCreativeResult":
+        """The spec ``status`` is the row's review state, on the actions that have one.
+
+        sync-creatives-response.json: ``status`` is the "advisory review-lifecycle state of
+        the creative after this sync", drawn from CreativeStatus, and "MUST be omitted when
+        action is failed or deleted (the creative has no meaningful review state -- failure
+        details belong in the errors array; deleted creatives are gone from the library)".
+        ``internal_status`` IS that state -- every value the creatives row holds is a
+        CreativeStatus member, pinned by test_architecture_creative_status_vocabulary -- so
+        the wire field is derived here once rather than at the three sites that build a
+        result. A failed or deleted result carries no row state and its status stays unset,
+        which the exclude_none serialization then omits.
+        """
+        if self.action in ("failed", "deleted"):
+            self.status = None
+        elif self.status is None and self.internal_status is not None:
+            self.status = CreativeStatus(self.internal_status)
+        return self
 
 
 class AssignmentsSummary(SalesAgentBaseModel):

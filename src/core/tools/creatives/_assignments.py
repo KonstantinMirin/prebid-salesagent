@@ -6,13 +6,14 @@ from typing import Any
 
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.uow import CreativeUoW
-from src.core.errors.details import CreativeRejectionDetails, ValidationDetails
+from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
     AdCPCreativeNotFoundError,
-    AdCPCreativeRejectedError,
     AdCPPackageNotFoundError,
+    AdCPSalesAgentError,
     AdCPValidationError,
 )
+from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
 from src.core.tenant_context import TenantContext
@@ -33,8 +34,17 @@ def _resolve_creative_for_assignment(assignment_repo, creative_id: str, principa
     return assignment_repo.get_creative_by_id(creative_id, principal_id)
 
 
-def _normalise_assignments(entries: list[Any]) -> dict[str, list[str]]:
-    """The AdCP 3.1 assignment ARRAY, as the internal ``{creative_id: [package_ids]}`` map.
+#: What one assignment entry asks for beyond naming the package: the pinned
+#: sync-creatives-request.json's optional ``assignments[].weight`` and
+#: ``assignments[].placement_ids``, ``None`` when the entry omits them.
+AssignmentTerms = tuple[float | None, list[str] | None]
+
+#: ``{creative_id: {package_id: (weight, placement_ids)}}`` -- the internal shape.
+AssignmentMap = dict[str, dict[str, AssignmentTerms]]
+
+
+def _normalise_assignments(entries: list[Any]) -> AssignmentMap:
+    """The AdCP 3.1 assignment ARRAY, as the internal ``{creative_id: {package_id: terms}}`` map.
 
     Entries arrive TYPED (adcp ``Assignment``) from every transport whose shape is derived
     from the DTO, and as raw dicts from callers that build the list by hand. Both must work.
@@ -45,17 +55,24 @@ def _normalise_assignments(entries: list[Any]) -> dict[str, list[str]]:
     line, behind a response that looked like a clean sync. Adopting the DTO at the boundary is
     precisely what turned those dicts into models, so the failure arrived with the
     announcement work rather than with any edit here.
+
+    The map used to be ``{creative_id: [package_ids]}``, which is where ``weight`` and
+    ``placement_ids`` were dropped: the pin defines both per entry, and a map of ids has
+    nowhere to carry them. Keying the terms by package keeps them with the entry they came on.
     """
-    coerced: dict[str, list[str]] = {}
+    coerced: AssignmentMap = {}
     dropped = 0
     for entry in entries:
         if isinstance(entry, dict):
             creative_id, package_id = entry.get("creative_id"), entry.get("package_id")
+            weight, placement_ids = entry.get("weight"), entry.get("placement_ids")
         else:
             creative_id = getattr(entry, "creative_id", None)
             package_id = getattr(entry, "package_id", None)
+            weight = getattr(entry, "weight", None)
+            placement_ids = getattr(entry, "placement_ids", None)
         if creative_id and package_id:
-            coerced.setdefault(creative_id, []).append(package_id)
+            coerced.setdefault(creative_id, {})[package_id] = (weight, placement_ids)
         else:
             dropped += 1
     if dropped:
@@ -105,13 +122,20 @@ def _process_assignments(
     assignments_by_creative: dict[str, list[str]] = {}  # creative_id -> [package_ids]
     assignment_errors_by_creative: dict[str, dict[str, str]] = {}  # creative_id -> {package_id: error}
     not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
+    packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
 
-    # AdCP v3 spec defines assignments as list[{creative_id, package_id, ...}];
-    # normalise to dict form {creative_id: [package_ids]} for internal processing.
+    # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
+    # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
+    # for internal processing. A caller still handing over the older {creative_id:
+    # [package_ids]} map asks for the default terms on every entry.
     if assignments and isinstance(assignments, list):
         coerced = _normalise_assignments(assignments)
         assignments = coerced if coerced else None
+    elif assignments and isinstance(assignments, dict):
+        assignments = {
+            creative_id: dict.fromkeys(package_ids, (None, None)) for creative_id, package_ids in assignments.items()
+        }
 
     # Creatives whose sync failed were never persisted; we must not attempt to
     # assign them (the creative_assignments FK would crash the request). Their
@@ -128,7 +152,8 @@ def _process_assignments(
             assert uow.assignments is not None
             assignment_repo = uow.assignments
 
-            for creative_id, package_ids in assignments.items():
+            for creative_id, terms_by_package in assignments.items():
+                package_ids = list(terms_by_package)
                 # Initialize tracking for this creative
                 if creative_id not in assignments_by_creative:
                     assignments_by_creative[creative_id] = []
@@ -171,11 +196,19 @@ def _process_assignments(
                         # Entity-specific spec code (pinned enum: CREATIVE_NOT_FOUND,
                         # correctable, MANDATED uniformly for unowned creative_ids) —
                         # parity with the PACKAGE_NOT_FOUND branch below (#1430 review).
-                        raise AdCPCreativeNotFoundError()
+                        # The id is echoed back because the caller supplied it verbatim,
+                        # which 3.1.1 L3/error-handling.mdx permits; every unresolvable
+                        # id reads identically, so the uniformity the enum mandates holds.
+                        # No index is available here (the list is normalised to a dict
+                        # above), so `field` names the array parameter itself.
+                        raise AdCPCreativeNotFoundError(
+                            details=CreativeRefDetails(creative_id=creative_id),
+                            field="assignments",
+                        )
                     logger.warning(log_safe(f"Skipping assignments for unknown creative {creative_id}: {error_msg}"))
                     continue
 
-                for package_id in package_ids:
+                for package_id, (requested_weight, placement_ids) in terms_by_package.items():
                     # Find which media buy this package belongs to
                     pkg_result = assignment_repo.find_package_with_media_buy(package_id)
 
@@ -190,13 +223,19 @@ def _process_assignments(
                         # Package not found - record error
                         error_msg = f"Package not found: {package_id}"
                         assignment_errors_by_creative[creative_id][package_id] = error_msg
+                        packages_not_found_by_creative.setdefault(creative_id, set()).add(package_id)
 
                         # Skip if in lenient mode, error if strict
                         if validation_mode == "strict":
                             # Use the specific subclass so the wire code is PACKAGE_NOT_FOUND
                             # (STANDARD); the base AdCPNotFoundError would emit INVALID_REQUEST
                             # via the wire-safe translation and lose buyer-facing specificity.
-                            raise AdCPPackageNotFoundError()
+                            # WHICH package travels in details: a sync may name many, and the
+                            # message is a function of the code, so without this the buyer
+                            # learns that a package was not found and not which one.
+                            raise AdCPPackageNotFoundError(
+                                details=EntityRefDetails(creative_id=creative_id, package_id=package_id)
+                            )
                         else:
                             logger.warning(log_safe(f"Package not found during assignment: {package_id}, skipping"))
                             continue
@@ -213,50 +252,27 @@ def _process_assignments(
                         product = assignment_repo.get_product_by_id(product_id)
 
                         if product and product.format_ids:
-                            # Build set of supported formats (agent_url, format_id) tuples
-                            supported_formats: set[tuple[str, str]] = set()
-                            for fmt in product.format_ids:
-                                if isinstance(fmt, dict):
-                                    agent_url_val = fmt.get("agent_url")
-                                    format_id_val = fmt.get("id") or fmt.get("format_id")
-                                    if agent_url_val and format_id_val:
-                                        supported_formats.add((str(agent_url_val), str(format_id_val)))
+                            # Identity is (canonical agent_url, id) per the pinned
+                            # core/format-id.json, asked of format_resolver so this path and
+                            # the media_buy_update assignment path cannot disagree about
+                            # whether a creative's format is one the product declares.
+                            supported_formats = product_format_identities(product.format_ids)
+                            creative_identity = format_identity_or_none(
+                                {"agent_url": db_creative_result.agent_url, "id": db_creative_result.format}
+                            )
 
-                            # Check creative format against supported formats
-                            creative_agent_url = db_creative_result.agent_url
-                            creative_format_id = db_creative_result.format
-
-                            # Allow /mcp URL variant (creative agent may return format with /mcp suffix)
-                            def normalize_url(url: str | None) -> str | None:
-                                if not url:
-                                    return None
-                                return url.rstrip("/").removesuffix("/mcp")
-
-                            normalized_creative_url = normalize_url(creative_agent_url)
-                            is_supported = False
-
-                            for supported_url, supported_format_id in supported_formats:
-                                normalized_supported_url = normalize_url(supported_url)
-                                if (
-                                    normalized_creative_url == normalized_supported_url
-                                    and creative_format_id == supported_format_id
-                                ):
-                                    is_supported = True
-                                    break
-
-                            if not supported_formats:
-                                # Product has no format restrictions - allow all
-                                is_supported = True
+                            # A product with no usable format entries imposes no restriction.
+                            is_supported = not supported_formats or creative_identity in supported_formats
 
                             if not is_supported:
                                 # Creative format not supported by product
                                 creative_format_display = (
-                                    f"{creative_agent_url}/{creative_format_id}"
-                                    if creative_agent_url
-                                    else creative_format_id
+                                    format_display(creative_identity)
+                                    if creative_identity
+                                    else str(db_creative_result.format)
                                 )
                                 supported_formats_display = ", ".join(
-                                    [f"{url}/{fmt_id}" if url else fmt_id for url, fmt_id in supported_formats]
+                                    format_display(identity) for identity in sorted(supported_formats)
                                 )
                                 error_msg = (
                                     f"Creative {creative_id} format '{creative_format_display}' "
@@ -266,14 +282,14 @@ def _process_assignments(
                                 assignment_errors_by_creative[creative_id][package_id] = error_msg
 
                                 if validation_mode == "strict":
-                                    # Converge with the update path (media_buy_update.py:233):
-                                    # creative-format-incompatible-with-product is CREATIVE_REJECTED,
-                                    # the canonical code for a rejected creative (#1417).
-                                    raise AdCPCreativeRejectedError(
+                                    # Reverses #1417, which routed this to CREATIVE_REJECTED: adcp
+                                    # 3.1.1's enum reserves that for "Creative failed content policy
+                                    # review". Converged with the create and update paths.
+                                    raise AdCPValidationError(
                                         # `supported_formats` is the pin-canonical `accepted_values`.
                                         # supported_formats_display is a JOINED string, not a list -- wrap it so the
                                         # canonical accepted_values stays an array as the pin declares.
-                                        details=CreativeRejectionDetails(accepted_values=[supported_formats_display]),
+                                        details=ValidationDetails(accepted_values=[supported_formats_display]),
                                     )
                                 else:
                                     logger.warning(
@@ -295,10 +311,21 @@ def _process_assignments(
                         principal_id=principal_id,
                     )
 
+                    # The pinned sync-creatives-request.json: weight is "Relative delivery
+                    # weight (0-100) ... When omitted, the creative receives equal rotation
+                    # with other unweighted creatives. A weight of 0 means the creative is
+                    # assigned but paused"; placement_ids "Restrict this creative to specific
+                    # placements within the package. When omitted, the creative is eligible
+                    # for all placements." Omitted weight is the column default, 100 -- the
+                    # same value every unweighted creative gets, which IS equal rotation.
+                    # The pin types weight as a number; the column is an integer, as it is
+                    # for the update_media_buy writer of the same column.
+                    weight = 100 if requested_weight is None else int(requested_weight)
                     if existing_assignment:
-                        # Assignment already exists - update weight if needed
-                        if existing_assignment.weight != 100:
-                            existing_assignment.weight = 100
+                        # Assignment already exists - carry this request's terms onto it
+                        if existing_assignment.weight != weight or existing_assignment.placement_ids != placement_ids:
+                            existing_assignment.weight = weight
+                            existing_assignment.placement_ids = placement_ids
                             logger.info(
                                 log_safe(
                                     f"Updated existing assignment: creative={creative_id}, "
@@ -313,6 +340,8 @@ def _process_assignments(
                             package_id=actual_package_id,
                             creative_id=creative_id,
                             principal_id=principal_id,
+                            weight=weight,
+                            placement_ids=placement_ids,
                         )
                         logger.info(
                             log_safe(
@@ -393,23 +422,37 @@ def _process_assignments(
             )
         else:
             # Nothing assigned: every referenced package failed. Buyer-correctable.
-            # Creative-not-found entries carry CREATIVE_NOT_FOUND — the same code
-            # the strict-mode AdCPCreativeNotFoundError raise emits (287c93099);
-            # the continue in the not-found branch means such an entry can never
-            # also carry package causes. Other synthesized causes still ride
-            # VALIDATION_ERROR — a known residual (strict package-not-found emits
-            # PACKAGE_NOT_FOUND; per-condition parity is tracked in GH #1598).
-            not_found = creative_id in not_found_creative_ids
-            cause = AdCPCreativeNotFoundError if not_found else AdCPValidationError
-            entry = _failed_sync_result(
-                creative_id,
-                cause(
-                    # ``assignment_errors`` is NOT duplicated into details: the line
-                    # below sets it on the result entry, which is the buyer's path to
-                    # it. Two copies of one fact is what this migration removes.
-                    details=ValidationDetails(creative_id=creative_id),
-                ),
-            )
+            #
+            # A creative-not-found entry carries CREATIVE_NOT_FOUND, the same code the
+            # strict-mode raise above emits, so the two validation modes agree on this
+            # condition. The ``continue`` in the not-found branch means such an entry can
+            # never also carry package causes, which is what keeps the two exclusive.
+            #
+            # A package-not-found entry carries PACKAGE_NOT_FOUND for the same reason: the
+            # strict path raises AdCPPackageNotFoundError for this condition, and the
+            # pinned enum defines the code, so the lenient advisory names the same thing.
+            # Only when EVERY package the entry names was not found -- a mixed entry (one
+            # package missing, another refusing the format) is a validation failure, and
+            # ``assignment_errors`` spells out each package's cause.
+            #
+            # ``assignment_errors`` is NOT duplicated into details: the line below sets
+            # it on the result entry, which is the buyer's path to it. Two copies of one
+            # fact is what this migration removes. Each code carries its own details
+            # shape — the exception class declares which one it accepts.
+            cause: AdCPSalesAgentError
+            missing_packages = packages_not_found_by_creative.get(creative_id, set())
+            if creative_id in not_found_creative_ids:
+                cause = AdCPCreativeNotFoundError(details=CreativeRefDetails(creative_id=creative_id))
+            elif missing_packages and set(errors) == missing_packages:
+                cause = AdCPPackageNotFoundError(
+                    details=EntityRefDetails(
+                        creative_id=creative_id,
+                        package_id=next(iter(missing_packages)) if len(missing_packages) == 1 else None,
+                    )
+                )
+            else:
+                cause = AdCPValidationError(details=ValidationDetails(creative_id=creative_id))
+            entry = _failed_sync_result(creative_id, cause)
             entry.assignment_errors = errors
         results.append(entry)
 

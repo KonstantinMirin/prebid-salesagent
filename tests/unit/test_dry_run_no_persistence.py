@@ -11,8 +11,8 @@ from typing import Any, cast
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-
 from src.core.testing_hooks import AdCPTestContext
+
 from tests.factories.principal import PrincipalFactory
 
 

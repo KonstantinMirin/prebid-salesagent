@@ -125,6 +125,7 @@ dependencies = [
     { name = "httpcore2" },
     { name = "httpx" },
     { name = "httpx2" },
+    { name = "idna" },
     { name = "jaraco-context" },
     { name = "jinja2" },
     { name = "logfire" },
@@ -214,6 +215,7 @@ requires-dist = [
     { name = "httpcore2", specifier = ">=2.10.0" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "httpx2", specifier = ">=2.12.0" },
+    { name = "idna", specifier = ">=3.7" },
     { name = "jaraco-context", specifier = ">=6.1.0" },
     { name = "jinja2", specifier = ">=3.1.0" },
     { name = "logfire", specifier = ">=4.16.0" },
@@ -1206,15 +1208,15 @@ wheels = [
 
 [[package]]
 name = "genai-prices"
-version = "0.0.65"
+version = "0.1.6"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx2" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e4/1e/62a8d65d263f0315a9dbd948110ad71c70ea16b58297c8c2121917848766/genai_prices-0.0.65.tar.gz", hash = "sha256:9cfe2ad2b4fdd68a8c9d2d189392e0d5bdd17048abd4105eb7c740c61392090f", size = 68908, upload-time = "2026-06-06T19:39:28.269Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1a/16/e5a507d42c0eb629b48ebe6c278f2d8c3f929bb6b28f18108bdd66d8ae12/genai_prices-0.1.6.tar.gz", hash = "sha256:802c1e4cc3ed5e70a09083b83af441a58d91f62e12768f7f1b6b26c98a33fcac", size = 111810, upload-time = "2026-09-02T14:53:54.895Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/9b/727c0b640d72c857bfb2b30b4ae2b16f612d81c5c2f09862a52b4697cbce/genai_prices-0.0.65-py3-none-any.whl", hash = "sha256:6f9239a21ce13c9fb329825dc7e06520bc582227b83b51fe82ab71f2dd3850da", size = 71549, upload-time = "2026-06-06T19:39:29.219Z" },
+    { url = "https://files.pythonhosted.org/packages/48/a1/43fa2a4c5557cd977e83eecec265b0b77b726b0c7b9f2f180b46c6fdb458/genai_prices-0.1.6-py3-none-any.whl", hash = "sha256:35ac8043dbcf2958488129413bfecba7304fe12a68ad4a78c5b0d15281e82814", size = 118834, upload-time = "2026-09-02T14:53:53.758Z" },
 ]
 
 [[package]]

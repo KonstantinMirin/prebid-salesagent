@@ -23,12 +23,12 @@ from contextlib import nullcontext
 import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.orm import joinedload
+from src.core.testing_hooks import TestingContext, apply_testing_hooks
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ProductModel
 from src.core.database.models import Tenant
 from src.core.schemas import Product as ProductSchema
-from src.core.testing_hooks import TestingContext, apply_testing_hooks
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 

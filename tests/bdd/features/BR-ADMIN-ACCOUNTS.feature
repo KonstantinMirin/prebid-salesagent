@@ -134,7 +134,7 @@ Feature: BR-ADMIN-ACCOUNTS Admin Account Management
   Scenario: Reject invalid status transition
     Given the tenant has an account "Acme Corp" with status "active"
     When the admin sends a status change request for "Acme Corp" to "rejected"
-    Then the JSON response returns status 400
+    Then the page returns status 400
     And the JSON response has "success" as false
     And the JSON response has "error" containing "Cannot transition"
     And the database shows account "Acme Corp" with status "active"

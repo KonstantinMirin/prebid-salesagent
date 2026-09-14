@@ -347,25 +347,57 @@ def url(value: str) -> AnyUrl:
 def canonical_agent_url(agent_url: object) -> str:
     """Canonicalize an agent_url for identity comparison (spec MUST canonicalization).
 
-    Delegates to the SDK's ``adcp.signing.canonicalize_target_uri`` so federation
-    identity uses the *same* canonical form the spec mandates for target URIs —
-    lowercased scheme/host, dropped default ports, normalized percent-encoding, and
-    stripped userinfo + fragment (a hand-rolled normalizer such as yarl keeps those,
-    diverging from the spec). The SDK preserves a trailing slash, so we additionally
-    strip it to keep ``https://x.org`` and ``https://x.org/`` equal. This is the
-    single canonical form used both to compare two FormatId references for federation
-    identity (see ``format_id_identity``) and to key the creative-agent format cache
+    ``core/format-id.json`` makes canonicalizing ``agent_url`` a MUST before two
+    format references may be treated as the same, per the eight-step algorithm at
+    ``docs/reference/url-canonicalization``: lowercased scheme and host, IDN hosts
+    to Punycode, userinfo stripped, default ports dropped, dot segments removed but
+    consecutive slashes PRESERVED, percent-encoding normalized, query preserved
+    byte-for-byte, fragment stripped. This is the single canonical form used both to
+    compare two FormatId references for federation identity (see
+    ``format_id_identity``) and to key the creative-agent format cache
     (``CreativeAgentRegistry._cache_key``).
+
+    The algorithm is not reimplemented here. It comes from
+    ``src.vendor.adcp_canonical`` — adcp 7.0.2's implementation, copied verbatim,
+    which passes all 37 published conformance vectors. The version this repo pins
+    (6.6.0) fails 14 of them and is terminal on its line; that package's docstring
+    has the detail, and salesagent-3xcdk deletes it by migrating.
+
+    **Spec step 5 is applied here, not there.** "If the path is empty AND an
+    authority is present, substitute ``/``." 7.0.2 does this only when a query is
+    present (``https://h.com?x=1`` -> ``https://h.com/?x=1``) and leaves
+    ``https://h.com`` with an empty path; no conformance vector covers the no-query
+    case, so it passes 37/37 while still diverging. Applying it makes
+    ``https://x.org`` and ``https://x.org/`` one agent, which is the spelling
+    difference a human actually produces.
+
+    What this deliberately does NOT do is ``.rstrip("/")``, which it used to. That
+    is an "additional transformation before comparison", which the algorithm's
+    closing sentence forbids, and it went further than step 5 in three ways the
+    spec calls DISTINCT: it equated ``/a`` with ``/a/``, equated
+    ``/.well-known/adcp/sales`` with ``.../sales/``, and collapsed the consecutive
+    slashes step 5 exists to preserve.
 
     Args:
         agent_url: A URL string or ``AnyUrl`` (FormatId.agent_url, CreativeAgent.agent_url).
 
     Returns:
-        The canonicalized URL string with any trailing slash removed.
-    """
-    from adcp.signing import canonicalize_target_uri
+        The canonical form, with an empty path rendered as ``/``.
 
-    return canonicalize_target_uri(str(agent_url)).rstrip("/")
+    Raises:
+        TargetUriMalformedError: For an authority the profile requires be rejected
+            rather than canonicalized (no host, bare IPv6, unclosed bracket, IPv6
+            zone id). A ``ValueError`` subclass, so existing callers that treat a
+            bad URL as ``ValueError`` keep working.
+    """
+    from src.vendor.adcp_canonical import canonicalize_target_uri
+
+    canonical = canonicalize_target_uri(str(agent_url))
+    # Step 5, the half the vendored implementation applies only when a query is present.
+    scheme, _, rest = canonical.partition("://")
+    if rest and "/" not in rest and "?" not in rest:
+        canonical = f"{scheme}://{rest}/"
+    return canonical
 
 
 def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:

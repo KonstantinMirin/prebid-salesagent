@@ -89,15 +89,9 @@ class TestSpecShapedPayloadLands:
             result = env.call_a2a(**self._payload())
         self._assert_landed(result, "a2a")
 
-    def test_spec_shaped_payload_lands_on_rest(self, integration_db):
-        with CapabilitiesEnv() as env:
-            env.setup_default_data()
-            client = env.get_rest_client()
-            response = client.post("/api/v1/capabilities", json=self._payload())
-        assert response.status_code == 200, (
-            f"a spec-shaped payload was REFUSED on rest: {response.status_code} {response.text}"
-        )
-        self._assert_landed(response.json(), "rest")
+    # The REST leg is graded on the wire by @T-UC-010-ext-e-echo (context echoed) and
+    # @T-UC-010-ext-d-filter (media_buy selected) on rest and e2e_rest; the copy that
+    # stood here posted without credential headers and was deleted rather than migrated.
 
     @staticmethod
     def _assert_landed(result, transport: str) -> None:
@@ -117,6 +111,6 @@ class TestSpecShapedPayloadLands:
         # fixture's tenant never declares them (the four declaration blocks are measurement,
         # specialisms, supported_protocols and trusted_match -- none populates signals), so
         # disabling the filter outright reddened nothing.
-        # It is graded properly, with a tenant that has sections to null out, by
-        # test_capabilities_rest_post_contract.py::test_post_capabilities_filters_sections_by_protocols.
+        # It is graded properly, with a tenant that has sections to null out, by the wired
+        # BDD scenario @T-UC-010-ext-d-filter on every transport.
         # Duplicating it here in a form that cannot fail is worse than not asserting it.

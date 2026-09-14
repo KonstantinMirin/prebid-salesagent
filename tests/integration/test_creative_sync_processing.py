@@ -246,7 +246,7 @@ class TestGenerativeUpdateUserAssets:
                     "status": "draft",
                     "context_id": "ctx-update",
                     "creative_output": {
-                        "assets": {"headline": {"text": "Generated headline"}},
+                        "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
                         "output_format": {"url": "https://generated.example.com/creative.html"},
                     },
                 }

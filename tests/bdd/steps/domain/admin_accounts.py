@@ -424,13 +424,6 @@ def then_json_key_contains(ctx: dict, key: str, substring: str) -> None:
     assert substring in str(data.get(key, "")), f"Expected {key} to contain '{substring}', got '{data.get(key)}'"
 
 
-@then(parsers.parse("the JSON response returns status {status_code:d}"))
-def then_json_status(ctx: dict, status_code: int) -> None:
-    """Assert JSON response HTTP status code."""
-    response = _require_admin_page(ctx)
-    assert response.status_code == status_code, f"Expected status {status_code}, got {response.status_code}"
-
-
 @then(parsers.parse('the "{field}" control is not editable'))
 def then_control_is_not_editable(ctx: dict, field: str) -> None:
     """Assert the form control for *field* is rendered disabled or readonly.

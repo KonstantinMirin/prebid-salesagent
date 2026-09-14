@@ -114,6 +114,12 @@ Results are saved as JSON in `test-results/<ddmmyy_HHmm>/`. Always check these a
 - Review failures without re-running
 - Compare before/after counts
 
+Read a run with `python3 -m scripts.audit.run_report test-results/<run> [--baseline LABEL=<run>]`:
+the per-suite table, the storyboard runner's own score per protocol (the pytest items cannot
+show a storyboard pass), every failure with its last traceback line, and the per-nodeid delta
+against each baseline. `scripts/audit/compare_runs.py` is the strict regression gate over the
+same data.
+
 ## Testing Workflow (Before Commit)
 ```bash
 # ALL changes

@@ -292,7 +292,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request does not include any updatable fields
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -347,7 +347,7 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | budget     | 5000    |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -378,7 +378,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the response should contain an "errors" array
     And the response should NOT contain "media_buy_id" field
     And the response should NOT contain "buyer_ref" field
@@ -489,7 +489,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
@@ -506,7 +506,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
@@ -532,7 +532,7 @@ Feature: BR-UC-003 Update Media Buy
     | paused       | true           |
     And no media buy exists with media_buy_id "mb_nonexistent"
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error should include "suggestion" field
@@ -548,7 +548,7 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "ACCOUNT_NOT_FOUND"
     And the error should include "suggestion" field
@@ -566,7 +566,7 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | budget     | 0 |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "recovery" field with value "correctable"
@@ -593,7 +593,7 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | budget     | -500 |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -609,7 +609,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing              |
     | end_time     | 2026-03-15T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -625,7 +625,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing              |
     | end_time     | 2026-04-01T00:00:00Z     |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -644,7 +644,7 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | budget     | 5000    |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -665,7 +665,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 50000   |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error should include "recovery" field with value "correctable"
@@ -682,7 +682,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes 1 package update without package_id
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -703,26 +703,44 @@ Feature: BR-UC-003 Update Media Buy
     # POST-F3: Suggestion for recovery
 
   @T-UC-003-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
-  Scenario: Creative not found -- referenced creative_id not in library
+  Scenario Outline: Creative not found -- referenced creative_id not in library (<array>)
     Given a valid update_media_buy request with:
     | field        | value       |
     | media_buy_id | mb_existing |
     And the request includes 1 package update with:
     | field      | value   |
     | package_id | pkg_001 |
-    And the package update includes creative_assignments with:
-    | creative_id |
-    | cr_missing  |
+    And the package update references creative "cr_missing" via <array>
     And creative "cr_missing" does not exist in the creative library
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # adcp 3.1.1 enums/error-code.json: CREATIVE_NOT_FOUND is MANDATED uniformly for
+    # any creative_id not owned by the calling account ("never distinguish 'exists in
+    # another tenant' from 'does not exist'", anti-enumeration). Was CREATIVE_REJECTED,
+    # which the same enum defines as a content-policy review failure.
+    And the error code should be "CREATIVE_NOT_FOUND"
+    # 3.1.1 L3/error-handling.mdx: error.field MUST name the ARRAY parameter itself,
+    # and the two request members that reference creatives are different arrays --
+    # which is the whole reason this is an outline rather than one scenario. A single
+    # hard-coded pointer would be right for one caller and silently wrong for the other.
+    And the response error field is packages[0].<array>
+    # Same paragraph: "Sellers MAY enumerate specific unresolvable elements in
+    # error.details -- but only when the elements were supplied verbatim by the caller."
+    # cr_missing was. Enumerating does not breach the anti-enumeration MUST above,
+    # which forbids DISTINGUISHING "exists elsewhere" from "does not exist"; every
+    # unresolvable id is listed identically, so the two remain indistinguishable.
+    And the wire error details should include missing_creative_ids "cr_missing"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains creative not found
     # POST-F3: Suggestion for recovery
+
+    Examples: the two request members that reference creatives
+      | array                |
+      | creative_ids         |
+      | creative_assignments |
 
   @T-UC-003-ext-j-error @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- creative in error state
@@ -738,9 +756,13 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_error" is in "error" state
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # adcp 3.1.1: INVALID_STATE is "Operation is not permitted for the resource's
+    # current status". CREATIVE_REJECTED is "Creative failed content policy review",
+    # whose pinned details shape is {policy_id, policy_url, reasons} — nothing this
+    # path can populate.
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-2: creative in error state → rejected
     # POST-F1: System state unchanged
@@ -760,12 +782,45 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_rejected" is in "rejected" state
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # INVALID_STATE, even though the creative's STATUS is "rejected": the refusal here
+    # is "you cannot assign a creative in this state", not a fresh policy review. The
+    # policy rejection already happened and was reported when the status was set.
+    And the error code should be "INVALID_STATE"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-3: creative in rejected state → rejected
     # POST-F3: Suggestion for recovery
+
+  # The multi-subject half. Every scenario above drives ONE creative, so a refusal that
+  # named only the first would satisfy all of them — the buyer would fix it, resubmit,
+  # and meet the second, one round trip per bad creative with no way to know how many
+  # remain. adcp 3.1.1 leaves the shape open (core/error.json types `details` as a free
+  # object and reserves `issues[]` for per-FIELD schema failures, which a state refusal
+  # has no pointer or keyword for), so this grades the per-ENTITY channel this repo
+  # uses: details.problems, one entry per creative with the state that disqualified it.
+  @T-UC-003-ext-j-multi @extension @ext-j @error @post-f1 @post-f2 @post-f3
+  Scenario: Creative validation -- every unassignable creative is named, not just the first
+    Given a valid update_media_buy request with:
+    | field        | value       |
+    | media_buy_id | mb_existing |
+    And the request includes 1 package update with:
+    | field      | value   |
+    | package_id | pkg_001 |
+    And the package update includes creative_assignments with:
+    | creative_id |
+    | cr_error    |
+    | cr_rejected |
+    And creative "cr_error" is in "error" state
+    And creative "cr_rejected" is in "rejected" state
+    And the package "pkg_001" exists in the media buy
+    When the Buyer Agent sends the update_media_buy request
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_STATE"
+    And the error details should name each rejected creative with its state
+    # POST-F1: System state unchanged
+    # POST-F2: Error explains which creatives blocked the update, and why
 
   @T-UC-003-ext-j-format @extension @ext-j @error @post-f1 @post-f2 @post-f3
   Scenario: Creative validation -- format incompatible with product
@@ -781,9 +836,11 @@ Feature: BR-UC-003 Update Media Buy
     And creative "cr_wrong_fmt" has a format incompatible with package product
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
-    And the error code should be "CREATIVE_REJECTED"
+    # adcp 3.1.1: VALIDATION_ERROR is "violates business rules beyond schema
+    # validation". The creative is fine; the ASSIGNMENT is what the product refuses.
+    And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
     # BR-RULE-026 INV-4: format mismatch → rejected
     # POST-F3: Suggestion for recovery
@@ -797,7 +854,7 @@ Feature: BR-UC-003 Update Media Buy
     And the creative upload/sync process fails
     And the package exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error should include "suggestion" field
     And the error code should be "SERVICE_UNAVAILABLE"
@@ -816,7 +873,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000           |
     And package "pkg_nonexistent" does not exist in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "PACKAGE_NOT_FOUND"
     And the error should include "suggestion" field
@@ -838,7 +895,7 @@ Feature: BR-UC-003 Update Media Buy
     And placement "plc_nonexistent" is not valid for the package product
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -860,7 +917,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package product does not support placement-level targeting
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
@@ -875,7 +932,7 @@ Feature: BR-UC-003 Update Media Buy
     | field        | value       |
     | media_buy_id | mb_existing |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error should include "suggestion" field
     And the error code should be "PERMISSION_DENIED"
@@ -890,7 +947,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id    | mb_existing |
     | idempotency_key | abc1234     |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -907,7 +964,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id    | mb_existing              |
     | idempotency_key | <256 character string>   |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
@@ -927,7 +984,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_add and targeting_overlay.keyword_targets
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -946,7 +1003,7 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes negative_keywords_add and targeting_overlay.negative_keywords
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -1919,8 +1976,8 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition            | creative_state  | outcome                                        |
-      | error_state          | error           | error "CREATIVE_REJECTED" with suggestion       |
-      | format_incompatible  | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
+      | error_state          | error           | error "INVALID_STATE" with suggestion          |
+      | format_incompatible  | wrong_format    | error "VALIDATION_ERROR" with suggestion       |
 
   @T-UC-003-boundary-creative-state @boundary @creative_state_validation
   Scenario Outline: Creative state validation boundary - <boundary_point>
@@ -1940,8 +1997,8 @@ Feature: BR-UC-003 Update Media Buy
     Examples: Boundary values
       | boundary_point                              | creative_state  | outcome                                        |
       | all creatives valid state and format         | approved        | success                                        |
-      | creative in error state                     | error           | error "CREATIVE_REJECTED" with suggestion       |
-      | format incompatible with product            | wrong_format    | error "CREATIVE_REJECTED" with suggestion       |
+      | creative in error state                     | error           | error "INVALID_STATE" with suggestion          |
+      | format incompatible with product            | wrong_format    | error "VALIDATION_ERROR" with suggestion       |
 
   @T-UC-003-partition-placement-id @partition @placement_id_validation
   Scenario Outline: Placement ID validation partition - <partition>
@@ -2115,7 +2172,7 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 100 |
     And the seller's minimum budget for this media buy is 500 USD
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "BUDGET_TOO_LOW"
     And the error "details" object should include "minimum_budget" with value 500
@@ -2136,7 +2193,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "CONFLICT"
     And the error "details" object should include "resource_id" with value "mb_existing"
@@ -2158,7 +2215,7 @@ Feature: BR-UC-003 Update Media Buy
     | idempotency_key | upd-20260521-001  |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
     And the error "details" object should include "resource_id" with value "mb_existing"
@@ -2172,7 +2229,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: update_media_buy with unknown media_buy_id returns structured MEDIA_BUY_NOT_FOUND, not a 500
     Given the buyer fabricates a media_buy_id that does not exist in the seller catalog
     When the Buyer Agent sends update_media_buy with the unknown media_buy_id and paused true
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "MEDIA_BUY_NOT_FOUND"
     And the error recovery hint should indicate correctable
@@ -2189,7 +2246,7 @@ Feature: BR-UC-003 Update Media Buy
     Given the media buy exists in the seller catalog
     And the buyer references a package_id that does not belong to the media buy
     When the Buyer Agent sends update_media_buy targeting the unknown package
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "PACKAGE_NOT_FOUND"
     And the response should echo the context.correlation_id unchanged
@@ -2204,7 +2261,7 @@ Feature: BR-UC-003 Update Media Buy
   Scenario: Re-cancel of a canceled media buy returns NOT_CANCELLABLE, not silent success
     Given the media buy is in "canceled" status
     When the Buyer Agent sends update_media_buy with canceled true on the already-canceled buy
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "NOT_CANCELLABLE"
     And the error recovery hint should indicate correctable
@@ -2338,7 +2395,7 @@ Feature: BR-UC-003 Update Media Buy
     | paused       | true        |
     And the invoice_recipient "acme-finance-not-on-acct" is not authorized for this account
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -2357,7 +2414,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error "details" object should include "scope" with value "<scope>"
@@ -2380,7 +2437,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "BILLING_NOT_PERMITTED_FOR_AGENT"
     And the error "details" object should include "rejected_billing"
@@ -2399,7 +2456,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | paused       | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "BILLING_NOT_SUPPORTED"
     And the error "details" object should NOT include "scope"
@@ -2417,7 +2474,7 @@ Feature: BR-UC-003 Update Media Buy
     And the request includes new_packages with one complete package-request
     And the media buy's valid_actions does NOT advertise "add_packages"
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "UNSUPPORTED_FEATURE"
     And the error should include "suggestion" field
@@ -2449,7 +2506,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes new_packages with an entry missing product_id
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -2465,7 +2522,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     And the request includes new_packages with a package for product "prod_news_300x250"
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -2482,7 +2539,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | canceled     | true        |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "NOT_CANCELLABLE"
     And the error should include "suggestion" field
@@ -2536,7 +2593,7 @@ Feature: BR-UC-003 Update Media Buy
     | media_buy_id | mb_existing |
     | canceled     | false       |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -2554,7 +2611,7 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001    |
     | product_id | prod_other |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field
@@ -2604,7 +2661,7 @@ Feature: BR-UC-003 Update Media Buy
     Given the media buy "mb_existing" has a committed metric "impressions" with committed_at "2026-04-29T10:53:00Z"
     And a valid update_media_buy request that <mutation>
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "VALIDATION_ERROR"
     And the error should include "suggestion" field
@@ -2663,7 +2720,7 @@ Feature: BR-UC-003 Update Media Buy
     | package_id | pkg_001 |
     | start_time | asap    |
     When the Buyer Agent sends the update_media_buy request
-    Then the error is compliant with the AdCP error spec
+    Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error should include "suggestion" field

@@ -88,8 +88,9 @@ class TestRelevanceThresholdIntegration:
 
         Covers: CONSTR-RELEVANCE-THRESHOLD-01
         """
-        from src.core.tenant_context import TenantContext
         from src.core.testing_hooks import AdCPTestContext
+
+        from src.core.tenant_context import TenantContext
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
         with ProductEnv(tenant_id="thresh-t1", principal_id="p1") as env:

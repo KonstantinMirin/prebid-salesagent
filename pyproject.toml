@@ -37,6 +37,8 @@ dependencies = [
     "waitress>=3.0.0",
     "pytz>=2024.1",
     "httpx>=0.28.1",
+    "idna>=3.7",  # explicit: src/vendor/adcp_canonical needs UTS-46 ToASCII (NOT str.encode('idna'), which is IDNA2003). Drops out with the vendored copy — see salesagent-3xcdk
+
     "a2a-cli>=0.2.0",
     "a2a-sdk[http-server]>=1.0.1", # a2a-sdk 1.0 (protobuf API, required by adcp>=4.3.0)
     "jinja2>=3.1.0",
@@ -147,6 +149,7 @@ exclude = [
     ".tox",
     ".venv",
     ".claude/worktrees",  # Agent worktrees have their own checkouts
+    "src/vendor",  # Third-party source copied verbatim; we are forbidden from editing it, so linting it can only produce findings nobody may act on. Bounded by tests/unit/test_architecture_vendored_code.py
     "_build",
     "buck-out",
     "build",

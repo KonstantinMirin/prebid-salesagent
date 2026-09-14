@@ -76,12 +76,6 @@ def then_all_formats(ctx: dict) -> None:
     )
 
 
-@then("the response should include an empty formats array")
-def then_empty_formats(ctx: dict) -> None:
-    formats = _get_formats(ctx)
-    assert len(formats) == 0, f"Expected 0 formats, got {len(formats)}"
-
-
 @then("the response should include only display formats")
 def then_only_display(ctx: dict) -> None:
     formats = _get_formats(ctx)

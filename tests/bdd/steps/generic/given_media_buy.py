@@ -533,34 +533,6 @@ def given_request_with_total_budget(ctx: dict, amount: int) -> None:
     )
 
 
-@given(parsers.parse("a create_media_buy request with total_budget of {amount:d}"))
-@given(parsers.parse("a create_media_buy request with total_budget {amount:d}"))
-def given_request_with_total_budget_of(ctx: dict, amount: int) -> None:
-    """Set up request with a specific total_budget amount (may be invalid, e.g. 0).
-
-    Unlike 'a valid create_media_buy request with total budget' this step
-    deliberately allows invalid amounts for validation-error scenarios.
-
-    In the package-based model, total_budget is the sum of all package budgets.
-    This step sets the first package's budget and zeroes out any others so the
-    total matches the claimed amount.
-    """
-    kwargs = _ensure_request_defaults(ctx)
-    assert kwargs.get("packages"), (
-        "No packages in request — step claims 'total_budget of {amount}' but cannot set budget without packages"
-    )
-    kwargs["packages"][0]["budget"] = float(amount)
-    # Zero out remaining packages so total equals claimed amount
-    for pkg in kwargs["packages"][1:]:
-        pkg["budget"] = 0.0
-    # Post-setup invariant: total across all packages equals the claimed total_budget
-    actual_total = sum(pkg.get("budget", 0) for pkg in kwargs["packages"])
-    assert actual_total == float(amount), (
-        f"Step claims 'total_budget of {amount}' but total of all package budgets "
-        f"is {actual_total} — setup did not establish the claimed total"
-    )
-
-
 @given(parsers.parse("the product minimum spend is {amount:d} {currency}"))
 def given_product_minimum_spend(ctx: dict, amount: int, currency: str) -> None:
     """Configure the product's minimum spend threshold.
@@ -749,13 +721,6 @@ def given_nonexistent_product(ctx: dict, product_id: str) -> None:
         "but cannot override product_id without packages"
     )
     kwargs["packages"][0]["product_id"] = product_id
-
-
-@given(parsers.parse('start_time is "{value}" (in the past)'))
-def given_past_start_time(ctx: dict, value: str) -> None:
-    """Set start_time to a past datetime."""
-    kwargs = _ensure_request_defaults(ctx)
-    kwargs["start_time"] = value
 
 
 @given("end_time is before start_time")

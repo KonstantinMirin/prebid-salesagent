@@ -104,7 +104,6 @@ _ENTITY_PATTERNS: dict[str, list[str]] = {
         "formatid",
         "build_creative_data",
         "extract_url_from_assets",
-        "normalize_agent_url",
         "list_creative_formats",
     ],
     "product": [
@@ -269,6 +268,12 @@ _PATH_ENTITY_MAP: dict[str, str] = {
 }
 
 
+#: What pytest-playwright's --output defaults to, and where this repo sends it instead.
+#: Module constants so the guard test and the redirect below read one definition.
+PLAYWRIGHT_DEFAULT_OUTPUT = "test-results"
+PLAYWRIGHT_ARTIFACTS_DIR = ".playwright-artifacts"
+
+
 def pytest_configure(config):
     """Register entity markers and configure test environment.
 
@@ -281,6 +286,20 @@ def pytest_configure(config):
     # --- Entity marker registration ---
     for marker in sorted(_ENTITY_MARKERS):
         config.addinivalue_line("markers", f"{marker}: Entity marker (auto-applied by filename/path)")
+
+    # --- pytest-playwright must not be pointed at test-results/ ---
+    # The plugin's --output defaults to test-results and it shutil.rmtree()s that
+    # directory at the start of EVERY session, UI suite or not (pytest_playwright.py,
+    # the _pw_artifacts_folder fixture). test-results/ is where run_all_tests.sh and
+    # the CI-box runner write the per-run JSON reports -- the baselines every
+    # failing-nodeid membership diff is made against -- so a plain
+    # `pytest tests/unit/<one file>` in the dev venv deleted every recorded run on
+    # the machine. Redirected HERE, not in pytest.ini addopts: the tox envs do not
+    # install the plugin, and an addopts `--output` is an unrecognized argument
+    # there, which is how one attempt refused every suite but ui on the box.
+    # Pinned by tests/unit/test_pytest_playwright_output_dir.py.
+    if config.pluginmanager.hasplugin("playwright") and config.getoption("--output") == PLAYWRIGHT_DEFAULT_OUTPUT:
+        config.option.output = PLAYWRIGHT_ARTIFACTS_DIR
 
     # --- Environment setup ---
     os.environ.setdefault("FASTMCP_DEPRECATION_WARNINGS", "false")

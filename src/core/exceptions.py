@@ -24,6 +24,7 @@ from src.core.errors.details import (
     CapabilityRefusalDetails,
     ConfigurationDetails,
     ConflictDetails,
+    CreativeRefDetails,
     CreativeRejectionDetails,
     EntityRefDetails,
     ErrorDetails,
@@ -849,7 +850,7 @@ class AdCPContextNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.SESSION_NOT_FOUND
 
 
-class AdCPCreativeNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+class AdCPCreativeNotFoundError(AdCPNotFoundError[CreativeRefDetails]):
     """Requested creative does not exist (404, wire CREATIVE_NOT_FOUND).
 
     ``CREATIVE_NOT_FOUND`` is a pinned-spec wire code (enums/error-code.json @
@@ -982,6 +983,37 @@ class AdCPCreativeRejectedError(AdCPSalesAgentError[CreativeRejectionDetails]):
     """Creative failed policy or technical validation (422, CREATIVE_REJECTED)."""
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.CREATIVE_REJECTED
+
+
+# The structural provenance rejections of core/creative-policy.json: "Sellers that publish a
+# requirement here MUST enforce it on creative submission: a sync_creatives request that
+# omits a required field is rejected with the corresponding PROVENANCE_* error code". All
+# four are correctable per the pinned enumMetadata, and each names in ``field`` the
+# provenance path it inspected.
+
+
+class AdCPProvenanceRequiredError(AdCPSalesAgentError[EntityRefDetails]):
+    """No provenance object on the creative or any asset under a policy requiring one (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_REQUIRED
+
+
+class AdCPProvenanceDigitalSourceTypeMissingError(AdCPSalesAgentError[EntityRefDetails]):
+    """Provenance present but ``digital_source_type`` absent under require_digital_source_type (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING
+
+
+class AdCPProvenanceDisclosureMissingError(AdCPSalesAgentError[EntityRefDetails]):
+    """Provenance present but no usable ``disclosure`` block under require_disclosure_metadata (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_DISCLOSURE_MISSING
+
+
+class AdCPProvenanceEmbeddedMissingError(AdCPSalesAgentError[EntityRefDetails]):
+    """Provenance present but no ``embedded_provenance`` entry under require_embedded_provenance (422)."""
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.PROVENANCE_EMBEDDED_MISSING
 
 
 class AdCPBudgetExceededError(AdCPSalesAgentError[BudgetDetails]):

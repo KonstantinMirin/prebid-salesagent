@@ -28,7 +28,7 @@ from tests.factories.request import PackageRequestFactory
 #: The product a fixture package points at. Held here rather than taken from the request
 #: factory's ``prod-1`` because the ORM fixtures JOIN on it: seeding hooks create
 #: ``ProductFactory(product_id="prod_001")`` so format validation resolves the product
-#: instead of silently skipping (tests/integration/test_creative_sync_behavioral.py).
+#: instead of silently skipping.
 FIXTURE_PRODUCT_ID = "prod_001"
 
 
@@ -45,8 +45,7 @@ def request_package(index: int = 0, **overrides: Any) -> dict[str, Any]:
 
     - ``product_id`` — the model's ``prod-1`` names no fixture product. The ORM fixtures
       JOIN on ``prod_001``: seeding hooks create ``ProductFactory(product_id="prod_001")``
-      so format validation resolves the product instead of silently skipping
-      (tests/integration/test_creative_sync_behavioral.py).
+      so format validation resolves the product instead of silently skipping.
     - ``package_id`` — NOT a ``PackageRequest`` field, because the buyer does not send one.
       The seller mints it and ``MediaBuyRepository.create_from_request`` injects it into
       the persisted request from ``package_id_map``; injecting it here is the same move,

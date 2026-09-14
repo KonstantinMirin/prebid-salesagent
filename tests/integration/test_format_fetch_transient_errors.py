@@ -1,7 +1,8 @@
-"""mpo1 repro: typed transient creative-agent errors must stay transient on the wire.
+"""Typed transient creative-agent errors must stay transient on the wire.
 
-Split from test_creative_sync_behavioral.py so the (intentionally red, pre-fix)
-repro ships with the fix commit, not before it.
+Split from the (since retired) creative-sync integration file so the intentionally
+red, pre-fix repro shipped with the fix commit, not before it. The same rule is
+graded on every transport by @T-UC-006-ext-g in BR-UC-006-sync-creatives.feature.
 """
 
 from __future__ import annotations

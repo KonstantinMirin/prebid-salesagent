@@ -1008,9 +1008,9 @@ class TestSyncAccountsBrandIdRoundTrip:
             AccountReference,
             AccountReferenceByNaturalKey,
         )
+        from src.core.helpers.account_helpers import resolve_account
 
         from src.core.database.repositories.uow import AccountUoW
-        from src.core.helpers.account_helpers import resolve_account
 
         with AccountSyncEnv(tenant_id="sync_bid1", principal_id="agent_sync_bid") as env:
             env.setup_default_data()

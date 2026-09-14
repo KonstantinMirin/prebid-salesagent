@@ -9,11 +9,11 @@ Uses ProductEnv harness + factories. Only mocks PolicyCheckService (LLM).
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthorizationError
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import TenantContext
-from src.core.testing_hooks import AdCPTestContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.harness.product import ProductEnv

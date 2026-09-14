@@ -60,6 +60,7 @@ def _make_request(idempotency_key, *, po_number="REPLAY-1"):
 
 def _identity(tenant_id, principal_id):
     from src.core.testing_hooks import AdCPTestContext
+
     from tests.factories import PrincipalFactory
 
     return PrincipalFactory.make_identity(

@@ -125,11 +125,12 @@ class TestSyncCreativesFormatValidation:
             assert len(response.creatives[0].errors) == 1
 
             advisory = response.creatives[0].errors[0]
-            # The rejected format and the agent that lacks it are STRUCTURED now, not
-            # interpolated prose: a buyer agent can read them without parsing English.
-            assert advisory.code == "VALIDATION_ERROR"
+            # The rejected format is STRUCTURED, not interpolated prose: a buyer agent can
+            # read it without parsing English. The code is the pin's generic not-found
+            # (enums/error-code.json: REFERENCE_NOT_FOUND for a referenced identifier that
+            # does not exist), not VALIDATION_ERROR, which it reserves for business rules.
+            assert advisory.code == "REFERENCE_NOT_FOUND"
             assert advisory.details["format_id"] == "display_300x250_image"
-            assert "creative.adcontextprotocol.org" in advisory.details["agent_url"]
 
     def test_format_validation_agent_unreachable(self, identity, mock_tenant, valid_creative_dict):
         """An unreachable agent fails the REQUEST transiently, not the creative.
@@ -220,7 +221,7 @@ class TestSyncCreativesFormatValidation:
             assert response.creatives[1].creative_id == "creative_2"
             assert response.creatives[1].action == "failed"
             advisory_2 = response.creatives[1].errors[0]
-            assert advisory_2.code == "VALIDATION_ERROR"
+            assert advisory_2.code == "REFERENCE_NOT_FOUND"
             assert advisory_2.details["format_id"] == "unknown_format"
 
             # Third creative: success
@@ -319,7 +320,7 @@ class TestSyncCreativesFormatValidation:
             # The advisory is built by the SAME derivation as the request-level envelope
             # (build_error_object), and since salesagent-3dawm.8 that derivation resolves
             # the suggestion from CODE_TABLE — the class default is gone, not deferred.
-            assert advisory1.code == "VALIDATION_ERROR"
+            assert advisory1.code == "REFERENCE_NOT_FOUND"
             assert advisory1.code != "SERVICE_UNAVAILABLE"
 
             # Down agent: request-level TRANSIENT failure — the creative is fine.

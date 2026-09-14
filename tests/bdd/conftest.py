@@ -74,6 +74,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
+    "tests.bdd.steps.domain.uc006_dry_run_parity",
     "tests.bdd.steps.domain.uc005_format_id_shape",
     "tests.bdd.steps.domain.uc005_format_id_roundtrip",
     "tests.bdd.steps.domain.uc005_format_id_third_party",
@@ -189,7 +190,7 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
     WHY THIS EXISTS. A scenario whose step has no binding executes nothing, and the
     auto-convert below reported it as a plain xfail -- indistinguishable in any
     summary from a graded spec-production gap. A suite could shrink to nothing while
-    every run stayed green, which is the state salesagent-prkv.39 found.
+    every run stayed green, which is the state that audit found.
 
     The judgement was already in this file and was simply not reached:
     ``pytest_bdd_step_func_lookup_error`` classifies a missing binding as dormancy,
@@ -203,7 +204,7 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
     serialize ``wasxfail``: the reason string is invisible in the JSON reports, so the
     only trace of dormancy there is the exception class inside a traceback. Measuring
     this required knowing that trick, and the first attempt at it returned zero
-    against a real count of 1356 (salesagent-vtreb). A user_property IS serialized, so
+    against a real count of 1356. A user_property IS serialized, so
     the next audit does not depend on folklore.
     """
     tag = _scenario_tag(item)
@@ -248,7 +249,7 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
         report.wasxfail = (
             f"Step definition not found: DORMANT (test-wiring) — no step definition for "
             f"{step_key!r} in {tag}, so this scenario grades nothing. Recorded in "
-            f"tests/bdd/dormant_scenarios.txt; closing the hole is salesagent-8j5nf."
+            f"tests/bdd/dormant_scenarios.txt; closing the hole means writing the step."
         )
         return True
     report.outcome = "failed"
@@ -487,23 +488,15 @@ _XFAIL_TAGS: dict[str, str] = {
     "production populates >=DEFAULT_AGENT over real transports (mock limitation, not a spec-production gap). "
     "ALSO upstream adcp#7338 on e2e_rest: the response asset oneOf omits pixel_tracker, which the reference "
     "formats declare -- see the _SELECTIVE_XFAIL block for the evidence",
-    # T-UC-005-main: TWO different failures under one tag, and the reason used to name only
-    # the first. In-process it is a real spec-production gap (some formats, e.g. audio-spot,
-    # carry no asset_requirements or render_capabilities). On e2e_rest it is DORMANCY, not a
-    # gap: the Given "the creative agent registry has formats across multiple categories" asks
-    # for fmt_47/fmt_48/fmt_49, none of which is among the 57 in
-    # tests/fixtures/creative_formats/reference_formats.json, so the env raises
-    # E2EUnsupportedSetup before anything is graded. The strict-xfail misclassification
-    # detector caught exactly that and said so; recording it as a production gap would have
-    # been the lie it refused. Fixing it means registering those three in the creative agent
-    # and running `make creative-formats-refresh` -- test wiring, not production work.
-    # ONE obligation now, and it is a real production gap. The scenario used to carry two
-    # more Thens that graded `type` -- "a name and type category" and "sorted by format type
-    # then name" -- a field adcp 3.12 removed from Format. Sorting has its own scenario
-    # (@T-UC-005-inv-031-2-holds, graduated above), so it is no longer suppressed by this tag.
-    "T-UC-005-main": "in-process: some formats (e.g. audio-spot) lack asset_requirements and "
-    "render_capabilities — spec-production gap. e2e_rest: DORMANT — the Given requests "
-    "fmt_47/48/49, which are not in the reference fixture, so the scenario grades nothing",
+    # Graduated: T-UC-005-main. Both halves of its old reason were the Given, not
+    # production: it minted fmt_N formats, which carry no assets (so "asset requirements"
+    # graded nothing in-process and read as a spec-production gap) and which the live
+    # stack cannot serve (E2EUnsupportedSetup on e2e_rest, flagged by the misclassification
+    # detector). The Given now draws three reference-catalog formats (given_entities.py),
+    # so the scenario grades POST-S1/S2 for real on a2a, mcp and rest. On e2e_rest the live
+    # server answers with the WHOLE catalog, pixel_tracker assets included, and the
+    # compliance Then fails on adcp#7338 exactly as its siblings do -- that one node is on
+    # tests/bdd/e2e_rest_known_failures.txt under the #7338 block, not parked by tag.
     # Partially graduated: dispatch fix landed; error code mismatch remains
     # FIXME: production raises AUTH_REQUIRED, spec expects TENANT_REQUIRED
     "T-UC-005-ext-a": "error code AUTH_REQUIRED instead of TENANT_REQUIRED — spec-production gap",
@@ -516,7 +509,7 @@ _XFAIL_TAGS: dict[str, str] = {
     # Suggestion parity for list_creative_formats is pinned instead by
     # tests/integration/test_request_validation_suggestion_parity.py.
     "T-UC-005-ext-b": "suggestion field not implemented in error responses",
-    # Graduated (salesagent-prkv.65, cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
+    # Graduated (cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
     # T-UC-005-ext-b-disclosure-invalid, -disclosure-empty, -output-empty,
     # -output-invalid, -output-noid, -input-empty, -input-invalid, -input-noid.
     #
@@ -672,8 +665,8 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: T-UC-002-inv-080-1 ("account field absent"). The entry said production
     # accepts a create_media_buy without account while BR-RULE-080 INV-1 and
     # create-media-buy-request.json /required both demand it. CreateMediaBuyRequest.account
-    # is REQUIRED now (salesagent-prkv.68; it was the last surviving instance of
-    # salesagent-prkv.28, which had already fixed update_media_buy and sync_creatives), so
+    # is REQUIRED now (it was the last surviving instance of the optional-account
+    # shape; update_media_buy and sync_creatives had already been fixed), so
     # an absent account is refused at the request boundary as the scenario always said.
     # FIXME: rate limiting + payload size validation not implemented
     # Rate limiting middleware does not exist (AdCPRateLimitError never raised).
@@ -886,7 +879,7 @@ _XFAIL_TAGS: dict[str, str] = {
 # some examples exercise unimplemented features. Each entry: (tag, node_id
 # substrings that should xfail, reason).
 _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
-    # ── UC-006 ROUTE PARTITION (salesagent-lqm79) ──
+    # ── UC-006 ROUTE PARTITION ──
     # These 16 Scenario Outlines disagree ROW TO ROW, which is why they are here and not
     # in _UC006_WIRED_SCENARIOS: a route matches on a scenario's markers and cannot say
     # "these Examples rows, not those". Wiring them wakes 128 passing nodes; these 70 are
@@ -906,123 +899,14 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     #
     # strict=True is the consumer's default here, so a parked row that starts passing
     # becomes XPASS(strict) and fails -- the list cannot rot quietly.
-    # Graduated: the [rest-auto-approve] row. XPASS(strict) on REST in every box run from
-    # innet_110926_0843 through innet_120926_1631, while its a2a and mcp siblings were never
-    # parked and pass. The Then reads the creative's status and the absence of workflow
-    # steps back from the database after a success check, so the pass is not vacuous.
-    (
-        "T-UC-006-boundary-approval",
-        {
-            '-ai-powered-"ai-powered"-a review workflow should be created with AI review]',
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-boundary-assignment-weight",
-        {
-            "-weight = -1 (min - 1)--1-the error should be INVALID_REQUEST with suggestion]",
-            "-weight = 101 (max + 1)-101-the error should be INVALID_REQUEST with suggestion]",
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-boundary-assignments-structure",
-        {
-            "-entry missing creative_id-an assignment entry with only package_id-the error should be INVALID_REQUEST]",
-            "-entry missing package_id-an assignment entry with only creative_id-the error should be INVALID_REQUEST]",
-            "[rest-duplicate (creative_id, package_id) pair-two assignment entries with same creative_id and package_id-the second should be an idempotent upsert]",
-        },
-        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps; unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-boundary-generative",
-        {
-            '-generative, no GEMINI_API_KEY-a creative with a generative format but GEMINI_API_KEY not configured-the error should include "suggestion" field]',
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-boundary-provenance",
-        {
-            "-provenance present + no provenance policy-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
-            "-provenance present + policy requires provenance-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
-        },
-        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
-    ),
-    (
-        "T-UC-006-boundary-validation-mode",
-        {
-            '-unknown value-"partial"-the system should reject with INVALID_REQUEST]',
-        },
-        "uc006 route partition (salesagent-lqm79): no step definition for one of its steps",
-    ),
-    (
-        "T-UC-006-main-lenient-warnings",
-        {
-            "[rest]",
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-partition-assignment-pkg",
-        {},
-        "uc006 route partition (salesagent-lqm79): ",
-    ),
-    (
-        "T-UC-006-partition-assignment-weight",
-        {
-            "-weight_above_max-101-the error should be INVALID_REQUEST with suggestion]",
-            "-weight_below_min--1-the error should be INVALID_REQUEST with suggestion]",
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-partition-assignments-structure",
-        {
-            "-missing_creative_id-an assignment entry missing creative_id-the error should be INVALID_REQUEST with suggestion]",
-            '-with_placement_targeting-an assignment with creative_id "c1", package_id "p1", and placement_ids ["slot_a"]-the assignment should be created with placement targeting]',
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-partition-format-id",
-        {
-            "-agent_unreachable-a format_id whose agent is unreachable-AGENT_UNREACHABLE]",
-            "-empty_name-an empty name and a known format_id-INVALID_REQUEST]",
-            "-missing_format_id-no format_id-INVALID_REQUEST]",
-            "-unknown_format-a format_id unknown to all agents-REFERENCE_NOT_FOUND]",
-        },
-        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
-    ),
-    (
-        "T-UC-006-partition-generative",
-        {
-            "-generative_no_gemini_key-output_format_ids present-message asset but no GEMINI_API_KEY-CONFIGURATION_ERROR]",
-        },
-        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
-    ),
-    (
-        "T-UC-006-partition-idempotency-key",
-        {
-            '-boundary_min-"12345678"-the request should proceed normally]',
-        },
-        "uc006 route partition (salesagent-lqm79): unverified: not one of the named test-side blockers",
-    ),
-    (
-        "T-UC-006-partition-provenance",
-        {
-            "-provenance_present_not_required-a creative with provenance metadata-no product with provenance_required-the creative should be processed without warning]",
-            "-provenance_present_required-a creative with provenance metadata-a product with creative_policy.provenance_required = true-the creative should be processed without warning]",
-        },
-        "uc006 route partition (salesagent-lqm79): the dispatched payload is refused by the malformation gate and undeclared",
-    ),
-    (
-        "T-UC-006-partition-validation-mode",
-        {
-            "-unknown_value-partial-rejected with INVALID_REQUEST]",
-        },
-        "uc006 route partition (salesagent-lqm79): the Then step does not handle this row's outcome string",
-    ),
+    # No UC-006 rows are parked here any more. What stood here, and why each is live:
+    # boundary-approval's ai-powered row read a column the mapping table does not have
+    # (workflow_step_id); the assignments-structure "entry missing a field" rows now send
+    # the entry itself, which the request schema refuses; the generative no-GEMINI-key
+    # row reads CONFIGURATION_ERROR on the entry, as ext-i does; the validation_mode
+    # "partial" row names the code; main-lenient-warnings built its two valid packages
+    # from one factory-default id, so they collapsed into one assignment; and the
+    # assignment-weight / provenance rows are described where the Given changed.
     # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
     # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
     # build a success response and therefore validate assets against the pinned schema; the
@@ -2223,213 +2107,62 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # pre-existing, not introduced by graduating this route; strengthening it to
         # a wire-envelope + error-code assertion is tracked separately.
 
-        # --- UC-006: auth error code mismatch (production returns VALIDATION_ERROR, spec expects AUTH_REQUIRED) ---
-        _UC006_AUTH_XFAIL = {"T-UC-006-ext-a"}
-        if marker_names & _UC006_AUTH_XFAIL:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="AUTH_REQUIRED error code not implemented (returns VALIDATION_ERROR)", strict=True
-                )
-            )
+        # Graduated: T-UC-006-ext-a. The strict xfail here said production answered
+        # VALIDATION_ERROR for a missing principal; it answers AUTH_MISSING, which the
+        # scenario names, so the route that parked it as "passes under a stale xfail" is
+        # gone with the xfail and the scenario grades live with ext-a-empty.
 
-        # --- UC-006: INVALID_REQUEST validation xfails (production not implemented) ---
-        _UC006_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
-            (
-                "T-UC-006-partition-account",
-                {"missing_account", "invalid_oneOf_both"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
-            ),
-            (
-                "T-UC-006-boundary-account",
-                {"account field absent", "both account_id and brand"},
-                "INVALID_REQUEST validation not implemented (schema-level)",
-            ),
-            # boundary-format-id: error-path examples need "suggestion" field
-            (
-                "T-UC-006-boundary-format-id",
-                {"suggestion"},
-                "SPEC-PRODUCTION GAP: _SyntheticError lacks suggestion field",
-            ),
-        ]
-        if any(t.startswith("T-UC-006") for t in marker_names):
-            for tag, substrings, reason in _UC006_VALIDATION_XFAIL:
-                if tag in marker_names and any(s in nodeid for s in substrings):
-                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-                    break
+        # Graduated: the UC-006 account rows that used to xfail as "INVALID_REQUEST
+        # validation not implemented". The schema always refused them; the harness did
+        # not send them -- a "not provided" account was replaced by the default one and
+        # the both-branches reference was dropped before dispatch. They go on the wire
+        # now (OMIT_ACCOUNT, and the oneOf violation verbatim) and the request model's
+        # refusal is what the rows grade.
 
         # --- UC-006: spec-production gaps surfaced by Wave 1B step implementations ---
         # Production uses generic error codes / plain-string errors where the spec
         # demands specific codes and structured AdCPSalesAgentError with suggestion fields.
         _UC006_SPECGAP_XFAIL_TAGS: dict[str, str] = {
-            # Split out of @T-UC-006-storyboard-multi-format-sync.
-            # While the status obligation shared a scenario with the action
-            # obligations, its xfail ABORTED the scenario and the sibling
-            # action-value assertion never ran on any transport. It now owns a
-            # scenario, so the action half runs LIVE and this half is ledgered.
-            # Production defect: SyncCreativeResult deliberately never populates
-            # the inherited spec `status` (src/core/schemas/creative.py) — it
-            # stays None on the wire rather than carrying a creative-status enum.
-            # e2e_rest decision (owed explicitly by the lane's design): NO
-            # e2e_rest_known_failures.txt entry is required. These tag markers are
-            # applied here in pytest_collection_modifyitems with no transport
-            # gate, so they cover the e2e_rest param identically to a2a/mcp/rest.
-            # Routing the gap through the tag ledger therefore registers it once
-            # and grows NO ratchet — which is the whole point of preferring it to
-            # a per-nodeid entry.
-            "T-UC-006-storyboard-multi-format-sync-status": (
-                "SPEC-PRODUCTION GAP: SyncCreativeResult.status is never populated by production; "
-                "every per-creative status is None on the wire, not a creative-status enum value"
-            ),
-            # ── Storyboard provenance scenarios (#1858) ──────────────
-            # These carried per-assertion pytest.xfail() calls inside the step
-            # bodies, which turned ANY failure (a 401, a 500, a timeout) into a
-            # green "known gap". The gaps are real, so they are registered here
-            # the one sanctioned way — by scenario tag, strict=True — and the
-            # steps now assert unconditionally.
-            #
-            # Production defect: check_provenance_required
-            # (src/core/tools/creatives/_validation.py) only ever emits a soft
-            # WARNING on missing/incomplete provenance. It never produces a
-            # per-creative action="failed" nor the spec's PROVENANCE_REQUIRED /
-            # PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING / PROVENANCE_DISCLOSURE_MISSING
-            # error codes.
-            "T-UC-006-storyboard-provenance-required-rejection": (
-                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
-                "check_provenance_required emits a soft warning, never action='failed' with "
-                "PROVENANCE_REQUIRED"
-            ),
-            "T-UC-006-storyboard-provenance-digital-source-type-missing": (
-                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
-                "no action='failed' with PROVENANCE_DIGITAL_SOURCE_TYPE_MISSING"
-            ),
-            "T-UC-006-storyboard-provenance-disclosure-missing": (
-                "SPEC-PRODUCTION GAP: structural provenance rejection is not implemented — "
-                "no action='failed' with PROVENANCE_DISCLOSURE_MISSING"
-            ),
-            # Distinct defect, same family: the internal Creative.provenance model
-            # (src/core/schemas/creative.py) is structurally incompatible with the
-            # wire-level adcp.types Provenance it is converted from (disclosure: str
-            # vs a Disclosure object, human_oversight: bool vs an enum, verification:
-            # dict vs a list), so even a well-formed corrected resubmission is rejected.
-            "T-UC-006-storyboard-provenance-corrected-acceptance": (
-                "SPEC-PRODUCTION GAP: internal Creative.provenance is structurally incompatible "
-                "with the wire-level adcp.types Provenance shape, so a spec-compliant corrected "
-                "resubmission is not accepted"
-            ),
-            # Error-path scenarios: production returns CREATIVE_VALIDATION_FAILED or
-            # plain-string errors[] instead of spec-specific error codes / AdCPSalesAgentError.
-            # See _processing.py error handling paths.
-            "T-UC-006-ext-d-whitespace": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion"
-            ),
-            "T-UC-006-ext-f": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_FORMAT_UNKNOWN"
-            ),
-            "T-UC-006-ext-g": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, spec expects CREATIVE_AGENT_UNREACHABLE"
-            ),
-            "T-UC-006-ext-h": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion "
-                "(preview-failure path, _processing.py:712-737)"
-            ),
-            "T-UC-006-ext-i": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion "
-                "(GEMINI_API_KEY not configured path)"
-            ),
-            # Creative unchanged: production returns action "updated" not "unchanged"
-            "T-UC-006-main-unchanged": (
-                "SPEC-PRODUCTION GAP: production returns action 'updated', "
-                "spec expects 'unchanged' when creative data is identical"
-            ),
-            # ext-c: schema violation — wrong error code
-            "T-UC-006-ext-c": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_FORMAT_REQUIRED, "
-                "spec expects CREATIVE_VALIDATION_FAILED for schema violations"
-            ),
-            # ext-d: empty name — _SyntheticError lacks suggestion field
-            "T-UC-006-ext-d": (
-                "SPEC-PRODUCTION GAP: production returns plain-string errors[] via "
-                "_SyntheticError, spec expects structured AdCPSalesAgentError with suggestion"
-            ),
-            # ext-e: missing format_id — wrong error code
-            "T-UC-006-ext-e": (
-                "SPEC-PRODUCTION GAP: error_code is CREATIVE_VALIDATION_FAILED, "
-                "spec expects CREATIVE_FORMAT_REQUIRED for missing format_id"
-            ),
+            # Graduated: T-UC-006-storyboard-multi-format-sync-status. SyncCreativeResult
+            # now derives the spec `status` from the row's review state on every action
+            # that has one (src/core/schemas/creative.py), so each per-creative entry
+            # carries a creative-status member on the wire; the scenario grades live on
+            # every transport.
+            # Graduated: the four storyboard provenance scenarios (#1858). Production
+            # refuses a creative that does not meet the product's provenance policy with
+            # the pin's PROVENANCE_REQUIRED / _DIGITAL_SOURCE_TYPE_MISSING /
+            # _DISCLOSURE_MISSING codes (check_provenance_policy,
+            # src/core/tools/creatives/_validation.py) instead of appending a warning, and
+            # Creative.provenance inherits the pinned core/provenance.json shape, so the
+            # corrected resubmission is accepted.
+            # Error-path scenarios: production returns plain-string errors[] instead of a
+            # structured error. See _processing.py error handling paths. The ext-c/d/e/f/g
+            # entries that stood here named codes the pinned enum does not define
+            # (CREATIVE_VALIDATION_FAILED, CREATIVE_FORMAT_REQUIRED, CREATIVE_FORMAT_UNKNOWN,
+            # CREATIVE_AGENT_UNREACHABLE); the scenarios were corrected to the pin and pass.
+            # Graduated: T-UC-006-rule-037-inv4. The "Slack sent during the sync" it
+            # recorded was the seam, not production: the env replaced the notification
+            # function wholesale and the Then counted entries into it. The env runs the
+            # real function now, whose guard skips Slack for ai-powered, and the Then reads
+            # the Slack sender -- unused during the sync, with the review submitted to
+            # defer to.
             # Invariant scenarios: production behaviour diverges from spec
-            "T-UC-006-rule-039-inv2": (
-                "OVER-SPECIFIED OBLIGATION (#1417): scenario asserts the non-canonical "
-                "FORMAT_MISMATCH. Production now emits CREATIVE_REJECTED WITH a suggestion + "
-                "details (#1417), so the suggestion gap is closed; the code "
-                "assertion awaits upstream reconciliation (FORMAT_MISMATCH -> CREATIVE_REJECTED)."
-            ),
-            # FIXME(#1417): ext-k asserts FORMAT_MISMATCH, which is NOT in the pinned
-            # error-code enum (non-canonical). Production now emits CREATIVE_REJECTED
-            # (_assignments.py), converged with the update path for the identical
-            # condition. Reconcile upstream (adcp-req: FORMAT_MISMATCH -> CREATIVE_REJECTED),
-            # then remove this xfail.
-            "T-UC-006-ext-k": (
-                "OVER-SPECIFIED OBLIGATION (#1417): scenario asserts the non-canonical "
-                "FORMAT_MISMATCH (absent from the pinned error-code enum). Production emits "
-                "the canonical CREATIVE_REJECTED, converged with the update path. Awaiting "
-                "upstream reconciliation of the generated feature."
-            ),
-            # FIXME(#TBD): inv5-lenient: lenient mode format mismatch doesn't populate assigned_to
-            # In lenient mode, the compatible package assignment should be created
-            # and incompatible reported in assignment_errors. Production skips both
-            # because the creative-not-found guard or format check logic prevents
-            # the compatible assignment from completing.
-            "T-UC-006-rule-039-inv5-lenient": (
-                "SPEC-PRODUCTION GAP: lenient format mismatch does not create "
-                "compatible assignment — assigned_to is empty (BR-RULE-039 INV-5)"
-            ),
+            # Graduated: the gap this named is closed. The entry said the scenario asserted
+            # the non-canonical FORMAT_MISMATCH while production emitted CREATIVE_REJECTED.
+            # The .feature had already moved to VALIDATION_ERROR (the entry went stale), and
+            # production now RAISES AdCPValidationError for a format outside the product's
+            # declared set -- adcp 3.1.1's enum codes that "violates business rules beyond
+            # schema validation", and reserves CREATIVE_REJECTED for "Creative failed content
+            # policy review". Verified: the scenario passes under --runxfail on a2a, the only
+            # transport it routes to, and it is not listed in e2e_rest_known_failures.txt.
             # T-UC-006-rule-037-inv5: e2e_rest only — handled below with transport check
-            # Sandbox: sync_creatives does not set sandbox=true on response
-            "T-UC-006-sandbox-happy": (
-                "SPEC-PRODUCTION GAP: sync_creatives does not set sandbox=true on "
-                "response for sandbox accounts (BR-RULE-209 INV-4)"
-            ),
-            # Sandbox: invalid format_id does not trigger validation error at _impl level
-            "T-UC-006-sandbox-validation": (
-                "SPEC-PRODUCTION GAP: production does not validate format_id pattern "
-                "at _impl level — invalid format_id processed without error (BR-RULE-209 INV-7)"
-            ),
+            # Graduated: the sandbox flag. sync_creatives reads the account the request
+            # names and sets sandbox=true on the success shape for a sandbox account;
+            # the sandbox scenarios are the rows of @T-UC-006-boundary-sandbox now.
         }
         for tag, reason in _UC006_SPECGAP_XFAIL_TAGS.items():
             if tag in marker_names:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-
-        # UC-006: assignment_package_validation — PACKAGE_NOT_FOUND outcome not
-        # wired in the Then step dispatch (raises ValueError). The production
-        # error is AdCPNotFoundError('NOT_FOUND'), spec demands 'PACKAGE_NOT_FOUND'.
-        if "T-UC-006-partition-assignment-pkg" in marker_names and "package_not_found" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "SPEC-PRODUCTION GAP: outcome 'PACKAGE_NOT_FOUND' not in Then dispatch — "
-                        "production returns AdCPNotFoundError(code='NOT_FOUND'), spec expects "
-                        "'PACKAGE_NOT_FOUND'. See _assignments.py:62-69"
-                    ),
-                    strict=True,
-                )
-            )
-
-        # UC-006: format_validation_boundary agent-unreachable — production returns
-        # success with per-creative action="failed" instead of raising an error.
-        if "T-UC-006-boundary-format-id" in marker_names and "agent unreachable" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason=(
-                        "SPEC-PRODUCTION GAP: agent-unreachable returns success with "
-                        "per-creative action='failed', not a top-level error — "
-                        "Then step expects ctx['error'] but gets ctx['response']"
-                    ),
-                    strict=True,
-                )
-            )
 
         # Graduated: T-UC-004-webhook-bearer, T-UC-004-webhook-hmac,
         # T-UC-004-webhook-no-aggregated, T-UC-004-webhook-notification-type
@@ -2453,6 +2186,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # the pass is graded on the envelope rather than a reconstruction.
             "T-UC-004-identify-buyer-refs-empty": (
                 "buyer_refs removed in adcp 3.12 — empty buyer_refs=[] is now an unknown field, silently ignored",
+                True,
+            ),
+            # BR-RULE-092 INV-2: a seller that does NOT support configurable attribution must
+            # DISCARD the buyer's requested window and answer with its platform default.
+            # Production echoes the request back instead, so the response reports an
+            # attribution window the seller will not actually honour.
+            #
+            # This was `try: assert ... except AssertionError: pytest.xfail(...)` inside
+            # then_attribution_default — catch the failure and excuse it, the purest form of
+            # the shape the conditional-xfail sweep removed. It could not fail in either direction, so
+            # the echo had been reported as an expected failure on every run. strict=True
+            # here means it XPASSes loudly the day production starts stripping the request.
+            "T-UC-004-attr-unsupported": (
+                "production echoes the buyer's attribution_window instead of discarding it and "
+                "returning the platform default (BR-RULE-092 INV-2)",
                 True,
             ),
             # Invalid status filter: NOT a production gap — the generic
@@ -3363,6 +3111,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Suggestion parity for get_media_buys is pinned by
             # tests/integration/test_request_validation_suggestion_parity.py.
             "T-UC-019-partition-status-filter-invalid",
+            # Package details omit the flight window. The buyer supplies start/end in the
+            # Given, the pinned 3.1 core/package.json names the echo fields start_time /
+            # end_time (optional — required is ["package_id"]), and production does not
+            # populate them on the packages get_media_buys returns.
+            #
+            # Declared HERE rather than inside _assert_flight_dates_present, where an
+            # xfail keyed on the outcome could not fail in either direction: it passed
+            # when the fields were present and excused itself when they were not, so a
+            # seller that stopped echoing them entirely would never have turned it red
+            # . As a tag this XPASSes the day production populates them.
+            "T-UC-019-main",
             # Creative approval mapping — not implemented
             "T-UC-019-partition-approval",
             "T-UC-019-partition-approval-invalid",
@@ -3409,8 +3168,6 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # a no-wire run raises). Verified xpassing on a2a and mcp — the only
             # transports this module collects; its total absence of [rest] is a
             # module-wide parametrize-time gap filed separately.
-            # Transport-agnostic main scenario
-            "T-UC-019-main",
         }
         # Snapshot scenarios (main-snapshot, inv-153-3/4/5): given_adapter_supports_reporting /
         # given_adapter_no_reporting assert "adapter" in env.mock, but MediaBuyListEnv
@@ -4150,7 +3907,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # does not pass -p no:randomly), so WHICH transport the scenario graded
         # changed run to run with no code change: measured over the UC-010
         # module, a2a 196 on every seed but mcp/rest 183/166, 171/178, 174/175
-        # on seeds 1/2/3 (salesagent-1iidr). The skipped transport was ungraded
+        # on seeds 1/2/3. The skipped transport was ungraded
         # and the skip was invisible — it presents as ~19 removed / ~19 added
         # nodeids, the shape scripts/audit/compare_runs.py documents as benign
         # transport-parameter noise, so every nodeid-set diff read CLEAN.
@@ -4669,8 +4426,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     # and ended INTERNALERROR, and suites that touch none of this — admin, e2e — failed
     # too. A saturated box manufactures failures that look like defects.
     #
-    # So they are enabled per-run by BDD_E2E_TRANSPORTS=all, which is how the rollout in
-    # salesagent-e0enw is meant to go: turn them on for one feature, classify what breaks
+    # So they are enabled per-run by BDD_E2E_TRANSPORTS=all, which is how the rollout
+    # is meant to go: turn them on for one feature, classify what breaks
     # as harness gap versus real transport defect, and only then widen. Nothing about the
     # collection logic differs — the same six ids appear the moment the variable is set.
     e2e_members = [Transport.E2E_REST]
@@ -5344,112 +5101,44 @@ _UC003_STORYBOARD_CLIENT_TAGS = frozenset(
 #: By identity the same measurement selects 210 nodes across these 49 scenarios, every
 #: one of which passes on every transport and every Examples row.
 #:
-#: MEASURED, not assumed (salesagent-lqm79): the catch-all row below and this row build
+#: MEASURED, not assumed: the catch-all row below and this row build
 #: the SAME env, so "wiring" is not building a harness -- it is naming the scenarios the
 #: existing one serves. Setting the catch-all's xfail_reason to None locally and running
 #: the file against a real Postgres gives 410 passed / 209 failed / 85 xfailed; grouped
 #: by identity, 49 scenarios pass on every node, 23 are step-less, 20 carry their own
 #: xfail and 7 fail on production defects. These are the 49.
 #:
-#: The rest stay on the catch-all with their blockers named in salesagent-lqm79. Adding
+#: The rest stay on the catch-all with their blockers named per bucket below. Adding
 #: an entry here GROWS the executing surface; it exempts nothing from grading.
-#: 27 UC-006 scenarios, blocker measured (salesagent-lqm79).
-_UC006_NO_STEP_DEFINITION = frozenset(
-    {
-        "T-UC-006-boundary-creative-status",
-        "T-UC-006-boundary-creative-status-response",
-        "T-UC-006-boundary-delete-missing",
-        "T-UC-006-boundary-sandbox",
-        "T-UC-006-creative-item-missing-content",
-        "T-UC-006-creative-item-multi-asset",
-        "T-UC-006-creative-item-text-array",
-        "T-UC-006-creative-variable-declared",
-        "T-UC-006-creative-variable-invalid-type",
-        "T-UC-006-creative-variable-required-flag",
-        "T-UC-006-daast-tracker-asset",
-        "T-UC-006-daast-tracker-no-non-linear-target",
-        "T-UC-006-error-details-conflict",
-        "T-UC-006-error-details-creative-rejected",
-        "T-UC-006-error-details-policy-violation",
-        "T-UC-006-main-async-submitted",
-        "T-UC-006-main-delete-missing-conflict",
-        "T-UC-006-partition-creative-status-terminal",
-        "T-UC-006-rule-039-inv5-lenient",
-        "T-UC-006-rule-093-inv1",
-        "T-UC-006-rule-093-inv3",
-        "T-UC-006-sandbox-errors-no-flag",
-        "T-UC-006-sandbox-happy",
-        "T-UC-006-sandbox-submitted-no-flag",
-        "T-UC-006-vast-tracker-asset",
-        "T-UC-006-vast-tracker-forbidden-event",
-        "T-UC-006-vast-tracker-progress-requires-offset",
-    }
-)
+#: Empty: every UC-006 scenario parked here has either been corrected to the pin and
+#: wired (assignment weight, per-creative status, the sandbox flag, tracker assets,
+#: CREATIVE_REJECTED details) or deleted as ungrounded in the sync request's pin
+#: (CreativeItem / CreativeVariable, the submitted envelope, CONFLICT, POLICY_VIOLATION).
+_UC006_NO_STEP_DEFINITION: frozenset[str] = frozenset()
 
-#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
-_UC006_STALE_XFAIL = frozenset(
-    {
-        "T-UC-006-boundary-format-id",
-        "T-UC-006-ext-a",
-    }
-)
+#: Empty: rule-094-inv2, the one scenario parked here, sent a provenance object with
+#: fields core/provenance.json does not define; the Given is pin-shaped now.
+_UC006_UNDECLARED_MALFORMATION: frozenset[str] = frozenset()
 
-#: 2 UC-006 scenarios, blocker measured (salesagent-lqm79).
-_UC006_UNDECLARED_MALFORMATION = frozenset(
-    {
-        "T-UC-006-partition-assignment-fmt",
-        "T-UC-006-rule-094-inv2",
-    }
-)
+#: Empty: the one scenario parked here (rule-037-inv4) reads the AI-review executor
+#: seam the env has carried since the local dry-run features needed it.
+_UC006_MISSING_HARNESS_SEAM: frozenset[str] = frozenset()
 
-#: 1 UC-006 scenarios, blocker measured (salesagent-lqm79).
-_UC006_MISSING_HARNESS_SEAM = frozenset(
-    {
-        "T-UC-006-rule-037-inv4",
-    }
-)
+#: Empty: rule-037-inv6 (no Slack without a webhook) was parked here because the env
+#: replaced _send_creative_notifications wholesale and the guard lives inside it. The
+#: env now runs the real function and mocks the Slack sender it reaches, so the
+#: scenario reads the sender and grades live.
+_UC006_UNVERIFIED_FAILURE: frozenset[str] = frozenset()
 
-#: 3 UC-006 scenarios, blocker measured (salesagent-lqm79).
-_UC006_UNVERIFIED_FAILURE = frozenset(
-    {
-        "T-UC-006-rule-033-inv2",
-        "T-UC-006-rule-035-static",
-        "T-UC-006-rule-037-inv6",
-    }
-)
-
-#: 16 UC-006 scenarios, blocker measured (salesagent-lqm79).
-_UC006_OWN_XFAIL = frozenset(
-    {
-        "T-UC-006-ext-b",
-        "T-UC-006-ext-c",
-        "T-UC-006-ext-d",
-        "T-UC-006-ext-d-whitespace",
-        "T-UC-006-ext-e",
-        "T-UC-006-ext-f",
-        "T-UC-006-ext-g",
-        "T-UC-006-ext-h",
-        "T-UC-006-ext-i",
-        "T-UC-006-ext-k",
-        "T-UC-006-main-unchanged",
-        "T-UC-006-main-weight",
-        "T-UC-006-rule-035-inv2",
-        "T-UC-006-rule-039-inv2",
-        "T-UC-006-rule-039-inv4",
-        "T-UC-006-sandbox-validation",
-    }
-)
+#: Empty: main-weight and sandbox-validation, the two scenarios parked here, are rows of
+#: the boundary outlines that grade assignments[].weight and the sandbox flag now.
+_UC006_OWN_XFAIL: frozenset[str] = frozenset()
 
 _UC006_WIRED_SCENARIOS = frozenset(
     {
-        # NOT here, and not parked either: T-UC-006-boundary-format-id and
-        # T-UC-006-ext-a PASS once wired, and a pre-existing strict xfail then turns
-        # that pass into XPASS(strict) -- a FAILURE. For boundary-format-id it is
-        # _UC006_VALIDATION_XFAIL's "SPEC-PRODUCTION GAP: _SyntheticError lacks
-        # suggestion field"; production emits the field now, so the reason is stale.
-        # A stale xfail is graduated one scenario at a time
-        # (.claude/rules/workflows/xpass-graduation.md), never parked under a second
-        # marker -- parking a passing row is how a route silences working behaviour.
+        # ext-a: the AUTH_MISSING refusal of a request with no principal, graded live
+        # with ext-a-empty now that the stale "answers VALIDATION_ERROR" xfail is gone.
+        "T-UC-006-ext-a",
         # The 15 Scenario Outlines whose Examples rows disagree: wired here so their
         # passing rows execute, with the non-passing rows parked per row in
         # _SELECTIVE_XFAIL. A route cannot express row-level disagreement.
@@ -5461,13 +5150,14 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-boundary-validation-mode",
         "T-UC-006-main-lenient-warnings",
         "T-UC-006-partition-assignment-pkg",
-        "T-UC-006-partition-assignment-weight",
         "T-UC-006-partition-assignments-structure",
+        # The per-creative status is omitted on failed/deleted actions: graded on the
+        # unknown-format and full-library-replace rows through the entry selectors.
+        "T-UC-006-partition-creative-status-terminal",
         "T-UC-006-partition-format-id",
         "T-UC-006-partition-generative",
         "T-UC-006-partition-idempotency-key",
         "T-UC-006-partition-provenance",
-        "T-UC-006-partition-validation-mode",
         "T-UC-006-boundary-assignment-format",
         "T-UC-006-boundary-assignment-package",
         "T-UC-006-boundary-creative-scope",
@@ -5485,6 +5175,44 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-partition-auth",
         "T-UC-006-partition-creative-scope",
         "T-UC-006-partition-mb-status",
+        # The four assignment-reference scenarios migrated from the retired creative-sync
+        # integration file: wired because they pass on every in-process transport.
+        "T-UC-006-local-assignment-unknown-creative",
+        "T-UC-006-local-assignment-only-missing-package",
+        "T-UC-006-local-assignment-only-existing-creative",
+        "T-UC-006-local-failed-creative-assignment",
+        "T-UC-006-local-dryrun-parity",
+        # The format/validation error paths, corrected to the pinned enum (INVALID_REQUEST
+        # for schema violations at the request, REFERENCE_NOT_FOUND / VALIDATION_ERROR on
+        # the creative's entry, SERVICE_UNAVAILABLE for an agent that does not answer) and
+        # to what production does; their ledger entries named codes the enum never had.
+        "T-UC-006-boundary-format-id",
+        "T-UC-006-ext-c",
+        "T-UC-006-ext-d",
+        "T-UC-006-ext-d-whitespace",
+        "T-UC-006-ext-e",
+        "T-UC-006-ext-f",
+        "T-UC-006-ext-g",
+        "T-UC-006-rule-035-inv2",
+        # And the rest of that sweep: per-item CONFIGURATION_ERROR read on the entry
+        # (ext-i), the creative on the transport's own served format so only the
+        # product's declared set varies (partition-assignment-fmt, which also absorbed
+        # ext-k and rule-039-inv2), strict PACKAGE_NOT_FOUND carrying which package
+        # (rule-033-inv2), and two Then bodies that read the wrong mock argument or a
+        # mock no env wires (rule-035-static, rule-037-inv4).
+        "T-UC-006-ext-i",
+        "T-UC-006-partition-assignment-fmt",
+        "T-UC-006-rule-033-inv2",
+        "T-UC-006-rule-035-static",
+        "T-UC-006-rule-037-inv4",
+        # Steps written for the delete_missing scope outline, the delete_missing +
+        # creative_ids conflict (now refused by the request model, per the pin's own
+        # "Invalid when creative_ids is provided") and the lenient format mismatch;
+        # action "unchanged" reachable now that upsert fields are compared to the row.
+        "T-UC-006-boundary-delete-missing",
+        "T-UC-006-main-delete-missing-conflict",
+        "T-UC-006-rule-039-inv5-lenient",
+        "T-UC-006-main-unchanged",
         "T-UC-006-rule-033-inv1",
         "T-UC-006-rule-033-inv3",
         "T-UC-006-rule-033-inv4",
@@ -5505,18 +5233,34 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-rule-038-inv4-violated",
         "T-UC-006-rule-038-inv5",
         "T-UC-006-rule-039-inv1",
+        "T-UC-006-rule-039-inv1b",
         "T-UC-006-rule-039-inv3",
         "T-UC-006-rule-039-inv6",
         "T-UC-006-rule-040-inv1",
         "T-UC-006-rule-040-inv2",
         "T-UC-006-rule-040-inv3",
         "T-UC-006-rule-040-inv4",
-        "T-UC-006-rule-093-inv2",
+        # assignments[].weight is carried per entry now, so the two-creative INV-3 grades
+        # each persisted weight; INV-1/INV-2 became boundary-assignment-weight rows.
+        "T-UC-006-rule-093-inv3",
+        # The env runs the real notification function and mocks the Slack sender it
+        # reaches, so "no Slack without a webhook" is read off the sender.
+        "T-UC-006-rule-037-inv6",
         "T-UC-006-rule-094-inv1",
+        # A pin-shaped provenance object (digital_source_type, ai_tool, disclosure).
+        "T-UC-006-rule-094-inv2",
         "T-UC-006-rule-094-inv3",
         "T-UC-006-rule-094-inv4",
         "T-UC-006-rule-094-inv5",
-        "T-UC-006-sandbox-production",
+        # The sandbox flag on the success shape, absent for a production account and on
+        # the errors shape: the request names the seeded account, production reads it.
+        "T-UC-006-boundary-sandbox",
+        # Tracker assets: accepted ones stored as sent, the pin's refused events and the
+        # missing progress offset INVALID_REQUEST through the accepted shape's validator.
+        "T-UC-006-partition-tracker-assets",
+        # CREATIVE_REJECTED with reasons, driven through the no-preview / no-media_url
+        # rejection production already makes.
+        "T-UC-006-error-details-creative-rejected",
     }
 )
 
@@ -5695,7 +5439,7 @@ ENV_ROUTES: list[EnvRoute] = [
                 # Givens built instead of rebuilding it. It sat on the uc002-not-wired
                 # catch-all until now, which xfailed it at fixture setup, so it dispatched
                 # nothing and its two unique Thens had never executed anywhere in the corpus
-                # (salesagent-9p7oe). The sibling already on this row,
+                # The sibling already on this row,
                 # @T-UC-002-ext-dual-emit, has the byte-identical Given block and passes on
                 # a2a/mcp/rest/e2e_rest, which is why this is a row-share and not new wiring.
                 or "T-UC-002-main" in m
@@ -5806,15 +5550,7 @@ ENV_ROUTES: list[EnvRoute] = [
         when=_uc("UC-006", lambda m, s=_UC006_NO_STEP_DEFINITION: bool(m & s)),
         env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
         xfail_reason=(
-            "UC-006 not wired: no step definition for one of its steps, so it grades nothing (salesagent-eii8n names the blocking sentence per scenario)"
-        ),
-    ),
-    EnvRoute(
-        tag="uc006-graduation",
-        when=_uc("UC-006", lambda m, s=_UC006_STALE_XFAIL: bool(m & s)),
-        env_builder=_env("tests.harness.creative_sync.CreativeSyncEnv"),
-        xfail_reason=(
-            "UC-006 not wired: it PASSES, and a pre-existing strict xfail turns that into XPASS(strict). The reason is stale and graduates one scenario at a time (.claude/rules/workflows/xpass-graduation.md), never by parking a passing row"
+            "UC-006 not wired: no step definition for one of its steps, so it grades nothing (tests/bdd/dormant_scenarios.txt names the blocking sentence per scenario)"
         ),
     ),
     EnvRoute(

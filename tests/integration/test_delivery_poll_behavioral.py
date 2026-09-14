@@ -120,6 +120,7 @@ class TestSimulationReachesFinalThroughRealHook:
 
     def test_mock_time_past_flight_reaches_completed_and_final(self, integration_db):
         from src.core.testing_hooks import AdCPTestContext
+
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -154,6 +155,7 @@ class TestSimulationReachesFinalThroughRealHook:
     def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
         """The in-flight companion: simulated clock inside the window -> active/scheduled."""
         from src.core.testing_hooks import AdCPTestContext
+
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 

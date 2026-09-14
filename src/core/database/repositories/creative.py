@@ -495,6 +495,7 @@ class CreativeAssignmentRepository:
             creative_id=creative_id,
             principal_id=principal_id,
             weight=weight,
+            placement_ids=placement_ids,
             created_at=datetime.now(UTC),
         )
         if placement_ids is not None:

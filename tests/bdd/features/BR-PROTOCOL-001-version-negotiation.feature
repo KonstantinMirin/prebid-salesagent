@@ -102,6 +102,28 @@ Feature: Inbound AdCP version negotiation applies to every tool
     Then the error is compliant with the AdCP error spec
     And the response contains error code VERSION_UNSUPPORTED
 
+  # The pin is a PRECONDITION, so nothing the request names may be looked up before it is
+  # judged. Naming an account is itself a claim that needs a credential (#1417), which put
+  # authentication and the account lookup ahead of a negotiation that was sitting beside the
+  # outbound version stamp — and a buyer who pinned a release this seller cannot serve was
+  # answered about their account instead. The account named here does not exist, so the
+  # refusal can only read VERSION_UNSUPPORTED if the pin is judged before the account is
+  # resolved. That is also the shape the storyboard sends: error_compliance's
+  # unsupported_major_version and unsupported_release_version both carry an account.
+  @T-PROTOCOL-001-pin-precedes-account
+  Scenario: A request naming an account is refused on its pin, not on the account
+    When the buyer requests products naming an unknown account and pinning adcp_major_version 99
+    Then the error is compliant with the AdCP error spec
+    And the response contains error code VERSION_UNSUPPORTED
+
+  # The release-precision sibling, for the same reason the two scenarios above are separate:
+  # a seller validating only the integer major refuses nothing a real 3.1 buyer sends.
+  @T-PROTOCOL-001-pin-precedes-account-release
+  Scenario: A request naming an account is refused on its unsupported release
+    When the buyer requests products naming an unknown account and pinning adcp_version "99.0"
+    Then the error is compliant with the AdCP error spec
+    And the response contains error code VERSION_UNSUPPORTED
+
   # error-details/version-unsupported.json declares supported_majors as a SHOULD-emit
   # integer array through 3.x. It was declared on this seller's details model and never
   # populated, so a buyer refused for a MAJOR was told only which RELEASES exist — not the

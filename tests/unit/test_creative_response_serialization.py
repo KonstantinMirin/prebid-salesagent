@@ -123,16 +123,17 @@ def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
 
 
 def test_sync_creative_result_excludes_internal_fields():
-    """model_dump() excludes status and review_feedback (internal-only)."""
+    """model_dump() excludes internal_status and review_feedback; the spec status is derived."""
     result = SyncCreativeResult(
         creative_id="c_1",
         action=CreativeAction.created,
         internal_status="pending_review",
         review_feedback="Looks good",
     )
-    dumped = result.model_dump()
+    dumped = result.model_dump(mode="json")
     assert dumped["creative_id"] == "c_1"
-    assert "status" not in dumped
+    # The pinned per-creative ``status`` is the row's review state (creative-status enum).
+    assert dumped["status"] == "pending_review"
     assert "internal_status" not in dumped
     assert "review_feedback" not in dumped
 

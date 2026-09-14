@@ -29,7 +29,8 @@ from src.core.exceptions import (
     AdCPAuthenticationError,
     AdCPBudgetExceededError,
     AdCPCapabilityNotSupportedError,
-    AdCPCreativeRejectedError,
+    AdCPCreativeNotFoundError,
+    AdCPGoneError,
     AdCPPackageNotFoundError,
     AdCPValidationError,
 )
@@ -1063,11 +1064,11 @@ class TestUC003UpdateCreativeIds:
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C999"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
 
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
 
     def test_creative_error_state_rejected(self):
         """Creative in error state cannot be assigned.
@@ -1090,10 +1091,10 @@ class TestUC003UpdateCreativeIds:
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPGoneError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "INVALID_STATE"
 
     def test_creative_rejected_state_rejected(self):
         """Creative in rejected state cannot be assigned.
@@ -1115,10 +1116,10 @@ class TestUC003UpdateCreativeIds:
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPGoneError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "INVALID_STATE"
 
     def test_creative_format_compatibility_check(self):
         """Creative format mismatch with product returns INVALID_CREATIVES.
@@ -1159,10 +1160,10 @@ class TestUC003UpdateCreativeIds:
                 media_buy_id="mb_creative",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPValidationError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "VALIDATION_ERROR"
 
     def test_creative_update_no_adapter_call(self):
         """Creative ID updates persist directly to DB without adapter call.
@@ -1577,10 +1578,10 @@ class TestUC003UpdateCreativeAssignments:
                     }
                 ],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
 
 
 # ---------------------------------------------------------------------------
@@ -2249,9 +2250,9 @@ class TestUC003ExtI:
                 media_buy_id="mb_all_missing",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C999", "C998"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
 
 
 # ---------------------------------------------------------------------------
@@ -2298,10 +2299,10 @@ class TestUC003ExtJ:
                 media_buy_id="mb_rejected",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPGoneError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "INVALID_STATE"
 
     def test_all_validation_errors_collected(self):
         """Multiple creative errors collected and returned together.
@@ -2347,11 +2348,11 @@ class TestUC003ExtJ:
                 media_buy_id="mb_multi_err",
                 packages=[{"package_id": "pkg_1", "creative_ids": ["C1", "C2"]}],
             )
-            with pytest.raises(AdCPCreativeRejectedError) as exc_info:
+            with pytest.raises(AdCPGoneError) as exc_info:
                 _update_media_buy_impl(req=req, identity=identity)
 
             # Both offending creatives reported together in the rejection.
-            assert exc_info.value.error_code == "CREATIVE_REJECTED"
+            assert exc_info.value.error_code == "INVALID_STATE"
             # details carries the state per creative, not a bare id list plus joined prose.
             assert {p.subject_id for p in exc_info.value.details.problems or []} == {"C1", "C2"}
 

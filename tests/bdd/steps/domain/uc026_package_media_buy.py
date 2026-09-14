@@ -1540,12 +1540,6 @@ def when_dispatch_create_named_transport(ctx: dict) -> None:
     _dispatch_create(ctx)
 
 
-@when(parsers.parse('the Buyer Agent sends the create_media_buy request for "{mb_id}"'))
-def when_send_create_for_mb(ctx: dict, mb_id: str) -> None:
-    """Dispatch create_media_buy for a specific (cross-buy) media buy."""
-    _dispatch_create(ctx)
-
-
 @when("the Buyer Agent sends the request")
 def when_send_generic_request(ctx: dict) -> None:
     """Send either a create or update request based on context."""
@@ -1630,7 +1624,6 @@ def then_package_pricing(ctx: dict, pricing_option_id: str) -> None:
 @then("the package should contain format_ids defaulting to all product formats")
 def then_package_default_formats(ctx: dict) -> None:
     """Assert package format_ids default to all product formats."""
-    import pytest
 
     packages = _get_packages(ctx)
     pkg = packages[0]
@@ -1638,7 +1631,9 @@ def then_package_default_formats(ctx: dict) -> None:
     assert pkg_id, "Package has no package_id — cannot verify format_ids"
     format_ids = _pkg_field(pkg, "format_ids")
     if format_ids is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: format_ids not defaulted to product formats when omitted from request")
+        raise AssertionError(
+            "format_ids not defaulted to the product formats when omitted; the pinned 3.1 core/package.json declares format_ids"
+        )
     assert isinstance(format_ids, list), f"Expected format_ids to be a list, got {type(format_ids)}"
     assert format_ids, "Expected format_ids to default to all product formats, got empty list"
     product = ctx["default_product"]
@@ -1925,16 +1920,6 @@ def then_outcome(ctx: dict, outcome: str) -> None:
 # --- Update-specific Then steps ---
 
 
-@then(parsers.parse("the response should contain the updated package with budget {budget:d}"))
-def then_updated_budget(ctx: dict, budget: int) -> None:
-    """Assert updated package has the expected budget."""
-    packages = _get_packages(ctx)
-    pkg = packages[0]
-    actual = _pkg_field(pkg, "budget")
-    assert actual is not None, "Package budget is None in update response"
-    assert float(actual) == float(budget), f"Expected budget {budget}, got {actual}"
-
-
 @then(parsers.parse('the response should contain the updated package with budget {budget:d} and pacing "{pacing}"'))
 def then_updated_budget_and_pacing(ctx: dict, budget: int, pacing: str) -> None:
     """Assert updated package has expected budget and pacing."""
@@ -1950,7 +1935,6 @@ def then_updated_budget_and_pacing(ctx: dict, budget: int, pacing: str) -> None:
 @then("the package paused state should be unchanged")
 def then_paused_unchanged(ctx: dict) -> None:
     """Assert paused state was not changed by the update."""
-    import pytest
 
     _assert_no_error(ctx)
     packages = _get_packages(ctx)
@@ -1963,9 +1947,13 @@ def then_paused_unchanged(ctx: dict) -> None:
     )
     original_paused = _pkg_field(existing_pkg, "paused")
     if actual_paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused not echoed in update response — cannot verify unchanged. FIXME")
+        raise AssertionError(
+            "paused absent from the update response; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     if original_paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused not present on existing package — cannot verify unchanged. FIXME")
+        raise AssertionError(
+            "paused absent from the pre-update package; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     assert actual_paused == original_paused, f"Paused state changed: was {original_paused!r}, now {actual_paused!r}"
 
 
@@ -1982,7 +1970,6 @@ def then_pkg_paused_value(ctx: dict, paused: str) -> None:
 @then("the package should not deliver impressions")
 def then_no_delivery(ctx: dict) -> None:
     """Assert package should not deliver (paused=true implies no delivery)."""
-    import pytest
 
     _assert_no_error(ctx)
     packages = _get_packages(ctx)
@@ -1991,7 +1978,9 @@ def then_no_delivery(ctx: dict) -> None:
     assert pkg_id is not None, "Package missing package_id — cannot verify delivery state"
     paused = _pkg_field(pkg, "paused")
     if paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused field absent — cannot verify no-delivery. FIXME")
+        raise AssertionError(
+            "paused absent, so the no-delivery claim grades nothing; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     assert paused is True, f"Expected paused=true (no delivery), got paused={paused!r}"
 
 
@@ -2007,13 +1996,14 @@ def then_should_deliver(ctx: dict) -> None:
 @then("the package should resume delivering impressions")
 def then_resume_delivery(ctx: dict) -> None:
     """Assert package resumed delivery (paused=false)."""
-    import pytest
 
     packages = _get_packages(ctx)
     pkg = packages[0]
     paused = _pkg_field(pkg, "paused")
     if paused is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: paused field absent — cannot verify resumed delivery. FIXME")
+        raise AssertionError(
+            "paused absent, so the resumed-delivery claim grades nothing; the pinned 3.1 core/package.json declares paused as boolean with default false, so a parsed package resolves absence to False and never to None"
+        )
     assert paused is False, f"Expected paused=false (resumed), got paused={paused}"
 
 
@@ -2023,16 +2013,20 @@ def then_resume_delivery(ctx: dict) -> None:
 @then(parsers.parse('the response should contain the package with keyword "{keyword}" in targeting_overlay'))
 def then_pkg_has_keyword(ctx: dict, keyword: str) -> None:
     """Assert package targeting_overlay contains specified keyword."""
-    import pytest
 
     packages = _get_packages(ctx)
     pkg = packages[0]
     overlay = _pkg_field(pkg, "targeting_overlay")
-    if overlay is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: targeting_overlay not present in response. FIXME")
+    assert overlay is not None, (
+        "targeting_overlay absent from the package; the pinned 3.1 core/package.json "
+        "declares it ($ref targeting.json), and a step asserting what is INSIDE the "
+        "overlay grades nothing without it"
+    )
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not present in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json declares keyword_targets"
+        )
     found = _find_keyword(kw_targets, keyword)
     assert found is not None, (
         f"Keyword '{keyword}' not found in targeting_overlay.keyword_targets. "
@@ -2049,14 +2043,16 @@ def then_keyword_with_match_type(ctx: dict, keyword: str, match_type: str) -> No
     and the later body was stronger (asserted no error before inspecting
     packages), so that body survives here.
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json "
+            "declares it, and this step's claim is about its contents"
+        )
     found = _find_keyword(kw_targets, keyword, match_type)
     assert found is not None, (
         f"Keyword '{keyword}' with match_type '{match_type}' not found in targeting_overlay. "
@@ -2071,18 +2067,22 @@ def then_keyword_with_match_type(ctx: dict, keyword: str, match_type: str) -> No
 )
 def then_keyword_updated_bid(ctx: dict, keyword: str, match_type: str, price: str) -> None:
     """Assert keyword has updated bid_price."""
-    import pytest
 
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json "
+            "declares it, and this step's claim is about its contents"
+        )
     found = _find_keyword(kw_targets, keyword, match_type)
     assert found is not None, f"Keyword '{keyword}' with match_type '{match_type}' not found in targeting_overlay"
     actual_bid = _keyword_field(found, "bid_price")
     if actual_bid is None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: keyword '{keyword}' found but bid_price not echoed. FIXME")
+        raise AssertionError(
+            f"keyword {keyword!r} present but bid_price not echoed; the pinned 3.1 core/package.json declares bid_price"
+        )
     assert float(actual_bid) == float(price), f"Expected bid_price {price} for keyword '{keyword}', got {actual_bid}"
 
 
@@ -2130,13 +2130,14 @@ def then_targeting_unchanged(ctx: dict) -> None:
 @then(parsers.parse('the response should contain negative keyword "{keyword}" in targeting_overlay'))
 def then_negative_keyword(ctx: dict, keyword: str) -> None:
     """Assert targeting_overlay contains specified negative keyword."""
-    import pytest
 
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     neg_keywords = _get_overlay_keywords(pkg, "negative_keywords")
     if neg_keywords is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: negative_keywords not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "negative_keywords absent from targeting_overlay; the pinned 3.1 core/targeting.json declares negative_keywords"
+        )
     found = _find_keyword(neg_keywords, keyword)
     assert found is not None, (
         f"Negative keyword '{keyword}' not found in targeting_overlay.negative_keywords. "
@@ -2169,20 +2170,23 @@ def then_negative_keywords_unchanged(ctx: dict) -> None:
 @then("the response should contain updated keyword targets and negative keywords")
 def then_updated_keyword_and_negative(ctx: dict) -> None:
     """Assert response contains both keyword targets and negative keywords in targeting."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     overlay = _pkg_field(pkg, "targeting_overlay")
-    if overlay is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: targeting_overlay not present in response. FIXME")
+    assert overlay is not None, (
+        "targeting_overlay absent from the package; the pinned 3.1 core/package.json "
+        "declares it ($ref targeting.json), and a step asserting what is INSIDE the "
+        "overlay grades nothing without it"
+    )
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     neg_keywords = _get_overlay_keywords(pkg, "negative_keywords")
-    if kw_targets is None and neg_keywords is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: neither keyword_targets nor negative_keywords present in targeting_overlay. FIXME"
-        )
+    assert not (kw_targets is None and neg_keywords is None), (
+        "neither keyword_targets nor negative_keywords is present in targeting_overlay; "
+        "the pinned 3.1 core/targeting.json declares both, and this step asserts an update "
+        "touched one of them"
+    )
     # Both dimensions must be non-empty — cross-dimension mixing means both were updated
     assert kw_targets is not None and len(kw_targets) > 0, (
         f"Expected keyword_targets to be non-empty after cross-dimension update, got {kw_targets}"
@@ -2207,7 +2211,6 @@ def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
     3. The bid_price value matches the expected price (production persisted it).
     4. The pricing option has max_bid=true (ceiling semantics, not exact).
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
@@ -2220,7 +2223,10 @@ def then_keyword_bid_ceiling(ctx: dict, price: str) -> None:
     # Check keyword_targets in the response targeting_overlay
     kw_targets = _get_overlay_keywords(pkg, "keyword_targets")
     if kw_targets is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: keyword_targets not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "keyword_targets absent from targeting_overlay; the pinned 3.1 core/targeting.json "
+            "declares it, and this step's claim is about its contents"
+        )
     # Find keyword with the expected bid_price from the production response
     expected_price = float(price)
     found_with_bid = None
@@ -2377,7 +2383,6 @@ def then_pricing_defaults(ctx: dict) -> None:
        bid_price for auction options).
     4. The option carries a non-None default rate (the effective price).
     """
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
@@ -2441,16 +2446,18 @@ def then_pricing_defaults(ctx: dict) -> None:
             if isinstance(price_breakdown, dict)
             else getattr(price_breakdown, "list_price", None)
         )
-        if list_price is not None:
-            assert float(list_price) == float(rate), (
-                f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
-            )
+        assert list_price is not None, (
+            f"price_breakdown present but carries no list_price, so the default-rate claim ({rate}) grades nothing"
+        )
+        assert float(list_price) == float(rate), (
+            f"price_breakdown.list_price ({list_price}) != option rate ({rate}); defaults not applied correctly"
+        )
     else:
-        pytest.xfail(
-            f"price_breakdown not populated in create response — "
-            f"cannot verify default list_price == option rate ({rate}). "
-            f"Option defaults verified via catalog: pricing_model={pricing_model}, "
-            f"currency={currency}, rate={rate}, is_fixed={is_fixed}"
+        raise AssertionError(
+            f"price_breakdown absent from the create response, so the default "
+            f"list_price == option rate ({rate}) claim grades nothing. The pinned 3.1 "
+            f"core/package.json declares price_breakdown. Catalog-side option values: "
+            f"pricing_model={pricing_model}, currency={currency}, rate={rate}, is_fixed={is_fixed}"
         )
 
 
@@ -2579,13 +2586,14 @@ def _assert_goal_in_list(expected: dict, actual_list: list[dict]) -> None:
 @then("the package catalogs should be unchanged")
 def then_catalogs_unchanged(ctx: dict) -> None:
     """Assert package catalogs were not changed (patch semantics — omitted fields preserved)."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     actual_catalogs = _pkg_field(pkgs[0], "catalogs")
     if actual_catalogs is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: catalogs not echoed in update response — cannot verify unchanged. FIXME")
+        raise AssertionError(
+            "catalogs absent from the update response; the pinned 3.1 core/package.json declares catalogs"
+        )
     assert isinstance(actual_catalogs, list), f"Expected catalogs to be a list, got {type(actual_catalogs)}"
     # Compare with original package's catalogs — content equality, not just length
     existing_pkg = ctx.get("existing_package")
@@ -2608,15 +2616,14 @@ def then_catalogs_unchanged(ctx: dict) -> None:
 @then("the package optimization_goals should be unchanged")
 def then_goals_unchanged(ctx: dict) -> None:
     """Assert package optimization_goals were not changed (patch semantics)."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     actual_goals = _pkg_field(pkgs[0], "optimization_goals")
-    if actual_goals is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: optimization_goals not echoed in update response — cannot verify unchanged. FIXME"
-        )
+    assert actual_goals is not None, (
+        "optimization_goals absent from the update response, so the unchanged claim grades "
+        "nothing; the pinned 3.1 core/package.json declares optimization_goals"
+    )
     assert isinstance(actual_goals, list), f"Expected optimization_goals to be a list, got {type(actual_goals)}"
     # Compare with original package's goals — content equality, not just length
     existing_pkg = ctx.get("existing_package")
@@ -2637,7 +2644,6 @@ def then_goals_unchanged(ctx: dict) -> None:
 @then(parsers.parse("the package optimization_goals should be {expected}"))
 def then_pkg_goals(ctx: dict, expected: str) -> None:
     """Assert package optimization_goals match expected (replacement semantics)."""
-    import pytest
 
     # Handle "unchanged" case
     if expected.strip().lower() == "unchanged":
@@ -2647,7 +2653,9 @@ def then_pkg_goals(ctx: dict, expected: str) -> None:
     pkgs = _assert_has_packages(ctx)
     actual_goals = _pkg_field(pkgs[0], "optimization_goals")
     if actual_goals is None:
-        pytest.xfail(f"SPEC-PRODUCTION GAP: optimization_goals not echoed in response. Expected {expected}. FIXME")
+        raise AssertionError(
+            f"optimization_goals absent from the response (expected {expected}); the pinned 3.1 core/package.json declares optimization_goals"
+        )
     expected_parsed = json.loads(expected)
     if isinstance(actual_goals, list) and isinstance(expected_parsed, list):
         actual_normalized = [_normalize_item(ag) for ag in actual_goals]
@@ -2719,16 +2727,20 @@ def then_pkg_creatives(ctx: dict, expected: str) -> None:
 @then(parsers.parse('the package targeting_overlay should contain only audience "{audience_id}"'))
 def then_targeting_audience(ctx: dict, audience_id: str) -> None:
     """Assert targeting_overlay contains only specified audience."""
-    import pytest
 
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     overlay = _pkg_field(pkg, "targeting_overlay")
-    if overlay is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: targeting_overlay not present in response. FIXME")
+    assert overlay is not None, (
+        "targeting_overlay absent from the package; the pinned 3.1 core/package.json "
+        "declares it ($ref targeting.json), and a step asserting what is INSIDE the "
+        "overlay grades nothing without it"
+    )
     audiences = _get_overlay_field(pkg, "audiences")
     if audiences is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: audiences not in targeting_overlay. FIXME")
+        raise AssertionError(
+            "audience targeting absent from targeting_overlay; the pinned 3.1 core/targeting.json declares audience_include / audience_exclude"
+        )
     assert isinstance(audiences, list), f"Expected audiences to be a list, got {type(audiences)}"
     assert len(audiences) == 1, f"Expected exactly 1 audience, got {len(audiences)}"
     aud = audiences[0]
@@ -2739,13 +2751,14 @@ def then_targeting_audience(ctx: dict, audience_id: str) -> None:
 @then(parsers.parse('the old catalog "{catalog_id}" should not be present'))
 def then_old_catalog_absent(ctx: dict, catalog_id: str) -> None:
     """Assert old catalog is not present after replacement."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     catalogs = _pkg_field(pkgs[0], "catalogs")
     if catalogs is None:
-        pytest.xfail("SPEC-PRODUCTION GAP: catalogs not echoed in response — cannot verify old catalog absent. FIXME")
+        raise AssertionError(
+            "catalogs absent from the response, so the old-catalog-absent claim grades nothing; the pinned 3.1 core/package.json declares catalogs"
+        )
     for cat in catalogs:
         cat_id = cat.get("catalog_id") if isinstance(cat, dict) else getattr(cat, "catalog_id", None)
         assert cat_id != catalog_id, f"Old catalog '{catalog_id}' should NOT be present after replacement but was found"
@@ -2754,16 +2767,16 @@ def then_old_catalog_absent(ctx: dict, catalog_id: str) -> None:
 @then(parsers.parse('the old audience "{audience_id}" should not be present'))
 def then_old_audience_absent(ctx: dict, audience_id: str) -> None:
     """Assert old audience is not present after replacement."""
-    import pytest
 
     _assert_no_error(ctx)
     pkgs = _assert_has_packages(ctx)
     pkg = pkgs[0]
     audiences = _get_overlay_field(pkg, "audiences")
-    if audiences is None:
-        pytest.xfail(
-            "SPEC-PRODUCTION GAP: audiences not in targeting_overlay — cannot verify old audience absent. FIXME"
-        )
+    assert audiences is not None, (
+        "audience targeting absent from targeting_overlay, so the old-audience-absent claim "
+        "grades nothing; the pinned 3.1 core/targeting.json declares audience_include / "
+        "audience_exclude"
+    )
     for aud in audiences:
         aud_id = aud.get("audience_id") if isinstance(aud, dict) else getattr(aud, "audience_id", None)
         assert aud_id != audience_id, (

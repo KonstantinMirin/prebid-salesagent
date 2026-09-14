@@ -98,7 +98,7 @@ def _wire_of(error: object) -> dict | None:
 
     A failed wire dispatch now raises ``tests.harness._base.WireError``, which carries
     the envelope the buyer received VERBATIM instead of a production error class
-    rebuilt from those bytes (salesagent-3dawm.15). So the wire is reachable straight
+    rebuilt from those bytes. So the wire is reachable straight
     off the error object, and the extractors below read it without needing ``ctx``
     threaded through their forty call sites.
 
@@ -279,7 +279,7 @@ def then_response_arrives(ctx: dict) -> None:
       reached and there is nothing the buyer received;
     * the dispatch raised in the TEST PROCESS -- ``ctx['error']`` holds an
       ordinary exception rather than the ``WireError`` carrier a wire rejection
-      produces. That is the defect salesagent-prkv.65 removed at 53 sites: a
+      produces. That is the defect removed at 53 sites: a
       pydantic error raised while BUILDING the request looks like a rejection to
       any assertion that only checks "is there an error", but production was
       never executed.
@@ -362,31 +362,31 @@ def then_response_error_field(ctx: dict, field: str) -> None:
 def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
     """The rejection carries a STRUCTURED schema issue: *keyword* against *field*.
 
-    The fourth primitive, and like the other three it grades exactly one property:
-    that the seller's rejection came out of real schema validation and says which
-    rule the value broke.
+     The fourth primitive, and like the other three it grades exactly one property:
+     that the seller's rejection came out of real schema validation and says which
+     rule the value broke.
 
-    WHY THIS IS THE DIRECT GRADING OF BR-RULE-209 INV-1, not a concession to it.
-    INV-1 (BR-UC-001-discover-available-inventory.feature:1420) reads "inputs
-    validated same as production" -- it says nothing about an exception object.
-    The assertion this replaces required a ``pydantic.ValidationError`` INSTANCE,
-    which was a PROXY: "an exception of the right class was constructed" standing
-    in for "validation really ran". The proxy stopped being satisfiable once the
-    rejection moved to the transport boundary, even though the property itself
-    became MORE true -- the payload is now rejected by production's own schema
-    boundary rather than by a model built in the test process
-    (salesagent-prkv.65).
+     WHY THIS IS THE DIRECT GRADING OF BR-RULE-209 INV-1, not a concession to it.
+     INV-1 (BR-UC-001-discover-available-inventory.feature:1420) reads "inputs
+     validated same as production" -- it says nothing about an exception object.
+     The assertion this replaces required a ``pydantic.ValidationError`` INSTANCE,
+     which was a PROXY: "an exception of the right class was constructed" standing
+     in for "validation really ran". The proxy stopped being satisfiable once the
+     rejection moved to the transport boundary, even though the property itself
+     became MORE true -- the payload is now rejected by production's own schema
+     boundary rather than by a model built in the test process
+    .
 
-    An ``issues[]`` entry carrying the JSON-Schema ``keyword`` that failed and a
-    ``pointer`` at the offending member IS production's validation output. It is
-    also STRICTER than the type check it replaces: a sandbox-simulated or
-    hand-wrapped error would not carry that structure, whereas any
-    ``ValidationError`` -- including one synthesised in the test process --
-    satisfied an isinstance check.
+     An ``issues[]`` entry carrying the JSON-Schema ``keyword`` that failed and a
+     ``pointer`` at the offending member IS production's validation output. It is
+     also STRICTER than the type check it replaces: a sandbox-simulated or
+     hand-wrapped error would not carry that structure, whereas any
+     ``ValidationError`` -- including one synthesised in the test process --
+     satisfied an isinstance check.
 
-    *field* is matched against the issue POINTER by trailing segment, so
-    ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
-    having to spell out pydantic's union-branch naming.
+     *field* is matched against the issue POINTER by trailing segment, so
+     ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
+     having to spell out pydantic's union-branch naming.
     """
     from tests.helpers.envelope_assertions import locate_envelope_error
 
@@ -590,6 +590,63 @@ def then_error_has_suggestion(ctx: dict) -> None:
     assert d["suggestion"], "Expected non-empty suggestion"
 
 
+@then(parsers.parse("the error details should name each rejected {subject_type} with its state"))
+def then_error_details_name_each_subject(ctx: dict, subject_type: str) -> None:
+    """Assert EVERY offending entity is named, not just the first one.
+
+    The obligation this grades is a refusal that names its whole subject set. A
+    request referencing two unassignable creatives that comes back naming one
+    forces the buyer to fix, resubmit, and discover the second — a round trip per
+    bad item, with no way to know how many remain.
+
+    Graded on ``details.problems`` because that is where this repo puts per-ENTITY
+    outcomes. AdCP 3.1.1 leaves the shape open: ``core/error.json`` types
+    ``details`` as a free object and reserves ``issues[]`` for per-FIELD schema
+    failures ("pointer", "keyword"), which a business-rule state refusal has
+    neither of. The set is compared against the creative_ids the scenario
+    referenced, so the assertion fails both ways — a missing subject AND an
+    invented one.
+
+    Reads ``errors[0]`` through the harness accessor, never a hand-rolled
+    ``envelope["errors"][0]``: a second parser in a step module is free to drift
+    from the one on the result object, and the two disagreeing is how an error
+    assertion goes quietly vacuous.
+    """
+    referenced = ctx.get("referenced_creative_ids") or []
+    assert referenced, (
+        "no referenced_creative_ids on the context, so this step has nothing to compare "
+        "against. It belongs after Givens that named the offending entities."
+    )
+
+    error_object = _wire_error_object(ctx)
+    assert error_object is not None, (
+        "no wire envelope was captured, so there is nothing buyer-facing to grade. A "
+        "client-side exception is not a seller's answer."
+    )
+
+    details = error_object.get("details") or {}
+    problems = details.get("problems") or []
+    assert problems, (
+        f"the refusal names no {subject_type}s at all: details={details!r}. The buyer cannot "
+        f"tell WHICH of {sorted(referenced)} blocked the request."
+    )
+
+    named = {p.get("subject_id") for p in problems}
+    assert named == set(referenced), (
+        f"the refusal names {sorted(n for n in named if n)} but the request referenced "
+        f"{sorted(referenced)}. Every offending {subject_type} must be reported together, so "
+        f"the buyer fixes them in one pass rather than one round trip each."
+    )
+    for problem in problems:
+        assert problem.get("subject_type") == subject_type, (
+            f"expected subject_type {subject_type!r}, got {problem.get('subject_type')!r}"
+        )
+        assert problem.get("rejected_value"), (
+            f"{problem.get('subject_id')!r} is named without the state that disqualified it, "
+            f"so the buyer learns THAT it failed but not WHY"
+        )
+
+
 @then("the error should include a suggestion for how to fix the issue")
 def then_error_has_fix_suggestion(ctx: dict) -> None:
     """Assert error includes an actionable suggestion for fixing the issue.
@@ -668,7 +725,7 @@ def then_error_has_fix_suggestion(ctx: dict) -> None:
 #     or agent_url. So those six record obligations production does not meet, which were
 #     never ledgered because no scenario reaches them.
 #
-# Writing those scenarios is filed as salesagent-xighb. When they are written, the assertion should
+# Those scenarios are not written yet. When they are, the assertion should
 # be re-expressed against the CODE plus the sanctioned wire oracle rather than against
 # prose: core/error.json leaves `suggestion` free-form text the seller may reword, and
 # these keyword tests would grade one seller's phrasing.
@@ -797,12 +854,6 @@ def then_suggestion_agent_url_id(ctx: dict) -> None:
 
 
 # ── No error raised ─────────────────────────────────────────────────
-
-
-@then("no error should be raised")
-def then_no_error(ctx: dict) -> None:
-    """Assert no error was recorded."""
-    assert "error" not in ctx, f"Expected no error but got: {ctx.get('error')}"
 
 
 @then("no error should be returned")
@@ -1056,17 +1107,6 @@ def then_error_details_include_unquoted(ctx: dict, key: str, value: str) -> None
     _assert_detail_value_matches(key, actual, value)
 
 
-@then(parsers.parse('the error details should include {key} "{value}"'))
-def then_error_details_include_quoted(ctx: dict, key: str, value: str) -> None:
-    """Assert error.details contains a key with the given string value."""
-    error = ctx.get("error")
-    assert error is not None, "No error recorded in ctx"
-    details = _get_error_details(error)
-    assert key in details, f"Expected '{key}' in error details. Available keys: {list(details.keys())}"
-    actual = details[key]
-    assert str(actual) == value, f"Expected details['{key}'] = '{value}', got '{actual}'"
-
-
 @then(parsers.parse('the error "details" object should include "{key}" with value {value:d}'))
 def then_error_details_object_numeric(ctx: dict, key: str, value: int) -> None:
     """Assert error.details contains a key with an integer value.
@@ -1127,7 +1167,7 @@ def then_terminal_failure(ctx: dict) -> None:
     Verifies both that an error occurred and that its recovery hint is
     'terminal' -- meaning the buyer cannot retry with corrected input.
 
-    Wire-first (salesagent-3dawm.18). This step previously had NO wire path at
+    Wire-first. This step previously had NO wire path at
     all: it read recovery off the reconstructed ``ctx['error']``, and its final
     branch fell off the end asserting nothing, on the reasoning quoted below
     that a non-AdCP exception is terminal anyway. That made it the step most
@@ -1450,3 +1490,77 @@ def then_sole_entry_error_code(ctx: dict, collection: str, code: str) -> None:
     """The response's SOLE *collection* entry carries *code*. One property only."""
     codes = _entry_error_codes(ctx, collection)
     assert code in codes, f"Expected error code {code!r} on the sole {collection} entry, got {codes}"
+
+
+def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
+    """Index of the *collection* entry whose id field is *entry_id*, located on the wire.
+
+    The selector form the sole-entry docstring said to add with the scenario that
+    needs it: a sync that carries an anchor creative AND a synthesized entry for an
+    assignment reference has two rows, and grading "row 0" would grade the anchor.
+    The id key is the collection's singular -- ``creatives`` -> ``creative_id``,
+    ``accounts`` -> ``account_id`` -- which is how every per-item entry the pinned
+    response schemas define names itself.
+    """
+    id_key = f"{collection[:-1]}_id"
+    entries = wire_field(ctx, collection)
+    matches = [i for i, entry in enumerate(entries) if entry.get(id_key) == entry_id]
+    assert len(matches) == 1, (
+        f"expected exactly one {collection} entry with {id_key}={entry_id!r} on the wire, found "
+        f"{len(matches)} among {[e.get(id_key) for e in entries]}"
+    )
+    return matches[0]
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" carries error code "(?P<code>[^"]+)"$'))
+def then_selected_entry_error_code(ctx: dict, collection: str, entry_id: str, code: str) -> None:
+    """The *collection* entry selected by its id carries *code* in its ``errors[]``."""
+    index = _entry_index_for(ctx, collection, entry_id)
+    errors = wire_entry_errors(ctx, collection, index=index)
+    assert errors, f"the {collection} entry for {entry_id!r} carries an EMPTY errors[], so it reports no failure"
+    codes = [error.get("code") if isinstance(error, dict) else getattr(error, "code", None) for error in errors]
+    assert code in codes, f"Expected error code {code!r} on the {collection} entry for {entry_id!r}, got {codes}"
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" has action "(?P<action>[^"]+)"$'))
+def then_selected_entry_action(ctx: dict, collection: str, entry_id: str, action: str) -> None:
+    """The *collection* entry selected by its id reports *action* on the wire."""
+    index = _entry_index_for(ctx, collection, entry_id)
+    actual = wire_field(ctx, collection)[index].get("action")
+    assert actual == action, f"Expected action {action!r} on the {collection} entry for {entry_id!r}, got {actual!r}"
+
+
+@then(
+    parsers.re(
+        r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" carries a non-empty "(?P<key>\w+)" error detail$'
+    )
+)
+def then_selected_entry_error_detail(ctx: dict, collection: str, entry_id: str, key: str) -> None:
+    """One error on the selected entry carries a non-empty *key* under ``details`` (core/error.json).
+
+    ``details`` is "Additional task-specific error details"; the pin's error-details/*.json
+    files give each code its RECOMMENDED keys (creative-rejected: ``reasons``), so the grade
+    is presence with content, not an exact shape.
+    """
+    index = _entry_index_for(ctx, collection, entry_id)
+    errors = wire_entry_errors(ctx, collection, index=index)
+    assert errors, f"the {collection} entry for {entry_id!r} carries an EMPTY errors[], so it reports no failure"
+    details = [(e.get("details") if isinstance(e, dict) else getattr(e, "details", None)) or {} for e in errors]
+    assert any(d.get(key) for d in details), (
+        f"Expected a non-empty {key!r} under details on the {collection} entry for {entry_id!r}, got {details}"
+    )
+
+
+@then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" omits the "(?P<field>\w+)" field$'))
+def then_selected_entry_omits_field(ctx: dict, collection: str, entry_id: str, field: str) -> None:
+    """The *collection* entry selected by its id has no *field* key on the wire at all.
+
+    Key ABSENCE, not a null value: a schema that says a field MUST be omitted (the
+    per-creative ``status`` on a failed or deleted action) is violated by ``"status": null``
+    just as much as by a value, so the wire dict is read for the key itself.
+    """
+    index = _entry_index_for(ctx, collection, entry_id)
+    entry = wire_field(ctx, collection)[index]
+    assert field not in entry, (
+        f"Expected the {collection} entry for {entry_id!r} to omit {field!r}, but it carries {entry.get(field)!r}"
+    )

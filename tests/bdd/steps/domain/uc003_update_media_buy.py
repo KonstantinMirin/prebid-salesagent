@@ -229,12 +229,6 @@ def given_existing_mb_start_time(ctx: dict, start_time: str) -> None:
     env._commit_factory_data()
 
 
-@given("a valid update_media_buy request")
-def given_update_request_no_table(ctx: dict) -> None:
-    """Initialize update request kwargs with defaults (media_buy_id from ctx)."""
-    _ensure_update_defaults(ctx)
-
-
 @given(parsers.parse("a valid update_media_buy request with:"))
 def given_update_request_with_table(ctx: dict, datatable: list[list[str]]) -> None:
     """Build update request kwargs from a data table."""
@@ -502,6 +496,35 @@ def given_package_update_creative_assignments(ctx: dict, datatable: list[list[st
     # Track referenced creative_ids for later guard steps
     ctx["referenced_creative_ids"] = [a["creative_id"] for a in assignments]
     ctx["referenced_placement_ids"] = [pid for a in assignments for pid in (a.get("placement_ids") or [])]
+
+
+@given(parsers.parse('the package update references creative "{creative_id}" via {array}'))
+def given_package_update_references_creative(ctx: dict, creative_id: str, array: str) -> None:
+    """Reference one creative through the named ARRAY parameter, and only that one.
+
+    ``creative_ids`` and ``creative_assignments`` are the two request members that
+    name creatives, they reach the same validation helper, and the only thing that
+    differs on the wire is which array ``error.field`` points at. One step so an
+    outline can grade both from one row each, instead of two scenarios that drift.
+
+    Creates nothing: the scenarios using this are the not-found and bad-state paths,
+    where a companion Given says what the library does or does not hold.
+    """
+    kwargs = _ensure_update_defaults(ctx)
+    if not kwargs.get("packages"):
+        kwargs["packages"] = [{"package_id": "pkg_001"}]
+    pkg = kwargs["packages"][0]
+    if array == "creative_ids":
+        pkg["creative_ids"] = [creative_id]
+    elif array == "creative_assignments":
+        pkg["creative_assignments"] = [{"creative_id": creative_id, "weight": 1.0}]
+    else:
+        raise AssertionError(
+            f"{array!r} is not a request member that references creatives. The two are "
+            "'creative_ids' and 'creative_assignments'; a third spelling means the "
+            "scenario names something update_media_buy does not accept."
+        )
+    ctx["referenced_creative_ids"] = [creative_id]
 
 
 @given("all referenced creative_ids exist in the creative library")

@@ -34,9 +34,9 @@ from __future__ import annotations
 
 from pytest_bdd import parsers, then
 
-from tests.bdd.steps._outcome_helpers import wire_dict
+from tests.bdd.steps._outcome_helpers import wire_dict, wire_error_envelope_or_none
 from tests.helpers.pinned_schema import validator_for
-from tests.helpers.response_schemas import response_schema_ref, response_validator
+from tests.helpers.response_schemas import branch_names, response_schema_ref, response_validator
 
 
 def _dispatch_errored(ctx: dict) -> bool:
@@ -76,6 +76,31 @@ def _assert_compliant(ctx: dict, tool: str, branch: str | None) -> None:
     """
     if _dispatch_errored(ctx):
         then_error_compliant(ctx)
+        # Then grade the refusal against the TOOL's own error branch. Without this, the
+        # delegation above discards both ``tool`` and ``branch``, so ``<tool> error spec``
+        # and ``<tool> success spec`` were the SAME check on a refusal — asserting the
+        # SUCCESS branch of an error response passed. The branch form's own docstring
+        # calls itself "strictly stronger"; that held only for success outcomes until
+        # this line, and the ``error`` branch form was used ZERO times out of 251.
+        #
+        # Conditional because not every tool branches: a single-shape response has no
+        # error branch to narrow to, and ``response_validator`` raises rather than guess.
+        # Measured across the whole BDD suite when added: 128 failing before, 128 after.
+        # Nothing was wrong — nothing was checking.
+        # Through the ONE guarded accessor, never getattr on the result: a second reader
+        # in a step module is free to drift from the one the harness owns, which is what
+        # test_no_hand_rolled_wire_envelope_access exists to stop. It caught this line.
+        envelope = wire_error_envelope_or_none(ctx)
+        if envelope is not None and "error" in branch_names(tool):
+            branch_errors = sorted(
+                response_validator(tool, "error").iter_errors(envelope),
+                key=lambda e: list(e.absolute_path),
+            )
+            if branch_errors:
+                detail = "\n".join(
+                    f"  at {'.'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}" for e in branch_errors
+                )
+                raise AssertionError(f"the refusal does not comply with the {tool} error branch:\n{detail}")
         return
     wire = wire_dict(ctx)
     errors = sorted(response_validator(tool, branch).iter_errors(wire), key=lambda e: list(e.absolute_path))
@@ -97,6 +122,15 @@ def then_error_compliant(ctx: dict) -> None:
     A refusal is still a wire contract: the boundary's ``AdcpErrorResponse`` serializes to
     ``{adcp_error, errors[], context}`` and every entry in ``errors[]`` is a
     ``core/error.json`` object, required ``code`` and ``message``.
+
+    THIS IS THE LINE FOR A TOOL WITHOUT AN ERROR BRANCH. Where the pinned response
+    schema branches (``create_media_buy``, ``update_media_buy``, ``sync_creatives``,
+    ``sync_accounts`` carry an ``error`` title in their ``oneOf``), the canonical
+    sentence is ``the response is compliant with the <tool> error spec`` -- it runs
+    this same check and THEN grades the refusal against the tool's own error branch,
+    so it is strictly stronger and the generic line under-claims. Every refusal of
+    a branching tool was swept to it; what remains on this line is the read tools,
+    whose response schema has one shape and no branch to narrow to.
 
     Tool-independent on purpose. The AdCP error vocabulary is OPEN — ``code`` is
     a wire-typed string, published codes are documentary, and a receiver decodes

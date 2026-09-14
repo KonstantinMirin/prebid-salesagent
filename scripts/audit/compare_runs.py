@@ -108,14 +108,21 @@ class SuiteComparison(NamedTuple):
 
 
 def outcomes(report: pathlib.Path) -> dict[str, tuple[str, str]]:
-    """``nodeid -> (outcome, reason)`` for one suite's JSON report."""
+    """``nodeid -> (outcome, reason)`` for one suite's JSON report.
+
+    The reason is the longrepr of the phase that did NOT pass. Under xdist every
+    phase carries a longrepr -- a passed setup's is the worker banner
+    (``[gw3] linux -- Python ...``) -- so "the first phase with a longrepr" read
+    the banner for every failure and the traceback for none.
+    """
     data = json.loads(report.read_text())
     result: dict[str, tuple[str, str]] = {}
     for test in data.get("tests", []):
         outcome = test.get("outcome", "?")
         reason = ""
-        for phase in ("setup", "call", "teardown"):
-            info = test.get(phase) or {}
+        phases = [test.get(phase) or {} for phase in ("setup", "call", "teardown")]
+        unhappy = [info for info in phases if info.get("outcome") not in (None, "passed")]
+        for info in unhappy or phases:
             if info.get("longrepr"):
                 reason = str(info["longrepr"])
                 break
