@@ -717,18 +717,20 @@ document.
 
 **A stored document that does not fit its model is migrated once.** `Targeting` used to carry
 a validator that rewrote legacy flat geo keys into the structured fields on every validation.
-The validator is deleted. Migration `f7c3a9d21b64` in `alembic/versions/` rewrote the rows
-that still carried those keys, once. Every touched row was copied to a backup table first, so
-the downgrade restores the exact prior document. A validator that reshapes input runs
-on every read forever and hides which rows are legacy; a migration answers the question once.
+The validator is deleted, and no read-side normalizer replaced it. A validator that reshapes
+input runs on every read forever and hides which rows are legacy; a data migration answers
+the question once, in the rows. Write the migration only for rows that exist. No database
+reachable from this repo holds a document with the flat geo keys, so the tree carries no
+migration for them; if one is ever found, the migration is written then, for the databases
+that hold it.
 
 **No input reshaping on a wire model.** A model never coerces an older or looser buyer
 spelling on the way in. The before-validators that once did so on `Creative`,
 `PackageRequest`, `UpdateMediaBuyRequest`, and `Targeting` are deleted, and so is the one that
 wrapped a plain string as a `Provenance` tool. An undeclared buyer field follows the accepted
 shape rule under [pattern 7](#the-accepted-shape-is-the-declared-shape): rejected in
-development, dropped in production. A legacy stored shape is migrated once in the rows, as
-migration `f7c3a9d21b64` did for the flat geo keys, never reshaped on read.
+development, dropped in production. A legacy stored shape is migrated once in the rows,
+never reshaped on read.
 
 The before-validators that remain adopt a sibling generated class, which is a model-to-model
 step and never a dump. Pydantic validates a model-typed slot by instance, so a generated
