@@ -10,6 +10,8 @@ from pydantic import Field
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterCreateResult,
+    AdapterUpdateResult,
     AdServerAdapter,
     BaseConnectionConfig,
     BaseProductConfig,
@@ -40,14 +42,10 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
-    CreateMediaBuySuccess,
     DeliveryTotals,
     MediaPackage,
     ReportingPeriod,
     Snapshot,
-    UpdateMediaBuyResponse,
-    UpdateMediaBuySuccess,
 )
 from src.core.security.webhook_egress import deliver_webhook
 from src.core.validation_helpers import package_field_path
@@ -578,7 +576,7 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Simulates the creation of a media buy using GAM-like templates.
 
         Args:
@@ -590,7 +588,7 @@ class MockAdServer(AdServerAdapter):
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
 
         Returns:
-            CreateMediaBuyResponse with simulated media buy
+            AdapterCreateResult for the simulated media buy
         """
         from src.adapters.test_scenario_parser import has_test_keywords, parse_test_scenario
 
@@ -639,7 +637,7 @@ class MockAdServer(AdServerAdapter):
                 # For question-asking scenario, return success with pending media_buy_id
                 # The media buy hasn't been created yet - we need input first
                 # The workflow_step_id will track this pending operation
-                return CreateMediaBuySuccess.carrier(
+                return AdapterCreateResult(
                     media_buy_id="pending",  # Placeholder for pending manual approval
                     creative_deadline=None,
                     packages=[],  # No packages yet - operation not complete
@@ -674,10 +672,11 @@ class MockAdServer(AdServerAdapter):
             targeting = package.targeting_overlay
             if targeting:
                 # Mock adapter mirrors GAM behavior - these targeting types are not supported
-                if getattr(targeting, "device_type_any_of", None):
+                if targeting.device_form_factors:
                     raise AdCPCapabilityNotSupportedError(
                         details=CapabilityRefusalDetails(
-                            capability="device_type_any_of", rejected_value=targeting.device_type_any_of
+                            capability="device_type_any_of" if targeting.device_type_any_of else "device_platform",
+                            rejected_value=targeting.device_form_factors,
                         )
                     )
 
@@ -732,7 +731,7 @@ class MockAdServer(AdServerAdapter):
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create media buy in async HITL mode."""
         self.log("🤖 Processing create_media_buy in ASYNC mode")
 
@@ -762,7 +761,7 @@ class MockAdServer(AdServerAdapter):
         # The media buy hasn't been created yet - it's being processed asynchronously
         # The workflow_step_id (from step['step_id']) will track this pending operation
         # Client can poll the step or wait for webhook notification when complete
-        return CreateMediaBuySuccess.carrier(
+        return AdapterCreateResult(
             media_buy_id="pending",  # Placeholder for async processing in progress
             creative_deadline=None,
             packages=[],  # No packages yet - operation not complete
@@ -775,7 +774,7 @@ class MockAdServer(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create media buy in sync HITL mode with configurable delay."""
         self.log(f"🤖 Processing create_media_buy in SYNC mode ({self.sync_delay_ms}ms delay)")
 
@@ -814,7 +813,7 @@ class MockAdServer(AdServerAdapter):
         end_time: datetime,
         scenario=None,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create media buy immediately (original behavior)."""
         # DEBUG: Log packages received
         self.log(f"[DEBUG] MockAdapter._create_media_buy_immediate called with {len(packages)} packages")
@@ -1379,7 +1378,7 @@ class MockAdServer(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update media buy in database (Mock adapter implementation)."""
         import logging
 
@@ -1409,10 +1408,9 @@ class MockAdServer(AdServerAdapter):
                 else:
                     logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
 
-        return UpdateMediaBuySuccess.carrier(
+        return AdapterUpdateResult(
             media_buy_id=media_buy_id,
             affected_packages=[],
-            implementation_date=today,
         )
 
     def get_config_ui_endpoint(self) -> str | None:

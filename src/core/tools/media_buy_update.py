@@ -84,7 +84,6 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
     SyncCreativesRequest,
-    UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
     UpdateMediaBuySubmitted,
@@ -638,75 +637,56 @@ def _update_media_buy_impl(
                     budget=None,
                     today=utc_flight_start(today),
                 )
-                # Manual approval case - convert adapter result to appropriate Success/Error
-                # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
-                if isinstance(result, UpdateMediaBuyError) and result.errors:
-                    error_response = UpdateMediaBuyError(
-                        errors=result.errors,
-                        status=AdcpTaskStatus.failed,
-                        message=f"Media buy update encountered {len(result.errors)} error(s)."
-                        if result.errors
-                        else "Media buy update failed.",
-                    )
-                    ctx_manager.audit_workflow_step_result(
-                        step.step_id,
-                        error_response,
-                        status="failed",
-                        error_message=result.errors[0].message if result.errors else "Pause/resume failed",
-                    )
-                    return error_response
-                else:
-                    # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
-                    # Use getattr to safely access discriminated union fields
-                    media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
-                    affected_pkgs = getattr(result, "affected_packages", [])
+                # An adapter reports failure by raising; a returned result is the success.
+                media_buy_id = result.media_buy_id
+                affected_pkgs = result.affected_packages
 
-                    # Derive post-action status from the DB (date-refined for parity
-                    # with get_media_buys — see _adcp_status_and_actions) so
-                    # valid_actions reflects what the buyer can actually do next.
-                    # Fall back to the current state-machine target only if the DB
-                    # row is missing (e.g., adapter deleted it under us) — no row
-                    # means no dates to refine.
-                    # Persist the pause/resume OURSELVES. The adapter call above changes the
-                    # ad server, not our row -- and this branch wrote nothing, so two things
-                    # were silently lost. ``is_paused`` is read by _adcp_status_and_actions
-                    # to derive the status we report, so a paused buy kept reporting as
-                    # un-paused; and ``revision`` is the buyer's optimistic-concurrency
-                    # token, which update-media-buy-response.json defines as "Revision
-                    # number after this update", so the response returned the value from
-                    # BEFORE the write. update_fields sets the column, bumps the revision and
-                    # flushes, so the read below sees both.
-                    uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
+                # Derive post-action status from the DB (date-refined for parity
+                # with get_media_buys — see _adcp_status_and_actions) so
+                # valid_actions reflects what the buyer can actually do next.
+                # Fall back to the current state-machine target only if the DB
+                # row is missing (e.g., adapter deleted it under us) — no row
+                # means no dates to refine.
+                # Persist the pause/resume OURSELVES. The adapter call above changes the
+                # ad server, not our row -- and this branch wrote nothing, so two things
+                # were silently lost. ``is_paused`` is read by _adcp_status_and_actions
+                # to derive the status we report, so a paused buy kept reporting as
+                # un-paused; and ``revision`` is the buyer's optimistic-concurrency
+                # token, which update-media-buy-response.json defines as "Revision
+                # number after this update", so the response returned the value from
+                # BEFORE the write. update_fields sets the column, bumps the revision and
+                # flushes, so the read below sees both.
+                uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
 
-                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id)
-                    _post_action_revision = _post_action_mb.revision
-                    _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
-                    success_response = UpdateMediaBuySuccess(
-                        media_buy_id=media_buy_id,
-                        message=f"Media buy {media_buy_id} updated successfully.",
-                        revision=_post_action_revision,
-                        media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
-                        affected_packages=affected_pkgs,
-                        valid_actions=_post_action_actions,
-                        errors=property_list_unsupported_advisories(req.packages, adapter),
-                    )
-                    # Log successful update_media_buy (pause/resume)
-                    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
-                    audit_logger.log_operation(
-                        operation="update_media_buy",
-                        principal_name=principal_id or "anonymous",
-                        principal_id=principal_id or "anonymous",
-                        adapter_id="mcp_server",
-                        success=True,
-                        details={
-                            "media_buy_id": req.media_buy_id,
-                            "action": action,
-                            "affected_packages_count": len(affected_pkgs),
-                        },
-                    )
-                    ctx_manager.audit_workflow_step_result(step.step_id, success_response)
-                    success_response.status = AdcpTaskStatus.completed
-                    return success_response
+                _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id)
+                _post_action_revision = _post_action_mb.revision
+                _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
+                success_response = UpdateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    message=f"Media buy {media_buy_id} updated successfully.",
+                    revision=_post_action_revision,
+                    media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
+                    affected_packages=affected_pkgs,
+                    valid_actions=_post_action_actions,
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
+                )
+                # Log successful update_media_buy (pause/resume)
+                audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+                audit_logger.log_operation(
+                    operation="update_media_buy",
+                    principal_name=principal_id or "anonymous",
+                    principal_id=principal_id or "anonymous",
+                    adapter_id="mcp_server",
+                    success=True,
+                    details={
+                        "media_buy_id": req.media_buy_id,
+                        "action": action,
+                        "affected_packages_count": len(affected_pkgs),
+                    },
+                )
+                ctx_manager.audit_workflow_step_result(step.step_id, success_response)
+                success_response.status = AdcpTaskStatus.completed
+                return success_response
 
             # Handle package-level updates
             if req.packages:
@@ -718,34 +698,14 @@ def _update_media_buy_impl(
                     if pkg_update.paused is not None:
                         # adcp 2.12.0+: paused=True means pause, paused=False means resume
                         action = "pause_package" if pkg_update.paused else "resume_package"
-                        result = adapter.update_media_buy(
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
                             action=action,
                             package_id=pkg_update.package_id,
                             budget=None,
                             today=utc_flight_start(today),
                         )
-                        # adcp v1.2.1 oneOf pattern: Check if result is Error variant
-                        if isinstance(result, UpdateMediaBuyError) and result.errors:
-                            error_message = (
-                                result.errors[0].message
-                                if (result.errors and len(result.errors) > 0)
-                                else "Update failed"
-                            )
-                            response_data = UpdateMediaBuyError(
-                                errors=result.errors,
-                                status=AdcpTaskStatus.failed,
-                                message=f"Media buy update encountered {len(result.errors)} error(s)."
-                                if result.errors
-                                else "Media buy update failed.",
-                            )
-                            ctx_manager.audit_workflow_step_result(
-                                step.step_id,
-                                response_data,
-                                status="failed",
-                                error_message=error_message,
-                            )
-                            return response_data
 
                     # Handle budget updates
                     if pkg_update.budget is not None:
@@ -802,34 +762,14 @@ def _update_media_buy_impl(
                         # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
                         uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
 
-                        result = adapter.update_media_buy(
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
                             action="update_package_budget",
                             package_id=pkg_update.package_id,
                             budget=int(budget_amount),
                             today=utc_flight_start(today),
                         )
-                        # adcp v1.2.1 oneOf pattern: Check if result is Error variant
-                        if isinstance(result, UpdateMediaBuyError) and result.errors:
-                            error_message = (
-                                result.errors[0].message
-                                if (result.errors and len(result.errors) > 0)
-                                else "Update failed"
-                            )
-                            response_data = UpdateMediaBuyError(
-                                errors=result.errors,
-                                status=AdcpTaskStatus.failed,
-                                message=f"Media buy update encountered {len(result.errors)} error(s)."
-                                if result.errors
-                                else "Media buy update failed.",
-                            )
-                            ctx_manager.audit_workflow_step_result(
-                                step.step_id,
-                                response_data,
-                                status="failed",
-                                error_message=error_message,
-                            )
-                            return response_data
 
                         # Track budget update in affected_packages
                         # At this point, pkg_update.package_id is guaranteed to be str (checked above)
@@ -1281,7 +1221,6 @@ def _update_media_buy_impl(
             # Build final response first
             logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")
 
-            # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields (workflow_step_id, affected_packages)
             # affected_packages_list contains AffectedPackage objects with both:
             # - AdCP-required fields (package_id) for spec compliance
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True

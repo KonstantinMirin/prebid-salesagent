@@ -24,7 +24,13 @@ if TYPE_CHECKING:
 
 from flask import Flask
 
-from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
+from src.adapters.base import (
+    AdapterCapabilities,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    TargetingCapabilities,
+)
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -77,11 +83,8 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     MediaPackage,
     ReportingPeriod,
-    UpdateMediaBuyResponse,
-    UpdateMediaBuySuccess,
 )
 
 # Set up logger
@@ -355,7 +358,7 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create a new media buy (order) in GAM - main orchestration method.
 
         Args:
@@ -367,7 +370,7 @@ class GoogleAdManager(AdServerAdapter):
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
 
         Returns:
-            CreateMediaBuyResponse with GAM order details
+            AdapterCreateResult with GAM order details
         """
         self.log("[bold]GoogleAdManager.create_media_buy[/bold] - Creating GAM order")
 
@@ -566,7 +569,6 @@ class GoogleAdManager(AdServerAdapter):
                     media_buy_id,
                     packages,
                     creative_deadline_days=None,
-                    workflow_step_id=step_id,
                 )
             else:
                 raise AdCPWorkflowError()
@@ -679,7 +681,7 @@ class GoogleAdManager(AdServerAdapter):
             self.log(f"✓ Created {len(line_item_ids)} line items")
 
             # NOTE: platform_line_item_id persistence is handled by media_buy_create.py
-            # after response object is returned. See CreateMediaBuySuccess._platform_line_item_ids mapping.
+            # from AdapterCreateResult.platform_line_item_ids.
 
             # Approve the order now that it has line items
             # GAM requires line items to exist before an order can be APPROVED
@@ -742,62 +744,35 @@ class GoogleAdManager(AdServerAdapter):
             raise AdCPLineItemError()
 
         # Check if activation approval is needed (guaranteed line items require human approval)
+        # package_id -> line item id, from the parallel packages / line_item_ids arrays
+        platform_line_item_ids = {
+            package.package_id: line_item_id for package, line_item_id in zip(packages, line_item_ids, strict=False)
+        }
+        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
+
         has_guaranteed, item_types = self._check_order_has_guaranteed_items(order_id)
         if has_guaranteed:
             self.log("[yellow]Order contains guaranteed line items - creating activation workflow step[/yellow]")
 
             step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            # Create response and attach platform_line_item_id mapping for database persistence
-            # This mapping is used by media_buy_create.py to update MediaPackage records
-            response = self._build_create_success(
+            # media_buy_create.py persists platform_line_item_ids onto the MediaPackage rows
+            return self._build_create_success(
                 request,
                 order_id,
                 packages,
                 creative_deadline_days=None,
-                workflow_step_id=step_id,
+                platform_line_item_ids=platform_line_item_ids,
             )
 
-            # Store platform_line_item_id mapping as a non-standard attribute
-            # This survives Pydantic validation since it's set after construction
-            # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-            platform_line_item_ids = {}
-            for package, line_item_id in zip(packages, line_item_ids, strict=False):
-                platform_line_item_ids[package.package_id] = line_item_id
-
-            self.log(f"[DEBUG] Guaranteed path: Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-            # Attach to response object (bypass Pydantic validation)
-            object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-            self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-            self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
-            return response
-
-        # Create response and store platform_line_item_id mapping for database persistence
-        # This mapping is used by media_buy_create.py to update MediaPackage records
-        response = self._build_create_success(
+        # media_buy_create.py persists platform_line_item_ids onto the MediaPackage rows
+        return self._build_create_success(
             request,
             order_id,
             packages,
             creative_deadline_days=None,
+            platform_line_item_ids=platform_line_item_ids,
         )
-
-        # Store platform_line_item_id mapping as a non-standard attribute
-        # This survives Pydantic validation since it's set after construction
-        # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-        platform_line_item_ids = {}
-        for package, line_item_id in zip(packages, line_item_ids, strict=False):
-            platform_line_item_ids[package.package_id] = line_item_id
-
-        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-        # Attach to response object (bypass Pydantic validation)
-        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-        self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-        self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
-        return response
 
     def archive_order(self, order_id: str) -> bool:
         """Archive a GAM order for cleanup purposes (delegated to orders manager)."""
@@ -866,7 +841,6 @@ class GoogleAdManager(AdServerAdapter):
                             status="submitted",
                             message=f"Creative asset submitted for approval. Workflow step: {step_id}",
                             creative_id=None,
-                            workflow_step_id=step_id,
                         )
                     )
                 return asset_statuses
@@ -1250,7 +1224,7 @@ class GoogleAdManager(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update a media buy in GAM."""
         # Admin-only actions
         admin_only_actions = ["approve_order"]
@@ -1268,10 +1242,9 @@ class GoogleAdManager(AdServerAdapter):
 
             if step_id:
                 # Manual approval success - no errors
-                return UpdateMediaBuySuccess.carrier(
+                return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
                     affected_packages=[],  # List of package_ids affected by update
-                    implementation_date=today,
                 )
             else:
                 raise AdCPWorkflowError()
@@ -1288,11 +1261,9 @@ class GoogleAdManager(AdServerAdapter):
 
                 if step_id:
                     # Activation workflow created - success (no errors)
-                    return UpdateMediaBuySuccess.carrier(
+                    return AdapterUpdateResult(
                         media_buy_id=media_buy_id,
                         affected_packages=[],
-                        implementation_date=today,
-                        workflow_step_id=step_id,
                     )
                 else:
                     raise AdCPActivationWorkflowError()
@@ -1380,10 +1351,9 @@ class GoogleAdManager(AdServerAdapter):
                 session.commit()
                 self.log(f"✓ Updated package {package_id} budget to ${budget} in both GAM and database")
 
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],  # Required by AdCP spec
-                implementation_date=today,
             )
 
         # Handle pause/resume actions
@@ -1442,10 +1412,9 @@ class GoogleAdManager(AdServerAdapter):
                         buyer_package_ref=None,
                     )
 
-                    return UpdateMediaBuySuccess.carrier(
+                    return AdapterUpdateResult(
                         media_buy_id=media_buy_id,
                         affected_packages=[affected_package],
-                        implementation_date=today,
                     )
 
             # Media buy-level actions (pause/resume all packages)
@@ -1511,17 +1480,15 @@ class GoogleAdManager(AdServerAdapter):
                         for pkg in packages
                     ]
 
-                    return UpdateMediaBuySuccess.carrier(
+                    return AdapterUpdateResult(
                         media_buy_id=media_buy_id,
                         affected_packages=affected_packages_list,
-                        implementation_date=today,
                     )
 
             # Should not reach here - both pause/resume branches return above
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],
-                implementation_date=today,
             )
 
         # Explicit failure for unsupported actions (no silent success)

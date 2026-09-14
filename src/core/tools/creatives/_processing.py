@@ -34,7 +34,7 @@ from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import run_async_in_sync_context
 
-from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
+from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets, _generative_assets
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
@@ -405,7 +405,7 @@ def _update_existing_creative(
                                 # Only use generative assets if user didn't provide their own
                                 user_provided_assets = creative.assets
                                 if creative_output.get("assets") and not user_provided_assets:
-                                    data["assets"] = creative_output["assets"]
+                                    data["assets"] = _generative_assets(creative_output["assets"])
                                     changes.append("assets")
                                     logger.info("[sync_creatives] Using assets from generative output (update)")
                                 elif user_provided_assets:
@@ -777,7 +777,7 @@ def _create_new_creative(
 
                             # Only use generative assets if user didn't provide their own
                             if creative_output.get("assets") and not user_provided_assets:
-                                data["assets"] = creative_output["assets"]
+                                data["assets"] = _generative_assets(creative_output["assets"])
                                 logger.info("[sync_creatives] Using assets from generative output")
                             elif user_provided_assets:
                                 logger.info(

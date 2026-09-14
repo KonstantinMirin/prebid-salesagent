@@ -4,7 +4,7 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
+from src.adapters.base import AdapterCreateResult, AdapterUpdateResult, AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
@@ -65,8 +65,8 @@ class TritonDigital(AdServerAdapter):
             return unsupported
 
         # Check device types - only audio-capable devices
-        if targeting_overlay.device_type_any_of:
-            for device in targeting_overlay.device_type_any_of:
+        if targeting_overlay.device_form_factors:
+            for device in targeting_overlay.device_form_factors:
                 if device not in self.SUPPORTED_DEVICE_TYPES:
                     unsupported.append(
                         f"Device type '{device}' not supported (Triton supports audio-capable devices only)"
@@ -128,7 +128,7 @@ class TritonDigital(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Creates a new Campaign and Flights in the Triton TAP API."""
         # Log operation
         self.audit_logger.log_operation(
@@ -403,7 +403,7 @@ class TritonDigital(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Updates a media buy in Triton Digital using standardized actions."""
         self.log(f"TritonDigital.update_media_buy for {media_buy_id} with action {action}")
 
@@ -438,7 +438,7 @@ class TritonDigital(AdServerAdapter):
                 )
 
                 # Return affected package with paused state
-                return UpdateMediaBuySuccess.carrier(
+                return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
                     affected_packages=[
                         AffectedPackage(
@@ -448,7 +448,6 @@ class TritonDigital(AdServerAdapter):
                             buyer_package_ref=None,
                         )
                     ],
-                    implementation_date=today,
                 )
 
             elif (
@@ -477,10 +476,9 @@ class TritonDigital(AdServerAdapter):
                     "PUT", f"/flights/{flight['id']}", json=goal_update_payload
                 )
 
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],  # List of package_ids affected by update
-                implementation_date=today,
             )
 
         except OutboundError as e:

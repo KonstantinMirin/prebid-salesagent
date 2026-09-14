@@ -509,13 +509,12 @@ class ValidationDetails(EntityRefDetails, ValueRejectionDetails, ProblemsDetails
     signal_agent_segment_id: str | None = None
     index: int | None = None
 
-    # The three keys `collect_targeting_violations` returns. They were SPREAD at
+    # The two keys `collect_targeting_violations` returns. They were SPREAD at
     # the top level of details, and the generated BR-UC-002 scenarios grade them
     # there by name -- so they are declared fields, not a nested `violations`
     # object. The scenario is the contract; a tidier shape that renames a graded
     # key is a wire break, not a cleanup.
     managed_only_dimensions: list[str] | None = None
-    removed_dimensions: list[str] | None = None
     geo_overlaps: list[dict[str, Any]] | None = None
 
 

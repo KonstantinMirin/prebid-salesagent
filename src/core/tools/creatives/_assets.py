@@ -8,6 +8,16 @@ import logging
 from typing import Any
 
 from adcp.types import CreativeAsset
+from adcp.types.generated_poc.creative.list_creatives_response import Creative as LibraryCreative
+from pydantic import TypeAdapter, ValidationError
+
+from src.core.exceptions import AdCPAdapterError
+from src.core.helpers.creative_helpers import asset_value_attr as _extract_attr_from_asset_value
+
+#: The typed asset map ``Creative.assets`` inherits from the library, as a validator. The one
+#: place a stored or agent-produced asset map is checked against the pinned shape: on the
+#: row-to-model read (listing) and on the generative write (processing).
+ASSET_MAP: TypeAdapter[Any] = TypeAdapter(LibraryCreative.model_fields["assets"].annotation)
 
 logger = logging.getLogger(__name__)
 
@@ -17,48 +27,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _extract_attr_from_asset_value(asset: Any, *attr_names: str) -> str | None:
-    """Extract a named attribute from an SDK 5.7 asset value.
+def _generative_assets(value: Any) -> Any:
+    """The asset map a creative agent built, checked against the pinned shape before it is stored.
 
-    SDK 5.7 wraps asset slot values in an ``Assets`` RootModel containing a
-    ``list[AssetVariant]`` where each ``AssetVariant`` is itself a RootModel
-    proxying the concrete typed asset.
-
-    This helper walks three paths in priority order:
-    1. **dict** -- legacy/test code that passes plain dicts.
-    2. **RootModel** -- unwrap ``.root`` to get the variant list, then check
-       the first variant's inner ``.root`` object and the variant itself.
-    3. **Plain object** -- pre-5.7 single-asset models.
-
-    Multiple *attr_names* are tried left-to-right (e.g. ``"content", "text"``);
-    the first truthy value wins.
+    The listing read validates every stored map and drops one that does not fit, so a
+    writer that stores an unchecked map from an external agent would produce rows the
+    listing silently hides. Refusing here keeps the row spec-shaped; the agent's output
+    is the failure, and it travels as ``internal_detail`` for the server log.
     """
-    # Dict path
-    if isinstance(asset, dict):
-        for attr in attr_names:
-            val = asset.get(attr)
-            if val:
-                return str(val)
-        return None
-
-    # RootModel path: Assets → list[AssetVariant] → concrete asset
-    items = getattr(asset, "root", None)
-    if isinstance(items, list) and items:
-        first = items[0]
-        # AssetVariant is also a RootModel wrapping the concrete asset
-        inner = getattr(first, "root", first)
-        for attr in attr_names:
-            val = getattr(inner, attr, None) or getattr(first, attr, None)
-            if val:
-                return str(val)
-        return None
-
-    # Plain object (e.g. a single asset model, not wrapped in list)
-    for attr in attr_names:
-        val = getattr(asset, attr, None)
-        if val:
-            return str(val)
-    return None
+    try:
+        return ASSET_MAP.validate_python(value)
+    except ValidationError as exc:
+        raise AdCPAdapterError(internal_detail=exc) from exc
 
 
 # ---------------------------------------------------------------------------

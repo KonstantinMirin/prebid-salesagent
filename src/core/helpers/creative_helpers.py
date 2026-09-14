@@ -821,3 +821,37 @@ def extract_impression_tracker_url(creative_data: dict[str, Any], format_spec: A
                     break
 
     return tracker_url
+
+
+def asset_value_attr(asset: Any, *attr_names: str) -> str | None:
+    """Read a named attribute off one asset-slot value, whatever shape it arrived in.
+
+    The library wraps a repeatable slot in an ``Assets`` RootModel holding a
+    ``list[AssetVariant]``, each variant itself a RootModel proxying the concrete typed
+    asset; a single slot is the concrete asset; a stored row may still hold a plain dict.
+    The first truthy value among *attr_names* wins (for example ``"content", "text"``).
+    Shared by the sync pipeline and the creative-engine adapters, so it lives here rather
+    than inside a tool module.
+    """
+    if isinstance(asset, dict):
+        for attr in attr_names:
+            val = asset.get(attr)
+            if val:
+                return str(val)
+        return None
+
+    items = getattr(asset, "root", None)
+    if isinstance(items, list) and items:
+        first = items[0]
+        inner = getattr(first, "root", first)
+        for attr in attr_names:
+            val = getattr(inner, attr, None) or getattr(first, attr, None)
+            if val:
+                return str(val)
+        return None
+
+    for attr in attr_names:
+        val = getattr(asset, attr, None)
+        if val:
+            return str(val)
+    return None

@@ -20,7 +20,6 @@ from src.core.config import get_settings
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
-    AdCPConfigurationError,
     AdCPInternalError,
     AdCPPolicyViolationError,
     AdCPSalesAgentError,
@@ -746,44 +745,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
             # they were entitled to. AdCP 3.1.1 defines no ordering guarantee for
             # get_products and no `incomplete[]` scope for ranking.
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
-
-    # Annotate pricing options with adapter support (AdCP PR #88)
-    # Do this BEFORE serialization to avoid reconstruction issues.
-    # Tenant-level (not Principal-level) resolution: which pricing models an
-    # adapter supports is a fact about the SELLER's ad server, not the caller
-    # (same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
-    # must not depend on whether principal_id happens to resolve to a DB
-    # Principal (salesagent-r9rf).
-    if eligible_products:
-        try:
-            from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
-
-            adapter_class = get_adapter_class_for_tenant(tenant)
-            supported_models = adapter_class.get_supported_pricing_models()
-
-            for product in eligible_products:
-                if product.pricing_options:
-                    # Annotate each pricing option with "supported" flag.
-                    # supported / unsupported_reason are declared (excluded)
-                    # fields on every local pricing member, so these are plain
-                    # attribute writes that never reach the wire.
-                    for option in product.pricing_options:
-                        inner = option.root
-                        pricing_model = inner.pricing_model
-                        is_supported = pricing_model in supported_models
-                        inner.supported = is_supported
-                        if not is_supported:
-                            inner.unsupported_reason = (
-                                f"Current adapter does not support {pricing_model.upper()} pricing"
-                            )
-        except (ImportError, RuntimeError, OSError, ValueError, AdCPConfigurationError) as e:
-            # structural-guard: spec-neutral — the dropped fields are not in
-            # the pin. `supported` / `unsupported_reason` do not exist in
-            # AdCP 3.1.1 core/pricing-option.json at all; that schema declares no
-            # additionalProperties, so draft-07 permits them as extensions. Dropping a
-            # non-spec extension field cannot violate the pin, so there is no
-            # conformance obligation to surface here.
-            logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
 
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues

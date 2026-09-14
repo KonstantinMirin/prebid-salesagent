@@ -5,7 +5,7 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from src.adapters.base import AdServerAdapter, CreativeEngineAdapter
+from src.adapters.base import AdapterCreateResult, AdapterUpdateResult, AdServerAdapter, CreativeEngineAdapter
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
@@ -71,8 +71,8 @@ class Kevel(AdServerAdapter):
             return unsupported
 
         # Check device types
-        if targeting_overlay.device_type_any_of:
-            for device in targeting_overlay.device_type_any_of:
+        if targeting_overlay.device_form_factors:
+            for device in targeting_overlay.device_form_factors:
                 if device not in self.SUPPORTED_DEVICE_TYPES:
                     unsupported.append(
                         f"Device type '{device}' not supported (Kevel supports: {', '.join(self.SUPPORTED_DEVICE_TYPES)})"
@@ -132,10 +132,10 @@ class Kevel(AdServerAdapter):
             kevel_targeting["keywords"] = targeting_overlay.keywords_any_of
 
         # Device targeting (map to Kevel format)
-        if targeting_overlay.device_type_any_of:
+        if targeting_overlay.device_form_factors:
             # Kevel uses strings for device targeting
             devices = []
-            for device in targeting_overlay.device_type_any_of:
+            for device in targeting_overlay.device_form_factors:
                 if device in self.SUPPORTED_DEVICE_TYPES:
                     devices.append(device)
             if devices:
@@ -200,7 +200,7 @@ class Kevel(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict[str, Any]] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Creates a new Campaign and associated Flights in Kevel."""
         # Log operation
         self.audit_logger.log_operation(
@@ -444,7 +444,7 @@ class Kevel(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Updates a media buy in Kevel using standardized actions."""
 
         self.log(f"Kevel.update_media_buy for {media_buy_id} with action {action}")
@@ -479,7 +479,7 @@ class Kevel(AdServerAdapter):
                 require_vendor(self._vendor, vendor="Kevel").call("PUT", f"/flight/{flight['Id']}", json=update_payload)
 
                 # Return affected package with paused state
-                return UpdateMediaBuySuccess.carrier(
+                return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
                     affected_packages=[
                         AffectedPackage(
@@ -489,7 +489,6 @@ class Kevel(AdServerAdapter):
                             buyer_package_ref=None,
                         )
                     ],
-                    implementation_date=today,
                 )
 
             elif (
@@ -519,10 +518,9 @@ class Kevel(AdServerAdapter):
                     "PUT", f"/flight/{flight['Id']}", json=impressions_payload
                 )
 
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],
-                implementation_date=today,
             )
 
         except OutboundError as e:

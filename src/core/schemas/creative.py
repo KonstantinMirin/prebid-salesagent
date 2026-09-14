@@ -10,7 +10,6 @@ from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
-from adcp.types import Error as LibraryError
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -62,7 +61,6 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
     AdcpResponse,
     BuyerRequest,
@@ -70,9 +68,6 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     Targeting,
-    WireSerializerMixin,
-    copy_before_mutating,
-    strip_none_deep,
 )
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
@@ -212,7 +207,7 @@ class CreativeAssetRequest(LibraryCreativeAsset):
 
 
 # --- Creative Lifecycle ---
-class Creative(WireSerializerMixin, LibraryCreative):
+class Creative(LibraryCreative):
     """Individual creative asset - extends listing Creative with internal workflow fields.
 
     adcp 3.6.0 listing Creative fields (public):
@@ -234,8 +229,9 @@ class Creative(WireSerializerMixin, LibraryCreative):
     # AwareDatetime, matching the pin: a naive value is schema-invalid here.
     created_date: AwareDatetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Creation timestamp")
     updated_date: AwareDatetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Update timestamp")
-    # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
-    assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
+    # assets is INHERITED as the library's typed asset map. It used to be redeclared as
+    # dict[str, Any] because the JSON column stores what the buyer sent; the row-to-model
+    # read (listing.py) now validates the stored value into the typed map instead.
 
     # === AI Provenance (EU AI Act Article 50) ===
     provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
@@ -258,31 +254,6 @@ class Creative(WireSerializerMixin, LibraryCreative):
         default=None, exclude=True, description="Associates creative with advertiser (workflow tracking)"
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def validate_format_id(cls, values):
-        """Strip fields this model does not declare.
-
-        It used to also accept a bare-string ``format_id`` and a ``format`` alias,
-        upgrading both into a ``FormatId`` by looking the id up in the reference
-        cache. Both are shapes the pinned schema does not define, and a DTO is the
-        pinned schema -- see docs/design/one-tool-registry-remaining.md. Neither had
-        a producer: ``CreativeAssetRequest`` refuses a string on the buyer path, and
-        the listing path builds the ``FormatId`` explicitly from the row's own
-        ``agent_url`` and ``format`` columns (creatives/listing.py).
-        """
-        if not isinstance(values, dict):
-            return values
-
-        values = copy_before_mutating(values)
-
-        # Strip delivery-only fields that callers may still pass from old code.
-        # These fields existed on the delivery Creative base but not on the listing base.
-        for field in ("variants", "variant_count", "totals", "media_buy_id"):
-            values.pop(field, None)
-
-        return values
-
     # Helper properties for format_id (still present in 3.6.0)
     @property
     def format(self) -> LibraryFormatId | None:
@@ -298,27 +269,6 @@ class Creative(WireSerializerMixin, LibraryCreative):
     def format_agent_url(self) -> str | None:
         """Get agent URL string from FormatId object."""
         return str(self.format_id.agent_url) if self.format_id else None
-
-    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
-        """``assets`` is an untyped dict[str, Any] (the DB stores arbitrary asset shapes),
-        so ``exclude_none`` never sees inside it: a None field on a stored asset would
-        survive as a literal null and fail AdCP schema validation."""
-        if data.get("assets") is not None:
-            data["assets"] = strip_none_deep(data["assets"])
-        return data
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage.
-
-        Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
-        We manually include the principal_id field which is excluded from public responses.
-        """
-        data = super().model_dump(exclude=set(), **kwargs)
-        if self.principal_id is not None:
-            data["principal_id"] = self.principal_id
-        # Ensure status is always present as string value for DB storage
-        data["status"] = enum_value(self.status)
-        return data
 
 
 class CreativeAdaptation(SalesAgentBaseModel):
@@ -458,7 +408,7 @@ class SyncSummary(SalesAgentBaseModel):
     deleted: int = Field(0, ge=0, description="Number of creatives deleted/archived (when delete_missing=true)")
 
 
-class SyncCreativeResult(WireSerializerMixin, LibrarySyncCreativeResult):
+class SyncCreativeResult(LibrarySyncCreativeResult):
     """Extends library SyncCreativeResult with internal-only fields.
 
     adcp 6.6 (spec 3.1.1) re-added assigned_to, assignment_errors, platform_id, status,
@@ -485,22 +435,11 @@ class SyncCreativeResult(WireSerializerMixin, LibrarySyncCreativeResult):
     # is omitted; on MCP the response goes through structured_content -> to_jsonable_python,
     # which BYPASSES the model_dump override, so the inherited `status` serializes as null —
     # that broader None-serialization question is tracked separately.
-    # platform_id/assigned_to/assignment_errors are type-compatible and inherited as-is.
-    #
-    # changes/warnings/errors are REDECLARED (sanctioned redeclaration, CLAUDE.md pattern 1)
-    # with default_factory=list rather than inheriting the parent's None default: spec 3.1.1
-    # sync-creatives-response.json types all three as `array`, and the MCP structured_content
-    # path above serializes a None default as the spec-invalid `null` (PR #1567 round-2 item 3).
-    # Wire outcome per transport — both spec-valid: MCP emits [] (array); A2A/REST OMIT empty
-    # lists via the model_dump strip below (byte-identical to the pre-6.6 wire).
-    # Writers still use the _append_warning guard in _sync.py.
-    changes: list[str] = Field(
-        default_factory=list, description="Field names that were modified (only populated when action='updated')"
-    )
-    warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-    errors: list[LibraryError] = Field(
-        default_factory=list, description="Validation or processing errors (only populated when action='failed')"
-    )
+    # platform_id/assigned_to/assignment_errors/changes/warnings/errors are inherited as-is,
+    # with the parent's None defaults: an optional array the tool did not populate is
+    # OMITTED by exclude_none on every path (the wire serializer runs on model_dump,
+    # model_dump_json and structured_content alike), which is the spec-valid absence.
+    # Writers materialize the list before appending (_append_warning in _sync.py).
     internal_status: str | None = Field(
         None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
     )
@@ -509,21 +448,6 @@ class SyncCreativeResult(WireSerializerMixin, LibrarySyncCreativeResult):
     review_feedback: str | None = Field(
         None, exclude=True, description="Feedback from platform review process (INTERNAL - excluded from responses)"
     )
-
-    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
-        """Internal fields (internal_status, review_feedback) are ``Field(exclude=True)``.
-        Optional fields are omitted rather than null, and ``changes`` / ``errors`` /
-        ``warnings`` are optional in the AdCP spec, so an empty list is omitted too."""
-        data = strip_none_deep(data)
-        for key in ("changes", "errors", "warnings"):
-            if key in data and not data[key]:
-                data.pop(key)
-        return data
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including all fields for database storage and internal processing."""
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
 
 
 class AssignmentsSummary(SalesAgentBaseModel):

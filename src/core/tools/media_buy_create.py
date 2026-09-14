@@ -104,7 +104,7 @@ from enum import StrEnum
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.core import schemas
+from src.adapters.base import AdapterCreateResult
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import (
     require_principal,
@@ -131,7 +131,6 @@ from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity, identity_of
 from src.core.schemas import (
     AssetStatus,
-    CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySubmitted,
@@ -562,7 +561,7 @@ def _execute_adapter_media_buy_creation(
     end_time: datetime,
     package_pricing_info: dict[str, dict[str, Any]],
     identity: ResolvedIdentity,
-) -> schemas.CreateMediaBuyResponse:
+) -> AdapterCreateResult:
     """Execute adapter's create_media_buy call.
 
     This function is shared between auto-approval and manual approval flows
@@ -577,7 +576,7 @@ def _execute_adapter_media_buy_creation(
         identity: The caller the adapter acts for (from a request or from stored ids)
 
     Returns:
-        CreateMediaBuyResponse from the adapter
+        AdapterCreateResult from the adapter
 
     Raises:
         Exception: If adapter creation fails (with detailed logging)
@@ -588,23 +587,11 @@ def _execute_adapter_media_buy_creation(
     # Call adapter with detailed error logging
     try:
         response = adapter.create_media_buy(request, packages, start_time, end_time, package_pricing_info)
-
-        # Log based on response type
-        if isinstance(response, CreateMediaBuyError):
-            error_count = len(response.errors) if response.errors else 0
-            logger.error(f"[ADAPTER] create_media_buy returned error response: {error_count} error(s)")
-            if response.errors:
-                for err in response.errors:
-                    logger.error(f"[ADAPTER]   Error: {err.code} - {err.message}")
-        else:
-            logger.info(
-                f"[ADAPTER] create_media_buy succeeded: {response.media_buy_id} "
-                f"with {len(response.packages) if response.packages else 0} packages"
-            )
-            if response.packages:
-                for i, pkg in enumerate(response.packages):
-                    # response.packages are now always Package objects
-                    logger.info(f"[ADAPTER] Response package {i}: {pkg.package_id}")
+        logger.info(
+            f"[ADAPTER] create_media_buy succeeded: {response.media_buy_id} with {len(response.packages)} packages"
+        )
+        for i, pkg in enumerate(response.packages):
+            logger.info(f"[ADAPTER] Response package {i}: {pkg.package_id}")
         return response
     except Exception as adapter_error:
         import traceback
@@ -1191,21 +1178,13 @@ def execute_approved_media_buy(
             identity,
         )
 
-        # Check if adapter returned an error response
-        if isinstance(response, CreateMediaBuyError):
-            # Adapter returned error response (not an exception)
-            error_messages = [str(err) for err in response.errors] if response.errors else ["Unknown error"]
-            error_msg = "; ".join(error_messages)
-            logger.error(log_safe(f"[APPROVAL] Adapter creation failed for {media_buy_id}: {error_msg}"))
-            return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
-
         logger.info(log_safe(f"[APPROVAL] Adapter creation succeeded for {media_buy_id}: {response.media_buy_id}"))
 
         # Persist adapter IDs to package_config.
         # platform_order_id is per-buy — always write to all packages so retroactive creative
         # push works regardless of whether the adapter also provides per-package line-item IDs.
         # platform_line_item_id is per-package and only present when the adapter maps them.
-        platform_line_item_ids = getattr(response, "_platform_line_item_ids", {})
+        platform_line_item_ids = response.platform_line_item_ids
         if response.media_buy_id:
             with MediaBuyUoW(tenant_id) as uow_plids:
                 assert uow_plids.media_buys is not None
@@ -1308,8 +1287,7 @@ def execute_approved_media_buy(
 
                     # Call adapter's add_creative_assets method
                     # For GAM, the media_buy_id is the GAM order ID
-                    # At this point, we know response is CreateMediaBuySuccess (checked above)
-                    gam_order_id: str = response.media_buy_id if response.media_buy_id else ""
+                    gam_order_id: str = response.media_buy_id
 
                     try:
                         if hasattr(adapter, "creatives_manager") and adapter.creatives_manager and gam_order_id:
@@ -3433,30 +3411,12 @@ async def _create_media_buy_impl(
         except Exception:
             raise
 
-        # Check if adapter returned an error response FIRST (before accessing any fields)
-        # With oneOf pattern, response can be CreateMediaBuySuccess or CreateMediaBuyError
-        if isinstance(response, CreateMediaBuyError):
-            error_msg = response.errors[0].message if response.errors else "Unknown error"
-            error_code = response.errors[0].code if response.errors else "UNKNOWN"
-            logger.error(f"[ADAPTER] Adapter returned error response: {error_code} - {error_msg}")
-            # RAISED, not returned. This was the one site in the tree that reported failure by
-            # returning a result carrying status="failed", and the boundary grew an
-            # `_is_error_result` status inspection to avoid caching it. Raising says the same
-            # thing through control flow: a raise never reaches the save, so AdCP's "an error
-            # is never cached" holds because the code cannot express caching one -- rather than
-            # because a status check remembered to look. The transports translate this into the
-            # same two-layer envelope they build for every other tool's failures.
-            raise AdCPAdapterError(details=AdapterFailureDetails(status=error_code))
-
-        # At this point, response is CreateMediaBuySuccess - safe to access success-specific fields
-        # Type narrowing: media_buy_id must be present in successful response
-        assert response.media_buy_id is not None, "Adapter returned response without media_buy_id"
-
-        # Log response packages for debugging
-        if response.packages:
-            for i, pkg_item in enumerate(response.packages):
-                # pkg_item is dict[str, Any] here (response.packages), different scope from earlier Package usage
-                logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
+        # An adapter reports failure by RAISING an AdCPSalesAgentError, never by returning
+        # one: a raise never reaches the save, so AdCP's "an error is never cached" holds
+        # because the code cannot express caching one. The transports translate the raise
+        # into the same two-layer envelope they build for every other tool's failures.
+        for i, pkg_item in enumerate(response.packages):
+            logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
 
         # Determine initial status using centralized logic
         # Check if creatives are assigned and approved
@@ -3614,7 +3574,7 @@ async def _create_media_buy_impl(
                 # Persist adapter IDs to package_config.
                 # platform_order_id is per-buy — always write to all packages; platform_line_item_id
                 # is per-package and conditional on the adapter providing the mapping.
-                platform_line_item_ids = getattr(response, "_platform_line_item_ids", {})
+                platform_line_item_ids = response.platform_line_item_ids
 
                 if response.media_buy_id:
                     assert auto_pkg_uow.media_buys is not None
@@ -3954,7 +3914,7 @@ async def _create_media_buy_impl(
             # envelope status == "completed"). Partial GH #1326.
             media_buy_status=media_buy_status,
             valid_actions=valid_actions_for_status(media_buy_status),
-            creative_deadline=getattr(response, "creative_deadline", None),
+            creative_deadline=response.creative_deadline,
             errors=property_list_unsupported_advisories(req.packages, adapter),
         )
 

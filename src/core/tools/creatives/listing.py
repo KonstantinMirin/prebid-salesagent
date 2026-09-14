@@ -5,6 +5,8 @@ import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from pydantic import ValidationError
+
 from src.core.audit_logger import get_audit_logger
 from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
@@ -19,6 +21,7 @@ from src.core.schemas import (
     ListCreativesRequest,
     ListCreativesResponse,
 )
+from src.core.tools.creatives._assets import ASSET_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -72,29 +75,25 @@ def _coerce_blob_scalar(value: Any, field_label: str, *, log_context: str = "") 
     return None
 
 
-def _coerce_blob_dict(value: Any, field_label: str, *, log_context: str = "") -> dict[str, Any] | None:
-    """Coerce an untyped JSON-blob value to a spec object (dict) field.
+def _coerce_blob_assets(value: Any, field_label: str, *, log_context: str = "") -> Any:
+    """Validate an untyped JSON-blob value into the typed ``Creative.assets`` map.
 
-    ``Creative.assets`` is typed ``dict[str, Any] | None`` but is read from the untyped
-    ``data`` blob, where the same out-of-band producer that can corrupt the scalar and
-    list fields may write a non-object value. A non-dict is corrupt for an object field
-    and dropped to ``None`` with a warning (No Quiet Failures) instead of failing
-    Creative validation and crashing the whole listing on one bad row — the object-field
-    sibling of :func:`_coerce_blob_scalar` / :func:`_coerce_blob_str_list`. ``log_context``
-    is the same optional operator-attribution suffix documented on :func:`_coerce_blob_scalar`.
-
-    This guarantees dict-*ness* only: a well-formed ``dict`` passes through unvalidated, so a
-    corrupt inner value (a ``null`` asset value, a non-``^[a-z0-9_]+$`` key) still reaches the
-    wire — inner asset-union validation against ``core/creative-asset.json`` is tracked in
-    #1779. Unlike the empty-list collapse in :func:`_coerce_blob_str_list`, an empty ``{}`` is
-    *preserved* (not collapsed to absent): ``assets`` is required on the sync input
-    (``core/creative-asset.json``), so ``{}`` is the presence-preserving projection and
-    ``exclude_none`` keeps it on the wire.
+    ``assets`` is read from the untyped ``data`` blob, where an out-of-band producer may
+    have written anything. The stored value is validated against the library's asset
+    union (``core/creative-asset.json``) here, in the one place a row becomes a model; a
+    value that does not validate is corrupt and dropped to ``None`` with a warning (No
+    Quiet Failures) instead of failing Creative validation and crashing the whole listing
+    on one bad row -- the object-field sibling of :func:`_coerce_blob_scalar` /
+    :func:`_coerce_blob_str_list`. An empty ``{}`` is preserved: ``assets`` is required on
+    the sync input, so ``{}`` is the presence-preserving projection.
     """
-    if value is None or isinstance(value, dict):
-        return value
-    _log_blob_drop("non-dict", field_label, log_context, value_type=type(value).__name__)
-    return None
+    if value is None:
+        return None
+    try:
+        return ASSET_MAP.validate_python(value)
+    except ValidationError:
+        _log_blob_drop("invalid-assets", field_label, log_context, value_type=type(value).__name__)
+        return None
 
 
 def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = "") -> list[str] | None:
@@ -115,7 +114,7 @@ def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = ""
     Finally an empty (or fully-emptied) list collapses to ``None`` so ``exclude_none``
     omits the key: the pinned 3.1.1 ``creative/list-creatives-response`` schema permits
     both ``[]`` and omission, and this list field standardizes on omission (the object-field
-    sibling :func:`_coerce_blob_dict` instead *preserves* an empty ``{}`` — see its docstring).
+    sibling :func:`_coerce_blob_assets` instead *preserves* an empty ``{}`` — see its docstring).
     That collapse is a valid-input serialization choice, not a corruption drop, so — unlike
     the drops above — it is logged at ``debug`` (traceability), never ``warning``.
     """
@@ -390,11 +389,10 @@ def _list_creatives_impl(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
-                # assets is read from the same untyped blob; a stored non-dict value
-                # would fail Creative validation and crash the whole listing, so coerce
-                # it (drop+log a non-dict) — the object-field sibling of the tags/concept
-                # coercion (#1508).
-                assets=_coerce_blob_dict(assets_dict, "assets", log_context=row_log_context),
+                # assets is read from the same untyped blob and validated into the typed
+                # map here; a stored value that does not validate is dropped with a log
+                # rather than crashing the whole listing (#1508).
+                assets=_coerce_blob_assets(assets_dict, "assets", log_context=row_log_context),
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
                 # [1, 2]) that would fail Creative validation and crash the whole

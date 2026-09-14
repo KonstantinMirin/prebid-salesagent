@@ -17,7 +17,14 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from src.adapters.base import AdapterCapabilities, AdServerAdapter, CreativeEngineAdapter, TargetingCapabilities
+from src.adapters.base import (
+    AdapterCapabilities,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    CreativeEngineAdapter,
+    TargetingCapabilities,
+)
 from src.adapters.broadstreet.client import BroadstreetClient
 from src.adapters.broadstreet.config_schema import parse_implementation_config
 from src.adapters.broadstreet.managers import (
@@ -42,13 +49,10 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     DeliveryTotals,
     MediaPackage,
     Principal,
     ReportingPeriod,
-    UpdateMediaBuyResponse,
-    UpdateMediaBuySuccess,
 )
 
 logger = logging.getLogger(__name__)
@@ -277,7 +281,7 @@ class BroadstreetAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create a new media buy (campaign) in Broadstreet.
 
         Args:
@@ -288,7 +292,7 @@ class BroadstreetAdapter(AdServerAdapter):
             package_pricing_info: Optional validated pricing per package
 
         Returns:
-            CreateMediaBuyResponse with media buy details
+            AdapterCreateResult with media buy details
         """
         # Log operation
         self.audit_logger.log_operation(
@@ -345,13 +349,11 @@ class BroadstreetAdapter(AdServerAdapter):
         if automation_mode == "manual":
             self.log("Manual mode - creating workflow step for human intervention")
 
-            workflow_step_id = self.workflow_manager.create_manual_campaign_workflow_step(
+            self.workflow_manager.create_manual_campaign_workflow_step(
                 request=request, packages=packages, start_time=start_time, end_time=end_time, media_buy_id=media_buy_id
             )
 
-            return self._build_create_success(
-                request, media_buy_id, packages, paused=True, workflow_step_id=workflow_step_id
-            )
+            return self._build_create_success(request, media_buy_id, packages, paused=True)
 
         # Build campaign name
         first_product_name = next(iter(products_map.values()), {}).get("name", "Campaign")
@@ -381,21 +383,19 @@ class BroadstreetAdapter(AdServerAdapter):
             )
 
         # Handle confirmation_required mode - create campaign but require activation approval
-        workflow_step_id = None
         if automation_mode == "confirmation_required":
             self.log("Confirmation required mode - creating activation workflow step")
-            workflow_step_id = self.workflow_manager.create_activation_workflow_step(
-                media_buy_id=media_buy_id, packages=packages
-            )
-
-        response = self._build_create_success(request, media_buy_id, packages, workflow_step_id=workflow_step_id)
+            self.workflow_manager.create_activation_workflow_step(media_buy_id=media_buy_id, packages=packages)
 
         # Persist campaign ID so update_media_buy can reconstruct state from DB
         # Core layer (media_buy_create.py) stores this as package_config["platform_line_item_id"]
         campaign_id = self._extract_campaign_id(media_buy_id)
-        object.__setattr__(response, "_platform_line_item_ids", {pkg.package_id: campaign_id for pkg in packages})
-
-        return response
+        return self._build_create_success(
+            request,
+            media_buy_id,
+            packages,
+            platform_line_item_ids={pkg.package_id: campaign_id for pkg in packages},
+        )
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime
@@ -526,7 +526,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
     def update_media_buy(
         self, media_buy_id: str, action: str, package_id: str | None, budget: int | None, today: datetime
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update a media buy with a specific action.
 
         Reconstructs state from database (not in-memory caches) so operations
@@ -604,9 +604,7 @@ class BroadstreetAdapter(AdServerAdapter):
                     for pkg in db_packages
                 ]
 
-                return UpdateMediaBuySuccess.carrier(
-                    media_buy_id=media_buy_id, affected_packages=affected, implementation_date=today
-                )
+                return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=affected)
 
         # Package-level pause/resume
         if action in ("pause_package", "resume_package"):
@@ -646,14 +644,13 @@ class BroadstreetAdapter(AdServerAdapter):
                 else:
                     self.log(f"[yellow]No Broadstreet advertisement IDs for package {package_id}[/yellow]")
 
-                return UpdateMediaBuySuccess.carrier(
+                return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
                     affected_packages=[
                         AffectedPackage(
                             package_id=package_id, paused=is_pause, changes_applied=None, buyer_package_ref=None
                         )
                     ],
-                    implementation_date=today,
                 )
 
         # Budget update: persist to database (Broadstreet has no budget API)
@@ -675,14 +672,13 @@ class BroadstreetAdapter(AdServerAdapter):
                 session.commit()
                 self.log(f"Updated budget for package {package_id} to ${budget / 100:.2f}")
 
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[
                     AffectedPackage(
                         package_id=package_id, paused=False, changes_applied={"budget": budget}, buyer_package_ref=None
                     )
                 ],
-                implementation_date=today,
             )
         # Impressions update: persist to database (Broadstreet has no impressions API)
         if action == "update_package_impressions":
@@ -705,7 +701,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 session.commit()
                 self.log(f"Updated impressions for package {package_id} to {budget:,}")
 
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[
                     AffectedPackage(
@@ -715,11 +711,10 @@ class BroadstreetAdapter(AdServerAdapter):
                         buyer_package_ref=None,
                     )
                 ],
-                implementation_date=today,
             )
 
         # Should not reach here - all actions are handled above
-        return UpdateMediaBuySuccess.carrier(media_buy_id=media_buy_id, affected_packages=[], implementation_date=today)
+        return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[], implementation_date=today)
 
     async def get_available_inventory(self) -> dict[str, Any]:
         """Fetch available inventory (zones) from Broadstreet.

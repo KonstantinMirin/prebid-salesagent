@@ -338,15 +338,6 @@ def managed_only_dimensions(targeting: Targeting) -> list[str]:
     return ["key_value_pairs"] if targeting.key_value_pairs is not None else []
 
 
-def removed_dimensions(targeting: Targeting) -> list[str]:
-    """Dimensions the spec removed that the request still sets.
-
-    City targeting was removed in v3. The normalizer consumes
-    ``geo_city_any_of``/``geo_city_none_of`` and sets ``had_city_targeting=True``.
-    """
-    return ["geo_city"] if targeting.had_city_targeting else []
-
-
 # Geo inclusion/exclusion field pairs for same-value overlap detection.
 # Per adcp PR #1010: sellers SHOULD reject when the same value appears in both
 # the inclusion and exclusion field at the same level.
@@ -414,7 +405,6 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     the keys that actually have content so the buyer can tell the reasons apart:
 
         managed_only_dimensions   dimensions the seller manages, not settable via overlay
-        removed_dimensions        dimensions removed from the spec (e.g. geo_city in v3)
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
 
@@ -436,7 +426,6 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """
     candidates: dict[str, object] = {
         "managed_only_dimensions": managed_only_dimensions(targeting),
-        "removed_dimensions": removed_dimensions(targeting),
         "geo_overlaps": geo_overlap_conflicts(targeting),
     }
     return {key: value for key, value in candidates.items() if value}

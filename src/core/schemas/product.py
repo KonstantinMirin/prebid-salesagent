@@ -24,8 +24,6 @@ from src.core.schemas._base import (
     FormatId,
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
-    WireSerializerMixin,
-    strip_none_deep,
 )
 
 # Private alias: product.py is star-imported by the package __init__, and a bare
@@ -90,7 +88,7 @@ class Placement(LibraryPlacement):
     )
 
 
-class Product(WireSerializerMixin, LibraryProduct):
+class Product(LibraryProduct):
     """Product schema extending library Product with internal fields.
 
     Inherits all AdCP-compliant fields from adcp library's Product,
@@ -110,8 +108,7 @@ class Product(WireSerializerMixin, LibraryProduct):
     reporting_capabilities: LibraryReportingCapabilities = Field(default_factory=_default_reporting_capabilities)
 
     # Narrowed to the local pricing wrapper (src.core.schemas.pricing) so every
-    # member carries our extra policy and the internal supported /
-    # unsupported_reason annotations as declared, never-serialized fields. Same
+    # member carries our extra policy and the derived is_fixed property. Same
     # wire shape and constraints as the SDK field it overrides; the [assignment]
     # ignore is the expected cost of narrowing a list element type (invariance).
     pricing_options: list[_PricingOption] = Field(  # type: ignore[assignment]
@@ -172,26 +169,11 @@ class Product(WireSerializerMixin, LibraryProduct):
     # - floor_price present = auction pricing with floor
     # The consolidated CpmPricingOption/VcpmPricingOption types handle this automatically.
 
-    # expires_at is internal; implementation_config is Field(exclude=True) at its declaration.
-    _INTERNAL_ONLY_FIELDS: ClassVar[frozenset[str]] = frozenset({"expires_at"})
-
-    def _finish_wire(self, data: dict[str, Any], info: Any) -> dict[str, Any]:
-        """The AdCP field names, with nulls dropped at every level.
-
-        ``formats`` -> ``format_ids`` per the spec. Nested optional fields
-        (format_ids[].width, pricing_options[].floor_price, placements[].*,
-        delivery_measurement.vendors, publisher_properties[].publisher_domains, ...) are
-        typed by the pinned schema and reject null, so nulls are stripped deep.
-        Falsy-but-present values are kept: ``pricing_options=[]`` is the anonymous-user
-        shape, which the spec requires as an empty array, not an omission. Every field
-        the pinned core/product.json requires unconditionally is non-nullable on the
-        model (pinned by test_required_fields_are_non_nullable), so nothing required can
-        be dropped; ``format_ids`` is Optional here but typed "array" in the pin, so an
-        unset one is omitted rather than emitted as null (#1868 review).
-        """
-        if "formats" in data:
-            data["format_ids"] = data.pop("formats")
-        return strip_none_deep(data)
+    # No wire shaping of its own. implementation_config is Field(exclude=True) at its
+    # declaration; expires_at is a PINNED field (core/product.json) and stays on the wire
+    # -- a strip of it here used to hide a spec field. Nulls are omitted by exclude_none at
+    # every typed level; pricing_options=[] (the anonymous-user shape) is an empty array,
+    # kept as the spec requires.
 
 
 class ProductFilters(LibraryFilters):

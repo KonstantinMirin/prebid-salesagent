@@ -11,20 +11,18 @@ from typing import Any
 from dateutil import parser as dateutil_parser
 from pydantic import JsonValue
 
-from src.adapters.base import AdServerAdapter
+from src.adapters.base import AdapterCreateResult, AdapterUpdateResult, AdServerAdapter
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
 from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPInternalError
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     MediaPackage,
     Principal,
     Product,
     ReportingPeriod,
     Targeting,
-    UpdateMediaBuyResponse,
     url,
 )
 from src.core.security.outbound_http import OutboundError
@@ -496,7 +494,7 @@ class XandrAdapter(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create insertion order and line items in Xandr."""
         if self._requires_manual_approval("create_media_buy"):
             task_id = self._create_human_task(
@@ -620,9 +618,9 @@ class XandrAdapter(AdServerAdapter):
             profile["region_targets"] = [r.root for r in targeting.geo_regions]
 
         # Map device types to Xandr numeric codes
-        if targeting.device_type_any_of:
+        if targeting.device_form_factors:
             device_map = {"desktop": "1", "mobile": "2", "tablet": "3", "ctv": "4"}
-            profile["device_type_targets"] = [device_map.get(d, "1") for d in targeting.device_type_any_of]
+            profile["device_type_targets"] = [device_map.get(d, "1") for d in targeting.device_form_factors]
 
         response = self._make_request("POST", "/profile", profile_data)
         return response["response"]["profile"]["id"]
@@ -634,7 +632,7 @@ class XandrAdapter(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update insertion order in Xandr."""
         # NOTE: This is a stub implementation - needs full refactor to match current API
         raise NotImplementedError("Xandr update_media_buy needs refactor to match current API")

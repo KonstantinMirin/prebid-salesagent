@@ -187,24 +187,30 @@ A model is serialized in three ways — `model_dump()`, `model_dump_json()`, and
 `pydantic_core.to_json` (which the JSON column type and every nested parent use) — and
 only a `@model_serializer` runs on all three. A `def model_dump(self, **kwargs)` override
 runs on one, so a shape written there exists on one path and not the others. **Never
-override `model_dump`.** Wire shaping goes on the one serializer seat,
-`WireSerializerMixin` (`src/core/schemas/_base.py`):
+override `model_dump`.** And a wire model does not shape its own output at all: it
+conforms BY INHERITANCE. The library parent is the pinned schema, so a model that inherits
+its fields and declares its internal ones `Field(exclude=True)` serializes to the spec shape
+on every path with no per-class hook:
 
 ```python
-class Product(WireSerializerMixin, LibraryProduct):
-    _INTERNAL_ONLY_FIELDS = frozenset({"expires_at"})      # never on the wire
-
-    def _finish_wire(self, data, info):                    # the class's last word
-        if "formats" in data:
-            data["format_ids"] = data.pop("formats")
-        return strip_none_deep(data)
+class Product(LibraryProduct):
+    implementation_config: dict[str, Any] | None = Field(default=None, exclude=True)  # never on the wire
 
 class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
     creatives: list[SyncCreativeResult]   # a local subclass: re-dumped through its own serializer
 ```
 
-`NestedModelSerializerMixin` re-serializes children by their INSTANCE rather than the
-declared (library) type, which is what keeps a local subclass's extra fields on the wire.
+There is one serializer seat, `WireSerializerMixin` (`src/core/schemas/_base.py`), and it
+carries exactly two concerns: `NestedModelSerializerMixin` re-serializes children by their
+INSTANCE rather than the declared (library) type, which is what keeps a local subclass's
+extra fields on the wire; and required-nullable retention keeps a required field whose
+value is `None` on the wire under `exclude_none`. A per-class "last word" hook
+(`_finish_wire`) and a per-class strip set (`_INTERNAL_ONLY_FIELDS`) used to be the third
+and fourth. Both are gone: every use was either a redeclaration weakening the library type
+and then patching the output back (the fix is to not redeclare), or a strip of a field that
+belongs on the wire (`Product.expires_at` is pinned), or bookkeeping that belongs off the
+model entirely (an adapter's carrier type, not a wire field). A field that must exist on the
+model and not on the wire is `Field(exclude=True)` at its declaration, nowhere else.
 
 **And business logic never calls `model_dump()` at all.** A model is the value; a dict built
 from it mid-flow is a second representation that drifts. Serialization happens at three

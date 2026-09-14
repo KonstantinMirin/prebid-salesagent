@@ -255,8 +255,10 @@ the mixin. Exactly three models declare a required-and-nullable field:
 `CreateMediaBuySuccess.confirmed_at` and `GetMediaBuysMediaBuy.confirmed_at`, both retained,
 and `DiscriminatorItem.value` from `core/error.json`, which this seller never constructs.
 
-One exception stays, and it is subtractive: `_INTERNAL_ONLY_FIELDS` / `exclude=True` strip our
-internal fields (`workflow_step_id`) from every protocol response. The other used to be
+One exception stays, and it is subtractive: `Field(exclude=True)` at a field's declaration keeps
+an internal field off every protocol response. It used to have a per-class sibling,
+`_INTERNAL_ONLY_FIELDS`, which is deleted: its only remaining member, `workflow_step_id`, was
+adapter bookkeeping that no longer lives on a wire model. The other exception used to be
 `apply_version_compat`, which was ADDITIVE -- it appended three properties the pinned schema
 does not define -- and is deleted.
 
