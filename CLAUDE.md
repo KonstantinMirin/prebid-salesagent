@@ -454,7 +454,21 @@ uv run alembic revision -m "description"        # Create migration
 docker compose exec admin-ui python scripts/ops/migrate.py
 ```
 
-**Never modify existing migrations after commit!**
+**A migration changes the structure in `upgrade()` and reverts it in `downgrade()`. That is all it does.**
+
+- **Do not preserve data across a migration.** No backup table, no copy-then-restore, no
+  conditional rewrite so a downgrade can put rows back. `downgrade()` reverts the structure;
+  if data is lost, that is accepted. A backup table created "just in case" is a permanent
+  artifact no model declares, and the health check then reports it forever.
+- **Never stack a revision to fix a revision that has not shipped.** The rule is not "never
+  edit a committed migration", it is never edit a migration that has RUN somewhere. A revision
+  that exists only on an unmerged branch has run nowhere: edit it, or delete it. Adding a
+  second revision to clean up after a first one you wrote this week is two migrations where the
+  problem needed zero.
+- **Check before you decide which case you are in:** `git cat-file -e main:alembic/versions/<file>`
+  says whether main has it. If a revision you would edit has children on the branch, re-point
+  the child's `down_revision` in the same change.
+- **A migration that has shipped is immutable.** Then, and only then, a new revision is correct.
 
 ### Tenant setup dependencies
 ```
