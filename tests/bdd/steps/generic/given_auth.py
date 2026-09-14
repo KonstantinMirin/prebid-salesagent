@@ -43,6 +43,27 @@ def given_buyer_no_auth(ctx: dict) -> None:
     ctx["credential"] = ctx["env"].credential(token=None)
 
 
+@given("a presented credential that resolves to no principal")
+def given_credential_resolves_to_no_principal(ctx: dict) -> None:
+    """A credential IS presented and verification fails: the pin's AUTH_INVALID case.
+
+    3.1.1 ``enums/error-code.json`` splits the two refusals on whether anything was
+    presented. ``AUTH_INVALID``: "Credentials were presented but rejected — revoked,
+    malformed signature, or a key no longer in the seller's keystore. Sellers MUST
+    return this code when an ``Authorization`` header was present but verification
+    failed", recovery ``terminal``. ``AUTH_MISSING``: "No credentials were presented",
+    which is the sibling row on no authentication context, recovery ``correctable``.
+
+    Nothing is simulated. The header carries a token that hashes to no principals row,
+    so the REAL resolver rejects it before a protected tool runs — which is what the
+    row asserts by saying the refusal happens before any database access.
+    """
+    from tests.harness._base import INVALID_TOKEN
+
+    ctx["has_auth"] = True
+    ctx["credential"] = ctx["env"].credential(token=INVALID_TOKEN)
+
+
 @given("no hostname-based tenant resolution is possible")
 def given_no_hostname_tenant(ctx: dict) -> None:
     """No tenant can be resolved from hostname.

@@ -3226,29 +3226,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
                 break
 
-        # --- UC-019: principal_id=null/empty/ghost boundary — unreachable via HTTP ---
-        # BR-RULE-154 INV-3 tests defensive behavior when _impl receives a broken
-        # identity (principal_id null/empty/not-found). This can't happen through
-        # HTTP: a valid token always resolves to a real principal; an invalid token
-        # gets rejected by auth middleware before _impl runs. These scenarios are
-        # only testable at the _impl level (impl/a2a/mcp pass the identity directly).
-        if (is_rest or is_e2e_rest) and "T-UC-019-boundary-principal" in marker_names:
-            if any(
-                s in nodeid
-                for s in (
-                    "principal_id is null",
-                    "principal_id is empty string",
-                    "principal_id not in registry",
-                )
-            ):
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="HTTP transport: principal_id=null/empty/ghost is unreachable — "
-                        "valid token always resolves to a real principal; invalid token "
-                        "rejected by auth middleware before _impl. Test only valid at _impl level.",
-                        strict=True,
-                    )
-                )
+        # --- UC-019: the principal boundary rows this parked are gone ---
+        # It matched three example names — "principal_id is null", "principal_id is empty
+        # string", "principal_id not in registry" — and its own reason said why they could
+        # not be graded: "a valid token always resolves to a real principal; an invalid
+        # token gets rejected by auth middleware before _impl", so they were "only testable
+        # at the _impl level". That reasoning was right about the rows and named a layer
+        # that no longer exists: there is no IMPL transport (tests/CLAUDE.md), because
+        # modelling a direct call as one gave every assert-on-the-wire rule an escape hatch.
+        #
+        # So the rows were corrected rather than parked. The two that posited an
+        # authenticated identity with no principal are gone: adcp 3.1.1
+        # enums/error-code.json gives AUTH_MISSING as "No credentials were presented", which
+        # a caller presenting a credential never is, and ResolvedIdentity makes the state
+        # unconstructible anyway. The third collapsed into one row that names what the
+        # architecture does have — a presented credential that verifies against no
+        # principal — refused hard with AUTH_INVALID, whose recovery the pin sets to
+        # terminal. It grades on a2a, mcp and rest alike, so nothing needs parking here.
 
         # --- UC-019: HTTP transport xfails for auth suggestion mismatch ---
         # Graduated on `rest`: the reason below -- a REST-only

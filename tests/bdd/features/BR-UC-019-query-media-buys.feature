@@ -426,14 +426,32 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And <expected_outcome>
     # BR-RULE-154: Boundary test for principal resolution
+    #
+    # Three rows were corrected here, against adcp 3.1.1 enums/error-code.json.
+    #
+    # Two demanded "an authenticated identity with no principal_id" answered with a SOFT
+    # AUTH_MISSING and an empty media_buys array. Both halves contradict the pin. Its
+    # AUTH_MISSING description reads "No credentials were presented. Sellers MUST return
+    # this code when no Authorization header was included in the request", so a caller who
+    # HAS presented a credential is never AUTH_MISSING; that is the row below on no
+    # authentication context. And the state itself is unconstructible: get_media_buys is a
+    # protected tool whose implementation declares ResolvedIdentity
+    # (src/core/tools/media_buy_list.py:147), on which the principal is not optional, so the
+    # resolver refuses such a caller before the tool runs rather than serving it an empty
+    # array. Those two rows described the tenant-admin-token credential class this epic
+    # removed, where a token authenticated without naming a buyer.
+    #
+    # The third demanded a SOFT AUTH_INVALID with an empty array for a credential naming an
+    # unknown principal. The code is right and the shape is not: the pin gives AUTH_INVALID
+    # recovery "terminal" with the suggestion "do NOT auto-retry", and a terminal refusal is
+    # not an empty success. The three collapse into one row: a presented credential that
+    # resolves to no principal is refused, hard, before any database access.
 
     Examples: Boundary values
       | boundary_point                          | principal_setup                                                       | expected_outcome                                                                                                          |
       | valid principal with multiple media buys | an authenticated principal "buyer-001" who owns 5 media buys         | the response should include 5 media buys scoped to buyer-001                                                              |
       | valid principal with zero media buys    | an authenticated principal "buyer-002" who owns no media buys         | the response should include an empty media_buys array                                                                     |
-      | principal_id is null                    | an authenticated identity with no principal_id | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
-      | principal_id is empty string            | an authenticated identity with no principal_id | empty media_buys with soft error code "AUTH_MISSING" message "Principal ID not found in context"                          |
-      | principal_id not in registry            | an authenticated principal "buyer-ghost" not in registry              | empty media_buys with soft error code "AUTH_INVALID" message "Principal buyer-ghost not found"                            |
+      | credentials presented but not resolvable | a presented credential that resolves to no principal                  | hard error code "AUTH_INVALID" raised before any DB access                                                                |
       | identity not resolved (no auth)         | no authentication context                                             | hard error code "AUTH_MISSING" raised before any DB access                                                                |
 
   @T-UC-019-inv-154-tenant @invariant @BR-RULE-154

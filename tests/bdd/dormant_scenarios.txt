@@ -310,10 +310,6 @@ T-UC-019-boundary-delivery-status :: given package "<>" has snapshot.staleness_s
 # T-UC-019-boundary-history  (test_uc019_query_media_buys.py)
 T-UC-019-boundary-history :: given the principal "<>" owns media buy "<>" with <n> history entries
 
-# T-UC-019-boundary-principal  (test_uc019_query_media_buys.py)
-T-UC-019-boundary-principal :: then empty media_buys with soft error code "<>" message "<>"
-T-UC-019-boundary-principal :: then hard error code "<>" raised before any DB access
-
 # T-UC-019-boundary-sandbox  (test_uc019_query_media_buys.py)
 T-UC-019-boundary-sandbox :: given the request targets an explicit production account
 

@@ -1035,14 +1035,29 @@ def given_snapshot_available(ctx: dict, pkg_id: str) -> None:
 
 
 def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
-    """Build and dispatch a get_media_buys request."""
+    """Build and dispatch a get_media_buys request, presenting whatever the Given set.
+
+    A credential Given writes ``ctx["credential"]`` — a headers dict from
+    ``env.credential(...)`` — and this hands it to ``dispatch_request``, which is the one
+    place that overrides the env's own credential. That is how UC-002, UC-006 and UC-010
+    already do it (uc002_create_media_buy.py:741, uc006_sync_creatives.py:441,
+    uc010_capabilities.py:556), so the auth rows of this use case grade the same way.
+
+    What this replaced passed ``identity=None`` for the token-less row, which injected an
+    absent identity instead of presenting an absent credential. That is the shape
+    tests/CLAUDE.md removed with the IMPL transport: a scenario asserts AdCP WIRE
+    conformance, so a refusal has to come from the real resolver answering a real request,
+    not from handing the boundary a None. Both auth rows now present headers and the
+    resolver decides: nothing on the tenant is AUTH_MISSING, a token that verifies against
+    no principal is AUTH_INVALID.
+    """
     if ctx.get("error") is not None:
         return
     query_kwargs = ctx.get("query_kwargs", {})
     query_kwargs.update(extra_kwargs)
 
-    if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=None, **query_kwargs)
+    if "credential" in ctx:
+        dispatch_request(ctx, credential=ctx["credential"], **query_kwargs)
     else:
         dispatch_request(ctx, **query_kwargs)
 
@@ -2208,6 +2223,34 @@ def then_any_status_returned(ctx: dict) -> None:
             f"All-status filter should return all media buys, but '{label}' (real_id={real_id}) is missing. "
             f"Returned: {returned_ids}"
         )
+
+
+@then(parsers.parse('hard error code "{code}" raised before any DB access'))
+def then_hard_refusal_before_db(ctx: dict, code: str) -> None:
+    """A refusal, not an empty success, and no payload behind it.
+
+    "Hard" is the distinction the row exists to grade. A refusal carries the code on the
+    envelope and NO success payload; the shape this replaced asserted an empty
+    ``media_buys`` array beside a "soft" error, which is a success document wearing an
+    error, and 3.1.1 gives both codes on this row's two cases a recovery that forbids
+    reading it that way: ``AUTH_INVALID`` is ``terminal`` ("do NOT auto-retry"),
+    ``AUTH_MISSING`` is ``correctable`` ("provide credentials via the auth header and
+    retry"). Neither says "here are zero results".
+
+    "Before any DB access" is graded structurally rather than by watching queries: the
+    envelope carries no payload at all, which is only true when the resolver refused
+    before the implementation ran. ``get_media_buys`` declares ``ResolvedIdentity``
+    (src/core/tools/media_buy_list.py:147), on which the principal is not optional, so a
+    caller the resolver cannot resolve never reaches the tool and no query is issued.
+
+    ``assert_wire_error`` defaults ``recovery`` from the pinned error-code table, so the
+    recovery half is asserted against the pin rather than restated here.
+    """
+    ctx["result"].assert_wire_error(code)
+    envelope = ctx["result"].error_envelope()
+    assert "media_buys" not in envelope, (
+        f"a hard refusal carries no result payload, but the envelope holds media_buys: {envelope.get('media_buys')!r}"
+    )
 
 
 @then(parsers.parse('error "{code}" with suggestion'))
