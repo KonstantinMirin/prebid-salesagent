@@ -50,7 +50,6 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         cls,
         principal_id: str | None = "test_principal",
         tenant_id: str = "test_tenant",
-        protocol: str = "mcp",
         tenant: TenantContext | None | Any = _UNSET,
         account_id: str | None = None,
         **tenant_overrides: object,
@@ -98,6 +97,5 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         return ResolvedIdentity(
             principal=principal,
             tenant=resolved_tenant,
-            protocol=protocol,
             account_id=account_id,
         )

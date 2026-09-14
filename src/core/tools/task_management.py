@@ -245,7 +245,7 @@ async def _list_tasks_impl(
     tenant = require_tenant(identity)
     principal_id = require_principal(identity).principal_id  # F-03: authenticated principal required
 
-    with WorkflowUoW(tenant["tenant_id"]) as uow:
+    with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
 
         # SCOPED TO THE CALLER'S PRINCIPAL. This listed the whole TENANT, so every buyer
@@ -322,7 +322,7 @@ async def _get_task_status_impl(
     # F-03: an authenticated (non-anonymous) principal is required
     principal_id = require_principal(identity).principal_id
 
-    with WorkflowUoW(tenant["tenant_id"]) as uow:
+    with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
 
         # SCOPED TO THE CALLER'S PRINCIPAL, which is what req.account's obligation amounts
@@ -440,7 +440,7 @@ async def _complete_task_impl(
     tenant = require_tenant(identity)
     principal_id = require_principal(identity).principal_id  # F-03: an authenticated principal is required
 
-    with WorkflowUoW(tenant["tenant_id"]) as uow:
+    with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
 
         # SCOPED, like the read. The same unscoped lookup made this a cross-principal
@@ -471,7 +471,7 @@ async def _complete_task_impl(
                 response_data=response_data,
             )
 
-        audit_logger = get_audit_logger("task_management", tenant["tenant_id"])
+        audit_logger = get_audit_logger("task_management", tenant.tenant_id)
         audit_logger.log_operation(
             operation="complete_task",
             principal_name="Manual Completion",

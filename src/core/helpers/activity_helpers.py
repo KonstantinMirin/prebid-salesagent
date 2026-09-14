@@ -31,7 +31,7 @@ def log_tool_activity(identity: ResolvedIdentity, tool_name: str, start_time: fl
         principal_name = "Unknown"
 
         if principal_id:
-            principal_name = read_principal_name(tenant["tenant_id"], principal_id) or principal_name
+            principal_name = read_principal_name(tenant.tenant_id, principal_id) or principal_name
 
         # Calculate response time if start_time provided
         response_time_ms: int | None = None
@@ -40,7 +40,7 @@ def log_tool_activity(identity: ResolvedIdentity, tool_name: str, start_time: fl
 
         # Log to activity feed (for WebSocket real-time updates)
         activity_feed.log_api_call(
-            tenant_id=tenant["tenant_id"],
+            tenant_id=tenant.tenant_id,
             principal_name=principal_name,
             method=tool_name,
             status_code=200,
@@ -52,7 +52,7 @@ def log_tool_activity(identity: ResolvedIdentity, tool_name: str, start_time: fl
 
         from src.core.audit_logger import get_audit_logger
 
-        audit_logger = get_audit_logger("MCP", tenant["tenant_id"])
+        audit_logger = get_audit_logger("MCP", tenant.tenant_id)
         details: dict[str, Any] = {"tool": tool_name, "status": "success"}
         if response_time_ms:
             details["response_time_ms"] = response_time_ms

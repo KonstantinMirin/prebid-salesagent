@@ -124,7 +124,7 @@ def _process_assignments(
             # Join the caller's transaction when given one; otherwise own a
             # transaction for the duration, exactly as before.
             if uow is None:
-                uow = stack.enter_context(CreativeUoW(tenant["tenant_id"]))
+                uow = stack.enter_context(CreativeUoW(tenant.tenant_id))
             assert uow.assignments is not None
             assignment_repo = uow.assignments
 

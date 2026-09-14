@@ -56,7 +56,10 @@ class ResolvedIdentity(BaseModel):
     # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
     # (transitional)", and that union is how dict-shaped tenant handling spread.
     tenant: TenantContext | None = None
-    protocol: TransportProtocol = TransportProtocol.MCP
+    # No ``protocol`` field: the transport is a label the boundary holds for its own
+    # observability record (``invoke_tool``'s parameter), and nothing read it off the
+    # identity. A field with no reader on an identity built for stored-id work
+    # (``identity_of``) could only claim a transport that never carried the request.
     account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
     # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
     # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
@@ -142,7 +145,6 @@ def _resolve_identity(
     headers: Mapping[str, str],
     *,
     require_valid_token: bool,
-    protocol: TransportProtocol,
 ) -> ResolvedIdentity:
     """Resolve identity from request headers. PRIVATE to the boundary.
 
@@ -155,16 +157,14 @@ def _resolve_identity(
     at lint time rather than by convention.
 
     It reads the headers ONCE and does everything identity-shaped: the Bearer value, the
-    tenant, the principal, and the testing context. No parameter accepts a pre-parsed token
-    or a pre-built testing context, so a second reader of the headers has nothing to feed
-    into this one.
+    tenant, and the principal. No parameter accepts a pre-parsed token, so a second reader
+    of the headers has nothing to feed into this one.
 
     Args:
         headers: The request headers, as the transport's framework exposes them.
         require_valid_token: The TOOL's declaration (``ToolSpec.requires_credential()``).
             If True, a missing or rejected credential raises. If False, a rejected
             credential is treated like a missing one (discovery).
-        protocol: Which transport is calling; a label for the observability record.
 
     Returns:
         ResolvedIdentity with all fields resolved
@@ -233,7 +233,7 @@ def _resolve_identity(
 
         raise AdCPAuthenticationError()
 
-    return ResolvedIdentity(principal=principal, tenant=tenant, protocol=protocol)
+    return ResolvedIdentity(principal=principal, tenant=tenant)
 
 
 def identity_of(tenant_id: str, principal_id: str) -> ResolvedIdentity:

@@ -200,7 +200,7 @@ def get_media_buy_delivery(
     # UoW scope encompasses all code that accesses MediaBuy ORM objects to prevent
     # DetachedInstanceError — the session must stay open while we read attributes
     # like buy.raw_request, buy.start_date, etc.
-    with MediaBuyUoW(tenant["tenant_id"]) as uow:
+    with MediaBuyUoW(tenant.tenant_id) as uow:
         assert uow.media_buys is not None
         repo = uow.media_buys
 
@@ -231,15 +231,15 @@ def get_media_buy_delivery(
                         pricing_option_ids.append(pkg_id)
         # FIXME(#2129): delivery UoW should provide a product repo directly
         assert uow.session is not None
-        product_repo = ProductRepository(uow.session, tenant["tenant_id"])
+        product_repo = ProductRepository(uow.session, tenant.tenant_id)
         pricing_options = _get_pricing_options(
-            pricing_option_ids, tenant_id=tenant["tenant_id"], product_repo=product_repo
+            pricing_option_ids, tenant_id=tenant.tenant_id, product_repo=product_repo
         )
 
         # Per-request invariants, hoisted out of the per-buy loop:
         # - the circuit breaker is tenant-scoped, so one check covers every buy;
         # - packages are fetched in one batch query instead of one per buy.
-        reporting_circuit_open = _is_circuit_breaker_open(tenant["tenant_id"])
+        reporting_circuit_open = _is_circuit_breaker_open(tenant.tenant_id)
         packages_by_buy = repo.get_packages_for_ids([buy_id for buy_id, _ in target_media_buys])
 
         # Collect delivery data for each media buy
@@ -327,7 +327,7 @@ def get_media_buy_delivery(
                         from src.core.database.models import AuditLog
 
                         audit_log = AuditLog(
-                            tenant_id=tenant["tenant_id"],
+                            tenant_id=tenant.tenant_id,
                             operation="adapter_delivery_failure",
                             principal_id=principal_id,
                             success=False,
@@ -542,7 +542,7 @@ def get_media_buy_delivery(
         sequence_number = None
         # FIXME(#2129): delivery UoW should provide DeliveryRepository directly
         if deliveries and uow.session is not None:
-            delivery_repo = DeliveryRepository(uow.session, tenant["tenant_id"])
+            delivery_repo = DeliveryRepository(uow.session, tenant.tenant_id)
             # Use the first media buy's sequence as the response-level sequence
             first_mb_id = deliveries[0].media_buy_id
             max_seq = delivery_repo.get_max_sequence_number(first_mb_id, task_type=POLL_SEQUENCE_TASK_TYPE)

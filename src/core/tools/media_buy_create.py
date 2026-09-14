@@ -115,7 +115,6 @@ from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, Per
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
-from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
 from src.core.helpers import log_tool_activity
@@ -1976,8 +1975,10 @@ async def _create_media_buy_impl(
                 raw_freq,
             )
 
-    # Authentication and tenant setup
-    principal_id = require_principal(identity).principal_id
+    # The one principal this tool holds: the row the resolver loaded. Its name is read
+    # off it below; nothing here loads a principal by id.
+    principal = require_principal(identity)
+    principal_id = principal.principal_id
 
     # Tenant is resolved once, in the resolver invoke_tool runs
     tenant = require_tenant(identity)
@@ -1998,19 +1999,15 @@ async def _create_media_buy_impl(
         )
 
     try:
-        validate_setup_complete(tenant["tenant_id"])
+        validate_setup_complete(tenant.tenant_id)
     except SetupIncompleteError as e:
         # Return helpful error with missing tasks
         raise AdCPConfigurationError(
             details=ConfigurationDetails(
                 missing_tasks=[t["name"] for t in e.missing_tasks],
-                setup_checklist_url=f"/tenant/{tenant['tenant_id']}/setup-checklist",
+                setup_checklist_url=f"/tenant/{tenant.tenant_id}/setup-checklist",
             )
         )
-
-    # Validate principal exists BEFORE creating context (foreign key constraint).
-    # Cannot create context or workflow step without a valid principal.
-    principal = require_principal(identity)
 
     # No second webhook-URL verdict here: the stored-then-fetched URLs already
     # got their correctable refusal at the registration gate above, before any
@@ -2022,7 +2019,7 @@ async def _create_media_buy_impl(
 
     # Context management and workflow step creation - create workflow step FIRST
     ctx_manager = get_context_manager()
-    persistent_ctx = ctx_manager.create_context(tenant_id=tenant["tenant_id"], principal_id=principal_id)
+    persistent_ctx = ctx_manager.create_context(tenant_id=tenant.tenant_id, principal_id=principal_id)
 
     # Create workflow step for tracking this operation
     # Pass model directly — ContextManager serializes at the DB boundary
@@ -2073,7 +2070,7 @@ async def _create_media_buy_impl(
         # (tenant, principal, url) is the natural key and it is made of SPEC fields:
         # re-registering the same URL updates the same row, which is the behaviour
         # A2A re-registration needs, without honouring a non-spec id to get it.
-        with PushNotificationConfigUoW(tenant["tenant_id"]) as pnc_uow:
+        with PushNotificationConfigUoW(tenant.tenant_id) as pnc_uow:
             assert pnc_uow.push_notification_configs is not None
             _existing = pnc_uow.push_notification_configs.find_by_url(
                 principal_id, str(registration.url), active_only=False
@@ -2200,14 +2197,14 @@ async def _create_media_buy_impl(
         from src.core.database.repositories import MediaBuyUoW
 
         # Get products first to determine currency from pricing options
-        with MediaBuyUoW(tenant["tenant_id"]) as validation_uow:
+        with MediaBuyUoW(tenant.tenant_id) as validation_uow:
             # FIXME(#1119): raw session usages below should migrate to repository methods
             assert validation_uow.session is not None
             session = validation_uow.session
             # Get products from database
             products_stmt = (
                 select(ProductModel)
-                .where(ProductModel.tenant_id == tenant["tenant_id"], ProductModel.product_id.in_(product_ids))
+                .where(ProductModel.tenant_id == tenant.tenant_id, ProductModel.product_id.in_(product_ids))
                 .options(selectinload(ProductModel.pricing_options))
             )
             products = session.scalars(products_stmt).all()
@@ -2316,7 +2313,7 @@ async def _create_media_buy_impl(
 
             # Get currency limits for this tenant and currency
             currency_stmt = select(CurrencyLimit).where(
-                CurrencyLimit.tenant_id == tenant["tenant_id"], CurrencyLimit.currency_code == request_currency
+                CurrencyLimit.tenant_id == tenant.tenant_id, CurrencyLimit.currency_code == request_currency
             )
             currency_limit = session.scalars(currency_stmt).first()
 
@@ -2330,7 +2327,7 @@ async def _create_media_buy_impl(
 
             # Check if currency is supported by GAM network (if GAM is configured)
             # GAM only accepts: primary currency OR enabled secondary currencies
-            adapter_config_stmt = select(AdapterConfig).where(AdapterConfig.tenant_id == tenant["tenant_id"])
+            adapter_config_stmt = select(AdapterConfig).where(AdapterConfig.tenant_id == tenant.tenant_id)
             adapter_config = session.scalars(adapter_config_stmt).first()
             if adapter_config and adapter_config.gam_network_currency:
                 # Build list of supported currencies: primary + any secondary
@@ -2587,7 +2584,7 @@ async def _create_media_buy_impl(
         # today), and resolve_manual_approval_signal()'s DB fallback would add an
         # unconditional query to this hot path for a stylistic DRY win. Tracked as a
         # follow-up (salesagent-3rhn) alongside the sibling media_buy_update.py gap.
-        tenant_approval_required = tenant.get("human_review_required", True)
+        tenant_approval_required = tenant.human_review_required
         adapter_approval_required = adapter.manual_approval_required
         # Tenant setting takes precedence - if tenant requires approval, it's required
         manual_approval_required = tenant_approval_required or adapter_approval_required
@@ -2602,8 +2599,9 @@ async def _create_media_buy_impl(
             f"adapter type: {adapter.__class__.__name__}"
         )
 
-        # Check if auto-creation is disabled in tenant config
-        auto_create_enabled = tenant.get("auto_create_media_buys", True)
+        # No tenant field declares auto-creation; the dict shim this replaced always
+        # answered its default, so the tenant never disables it.
+        auto_create_enabled = True
         product_auto_create = True  # Will be set correctly when we get products later
 
         if manual_approval_required and "create_media_buy" in manual_approval_operations:
@@ -2614,7 +2612,7 @@ async def _create_media_buy_impl(
             # path previously skipped missing ids (pending success) and emitted
             # VALIDATION_ERROR for format mismatch.
             if req.packages:
-                _pre_validate_package_creatives(req.packages, tenant["tenant_id"], principal_id, ctx_manager, step)
+                _pre_validate_package_creatives(req.packages, tenant.tenant_id, principal_id, ctx_manager, step)
             # Update existing workflow step to require approval
             ctx_manager.update_workflow_step(
                 step.step_id,
@@ -2640,8 +2638,8 @@ async def _create_media_buy_impl(
                 # Build notifier config from tenant fields
                 notifier_config = {
                     "features": {
-                        "slack_webhook_url": tenant.get("slack_webhook_url"),
-                        "slack_audit_webhook_url": tenant.get("slack_audit_webhook_url"),
+                        "slack_webhook_url": tenant.slack_webhook_url,
+                        "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
                     }
                 }
                 slack_notifier = get_slack_notifier(notifier_config)
@@ -2662,8 +2660,8 @@ async def _create_media_buy_impl(
                     media_buy_id=media_buy_id,
                     principal_name=principal_name,
                     details=notification_details,
-                    tenant_name=tenant.get("name", "Unknown"),
-                    tenant_id=tenant.get("tenant_id"),
+                    tenant_name=tenant.name,
+                    tenant_id=tenant.tenant_id,
                     success=True,
                 )
                 logger.info("📧 Sent manual approval notification to Slack")
@@ -2732,7 +2730,7 @@ async def _create_media_buy_impl(
             # Status is "pending_approval" but the ID is final
             # Repository handles raw_request serialization + package_id injection at the DB boundary
             try:
-                with MediaBuyUoW(tenant["tenant_id"]) as pending_uow:
+                with MediaBuyUoW(tenant.tenant_id) as pending_uow:
                     assert pending_uow.media_buys is not None
                     pending_uow.media_buys.create_from_request(
                         media_buy_id=media_buy_id,
@@ -2754,7 +2752,7 @@ async def _create_media_buy_impl(
             except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
                 return _resolve_idempotency_race_or_raise(
                     exc,
-                    tenant["tenant_id"],
+                    tenant.tenant_id,
                     idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
                     account_id=identity.account_id,
@@ -2767,7 +2765,7 @@ async def _create_media_buy_impl(
                 principal_name = principal.name if principal else principal_id
                 duration_days = (end_time - start_time).days + 1
                 activity_feed.log_media_buy(
-                    tenant_id=tenant["tenant_id"],
+                    tenant_id=tenant.tenant_id,
                     principal_name=principal_name,
                     media_buy_id=media_buy_id,
                     budget=float(total_budget),
@@ -2779,7 +2777,7 @@ async def _create_media_buy_impl(
 
             # Log to audit log for manual approval case
             try:
-                audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+                audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
                 audit_logger.log_operation(
                     operation="create_media_buy_pending_approval",
                     principal_name=principal_name,
@@ -2799,7 +2797,7 @@ async def _create_media_buy_impl(
 
             # Create MediaPackage records for structured querying
             # This enables the UI to display packages and creative assignments to work properly
-            with MediaBuyUoW(tenant["tenant_id"]) as pkg_uow:
+            with MediaBuyUoW(tenant.tenant_id) as pkg_uow:
                 # FIXME(#1788): package creation should use repository methods
                 assert pkg_uow.session is not None
                 session = pkg_uow.session
@@ -2891,14 +2889,14 @@ async def _create_media_buy_impl(
                 object_type="media_buy",
                 object_id=media_buy_id,
                 action="create",
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
             )
             logger.info(f"✅ Linked workflow step {step.step_id} to media buy")
 
             # Create creative assignments for manual approval flow
             # This must happen AFTER media packages are created so we have package_ids
             if req.packages:
-                with MediaBuyUoW(tenant["tenant_id"]) as assign_uow:
+                with MediaBuyUoW(tenant.tenant_id) as assign_uow:
                     # FIXME(#1788): assignment creation should use repository methods
                     assert assign_uow.session is not None
                     assert assign_uow.creatives is not None
@@ -2953,7 +2951,7 @@ async def _create_media_buy_impl(
                                 assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
                                 assignment = DBAssignment(
                                     assignment_id=assignment_id,
-                                    tenant_id=tenant["tenant_id"],
+                                    tenant_id=tenant.tenant_id,
                                     principal_id=principal_id,
                                     media_buy_id=media_buy_id,
                                     package_id=pkg_id,
@@ -3010,7 +3008,7 @@ async def _create_media_buy_impl(
                     )
 
                     # Persist the auto-generated config to database
-                    with MediaBuyUoW(tenant["tenant_id"]) as gam_uow:
+                    with MediaBuyUoW(tenant.tenant_id) as gam_uow:
                         # FIXME(#1119): product update should use ProductRepository
                         assert gam_uow.session is not None
                         product_stmt = select(ModelProduct).filter_by(product_id=schema_product.product_id)
@@ -3058,8 +3056,8 @@ async def _create_media_buy_impl(
                 # Build notifier config from tenant fields
                 notifier_config = {
                     "features": {
-                        "slack_webhook_url": tenant.get("slack_webhook_url"),
-                        "slack_audit_webhook_url": tenant.get("slack_audit_webhook_url"),
+                        "slack_webhook_url": tenant.slack_webhook_url,
+                        "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
                     }
                 }
                 slack_notifier = get_slack_notifier(notifier_config)
@@ -3083,8 +3081,8 @@ async def _create_media_buy_impl(
                     media_buy_id=media_buy_id,
                     principal_name=principal_name,
                     details=notification_details,
-                    tenant_name=tenant.get("name", "Unknown"),
-                    tenant_id=tenant.get("tenant_id"),
+                    tenant_name=tenant.name,
+                    tenant_id=tenant.tenant_id,
                     success=True,
                 )
                 logger.info(f"📧 Sent {reason.lower()} approval notification to Slack")
@@ -3281,8 +3279,9 @@ async def _create_media_buy_impl(
             if not format_ids_to_use:
                 if pkg_product.format_ids:
                     # Convert product.format_ids to FormatId objects if they're strings or dicts
-                    # Get default creative agent URL from tenant config (tenant is dict[str, Any])
-                    default_agent_url = tenant.get("creative_agent_url") or "https://creative.adcontextprotocol.org"
+                    # No tenant field declares a creative agent URL; the dict shim this
+                    # replaced always answered None, so the reference agent is the one.
+                    default_agent_url = "https://creative.adcontextprotocol.org"
                     for fmt_item in pkg_product.format_ids:
                         if isinstance(fmt_item, str):
                             # Convert legacy string format to FormatId object
@@ -3382,7 +3381,7 @@ async def _create_media_buy_impl(
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
-        _pre_validate_package_creatives(packages, tenant["tenant_id"], principal_id, ctx_manager, step)
+        _pre_validate_package_creatives(packages, tenant.tenant_id, principal_id, ctx_manager, step)
 
         # Pre-validate adapter-specific constraints (pricing models, budget limits)
         # This runs regardless of dry_run so adapter restrictions are always enforced.
@@ -3451,7 +3450,7 @@ async def _create_media_buy_impl(
         # Store the media buy in database (context_id is NULL for synchronous operations)
         # Repository handles raw_request serialization at the DB boundary
         try:
-            with MediaBuyUoW(tenant["tenant_id"]) as create_uow:
+            with MediaBuyUoW(tenant.tenant_id) as create_uow:
                 assert create_uow.media_buys is not None
                 created_row = create_uow.media_buys.create_from_request(
                     # The adapter has already returned by this point (`response` is
@@ -3483,7 +3482,7 @@ async def _create_media_buy_impl(
         except IntegrityError as exc:  # structural-guard: integrity-narrowing - _resolve_idempotency_race_or_raise decides, and re-raises anything else
             return _resolve_idempotency_race_or_raise(
                 exc,
-                tenant["tenant_id"],
+                tenant.tenant_id,
                 idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
                 account_id=identity.account_id,
@@ -3494,7 +3493,7 @@ async def _create_media_buy_impl(
         # Populate media_packages table for structured querying
         # This enables creative_assignments to work properly
         if req.packages or (response.packages and len(response.packages) > 0):
-            with MediaBuyUoW(tenant["tenant_id"]) as auto_pkg_uow:
+            with MediaBuyUoW(tenant.tenant_id) as auto_pkg_uow:
                 # FIXME(#1788): package creation should use repository methods
                 assert auto_pkg_uow.session is not None
                 session = auto_pkg_uow.session
@@ -3590,7 +3589,7 @@ async def _create_media_buy_impl(
 
         # Handle creative_ids in packages if provided (immediate association)
         if req.packages:
-            with MediaBuyUoW(tenant["tenant_id"]) as creative_uow:
+            with MediaBuyUoW(tenant.tenant_id) as creative_uow:
                 # FIXME(#1788): creative assignment should use repository methods
                 assert creative_uow.session is not None
                 assert creative_uow.creatives is not None
@@ -3640,7 +3639,7 @@ async def _create_media_buy_impl(
                         if pkg_cids and package.product_id:
                             # Load product to check supported formats
                             product_format_check_stmt = select(ModelProduct).where(
-                                ModelProduct.tenant_id == tenant["tenant_id"],
+                                ModelProduct.tenant_id == tenant.tenant_id,
                                 ModelProduct.product_id == package.product_id,
                             )
                             product_format_check: ModelProduct | None = session.scalars(
@@ -3746,7 +3745,7 @@ async def _create_media_buy_impl(
                                         {"package_id": response_package_id, "weight": 100}
                                     ]
                                     asset, build_err = _build_adapter_asset_from_creative(
-                                        creative, pkg_assignments, tenant_id=tenant["tenant_id"]
+                                        creative, pkg_assignments, tenant_id=tenant.tenant_id
                                     )
                                     if build_err:
                                         raise AdCPValidationError(
@@ -3769,7 +3768,7 @@ async def _create_media_buy_impl(
                                         uploaded_status = upload_result[0]
                                         merged_data = _apply_creative_enrichment(creative, uploaded_status)
                                         if merged_data is not None:
-                                            CreativeRepository(session, tenant["tenant_id"]).update_data(
+                                            CreativeRepository(session, tenant.tenant_id).update_data(
                                                 creative, merged_data
                                             )
                                         pcid = (creative.data or {}).get("platform_creative_id")
@@ -3787,7 +3786,7 @@ async def _create_media_buy_impl(
                             assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
                             assignment = DBAssignment(
                                 assignment_id=assignment_id,
-                                tenant_id=tenant["tenant_id"],
+                                tenant_id=tenant.tenant_id,
                                 principal_id=principal_id,
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
@@ -3925,22 +3924,13 @@ async def _create_media_buy_impl(
 
         # Also log specific media buy activity
         try:
-            principal_name = "Unknown"
-            with MediaBuyUoW(tenant["tenant_id"]) as log_uow:
-                # FIXME(#1119): principal lookup should use a repository method
-                assert log_uow.session is not None
-                principal_stmt = select(ModelPrincipal).filter_by(
-                    principal_id=principal_id, tenant_id=tenant["tenant_id"]
-                )
-                principal_db = log_uow.session.scalars(principal_stmt).first()
-                if principal_db:
-                    principal_name = principal_db.name
+            principal_name = principal.name
 
             # Calculate duration using new datetime fields (resolved from 'asap' if needed)
             duration_days = (end_time_val - start_time_val).days + 1
 
             activity_feed.log_media_buy(
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 principal_name=principal_name,
                 media_buy_id=response.media_buy_id,
                 budget=float(total_budget),
@@ -3960,7 +3950,7 @@ async def _create_media_buy_impl(
             object_type="media_buy",
             object_id=response.media_buy_id,
             action="create",
-            tenant_id=tenant["tenant_id"],
+            tenant_id=tenant.tenant_id,
         )
 
         # Mark workflow step as completed on success (triggers _send_push_notifications)
@@ -3968,23 +3958,13 @@ async def _create_media_buy_impl(
 
         # Send Slack notification for successful media buy creation
         try:
-            # Get principal name for notification (reuse from activity logging above)
-            principal_name = "Unknown"
-            with MediaBuyUoW(tenant["tenant_id"]) as slack_uow:
-                # FIXME(#1119): principal lookup should use a repository method
-                assert slack_uow.session is not None
-                principal_stmt2 = select(ModelPrincipal).filter_by(
-                    principal_id=principal_id, tenant_id=tenant["tenant_id"]
-                )
-                principal_db = slack_uow.session.scalars(principal_stmt2).first()
-                if principal_db:
-                    principal_name = principal_db.name
+            principal_name = principal.name
 
             # Build notifier config from tenant fields
             notifier_config = {
                 "features": {
-                    "slack_webhook_url": tenant.get("slack_webhook_url"),
-                    "slack_audit_webhook_url": tenant.get("slack_audit_webhook_url"),
+                    "slack_webhook_url": tenant.slack_webhook_url,
+                    "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
                 }
             }
             slack_notifier = get_slack_notifier(notifier_config)
@@ -4009,8 +3989,8 @@ async def _create_media_buy_impl(
                 media_buy_id=response.media_buy_id,
                 principal_name=principal_name,
                 details=success_details,
-                tenant_name=tenant.get("name", "Unknown"),
-                tenant_id=tenant.get("tenant_id"),
+                tenant_name=tenant.name,
+                tenant_id=tenant.tenant_id,
                 success=True,
             )
 
@@ -4019,7 +3999,7 @@ async def _create_media_buy_impl(
             logger.warning(f"⚠️ Failed to send success Slack notification: {e}")
 
         # Log to audit logs for business activity feed
-        audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+        audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
         audit_logger.log_operation(
             operation="create_media_buy",
             principal_name=principal_name,
@@ -4063,8 +4043,8 @@ async def _create_media_buy_impl(
             # Build notifier config from tenant fields
             notifier_config = {
                 "features": {
-                    "slack_webhook_url": tenant.get("slack_webhook_url"),
-                    "slack_audit_webhook_url": tenant.get("slack_audit_webhook_url"),
+                    "slack_webhook_url": tenant.slack_webhook_url,
+                    "slack_audit_webhook_url": tenant.slack_audit_webhook_url,
                 }
             }
             slack_notifier = get_slack_notifier(notifier_config)
@@ -4087,8 +4067,8 @@ async def _create_media_buy_impl(
                 media_buy_id=None,
                 principal_name=principal_name,
                 details=failure_details,
-                tenant_name=tenant.get("name", "Unknown"),
-                tenant_id=tenant.get("tenant_id"),
+                tenant_name=tenant.name,
+                tenant_id=tenant.tenant_id,
                 success=False,
                 error_message=str(e),
             )
@@ -4099,7 +4079,7 @@ async def _create_media_buy_impl(
 
         # Log to audit logs for failed operation
         try:
-            audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+            audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
             audit_logger.log_operation(
                 operation="create_media_buy",
                 principal_name=principal.name if principal else "unknown",

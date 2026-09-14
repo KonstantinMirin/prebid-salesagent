@@ -407,7 +407,7 @@ Each step leaves the tree green and is independently revertible.
 9. **Delete the fifteen `*_raw` wrappers**, and with them the last per-tool
    declaration of anything. Steps 6–8 left each transport naming its own
    pass-through; this one gives them a single seam, `src/core/tools/_boundary.py`,
-   that every transport enters with `invoke_tool(name, req, identity)`.
+   that every transport enters with `invoke_tool(name, req, headers, protocol)`.
 
    The wrappers were not only pass-throughs, which is why this step was needed and
    not merely tidy. Between them they disagreed about the two things they each did

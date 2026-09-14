@@ -21,7 +21,8 @@ from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal, Tenant
+from src.core.database.models import Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.domain_config import get_sales_agent_domain
 from src.core.validation import sanitize_form_data, validate_form_data
 from src.services.setup_checklist_service import SetupChecklistService
@@ -222,10 +223,9 @@ def tenant_settings(tenant_id, section=None):
             gam_oauth_configured = get_settings().auth.gam_oauth_configured
 
             # Get advertiser data for the advertisers section
-            from src.core.database.models import GAMInventory, Principal
+            from src.core.database.models import GAMInventory
 
-            stmt = select(Principal).filter_by(tenant_id=tenant_id)
-            principals = db_session.scalars(stmt).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
             advertiser_count = len(principals)
             active_advertisers = len(principals)  # For now, assume all are active
 
@@ -635,8 +635,7 @@ def media_buys_list(tenant_id):
                 # Get principal name
                 principal = None
                 if media_buy.principal_id:
-                    stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
-                    principal = db_session.scalars(stmt).first()
+                    principal = PrincipalRepository(db_session, tenant_id).get(media_buy.principal_id)
 
                 # Get product names from packages
                 product_names = []

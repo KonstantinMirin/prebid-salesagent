@@ -249,8 +249,8 @@ async def invoke_tool(
 
     IT TAKES HEADERS, NOT AN IDENTITY. Nothing here reads them: the resolver is their one
     reader, and it is handed the registry row's declaration of whether the credential must
-    verify, so no transport decides it. ``protocol`` labels the resulting identity for the
-    observability record and decides nothing.
+    verify, so no transport decides it. ``protocol`` labels the observability record a
+    failure writes and decides nothing; the identity does not carry it.
     """
     from src.core.resolved_identity import _resolve_identity
     from src.core.tools.registry import TOOLS
@@ -272,7 +272,6 @@ async def invoke_tool(
             _resolve_identity,
             headers,
             require_valid_token=spec.requires_credential(),
-            protocol=protocol,
         )
     except Exception as exc:
         _failed(protocol, tool_name, exc, echo)

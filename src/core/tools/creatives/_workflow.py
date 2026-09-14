@@ -125,15 +125,15 @@ def _send_creative_notifications(
     # Note: For ai-powered mode, notifications are sent AFTER AI review completes (with AI reasoning)
     # Only send immediate notifications for require-human mode or existing creatives with AI review results
     logger.info(
-        f"Checking Slack notification: creatives={len(creatives_needing_approval)}, webhook={tenant.get('slack_webhook_url')}, approval_mode={approval_mode}"
+        f"Checking Slack notification: creatives={len(creatives_needing_approval)}, webhook={tenant.slack_webhook_url}, approval_mode={approval_mode}"
     )
-    if not (creatives_needing_approval and tenant.get("slack_webhook_url") and approval_mode == "require-human"):
+    if not (creatives_needing_approval and tenant.slack_webhook_url and approval_mode == "require-human"):
         return
 
     from src.services.slack_notifier import get_slack_notifier
 
     logger.info(f"Sending Slack notifications for {len(creatives_needing_approval)} creatives (require-human mode)")
-    tenant_config = {"features": {"slack_webhook_url": tenant["slack_webhook_url"]}}
+    tenant_config = {"features": {"slack_webhook_url": tenant.slack_webhook_url}}
     notifier = get_slack_notifier(tenant_config)
 
     for creative_info in creatives_needing_approval:
@@ -153,7 +153,7 @@ def _send_creative_notifications(
                 principal_name=principal_name_str,
                 format_type=format_str,
                 media_buy_id=None,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 ai_review_reason=ai_review_reason,
             )
         else:
@@ -163,7 +163,7 @@ def _send_creative_notifications(
                 principal_name=principal_name_str,
                 format_type=format_str,
                 media_buy_id=None,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 ai_review_reason=ai_review_reason,
             )
 
@@ -187,7 +187,7 @@ def _audit_log_sync(
     Writes two audit entries: one at the AdCP level (always) and one at the
     sync_creatives level (only when the principal is found in the database).
     """
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
 
     # Build error message from failed creatives
     error_message = None
@@ -222,12 +222,12 @@ def _audit_log_sync(
 
     # Log audit trail for sync_creatives operation (with principal name from DB)
     try:
-        with WorkflowUoW(tenant["tenant_id"]) as uow:
+        with WorkflowUoW(tenant.tenant_id) as uow:
             assert uow.workflows is not None
             principal_name = uow.workflows.get_principal_name(principal_id) if principal_id else None
 
             if principal_name:
-                audit_logger = get_audit_logger("sync_creatives", tenant["tenant_id"])
+                audit_logger = get_audit_logger("sync_creatives", tenant.tenant_id)
                 audit_logger.log_operation(
                     operation="sync_creatives",
                     principal_name=principal_name,
@@ -244,7 +244,7 @@ def _audit_log_sync(
                         "dry_run": dry_run,
                         "creative_ids_filter": creative_ids,
                     },
-                    tenant_id=tenant["tenant_id"],
+                    tenant_id=tenant.tenant_id,
                 )
     except Exception as e:
         # Don't fail the operation if audit logging fails

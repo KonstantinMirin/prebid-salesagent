@@ -14,9 +14,9 @@ from sqlalchemy import select
 from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.credentials import hash_token
 from src.core.database.database_session import get_db_session
-from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant
+from src.core.database.repositories.principal_lookup import PrincipalLookupRepository
 from src.core.domain_config import extract_subdomain_from_host, is_sales_agent_domain
 from src.landing import generate_tenant_landing_page
 
@@ -72,8 +72,7 @@ async def debug_db_state(request: Request):
             product_stmt = select(ModelProduct)
             all_products = session.scalars(product_stmt).all()
 
-            principal_stmt = select(ModelPrincipal).filter_by(token_hash=hash_token("ci-test-token"))
-            principal = session.scalars(principal_stmt).first()
+            principal = PrincipalLookupRepository(session).find_by_token_hash(hash_token("ci-test-token"))
 
             principal_info = None
             tenant_info = None
@@ -124,10 +123,10 @@ async def debug_tenant(request: Request):
     detection_method = None
 
     if apx_host:
-        tenant = get_tenant_by_virtual_host(apx_host)
-        if tenant:
-            tenant_id = tenant.get("tenant_id")
-            tenant_name = tenant.get("name")
+        tenant_row = get_tenant_by_virtual_host(apx_host)
+        if tenant_row:
+            tenant_id = tenant_row.get("tenant_id")
+            tenant_name = tenant_row.get("name")
             detection_method = "apx-incoming-host"
 
     if not tenant_id and host_header:
@@ -161,21 +160,21 @@ async def debug_root(request: Request):
 
     virtual_host = apx_host or host_header
 
-    tenant = get_tenant_by_virtual_host(virtual_host) if virtual_host else None
+    tenant_row = get_tenant_by_virtual_host(virtual_host) if virtual_host else None
 
     debug_info = {
         "all_headers": headers,
         "apx_host": apx_host,
         "host_header": host_header,
         "virtual_host": virtual_host,
-        "tenant_found": tenant is not None,
-        "tenant_id": tenant.get("tenant_id") if tenant else None,
-        "tenant_name": tenant.get("name") if tenant else None,
+        "tenant_found": tenant_row is not None,
+        "tenant_id": tenant_row.get("tenant_id") if tenant_row else None,
+        "tenant_name": tenant_row.get("name") if tenant_row else None,
     }
 
-    if tenant:
+    if tenant_row:
         try:
-            html_content = generate_tenant_landing_page(tenant, virtual_host)
+            html_content = generate_tenant_landing_page(tenant_row, virtual_host)
             debug_info["landing_page_generated"] = True
             debug_info["landing_page_length"] = len(html_content)
         except Exception as e:
@@ -225,10 +224,10 @@ async def debug_root_logic(request: Request):
     if virtual_host:
         debug_info["step"] = "virtual_host_found"
 
-        tenant = get_tenant_by_virtual_host(virtual_host)
-        debug_info["exact_tenant_lookup"] = tenant is not None
+        tenant_row = get_tenant_by_virtual_host(virtual_host)
+        debug_info["exact_tenant_lookup"] = tenant_row is not None
 
-        if not tenant and is_sales_agent_domain(virtual_host) and not virtual_host.startswith("admin."):
+        if not tenant_row and is_sales_agent_domain(virtual_host) and not virtual_host.startswith("admin."):
             debug_info["step"] = "subdomain_fallback"
             subdomain = extract_subdomain_from_host(virtual_host)
             debug_info["extracted_subdomain"] = subdomain
@@ -244,13 +243,13 @@ async def debug_root_logic(request: Request):
             except Exception as e:
                 debug_info["subdomain_error"] = str(e)
 
-        if tenant:
+        if tenant_row:
             debug_info["step"] = "tenant_found"
-            debug_info["tenant_id"] = tenant.get("tenant_id")
-            debug_info["tenant_name"] = tenant.get("name")
+            debug_info["tenant_id"] = tenant_row.get("tenant_id")
+            debug_info["tenant_name"] = tenant_row.get("name")
 
             try:
-                html_content = generate_tenant_landing_page(tenant, virtual_host)
+                html_content = generate_tenant_landing_page(tenant_row, virtual_host)
                 debug_info["step"] = "landing_page_success"
                 debug_info["landing_page_length"] = len(html_content)
                 debug_info["would_return"] = "HTMLResponse"

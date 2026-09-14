@@ -327,8 +327,8 @@ def _get_adcp_capabilities_impl(
             request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         )
 
-    tenant_id = tenant["tenant_id"]
-    tenant_name = tenant.get("name", "Unknown")
+    tenant_id = tenant.tenant_id
+    tenant_name = tenant.name
 
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
@@ -406,12 +406,12 @@ def _get_adcp_capabilities_impl(
     # If no domains found, use a placeholder
     if not publisher_domains:
         # Use tenant name as placeholder domain
-        publisher_domains = [PublisherDomain(root=f"{tenant.get('subdomain', 'unknown')}.example.com")]
+        publisher_domains = [PublisherDomain(root=f"{tenant.subdomain}.example.com")]
 
     # Get advertising policies from tenant config
     advertising_policies: str | None = None
-    if tenant.get("advertising_policy"):
-        policy = tenant["advertising_policy"]
+    policy = tenant.advertising_policy
+    if policy:
         if isinstance(policy, dict) and policy.get("description"):
             advertising_policies = policy["description"]
 
@@ -497,7 +497,7 @@ def _get_adcp_capabilities_impl(
     # get_adcp_capabilities response, so an invalid declaration must surface as a
     # terminal CONFIGURATION_ERROR here rather than being discovered only at some
     # future write surface. `None` (nothing declared) reproduces the pre-#1592 wire.
-    declarations = CapabilityDeclarations.from_tenant(tenant.get("capability_declarations"))
+    declarations = CapabilityDeclarations.from_tenant(tenant.capability_declarations)
 
     # Build execution capabilities. Declared blocks merge in; undeclared stay absent
     # (honest omission, never an empty object).

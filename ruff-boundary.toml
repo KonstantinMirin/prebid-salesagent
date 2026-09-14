@@ -35,8 +35,9 @@
 #
 # ## Reaching an implementation legitimately
 #
-# `invoke_tool(name, req, identity)` from a transport; `TOOLS[name].impl` when you need
-# the function object. A caller with no buyer and no request envelope wants a SERVICE,
+# `serve(name, payload, headers, protocol)` from a transport, or
+# `invoke_tool(name, req, headers, protocol)` with a request it already validated;
+# `TOOLS[name].impl` when you need the function object. A caller with no buyer and no request envelope wants a SERVICE,
 # not the tool -- `delivery_for_media_buy` is the worked example.
 
 [lint]

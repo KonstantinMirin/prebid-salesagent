@@ -103,8 +103,9 @@ caller, and decides whether this call is idempotent:
 
 ```mermaid
 flowchart TD
-    IN["invoke_tool(tool_name, req, identity)"] --> IMPL["impl := TOOLS[tool_name].impl"]
-    IMPL --> ACCQ{"req.get_account() and<br/>identity both present?"}
+    IN["invoke_tool(tool_name, req, headers, protocol)"] --> IMPL["impl := TOOLS[tool_name].impl"]
+    IMPL --> RES["identity := _resolve_identity(headers,<br/>require_valid_token=spec.requires_credential())"]
+    RES --> ACCQ{"req.get_account()<br/>present?"}
     ACCQ -- yes --> ENR["identity = enrich_identity_with_account(...)"]
     ACCQ -- no --> SC
     ENR --> SC["scope = _keyed_scope(req, identity)"]

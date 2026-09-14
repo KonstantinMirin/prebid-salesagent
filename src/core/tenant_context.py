@@ -7,10 +7,9 @@ appropriate defaults.
 The resolver (``src/core/resolved_identity._resolve_identity``) loads it once per request
 and hands it on as ``ResolvedIdentity.tenant``. Nothing downstream loads a tenant again.
 
-Supports dict-like access for backward compatibility with existing code:
-    tenant["tenant_id"]     # works (backward compat)
-    tenant.get("field")     # works (backward compat)
-    tenant.tenant_id        # preferred for new code
+It is read by attribute only: ``tenant.tenant_id``. The dict shim (``__getitem__``, ``get``,
+``keys``, ``__contains__``) that let ``tenant["tenant_id"]`` compile is gone, so mypy sees
+every field a reader names.
 """
 
 import logging
@@ -58,32 +57,6 @@ class TenantContext(BaseModel):
     # #1592 T1a: implementation-backed AdCP capability declaration blocks.
     # None = nothing declared = the pre-#1592 capabilities wire.
     capability_declarations: dict[str, Any] | None = None
-
-    # --- Dict-like access for backward compatibility ---
-
-    def __getitem__(self, key: str) -> Any:
-        """Allow tenant['field'] access."""
-        if key in type(self).model_fields:
-            return getattr(self, key)
-        raise KeyError(key)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        """Allow tenant.get('field', default) access."""
-        if key in type(self).model_fields:
-            return getattr(self, key)
-        return default
-
-    def keys(self) -> list[str]:
-        """Allow dict(tenant) and iteration over keys."""
-        return list(type(self).model_fields.keys())
-
-    def __contains__(self, key: object) -> bool:
-        """Allow 'field' in tenant checks."""
-        return isinstance(key, str) and key in type(self).model_fields
-
-    def __iter__(self):
-        """Allow dict(tenant) conversion and for key in tenant."""
-        return iter(type(self).model_fields.keys())
 
     # --- Construction helpers ---
 

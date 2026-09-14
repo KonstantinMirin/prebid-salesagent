@@ -192,7 +192,7 @@ def _get_media_buys_impl(
     # if no tenant resolved (the principal guards above take precedence).
     tenant = require_tenant(identity)
     today = datetime.now(UTC).date()
-    tenant_id: str = tenant["tenant_id"]
+    tenant_id: str = tenant.tenant_id
 
     # Every non-fatal per-row advisory lands here — a degraded optional field and an
     # omitted unrenderable row alike. Surfaced on the response so the buyer can

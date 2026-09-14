@@ -207,7 +207,7 @@ def _list_accounts_impl(
     # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
     principal_id = require_principal(identity).principal_id
     tenant = require_tenant(identity)
-    tenant_id = tenant["tenant_id"]
+    tenant_id = tenant.tenant_id
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
@@ -1445,7 +1445,7 @@ async def _sync_accounts_impl(
     # BR-RULE-055: sync requires auth (consistent with list_accounts).
     principal_id = require_principal(identity).principal_id
     tenant = require_tenant(identity)
-    tenant_id = tenant["tenant_id"]
+    tenant_id = tenant.tenant_id
 
     # Validate non-empty accounts array. field= names WHICH input was rejected: the
     # buyer-facing sentence is derived from the code through CODE_TABLE and so cannot say
@@ -1587,7 +1587,7 @@ async def _sync_accounts_impl(
                 # BR-RULE-060: determine approval status from tenant config.
                 # account_approval_mode is a distinct field from creative approval_mode
                 # (BR-RULE-037) — do NOT fall back to approval_mode.
-                approval_mode = tenant.get("account_approval_mode")
+                approval_mode = tenant.account_approval_mode
                 setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
                 initial_status = "pending_approval" if setup else "active"
 

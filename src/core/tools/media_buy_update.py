@@ -307,7 +307,7 @@ def _verify_principal(
 
     if media_buy.principal_id != principal_id:
         # Log security violation
-        security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+        security_logger = get_audit_logger("AdCP", tenant.tenant_id)
         security_logger.log_security_violation(
             operation="access_media_buy",
             principal_id=principal_id,
@@ -393,7 +393,7 @@ def _update_media_buy_impl(
 
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
-        with MediaBuyUoW(tenant["tenant_id"]) as uow:
+        with MediaBuyUoW(tenant.tenant_id) as uow:
             assert uow.media_buys is not None
             # FIXME(#2128): raw session usages below should migrate to repository methods
             assert uow.session is not None
@@ -441,7 +441,7 @@ def _update_media_buy_impl(
             persistent_ctx = None
 
             persistent_ctx = ctx_manager.get_or_create_context(
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 principal_id=principal_id,  # Now guaranteed to be str
                 context_id=ctx_id,
                 is_async=True,
@@ -671,7 +671,7 @@ def _update_media_buy_impl(
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
                 # Log successful update_media_buy (pause/resume)
-                audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+                audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
                 audit_logger.log_operation(
                     operation="update_media_buy",
                     principal_name=principal_id or "anonymous",
@@ -815,7 +815,7 @@ def _update_media_buy_impl(
 
                         # Get existing assignments for this package
                         assignment_stmt = select(DBAssignment).where(
-                            DBAssignment.tenant_id == tenant["tenant_id"],
+                            DBAssignment.tenant_id == tenant.tenant_id,
                             DBAssignment.media_buy_id == actual_media_buy_id,
                             DBAssignment.package_id == pkg_update.package_id,
                         )
@@ -837,7 +837,7 @@ def _update_media_buy_impl(
                             assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
                             assignment = DBAssignment(
                                 assignment_id=assignment_id,
-                                tenant_id=tenant["tenant_id"],
+                                tenant_id=tenant.tenant_id,
                                 principal_id=principal_id,
                                 media_buy_id=actual_media_buy_id,
                                 package_id=pkg_update.package_id,
@@ -1002,7 +1002,7 @@ def _update_media_buy_impl(
                             if product_id:
                                 # Get product's placements
                                 prod_stmt = select(DBProduct).where(
-                                    DBProduct.tenant_id == tenant["tenant_id"],
+                                    DBProduct.tenant_id == tenant.tenant_id,
                                     DBProduct.product_id == product_id,
                                 )
                                 product_obj = session.scalars(prod_stmt).first()
@@ -1030,7 +1030,7 @@ def _update_media_buy_impl(
                         # in the new list, matching the creative_ids handler pattern.
                         requested_creative_ids = {ca.creative_id for ca in pkg_update.creative_assignments}
                         existing_stmt = select(DBAssignment).where(
-                            DBAssignment.tenant_id == tenant["tenant_id"],
+                            DBAssignment.tenant_id == tenant.tenant_id,
                             DBAssignment.media_buy_id == actual_media_buy_id,
                             DBAssignment.package_id == pkg_update.package_id,
                         )
@@ -1050,7 +1050,7 @@ def _update_media_buy_impl(
                             # principals (composite creatives PK), and the create branch
                             # below inserts under the requester's principal.
                             assign_stmt = select(DBAssignment).where(
-                                DBAssignment.tenant_id == tenant["tenant_id"],
+                                DBAssignment.tenant_id == tenant.tenant_id,
                                 DBAssignment.principal_id == principal_id,
                                 DBAssignment.media_buy_id == actual_media_buy_id,
                                 DBAssignment.package_id == pkg_update.package_id,
@@ -1073,7 +1073,7 @@ def _update_media_buy_impl(
                                 assignment_id = f"assign_{uuid_module.uuid4().hex[:12]}"
                                 new_assignment = DBAssignment(
                                     assignment_id=assignment_id,
-                                    tenant_id=tenant["tenant_id"],
+                                    tenant_id=tenant.tenant_id,
                                     principal_id=principal_id,
                                     media_buy_id=actual_media_buy_id,
                                     package_id=pkg_update.package_id,
@@ -1239,7 +1239,7 @@ def _update_media_buy_impl(
             )
 
             # Log successful update_media_buy call
-            audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+            audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
             audit_logger.log_operation(
                 operation="update_media_buy",
                 principal_name=principal_id or "anonymous",

@@ -196,9 +196,9 @@ def _defer_ai_review(
         future = _ai_review_executor.submit(
             _ai_review_creative,
             creative_id=creative_id,
-            tenant_id=tenant["tenant_id"],
+            tenant_id=tenant.tenant_id,
             webhook_url=webhook_url,
-            slack_webhook_url=tenant.get("slack_webhook_url"),
+            slack_webhook_url=tenant.slack_webhook_url,
             principal_name=principal_id,
         )
         with _ai_review_lock:

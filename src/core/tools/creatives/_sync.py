@@ -152,17 +152,15 @@ def sync_creatives(
 
     # Get tenant creative approval settings
     # approval_mode: "auto-approve", "require-human", "ai-powered"
-    logger.info(f"[sync_creatives] Tenant dict keys: {list(tenant.keys())}")
-    logger.info(f"[sync_creatives] Tenant approval_mode field: {tenant.get('approval_mode', 'NOT FOUND')}")
-    approval_mode = tenant.get("approval_mode", "require-human")
-    logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
+    approval_mode = tenant.approval_mode
+    logger.info(f"[sync_creatives] Approval mode: {approval_mode} (from tenant: {tenant.tenant_id})")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
     # This avoids async HTTP calls inside database savepoints which cause transaction errors
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
-    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant.tenant_id))
 
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical
@@ -175,7 +173,7 @@ def sync_creatives(
     # both stages share the one rolled-back transaction. A second invocation
     # under an `if dry_run:` would re-fork the very seam this collapses.
     with ExitStack() as stack:
-        uow = stack.enter_context(CreativeUoW(tenant["tenant_id"], dry_run=dry_run))
+        uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
         assert uow.creatives is not None
         creative_repo = uow.creatives
 
@@ -184,7 +182,7 @@ def sync_creatives(
         tenant_requires_provenance = len(provenance_policies) > 0
         if tenant_requires_provenance:
             logger.info(
-                f"[sync_creatives] Tenant {tenant['tenant_id']} has "
+                f"[sync_creatives] Tenant {tenant.tenant_id} has "
                 f"{len(provenance_policies)} product(s) requiring AI provenance"
             )
 

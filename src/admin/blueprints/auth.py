@@ -643,14 +643,14 @@ def google_callback():
 
         if is_single_tenant_mode() and len(session["available_tenants"]) == 1:
             # Auto-select the only tenant
-            tenant = session["available_tenants"][0]
-            tenant_id = tenant["tenant_id"]
+            membership = session["available_tenants"][0]
+            tenant_id = membership["tenant_id"]
 
             # Ensure User record exists
             from src.admin.domain_access import ensure_user_in_tenant
 
             user_name = session.get("user_name", email.split("@")[0].title())
-            role = "admin" if tenant.get("is_admin") else "viewer"
+            role = "admin" if membership.get("is_admin") else "viewer"
 
             try:
                 ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -658,7 +658,7 @@ def google_callback():
                 logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
 
             session["tenant_id"] = tenant_id
-            session["is_tenant_admin"] = tenant.get("is_admin", True)
+            session["is_tenant_admin"] = membership.get("is_admin", True)
             session.pop("available_tenants", None)
             flash(f"Welcome {user.get('name', email)}!", "success")
             # Check for saved redirect URL
@@ -702,15 +702,15 @@ def select_tenant():
         tenant_id = request.form.get("tenant_id")
 
         # Verify user has access to selected tenant
-        for tenant in session["available_tenants"]:
-            if tenant["tenant_id"] == tenant_id:
+        for membership in session["available_tenants"]:
+            if membership["tenant_id"] == tenant_id:
                 # Ensure User record exists in the database
                 # This is critical for require_tenant_access decorator to work
                 from src.admin.domain_access import ensure_user_in_tenant
 
                 email = session["user"]
                 user_name = session.get("user_name", email.split("@")[0].title())
-                role = "admin" if tenant["is_admin"] else "viewer"
+                role = "admin" if membership["is_admin"] else "viewer"
 
                 try:
                     ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -721,9 +721,9 @@ def select_tenant():
                     return redirect(url_for("auth.select_tenant"))
 
                 session["tenant_id"] = tenant_id
-                session["is_tenant_admin"] = tenant["is_admin"]
+                session["is_tenant_admin"] = membership["is_admin"]
                 session.pop("available_tenants", None)  # Clean up
-                flash(f"Welcome to {tenant['name']}!", "success")
+                flash(f"Welcome to {membership['name']}!", "success")
                 # Check for saved redirect URL
                 next_url = _safe_redirect(
                     session.pop("login_next_url", None),

@@ -14,6 +14,7 @@ from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.webhook_validator import webhook_url_for_log
@@ -42,8 +43,7 @@ def list_principals(tenant_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            stmt = select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)
-            principals = db_session.scalars(stmt).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
 
             # Convert to dict format for template
             principals_list = []
@@ -232,9 +232,7 @@ def edit_principal(tenant_id, principal_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
@@ -262,9 +260,7 @@ def edit_principal(tenant_id, principal_id):
     # POST - Update the principal
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
@@ -310,9 +306,7 @@ def get_principal(tenant_id, principal_id):
     """Get principal details including platform mappings (API endpoint)."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -355,9 +349,7 @@ def rotate_token(tenant_id, principal_id):
     """
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
 
@@ -404,9 +396,7 @@ def update_mappings(tenant_id, principal_id):
                     )
 
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -542,9 +532,7 @@ def get_principal_config(tenant_id, principal_id):
     """Get principal configuration including platform mappings for testing UI."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -582,9 +570,7 @@ def save_testing_config(tenant_id, principal_id):
         hitl_config = data["hitl_config"]
 
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -623,9 +609,7 @@ def manage_webhooks(tenant_id, principal_id):
     """Manage webhook configurations for a principal."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Principal not found", "error")
                 return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
@@ -861,8 +845,7 @@ def delete_principal(tenant_id, principal_id):
     try:
         with get_db_session() as db_session:
             # Find the principal
-            stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            principal = db_session.scalars(stmt).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404

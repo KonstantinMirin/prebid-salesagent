@@ -260,7 +260,7 @@ done and Critical Pattern #5 ([CLAUDE.md](../../CLAUDE.md), and
 [patterns-reference.md](patterns-reference.md)) takes over:
 
 - The boundary calls the `_impl` function with the request and the
-  `ResolvedIdentity`, never a `Context`, `ToolContext`, or raw headers.
+  `ResolvedIdentity`, never a `Context` or raw headers.
 - `_impl` is transport-agnostic: zero imports from fastmcp/a2a/starlette/
   fastapi, raises typed `AdCPSalesAgentError` subclasses, returns model
   objects. It reads the caller through `require_principal` and

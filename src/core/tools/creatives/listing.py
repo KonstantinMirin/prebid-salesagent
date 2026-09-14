@@ -235,7 +235,7 @@ def _list_creatives_impl(
     # response's errors[] at the bottom of this function.
     unreadable_status_advisories: list[Error] = []
 
-    with CreativeUoW(tenant["tenant_id"]) as uow:
+    with CreativeUoW(tenant.tenant_id) as uow:
         assert uow.creatives is not None
         result = uow.creatives.get_by_principal(
             principal_id,
@@ -346,7 +346,7 @@ def _list_creatives_impl(
                     "Creative %s (tenant %s) has unreadable stored status %r; reporting it as "
                     "'processing' and surfacing an advisory",
                     db_creative.creative_id,
-                    tenant["tenant_id"],
+                    tenant.tenant_id,
                     db_creative.status,
                 )
                 unreadable_status_advisories.append(
@@ -381,7 +381,7 @@ def _list_creatives_impl(
             # would be a visible mislabel, and the wiring test pins it either way).
             row_log_context = _blob_log_context(
                 creative_id=db_creative.creative_id,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 principal_id=db_creative.principal_id,
             )
 
@@ -442,7 +442,7 @@ def _list_creatives_impl(
         sort_applied = {"field": req.sort.field.value, "direction": req.sort.direction.value}
 
     # Audit logging
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
     audit_logger.log_operation(
         operation="list_creatives",
         principal_name=principal_id,

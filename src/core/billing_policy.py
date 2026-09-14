@@ -33,7 +33,7 @@ def resolve_supported_billing(tenant: "TenantContext | None") -> list[str]:
     "reject every billing model" and is preserved as-is — only ``None``
     means unconfigured.
     """
-    supported = tenant.get("supported_billing") if tenant else None
+    supported = tenant.supported_billing if tenant else None
     if not isinstance(supported, list):
         return list(BILLING_PARTY_VALUES)
     return [str(v) for v in supported]
@@ -54,4 +54,4 @@ def resolve_account_sandbox(tenant: "TenantContext | None") -> bool:
     """
     if not tenant:
         return False
-    return bool(tenant.get("account_sandbox", False))
+    return tenant.account_sandbox

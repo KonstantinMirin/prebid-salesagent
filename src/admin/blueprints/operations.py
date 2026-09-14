@@ -14,6 +14,7 @@ from sqlalchemy import select
 from src.admin.utils import approve_media_buy_through_writer, require_auth, require_tenant_access
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
@@ -108,7 +109,6 @@ def media_buy_detail(tenant_id, media_buy_id):
     from src.core.database.models import (
         Creative,
         CreativeAssignment,
-        Principal,
         Product,
         WorkflowStep,
     )
@@ -124,8 +124,7 @@ def media_buy_detail(tenant_id, media_buy_id):
             # Get principal info
             principal = None
             if media_buy.principal_id:
-                stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
-                principal = db_session.scalars(stmt).first()
+                principal = PrincipalRepository(db_session, tenant_id).get(media_buy.principal_id)
 
             # Get packages for this media buy from MediaPackage table
             media_packages = repo.get_packages(media_buy_id)
@@ -576,7 +575,6 @@ def webhooks(tenant_id, **kwargs):
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import AuditLog, MediaBuy, Tenant
-    from src.core.database.models import Principal as ModelPrincipal
 
     try:
         with get_db_session() as db:
@@ -612,7 +610,7 @@ def webhooks(tenant_id, **kwargs):
             )
 
             # Get all principals for filter dropdown
-            principals = db.query(ModelPrincipal).filter_by(tenant_id=tenant_id).all()
+            principals = PrincipalRepository(db, tenant_id).list_all()
 
             # Calculate summary stats
             total_webhooks = query.count()

@@ -52,6 +52,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)`; the DTO matches the registry row | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
 | One ResolvedIdentity constructor | `ResolvedIdentity(...)` only in the resolver and `PrincipalFactory.make_identity` | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
+| Principal rows loaded by the resolver alone | No `select`/`query` on the Principal model outside `auth_utils` and the repositories; a tool reads `require_principal(identity)`, an admin view uses `PrincipalRepository` | `.ast-grep/rules/principal-rows-are-loaded-only-by-the-resolver.yml` |
 | Auth refusals minted in two places | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver and `require_principal` / `require_tenant` | `ruff-boundary.toml` (TID251) |
 | Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |

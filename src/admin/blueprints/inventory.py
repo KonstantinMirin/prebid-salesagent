@@ -10,7 +10,8 @@ from src.admin.utils import execute_limited, get_tenant_config_from_db, require_
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Principal, Tenant
+from src.core.database.models import GAMInventory, GAMOrder, MediaBuy, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -607,7 +608,7 @@ def analyze_ad_server_inventory(tenant_id):
 
         # Get a principal for API calls
         with get_db_session() as db_session:
-            principal_obj = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id)).first()
+            principal_obj = next(iter(PrincipalRepository(db_session, tenant_id).list_all()), None)
 
             if not principal_obj:
                 return jsonify({"error": "No principal found for tenant"}), 404

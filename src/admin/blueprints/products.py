@@ -19,6 +19,7 @@ from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.schemas import Format
 from src.core.validation import sanitize_form_data
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -635,7 +636,6 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
         AuthorizedProperty,
         GAMInventory,
         InventoryProfile,
-        Principal,
         PropertyTag,
         SignalsAgent,
     )
@@ -663,7 +663,7 @@ def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_d
         ).all()
 
         # Load principals for access control dropdown
-        principals = db_session.scalars(select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)).all()
+        principals = PrincipalRepository(db_session, tenant_id).list_all()
         principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
         if adapter_type == "google_ad_manager":
@@ -1968,11 +1968,7 @@ def edit_product(tenant_id, product_id):
             product_dict["pricing_options"] = pricing_options_list
 
             # Get all principals for this tenant (for access control dropdown)
-            from src.core.database.models import Principal
-
-            principals = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)
-            ).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
             principals_list = [{"principal_id": p.principal_id, "name": p.name} for p in principals]
 
             # Get authorized properties for publisher properties selector

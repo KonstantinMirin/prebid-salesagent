@@ -246,14 +246,14 @@ def create_app(config=None):
 
         # External domain detected - redirect to tenant subdomain
         logger.info(f"External domain /admin request detected: {apx_host} -> {request.path}")
-        tenant = get_tenant_by_virtual_host(apx_host)
-        if not tenant:
+        tenant_row = get_tenant_by_virtual_host(apx_host)
+        if not tenant_row:
             logger.warning(f"No tenant found for external domain: {apx_host}")
             return None  # Can't determine tenant, let normal routing handle it
 
-        tenant_subdomain = tenant.get("subdomain")
+        tenant_subdomain = tenant_row.get("subdomain")
         if not tenant_subdomain:
-            logger.warning(f"Tenant {tenant.get('tenant_id')} has no subdomain configured")
+            logger.warning(f"Tenant {tenant_row.get('tenant_id')} has no subdomain configured")
             return None  # No subdomain configured, let normal routing handle it
 
         # Build redirect URL to tenant subdomain

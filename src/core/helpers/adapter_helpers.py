@@ -15,9 +15,8 @@ if TYPE_CHECKING:
     from src.core.tenant_context import TenantContext
 
     #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py): the tenant
-    #: context the resolver loaded. ``dict`` stays only for the call sites that still pass
-    #: raw rows; identity.tenant is never a dict.
-    IdentityTenant = TenantContext | dict[str, object]
+    #: context the resolver loaded. Never a dict.
+    IdentityTenant = TenantContext
     #: IdentityTenant plus the raw ORM row some call sites pass directly (e.g.
     #: media_buy_create.py's session.scalars(...).first()) instead of routing
     #: through identity.tenant.
@@ -103,21 +102,13 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
     raise error_class(details={"agent": agent_label}, internal_detail=exc) from exc
 
 
-def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -> tuple[str, str]:
+def _resolve_tenant_id_and_fallback_adapter(tenant: TenantLike) -> tuple[str, str]:
     """Extract tenant_id and the tenant.ad_server fallback adapter type.
 
-    Supports both the ORM model (Tenant) and the dict shape (identity.tenant).
-    This is the pre-AdapterConfig fallback only — callers needing the
+    Takes the ORM model (Tenant) or the TenantContext off the identity; both carry the
+    two columns. This is the pre-AdapterConfig fallback only — callers needing the
     authoritative adapter type must go through ``resolve_tenant_adapter_type``.
     """
-    if isinstance(tenant, dict):
-        tenant_id = tenant["tenant_id"]
-        ad_server = tenant.get("ad_server")
-        return (
-            tenant_id if isinstance(tenant_id, str) else str(tenant_id),
-            ad_server if isinstance(ad_server, str) and ad_server else "mock",
-        )
-    # ORM model or TenantContext — use attribute access
     return tenant.tenant_id, tenant.ad_server or "mock"
 
 
@@ -227,7 +218,7 @@ def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
     uses for enforcement, since that default is exactly the false-conformance
     risk this reader must avoid (salesagent-becl.72 refine).
     """
-    if tenant.get("human_review_required"):
+    if tenant.human_review_required:
         return True
 
     ctx = resolve_adapter_context(tenant)
