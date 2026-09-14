@@ -3254,9 +3254,6 @@ class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):
     accepted on any transport. Inheriting is what critical pattern #1 requires, and it is
     what stops the app model from silently shrinking the spec.
 
-    Adds:
-    - account_id: legacy non-spec filter, kept for callers that predate `account`
-
     status_filter is NOT overridden. The hand-written class typed it ``Any`` "to accept a
     MediaBuyStatus or a list", but the library already types it
     ``MediaBuyStatus | StatusFilter | None`` -- which is that union, precisely. Re-declaring

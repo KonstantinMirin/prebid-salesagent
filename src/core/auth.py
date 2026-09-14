@@ -5,22 +5,10 @@ by both MCP and A2A protocols.
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from src.core.config import get_settings
-
-if TYPE_CHECKING:
-    from src.core.resolved_identity import ResolvedIdentity
-    from src.core.tenant_context import TenantContext
-
-
-# Buyer-facing correction hints, split per the v3.1.1 AUTH_MISSING/AUTH_INVALID
-# error-code split (dist/schemas/3.1.1/enums/error-code.json, #2092).
-# Canonical hints owned by exceptions.py (class-level default suggestions on
-# AdCPAuthRequiredError / AdCPAuthenticationError); re-exported here for
-# existing importers.
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
-from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
 
@@ -63,42 +51,11 @@ def get_push_notification_config_from_headers(headers: dict[str, str] | None) ->
 # because seven test modules called it directly; test_no_duplicate_auth_functions.py said
 # so outright, keeping it "in auth.py for test compat". A second resolver kept alive by its
 # own tests is still a second resolver.
-
-
-def require_principal(identity: "ResolvedIdentity") -> Principal:
-    """The principal the resolver loaded for this caller, or ``AdCPAuthRequiredError``.
-
-    A tool acts only as the resolved principal, so this is the one principal a tool ever
-    holds; nothing downstream loads one by id. The anonymous caller of a public tool has
-    none, which on a tool that needs one is AUTH_MISSING. The refusal carries no request
-    context: the boundary echoes the buyer's context onto the failure it builds.
-    """
-    from src.core.exceptions import AdCPAuthRequiredError
-
-    if identity.principal is None:
-        raise AdCPAuthRequiredError()
-    return identity.principal
-
-
-def require_tenant(identity: "ResolvedIdentity") -> "TenantContext":
-    """Return ``identity.tenant`` or raise ``AdCPInternalError``.
-
-    Single source of truth for the "no tenant context available" guard — the
-    most-repeated ``_impl`` prologue. Use this instead of open-coding the check
-    across tool modules.
-
-    It returns a TenantContext, and said ``dict[str, Any]`` for a long time while
-    returning whatever ``identity.tenant`` held. An annotation that disagrees with the
-    value is worse than none: it tells every reader, and every type checker, that
-    subscripting is safe and attribute access is not, which is how dict-shaped handling
-    spread from here. The context is read by attribute only, and the annotation says so.
-    """
-    from src.core.exceptions import AdCPInternalError
-
-    tenant = identity.tenant
-    if tenant is None:
-        # Not an auth outcome. A protected tool is reached only with a resolved principal,
-        # and a principal is a row in a tenant, so this is the resolver's invariant broken.
-        # A public tool reads ``identity.tenant`` itself and answers without a seller.
-        raise AdCPInternalError()
-    return tenant
+#
+# (Deleted) the two require-the-principal / require-the-tenant helpers re-checked, inside
+# every protected tool, what the resolver had already decided: the boundary refuses an
+# anonymous caller before a protected implementation runs, so ``identity.principal is None``
+# there was unreachable, and a helper that raised AUTH_MISSING on it was a second minting
+# site for the refusal. The type carries the decision now: a protected implementation takes
+# ``ResolvedIdentity``, whose ``principal`` and ``tenant`` are not optional, and reads them
+# directly; a public one takes ``PublicIdentity`` and branches on ``identity.principal``.

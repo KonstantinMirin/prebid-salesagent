@@ -144,13 +144,16 @@ flowchart TD
     valid -->|"yes, or public tool"| rid["Frozen ResolvedIdentity"]
 ```
 
-The result is a frozen `ResolvedIdentity` with four fields: `principal` (a
-`Principal`, or `None` on a public tool called anonymously), `tenant` (a
-`TenantContext`, or `None` when no strategy matched), `protocol` (a label for
-the observability record), and `account_id` (populated by
-`enrich_identity_with_account` when the request body carries an
-`AccountReference`). `principal_id` and `tenant_id` are derived properties.
-Business logic receives this object and nothing transport-specific.
+The result is one of three frozen types, and the type carries the boundary's
+decision. `PublicIdentity` (a public tool): `principal` is a `Principal` or
+`None` for the anonymous caller, `tenant` a `TenantContext` or `None` when no
+strategy matched. `ResolvedIdentity` (a protected tool): both are present, and
+`account` is the schema `Account` the request named, resolved for this
+principal by `AccountRepository.find`, or `None` when the request named none.
+`AccountIdentity` (a tool whose DTO requires `account`): `account` is not
+optional. `principal_id` and `tenant_id` are derived properties. The resolver
+builds the object once, with the account inside; nothing copies or amends an
+identity afterwards. Business logic receives it and nothing transport-specific.
 
 Whether the credential must verify is the **tool's** declaration
 (`ToolSpec.requires_credential()` in `src/core/tools/registry.py`), handed
@@ -184,10 +187,13 @@ registry row's DTO (`validated_request`) and hands the result to
 1. Captures the buyer's `context` object, to stamp it back on the response
    unchanged.
 2. Resolves the identity with `_resolve_identity`, passing the row's
-   `requires_credential()`.
-3. Resolves the account the request names (`enrich_identity_with_account`),
-   honours the request's `idempotency_key` (replay lookup before, cache
-   after), and calls the implementation as `impl(req=..., identity=...)`.
+   `requires_credential()` (or True whenever the request names an account:
+   naming one is a claim that needs a credential) and the request's
+   `account` reference, which the resolver resolves for the principal and
+   builds into the identity.
+3. Honours the request's `idempotency_key` (replay lookup before, cache
+   after), scoped by the identity's `replay_scope()`, and calls the
+   implementation as `impl(req=..., identity=...)`.
 4. Turns any exception, from either step, into an `AdcpFailure` carrying the
    `AdcpErrorResponse` that answers it (`failure_response`), after recording
    the original exception with `record_boundary_error`
@@ -259,14 +265,16 @@ request object and a `ResolvedIdentity`. At that point the transport's job is
 done and Critical Pattern #5 ([CLAUDE.md](../../CLAUDE.md), and
 [patterns-reference.md](patterns-reference.md)) takes over:
 
-- The boundary calls the `_impl` function with the request and the
-  `ResolvedIdentity`, never a `Context` or raw headers.
+- The boundary calls the `_impl` function with the request and the identity
+  the resolver built, never a `Context` or raw headers. A protected tool
+  declares `identity: ResolvedIdentity`, whose `principal` and `tenant` are
+  not optional; a public tool declares `identity: PublicIdentity` and branches
+  on `identity.principal is None` itself. The registry derives the tool's
+  credential policy from that annotation (`ToolSpec.requires_credential`).
 - `_impl` is transport-agnostic: zero imports from fastmcp/a2a/starlette/
   fastapi, raises typed `AdCPSalesAgentError` subclasses, returns model
-  objects. It reads the caller through `require_principal` and
-  `require_tenant` (`src/core/auth.py`); on a protected tool both are
-  guaranteed by the resolver's postcondition, so a `None` there is an
-  invariant breach, not a request to refuse.
+  objects. It reads `identity.principal` and `identity.tenant` directly: the
+  type carries the boundary's decision, and nothing downstream re-checks it.
 - The boundary translates the result and any error back into the transport's
   wire format (REST status, MCP `isError` tool error, A2A failed Task),
   symmetrically, through `failure_response` and `to_wire`.
@@ -309,8 +317,8 @@ flowchart TD
 |---|---|---|
 | Read a new HTTP header for all transports | `_resolve_identity` / `_detect_tenant` in `src/core/resolved_identity.py`; headers reach the resolver from every transport | `_impl` (never sees headers), a transport entry |
 | Accept a request field | Declare it on the DTO; `validated_request` accepts exactly the declared shape | Route handlers, tool wrappers, `_impl` |
-| Add an auth rule (who may call at all) | The registry row's `auth` declaration (`src/core/tools/registry.py`), read by `invoke_tool` | A transport entry, or a check inside `_impl` |
-| Add an authorization rule (what this principal may do) | `_impl`, using `ResolvedIdentity` (`require_principal`, `require_tenant` in `src/core/auth.py`) | Middleware (too early, no business context) |
+| Add an auth rule (who may call at all) | The implementation's identity annotation: `ResolvedIdentity` needs a caller, `PublicIdentity` serves anybody; `ToolSpec.requires_credential` derives it and `invoke_tool` reads it | A transport entry, an `auth=` literal on the row, or a check inside `_impl` |
+| Add an authorization rule (what this principal may do) | `_impl`, reading `identity.principal` and `identity.tenant` off the `ResolvedIdentity` | Middleware (too early, no business context) |
 | Add a tenant-resolution strategy | `_detect_tenant` in `src/core/resolved_identity.py` | Per-transport code |
 | Add a field to what business logic knows about the caller | `ResolvedIdentity` + populate it in `_resolve_identity` and `identity_of` | Passing extra transport args into `_impl` |
 | Change how an error looks on the wire | `failure_response` (`src/core/tools/_boundary.py`) and `to_wire`; the 401 handshake in `AuthChallengeResponder` | `_impl` (raises typed errors, nothing else), a transport entry |

@@ -157,7 +157,7 @@ class Transport(StrEnum):
     E2E_A2A = "e2e_a2a"  # Real A2A via httpx → nginx → server (placeholder)
 
 
-# Maps Transport → ResolvedIdentity.protocol value
+# Maps Transport → the TransportProtocol label the boundary records (the identity carries none)
 TRANSPORT_PROTOCOL: dict[Transport, str] = {
     Transport.A2A: "a2a",
     Transport.REST: "rest",

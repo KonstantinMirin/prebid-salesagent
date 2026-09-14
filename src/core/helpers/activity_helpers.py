@@ -3,14 +3,13 @@
 import logging
 import time
 
-from src.core.database.repositories.principal_lookup import read_principal_name
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.services.activity_feed import activity_feed
 
 logger = logging.getLogger(__name__)
 
 
-def log_tool_activity(identity: ResolvedIdentity, tool_name: str, start_time: float | None = None):
+def log_tool_activity(identity: PublicIdentity, tool_name: str, start_time: float | None = None):
     """Log tool activity to the activity feed.
 
     Args:
@@ -28,10 +27,9 @@ def log_tool_activity(identity: ResolvedIdentity, tool_name: str, start_time: fl
 
         if not tenant:
             return
-        principal_name = "Unknown"
-
-        if principal_id:
-            principal_name = read_principal_name(tenant.tenant_id, principal_id) or principal_name
+        # The identity carries the principal the resolver loaded, name included; nothing
+        # here loads a row.
+        principal_name = identity.principal.name if identity.principal is not None else "Unknown"
 
         # Calculate response time if start_time provided
         response_time_ms: int | None = None

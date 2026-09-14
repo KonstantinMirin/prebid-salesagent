@@ -7,12 +7,15 @@ This eliminates isinstance checks and auth extraction inside business logic.
 """
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import StrEnum
+from typing import Literal, overload
 
-from pydantic import BaseModel, ConfigDict
+from adcp.types import AccountReference, AccountReferenceById
+from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from src.core.schemas import Principal
+from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)
@@ -38,31 +41,44 @@ class TransportProtocol(StrEnum):
     REST = "rest"
 
 
-class ResolvedIdentity(BaseModel):
-    """Transport-agnostic identity resolved at the boundary.
+class PublicIdentity(BaseModel):
+    """Whoever reached a PUBLIC tool: a resolved caller, or nobody.
 
-    Created by resolve_identity() before any _impl function is called.
-    Immutable after creation — identity should not change during request processing.
+    The resolver builds one for a registry row that does not require a credential
+    (``get_products``, ``list_creative_formats``, ``get_adcp_capabilities``). A presented
+    credential that resolves fills ``principal``; an absent or rejected one leaves it
+    ``None``, and the tool branches on that itself. A protected tool never sees this type:
+    it takes :class:`ResolvedIdentity`, whose fields are not optional.
+
+    Immutable after creation; the identity does not change during request processing.
     """
 
     # ``extra="forbid"`` so a caller still passing ``principal_id=`` or ``tenant_id=`` fails at
     # construction instead of silently building an anonymous identity: both are derived.
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    # Both fields are ``InstanceOf``: an identity is BUILT from the resolved types, never
+    # from a dict. Pydantic would otherwise coerce ``{"tenant_id": "d"}`` into a
+    # TenantContext (``strict=True`` does not refuse a dict for a nested model), and that
+    # coercion is how test code kept constructing identities from dicts after the type was
+    # made one type. A dict now fails validation at construction.
+    #
     # The principal the credential resolved to, built once from the row the lookup
-    # selected. None for the anonymous caller of a public tool.
-    principal: Principal | None = None
+    # selected. None for the anonymous caller.
+    principal: InstanceOf[Principal] | None = None
     # The tenant the request names, its row loaded by the resolver. ONE type, never a
     # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
     # (transitional)", and that union is how dict-shaped tenant handling spread.
-    tenant: TenantContext | None = None
+    tenant: InstanceOf[TenantContext] | None = None
     # No ``protocol`` field: the transport is a label the boundary holds for its own
     # observability record (``invoke_tool``'s parameter), and nothing read it off the
     # identity. A field with no reader on an identity built for stored-id work
     # (``identity_of``) could only claim a transport that never carried the request.
-    account_id: str | None = None  # Resolved account ID (from AccountReference at transport boundary)
-    # Tenant-level billing policy (BR-RULE-059) and account approval mode (BR-RULE-060)
-    # are NOT fields on ResolvedIdentity — they live on identity.tenant (TenantContext).
+    #
+    # No account either: an account is resolved for an authenticated caller only, so it
+    # is a field of ``ResolvedIdentity``. Tenant-level billing policy (BR-RULE-059) and
+    # account approval mode (BR-RULE-060) are NOT fields on the identity — they live on
+    # identity.tenant (TenantContext).
 
     @property
     def principal_id(self) -> str | None:
@@ -71,6 +87,64 @@ class ResolvedIdentity(BaseModel):
     @property
     def tenant_id(self) -> str | None:
         return self.tenant.tenant_id if self.tenant is not None else None
+
+    def replay_scope(self) -> tuple[str, str, str | None] | None:
+        """``(tenant_id, principal_id, account_id)`` the idempotency cache keys on, or None.
+
+        A caller that resolved no tenant or no principal has no scope to be cached under.
+        Polymorphic rather than an ``isinstance`` at the boundary: the type that knows what
+        it carries answers.
+        """
+        if self.tenant is None or self.principal is None:
+            return None
+        return self.tenant.tenant_id, self.principal.principal_id, None
+
+
+class ResolvedIdentity(PublicIdentity):
+    """The AUTHENTICATED caller of a protected tool. Principal and tenant are not optional.
+
+    The type carries the boundary's decision. ``_resolve_identity`` refuses a missing
+    credential (AUTH_MISSING) and a rejected one (AUTH_INVALID) before it can build this,
+    so an implementation annotated ``identity: ResolvedIdentity`` reads
+    ``identity.principal`` and ``identity.tenant`` directly: there is no ``None`` to check
+    and no helper to call. The registry DERIVES a tool's credential policy from that
+    annotation (``ToolSpec.requires_credential``), so the declaration and the guarantee are
+    one thing. ``identity_of`` builds the same type from stored ids for server-initiated
+    work.
+
+    ``account`` is the account the REQUEST named, resolved by the resolver for this
+    principal (``AccountRepository.find``): per request, never remembered on the
+    principal, because one credential may access many accounts (core/account-ref.json).
+    None when the request named none; a tool whose DTO requires an account takes
+    :class:`AccountIdentity` instead and never sees the None.
+    """
+
+    principal: InstanceOf[Principal]
+    tenant: InstanceOf[TenantContext]
+    account: InstanceOf[Account] | None = None
+
+    @property
+    def principal_id(self) -> str:
+        return self.principal.principal_id
+
+    @property
+    def tenant_id(self) -> str:
+        return self.tenant.tenant_id
+
+    def replay_scope(self) -> tuple[str, str, str | None]:
+        return self.tenant_id, self.principal_id, self.account.account_id if self.account is not None else None
+
+
+class AccountIdentity(ResolvedIdentity):
+    """The authenticated caller of a tool whose request REQUIRES an account.
+
+    ``create_media_buy``, ``update_media_buy`` and ``sync_creatives`` declare ``account``
+    required on their DTOs, so the resolver has resolved one by the time they run and the
+    field is not optional here. The registry checks the pairing at load: an implementation
+    annotated with this type whose DTO does not require ``account`` is refused.
+    """
+
+    account: InstanceOf[Account]
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -141,12 +215,79 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     return tenant_id
 
 
+def _load_account(account_ref: AccountReference, tenant_id: str, principal: Principal) -> Account:
+    """The account *account_ref* names for *principal*, as the schema object the identity carries.
+
+    The resolver's fourth database read (after the tenant id, the tenant row and the
+    principal row). It runs only for an authenticated caller -- the boundary requires a
+    valid token whenever a request names an account -- so the access-scoped lookup in
+    ``AccountRepository.find`` never sees an anonymous principal (#1417).
+    """
+    from src.core.database.repositories.account_lookup import find_account
+    from src.core.database.repositories.account_serialization import account_from_row
+    from src.core.database.repositories.uow import AccountUoW
+
+    with AccountUoW(tenant_id) as uow:
+        assert uow.accounts is not None
+        return account_from_row(find_account(uow.accounts, account_ref, principal))
+
+
+@overload
+def _resolve_identity(
+    headers: Mapping[str, str],
+    *,
+    require_valid_token: Literal[True],
+    account_ref: AccountReference | None = None,
+    credential_required_for: Callable[[TenantContext], bool] | None = None,
+) -> ResolvedIdentity: ...
+
+
+@overload
+def _resolve_identity(
+    headers: Mapping[str, str],
+    *,
+    require_valid_token: Literal[False],
+    account_ref: AccountReference | None = None,
+    credential_required_for: Callable[[TenantContext], bool] | None = None,
+) -> PublicIdentity: ...
+
+
+@overload
 def _resolve_identity(
     headers: Mapping[str, str],
     *,
     require_valid_token: bool,
-) -> ResolvedIdentity:
+    account_ref: AccountReference | None = None,
+    credential_required_for: Callable[[TenantContext], bool] | None = None,
+) -> ResolvedIdentity | PublicIdentity: ...
+
+
+def _resolve_identity(
+    headers: Mapping[str, str],
+    *,
+    require_valid_token: bool,
+    account_ref: AccountReference | None = None,
+    credential_required_for: Callable[[TenantContext], bool] | None = None,
+) -> ResolvedIdentity | PublicIdentity:
     """Resolve identity from request headers. PRIVATE to the boundary.
+
+    Returns a :class:`ResolvedIdentity` when ``require_valid_token`` is True -- it has
+    refused a missing or rejected credential by then, so principal and tenant are both
+    present -- and a :class:`PublicIdentity` otherwise, whose principal may be ``None``.
+    The overloads make that static: the boundary computes the flag from the row (the
+    implementation's identity annotation, or the request naming an account -- a claim
+    that needs a credential) and consumes the matching type with no ``isinstance``.
+
+    ``credential_required_for`` is the row's tenant-dependent policy
+    (``ToolSpec.requires_credential``), asked once the tenant row is loaded: a seller whose
+    ``brand_manifest_policy`` is ``require_auth`` makes ``get_products``, a public tool,
+    need a caller (BR-UC-001 INV-1). The refusal is minted HERE, the one minting site; the
+    tool then receives a :class:`ResolvedIdentity`, which is a :class:`PublicIdentity`, with
+    no branch of its own.
+
+    When the request names an account (``account_ref``), it is resolved HERE, for the
+    principal, so the identity is built once with the account inside (an
+    :class:`AccountIdentity`). No identity is copied or amended afterwards.
 
     The leading underscore is the design, not a style choice. This is the ONE identity
     resolution in the tree and ``src/core/tools/_boundary.invoke_tool`` is its only caller;
@@ -222,32 +363,64 @@ def _resolve_identity(
     tenant_id = _detect_tenant(headers)
     tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
 
+    # Step 3b: the SELLER's policy. A public tool's row does not require a credential, but
+    # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
+    # BR-UC-001 INV-1). The policy is seller data, so it can only be asked once the tenant
+    # is loaded; the answer is the same AUTH_MISSING the row-level check mints above.
+    if not require_valid_token and tenant is not None and credential_required_for is not None:
+        require_valid_token = credential_required_for(tenant)
+        if require_valid_token and not auth_token:
+            from src.core.exceptions import AdCPAuthRequiredError
+
+            raise AdCPAuthRequiredError()
+
     # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
     principal: Principal | None = None
     if auth_token and tenant is not None:
         principal = get_principal_from_token(auth_token, tenant.tenant_id)
-    if require_valid_token and principal is None:
-        # Presented, and not a principal of the tenant addressed: AUTH_INVALID. A public
-        # tool treats a rejected credential as absent and proceeds anonymously.
+
+    # A public tool takes whoever arrived: a rejected credential is treated as absent
+    # and the caller proceeds anonymously.
+    if not require_valid_token:
+        return PublicIdentity(principal=principal, tenant=tenant)
+
+    if tenant is None or principal is None:
+        # Presented, and not a principal of the tenant addressed: AUTH_INVALID. (No tenant
+        # means no lookup ran, which is the same outcome: nothing resolved.)
         from src.core.exceptions import AdCPAuthenticationError
 
         raise AdCPAuthenticationError()
 
-    return ResolvedIdentity(principal=principal, tenant=tenant)
+    if account_ref is None:
+        return ResolvedIdentity(principal=principal, tenant=tenant)
+    return AccountIdentity(
+        principal=principal, tenant=tenant, account=_load_account(account_ref, tenant.tenant_id, principal)
+    )
 
 
-def identity_of(tenant_id: str, principal_id: str) -> ResolvedIdentity:
+@overload
+def identity_of(tenant_id: str, principal_id: str, account_id: None = None) -> ResolvedIdentity: ...
+
+
+@overload
+def identity_of(tenant_id: str, principal_id: str, account_id: str) -> AccountIdentity: ...
+
+
+def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None) -> ResolvedIdentity:
     """Resolution from STORED ids, for server-initiated work. Not for requests.
 
     A request is resolved by ``_resolve_identity``: the host names the tenant and the
     token names the principal inside it. Two jobs run with no request at all -- executing
     a media buy after a human approved it, and the delivery scheduler reporting on stored
-    buys -- and they act on behalf of the row's owner. The row carries the same two facts
-    the request path derives, as ``tenant_id`` and ``principal_id``, so this is the same
-    resolution with those ids as its input: load the tenant, load the principal inside it,
-    build the same identity. It lives here because this module is the one place an
-    identity is constructed. A row whose tenant or principal is missing is broken seller
-    data, not an authentication outcome.
+    buys -- and they act on behalf of the row's owner, ON THE ROW'S ACCOUNT. The row
+    carries the same facts the request path derives, as ``tenant_id``, ``principal_id``
+    and ``account_id``, so this is the same resolution with those ids as its input: load
+    the tenant, load the principal inside it, and, when the row names an account, load it
+    through the same access-checked lookup a request goes through
+    (:class:`AccountIdentity`); otherwise a :class:`ResolvedIdentity` with no account. It
+    lives here because this module is the one place an identity is constructed. A row
+    whose tenant or principal is missing is broken seller data, not an authentication
+    outcome. Nothing is fabricated: an account is read off the row or not carried.
     """
     from src.core.auth_utils import get_principal_by_id
     from src.core.exceptions import AdCPConfigurationError
@@ -258,4 +431,7 @@ def identity_of(tenant_id: str, principal_id: str) -> ResolvedIdentity:
     principal = get_principal_by_id(tenant_id, principal_id)
     if principal is None:
         raise AdCPConfigurationError()
-    return ResolvedIdentity(principal=principal, tenant=tenant)
+    if account_id is None:
+        return ResolvedIdentity(principal=principal, tenant=tenant)
+    account_ref = AccountReference(root=AccountReferenceById(account_id=account_id))
+    return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))

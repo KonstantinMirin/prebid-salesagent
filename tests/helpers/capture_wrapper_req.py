@@ -93,6 +93,19 @@ def _enter_all(stack: ExitStack, patchings: list[Any]) -> list[Any]:
     return injected
 
 
+def stub_account_for(account_ref: Any, tenant_id: str, principal: Any) -> Any:
+    """The resolver's account read, without a database: an active Account named by the ref.
+
+    Shared by :class:`stub_impl` and the unit harness's resolver substitutes, so the two
+    database-free paths answer the same account for the same reference.
+    """
+    from src.core.schemas.account import Account
+
+    inner = account_ref.root
+    account_id = getattr(inner, "account_id", None) or "acct_stub"
+    return Account(account_id=account_id, name=f"Stub account {account_id}", status="active")
+
+
 class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every call site
     """Substitute ``tool_name``'s implementation with an ``AsyncMock``.
 
@@ -105,9 +118,9 @@ class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every ca
     Usable as a context manager (``with stub_impl("get_products") as mock_impl:``) or as a
     decorator, where it injects the mock like ``patch`` does -- bottom decorator first::
 
-        @patch("src.core.transport_helpers.enrich_identity_with_account")
+        @patch("src.core.resolved_identity._load_account")
         @stub_impl("get_products")
-        def test_x(self, mock_impl, mock_enrich, ...):
+        def test_x(self, mock_impl, mock_load_account, ...):
 
     The stub is called exactly as the boundary calls a real implementation --
     ``impl(req=..., identity=...)`` -- so ``assert_called_once_with(req=..., identity=...)``
@@ -139,9 +152,10 @@ class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every ca
         self._stack.enter_context(patch("src.core.tools._boundary.lookup_cached_replay", return_value=None))
         self._stack.enter_context(patch("src.core.tools._boundary.cache_success"))
         self._stack.enter_context(patch("src.core.tools._boundary.maybe_evict_expired"))
-        self._stack.enter_context(
-            patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i)
-        )
+        # The resolver's account read: answers a schema Account named by the reference (or a
+        # fixed id for the natural-key form), so a request that names an account resolves
+        # without a database and the identity still carries one.
+        self._stack.enter_context(patch("src.core.resolved_identity._load_account", side_effect=stub_account_for))
         return stub
 
     def __exit__(self, *exc: Any) -> None:

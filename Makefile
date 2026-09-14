@@ -17,6 +17,7 @@ quality-ci:
 	uv run ruff check .
 	uv run ruff check --config ruff-egress.toml --ignore-noqa --no-respect-gitignore src/ scripts/
 	uv run ruff check --config ruff-boundary.toml --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-ownership.toml --no-respect-gitignore src/ scripts/
 	# Structural rules, for the checks ruff cannot express. TID251 bans imports and
 	# attributes, which is what makes the egress line above work; a credential header is
 	# a dict-key string literal, so nothing in ruff or mypy can see it. .ast-grep/rules/

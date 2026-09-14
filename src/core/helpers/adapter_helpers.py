@@ -241,10 +241,8 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
     principal is the buyer inside it. Both come off the one identity, resolved from a
     request or from stored ids, so they cannot be handed over as a mismatched pair.
     """
-    from src.core.auth import require_principal, require_tenant
-
-    principal = require_principal(identity)
-    tenant = require_tenant(identity)
+    principal = identity.principal
+    tenant = identity.tenant
     ctx = resolve_adapter_context(tenant)
     selected_adapter = ctx.adapter_type
     tenant_id = ctx.tenant_id

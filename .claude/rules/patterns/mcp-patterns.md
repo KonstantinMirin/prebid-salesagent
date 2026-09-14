@@ -49,9 +49,12 @@ response = await serve("create_media_buy", payload, headers, TransportProtocol.A
 its `idempotency_key`, and stamps the buyer's `context` onto the response — once, for every
 transport.
 
-**`_impl` rules:** Accept `ResolvedIdentity` (not Context). Raise `AdCPSalesAgentError` (not
-ToolError). Zero imports from fastmcp/a2a/starlette/fastapi. No account resolution, no
-idempotency, no context echo. Declare exactly `(req: <DTO>, identity: ResolvedIdentity)`.
+**`_impl` rules:** Accept `ResolvedIdentity` (protected tool: principal and tenant are not
+optional, read them directly) or `PublicIdentity` (public tool: branch on
+`identity.principal is None`), never a Context. Raise `AdCPSalesAgentError` (not ToolError).
+Zero imports from fastmcp/a2a/starlette/fastapi. No account resolution, no idempotency, no
+context echo. Declare exactly `(req: <DTO>, identity: <one of the two>)`; the registry derives
+the tool's credential policy from that annotation.
 
 **Transport rules:** Hand over the headers, call `serve`, catch `AdcpFailure`, serialize
 its response with `to_wire`, add only the transport's own failure marker.

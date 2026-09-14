@@ -80,7 +80,6 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
-from src.core.auth import require_principal, require_tenant
 from src.core.database.models import MediaBuy, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
@@ -160,8 +159,8 @@ def delivery_for_media_buy(
             start_date=start_date,
             end_date=end_date,
         ),
-        # Resolution from stored ids: the job acts as the buy's owner.
-        identity=identity_of(media_buy.tenant_id, media_buy.principal_id),
+        # Resolution from stored ids: the job acts as the buy's owner, on the buy's account.
+        identity=identity_of(media_buy.tenant_id, media_buy.principal_id, media_buy.account_id),
     )
 
 
@@ -174,8 +173,8 @@ def get_media_buy_delivery(
     transports, auth or idempotency, so a server-initiated read can reach it through
     :func:`delivery_for_media_buy` without the front door.
     """
-    principal_id = require_principal(identity).principal_id
-    tenant = require_tenant(identity)
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
     adapter = get_adapter(identity)
 
     # Determine reporting period

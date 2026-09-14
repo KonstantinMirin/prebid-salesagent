@@ -224,7 +224,7 @@ class AccountRepository:
         For ambiguity *detection* prefer list_by_natural_key(limit=2) (single query).
         This exact count is for ambiguity *disclosure* on the error path only — once
         detection has confirmed >1 match, callers use it to tell the buyer how many
-        accounts collide (see account_helpers._resolve_by_natural_key).
+        accounts collide (see ``account_lookup.find_account``).
 
         ``principal_id`` MUST mirror the value passed to list_by_natural_key so the
         disclosed count is scoped to the agent's accessible accounts — disclosing a

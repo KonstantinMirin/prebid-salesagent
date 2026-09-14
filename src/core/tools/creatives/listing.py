@@ -8,7 +8,6 @@ from typing import Any, cast
 from pydantic import ValidationError
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import EntityRefDetails
@@ -222,11 +221,11 @@ def _list_creatives_impl(
 
     start_time = time.time()
 
-    # Authentication - REQUIRED (creatives contain sensitive data)
-    # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
-    # which are principal-specific and must be access-controlled
-    principal_id = require_principal(identity).principal_id
-    tenant = require_tenant(identity)
+    # Authentication is REQUIRED (creatives contain sensitive data): unlike a discovery
+    # tool, this returns creative assets that are principal-specific. The boundary refused
+    # an anonymous caller; the ResolvedIdentity carries the principal by type.
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
 
     creatives = []
     total_count = 0

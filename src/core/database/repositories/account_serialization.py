@@ -12,21 +12,33 @@ put ``.model_dump()`` inside the business-logic call graph, which is precisely w
 went unnoticed because that guard matched function NAMES rather than the call graph
 (#1721 review F5).
 
-Distinct from the write-only-field SCRUBBERS in ``src/core/tools/accounts.py``: those
-take a model and return a model, shaping the response echo, and belong with the two
-echo chokepoints they guard.
+The reverse direction lives here too: ``account_from_row`` is the ONE place a persisted
+``Account`` row becomes the schema ``Account``, and the write-only-field scrubbers it
+applies (``scrub_notification_credentials``, ``scrub_business_entity``) sit beside it.
+Three readers turn a row into the schema object -- ``list_accounts``'s echo, the
+``sync_accounts`` result, and the resolver, which puts the resolved account on the
+identity -- and the scrub is part of the conversion, not of any one caller, so a new
+reader cannot leak a credential by forgetting it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING
 
 from adcp.types import NotificationConfig
 from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
+if TYPE_CHECKING:
+    from src.core.database.models import Account as AccountRow
+    from src.core.schemas.account import Account
+
 __all__ = [
+    "account_from_row",
     "as_json_dict",
+    "scrub_business_entity",
+    "scrub_notification_credentials",
     "serialize_business_entity",
     "serialize_governance_agents",
     "serialize_notification_configs",
@@ -94,3 +106,76 @@ def serialize_business_entity(entity: BusinessEntity | Mapping[str, object] | No
     if entity is None:
         return None
     return as_json_dict(entity, exclude_none=True)
+
+
+def scrub_notification_credentials(
+    configs: Iterable[BaseModel | Mapping[str, object]] | None,
+) -> list[NotificationConfig] | None:
+    """Strip write-only ``authentication.credentials`` from an echoed subscriber set.
+
+    ``credentials`` is ``minLength: 32`` and documented write-only: the seller
+    stores it to authenticate its own outbound calls and MUST NOT reflect it.
+    Applied wherever a persisted config becomes a schema object -- ``account_from_row``
+    and the ``sync_accounts`` result -- rather than at each call site, so a future echo
+    path cannot forget it.
+
+    Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
+    "explicitly cleared" are different states to the buyer.
+    """
+    if configs is None:
+        return None
+    scrubbed: list[NotificationConfig] = []
+    for config in configs:
+        data = as_json_dict(config)
+        auth = data.get("authentication")
+        if isinstance(auth, dict) and "credentials" in auth:
+            auth = {k: v for k, v in auth.items() if k != "credentials"}
+            data["authentication"] = auth
+        scrubbed.append(NotificationConfig.model_validate(data))
+    return scrubbed
+
+
+def scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:
+    """Strip write-only ``bank`` from an echoed ``billing_entity``.
+
+    The response account item documents ``billing_entity`` as "echoed from the
+    request ... **Bank details are omitted (write-only)**" (v3.1.1
+    sync-accounts-response.json). Same placement rationale as
+    :func:`scrub_notification_credentials`: applied where a persisted entity becomes a
+    schema object, so a future echo path cannot leak by forgetting a call.
+    """
+    if entity is None:
+        return None
+    data = as_json_dict(entity, exclude_none=True)
+    data.pop("bank", None)
+    return BusinessEntity.model_validate(data)
+
+
+def account_from_row(row: AccountRow) -> Account:
+    """The schema ``Account`` for a persisted row: the one row-to-model conversion.
+
+    Write-only fields are scrubbed here, so every consumer -- the ``list_accounts`` echo
+    and the resolved account on a ``ResolvedIdentity`` alike -- holds the same shape.
+    """
+    from src.core.schemas.account import Account
+
+    return Account(
+        account_id=row.account_id,
+        name=row.name,
+        status=row.status,
+        advertiser=row.advertiser,
+        billing_proxy=row.billing_proxy,
+        brand=row.brand,
+        operator=row.operator,
+        billing=row.billing,
+        rate_card=row.rate_card,
+        payment_terms=row.payment_terms,
+        credit_limit=row.credit_limit,
+        setup=row.setup,
+        account_scope=row.account_scope,
+        governance_agents=row.governance_agents,
+        sandbox=row.sandbox,
+        notification_configs=scrub_notification_credentials(row.notification_configs),
+        billing_entity=scrub_business_entity(row.billing_entity),
+        ext=row.ext,
+    )

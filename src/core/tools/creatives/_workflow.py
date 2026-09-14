@@ -35,8 +35,9 @@ def _create_sync_workflow_steps(
     effect of that unit — cannot name a step the commit has not yet released
     (GH #2002).
     """
-    # ``principal_id`` is a ``str``: the caller took it from require_principal, so there is no
-    # anonymous case to refuse here and nothing re-derives what the resolver decided.
+    # ``principal_id`` is a ``str``: the caller read it off a ResolvedIdentity, whose principal
+    # is not optional, so there is no anonymous case to refuse here and nothing re-derives
+    # what the resolver decided.
     assert uow.workflows is not None
     # Context creation joins the caller's transaction too. The repository
     # takes no tenant_id (it uses its own scope) and create_step takes the

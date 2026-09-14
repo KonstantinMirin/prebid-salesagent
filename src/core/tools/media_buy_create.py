@@ -47,6 +47,7 @@ from src.core.exceptions import (
     AdCPFormatNotFoundError,
     AdCPIdempotencyExpiredError,
     AdCPInvalidRequestError,
+    AdCPPersistedStateError,
     AdCPProductNotFoundError,
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
@@ -106,10 +107,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from src.adapters.base import AdapterCreateResult
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import (
-    require_principal,
-    require_tenant,
-)
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
 from src.core.database.models import Creative as DBCreative
@@ -127,7 +124,7 @@ from src.core.helpers.creative_helpers import (
 )
 from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.logging_config import log_safe
-from src.core.resolved_identity import ResolvedIdentity, identity_of
+from src.core.resolved_identity import AccountIdentity, ResolvedIdentity, identity_of
 from src.core.schemas import (
     AssetStatus,
     CreateMediaBuyRequest,
@@ -577,7 +574,7 @@ def _execute_adapter_media_buy_creation(
     Raises:
         Exception: If adapter creation fails (with detailed logging)
     """
-    principal = require_principal(identity)
+    principal = identity.principal
     adapter = get_adapter(identity)
 
     # Call adapter with detailed error logging
@@ -906,6 +903,10 @@ def execute_approved_media_buy(
                     error_msg=f"{len(unapproved)} creative(s) not approved: {unapproved}",
                 )
 
+            # The buy's account, read off the row while the session is open (the row
+            # detaches when this block commits); the executor acts on it below.
+            buy_account_id = media_buy.account_id
+
             # Reconstruct CreateMediaBuyRequest from raw_request
             try:
                 # Strip package_id from packages - it was added for UI tracking but isn't
@@ -921,18 +922,20 @@ def execute_approved_media_buy(
                 # so a synthetic spec-shaped key keeps reconstruction valid.
                 raw_request_data.setdefault("idempotency_key", f"legacy-approval-{media_buy_id}")
 
-                # Same situation, same remedy, for ``account`` -- required since
-                # salesagent-prkv.68, so buys stored before it carry none in raw_request and
-                # would fail to reconstruct here, leaving an approvable buy stuck in
-                # pending_approval forever. Read off the PERSISTED ROW rather than
-                # synthesised: MediaBuy.account_id is what the transport boundary resolved
-                # this buy's reference to, so it is the same account, not a stand-in. A row
-                # with no account_id predates accounts entirely and gets the internal-replay
-                # placeholder, exactly as the key above does.
+                # ``account`` is required since salesagent-prkv.68, so buys stored before it
+                # carry none in raw_request. Read off the PERSISTED ROW, never synthesised:
+                # MediaBuy.account_id is what the boundary resolved this buy's reference to,
+                # so it is the same account. A row with no account_id is a seller-side store
+                # defect and is refused (No Quiet Failures), not given a stand-in; the
+                # census of such rows is a ticket question, not a code path.
+                if buy_account_id is None:
+                    raise AdCPPersistedStateError(
+                        internal_detail=ValueError(
+                            f"media buy {media_buy_id} has no account_id; cannot act on its account"
+                        )
+                    )
                 if not raw_request_data.get("account"):
-                    raw_request_data["account"] = {
-                        "account_id": media_buy.account_id or f"legacy-approval-{media_buy_id}"
-                    }
+                    raw_request_data["account"] = {"account_id": buy_account_id}
 
                 request = CreateMediaBuyRequest(**raw_request_data)
                 # Mark this request as already approved to skip adapter's approval workflow
@@ -1145,10 +1148,11 @@ def execute_approved_media_buy(
                 logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
-            # Resolution from stored ids: this job acts as the buy's owner. Captured while
-            # the session is open, because media_buy detaches when this block commits.
+            # Resolution from stored ids: this job acts as the buy's owner, on the buy's
+            # account (refused above if the row has none). Captured while the session is
+            # open, because media_buy detaches when this block commits.
             buy_principal_id = media_buy.principal_id
-            identity = identity_of(tenant_id, buy_principal_id)
+            identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
             logger.info(
                 f"[APPROVAL] Calling adapter for {media_buy_id}: "
@@ -1395,6 +1399,13 @@ def execute_approved_media_buy(
                 confirmed_at=written.confirmed_at,
             )
 
+    except AdCPPersistedStateError as e:
+        # The persisted row refused reconstruction (a NULL account_id, above); no adapter
+        # ran, so this is a store defect and not an adapter failure. The buy stays
+        # pending_approval so an operator who repairs the row can retry.
+        error_msg = f"Persisted media buy {media_buy_id} cannot be acted on: {e}"
+        logger.error(f"[APPROVAL] {error_msg}", exc_info=True)
+        return ApprovalResult.failed(error_msg)
     except Exception as e:
         import traceback
 
@@ -1941,7 +1952,7 @@ def _resolve_idempotency_race_or_raise(
 
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity,
+    identity: AccountIdentity,
 ) -> CreateMediaBuyResult:
     """Create a media buy with the specified parameters.
 
@@ -1972,13 +1983,11 @@ async def _create_media_buy_impl(
                 raw_freq,
             )
 
-    # The one principal this tool holds: the row the resolver loaded. Its name is read
-    # off it below; nothing here loads a principal by id.
-    principal = require_principal(identity)
+    # The one principal this tool holds: the row the resolver loaded, non-optional on a
+    # ResolvedIdentity. Its name is read off it below; nothing here loads a principal by id.
+    principal = identity.principal
     principal_id = principal.principal_id
-
-    # Tenant is resolved once, in the resolver invoke_tool runs
-    tenant = require_tenant(identity)
+    tenant = identity.tenant
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first. Must run before workflow metadata / DB writes.
@@ -2742,7 +2751,7 @@ async def _create_media_buy_impl(
                         order_name=f"{media_buy_id} - {start_time.strftime('%Y-%m-%d')}",
                         package_id_map=package_id_map,
                         by_alias=True,
-                        account_id=identity.account_id,
+                        account_id=identity.account.account_id,
                         created_at=datetime.now(UTC),
                     )
                     logger.info(f"✅ Created media buy {media_buy_id} with status=pending_approval")
@@ -2752,7 +2761,7 @@ async def _create_media_buy_impl(
                     tenant.tenant_id,
                     idempotency_key=req.idempotency_key,
                     principal_id=principal.principal_id,
-                    account_id=identity.account_id,
+                    account_id=identity.account.account_id,
                     req=req,
                     media_buy_id=media_buy_id,
                 )
@@ -3467,7 +3476,7 @@ async def _create_media_buy_impl(
                     status=media_buy_status,
                     campaign_objective=getattr(req, "campaign_objective", "") or "",
                     kpi_goal=getattr(req, "kpi_goal", "") or "",
-                    account_id=identity.account_id,
+                    account_id=identity.account.account_id,
                 )
                 # Read the two columns the REPOSITORY owns, inside the UoW while the
                 # row is still attached. The response reports what was persisted; it
@@ -3482,7 +3491,7 @@ async def _create_media_buy_impl(
                 tenant.tenant_id,
                 idempotency_key=req.idempotency_key,
                 principal_id=principal_id,
-                account_id=identity.account_id,
+                account_id=identity.account.account_id,
                 req=req,
                 media_buy_id=response.media_buy_id,
             )

@@ -60,7 +60,7 @@ INVALID_TOKEN = "invalid-token-harness"
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
-    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
     from tests.harness.transport import E2EConfig, Transport, TransportResult
 
 
@@ -559,6 +559,10 @@ class BaseTestEnv:
         - ``src.core.config_loader.get_tenant_by_id`` serves ``TenantFactory.make_tenant``
           with this env's overrides, so ``TenantContext.load`` builds the same tenant the
           env used to hand over pre-built. Read by the resolver.
+        - ``src.core.resolved_identity._load_account`` answers an active schema Account
+          named by the request's reference (``tests.helpers.capture_wrapper_req.stub_account_for``),
+          so a request that names an account resolves without a database and the identity
+          the resolver builds still carries one.
 
         Installed BEFORE ``EXTERNAL_PATCHES`` so an env that patches one of these itself
         keeps its own answer. Not entered into ``self.mock``: that dict is the env's own
@@ -567,6 +571,7 @@ class BaseTestEnv:
         ``_guard`` registry as every patch, under ``resolver:`` labels.
         """
         from tests.factories import TenantFactory
+        from tests.helpers.capture_wrapper_req import stub_account_for
 
         def _tenant_by_id(tenant_id: str) -> dict[str, Any]:
             return TenantFactory.make_tenant(tenant_id=tenant_id, **self._tenant_overrides)
@@ -585,6 +590,7 @@ class BaseTestEnv:
             ("tenant_id_for", "src.core.config_loader.tenant_id_for", lambda **_kw: None),
             ("get_principal_from_token", "src.core.auth_utils.get_principal_from_token", _principal_from_token),
             ("get_tenant_by_id", "src.core.config_loader.get_tenant_by_id", _tenant_by_id),
+            ("_load_account", "src.core.resolved_identity._load_account", stub_account_for),
         ):
             patcher = patch(target, side_effect=substitute)
             patcher.start()
@@ -609,23 +615,25 @@ class BaseTestEnv:
         self._tenant_id = tenant_id
 
     @property
-    def identity(self) -> ResolvedIdentity:
+    def identity(self) -> ResolvedIdentity | PublicIdentity:
         """The caller ``call_impl`` hands the implementation. FOR ``call_impl`` ONLY.
 
-        A direct ``_impl`` call takes a ``ResolvedIdentity`` by definition; a wire leg has no
+        A direct ``_impl`` call takes an identity by definition; a wire leg has no
         parameter to receive one, it presents ``credential()`` and the resolver builds the
-        identity. Supports direct override via ``env._identity = ...`` for integration tests
-        that create tenants in the DB and need a specific tenant context.
+        identity. An env with a principal builds the ``ResolvedIdentity`` a protected tool
+        takes; an env constructed with ``principal_id=None`` (a public tool's anonymous
+        caller) builds a ``PublicIdentity``. Supports direct override via
+        ``env._identity = ...`` for integration tests that create tenants in the DB and
+        need a specific tenant context.
         """
         direct = self.__dict__.get("_identity")
         if direct is not None:
             return direct
-        from tests.factories.principal import PrincipalFactory
+        from tests.harness._identity import make_identity
 
-        return PrincipalFactory.make_identity(
+        return make_identity(
             principal_id=self._principal_id,
             tenant_id=self._tenant_id,
-            protocol="mcp",
             **self._tenant_overrides,
         )
 

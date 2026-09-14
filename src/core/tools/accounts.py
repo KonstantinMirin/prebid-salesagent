@@ -33,10 +33,13 @@ from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKey, NaturalKeyConflict
-from src.core.database.repositories.account_serialization import as_json_dict
+from src.core.database.repositories.account_serialization import (
+    account_from_row,
+    scrub_business_entity,
+    scrub_notification_credentials,
+)
 from src.core.database.repositories.uow import AccountUoW
 from src.core.errors.codes import ErrorCode, ErrorCodeT
 from src.core.errors.details import BillingNotSupportedDetails, ConfigurationDetails, ErrorDetails, ValidationDetails
@@ -73,35 +76,6 @@ SyncEntry = SyncAccountInput | SettingsUpdateAccountInput
 #: carries: the seller-assigned handle (AccountReference1) or the natural key
 #: (AccountReference2).
 AccountRef = AccountReference1 | AccountReference2
-
-
-def _db_account_to_schema(db_account: DBAccount) -> Account:
-    """Convert ORM Account to Pydantic schema Account."""
-    return Account(
-        account_id=db_account.account_id,
-        name=db_account.name,
-        status=db_account.status,
-        advertiser=db_account.advertiser,
-        billing_proxy=db_account.billing_proxy,
-        brand=db_account.brand,
-        operator=db_account.operator,
-        billing=db_account.billing,
-        rate_card=db_account.rate_card,
-        payment_terms=db_account.payment_terms,
-        credit_limit=db_account.credit_limit,
-        setup=db_account.setup,
-        account_scope=db_account.account_scope,
-        governance_agents=db_account.governance_agents,
-        sandbox=db_account.sandbox,
-        # Same scrub as the sync echo: list_accounts must not reflect write-only
-        # credentials either, and the read-back leg of the register scenario goes
-        # through here.
-        notification_configs=_scrub_notification_credentials(db_account.notification_configs),
-        # Same scrub rationale as notification_configs: `bank` is write-only, and
-        # list_accounts is an echo path too.
-        billing_entity=_scrub_business_entity(db_account.billing_entity),
-        ext=db_account.ext,
-    )
 
 
 def _encode_cursor(offset: int) -> str:
@@ -204,9 +178,10 @@ def _list_accounts_impl(
     if req is None:
         req = ListAccountsRequest()
 
-    # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    principal_id = require_principal(identity).principal_id
-    tenant = require_tenant(identity)
+    # BR-RULE-055 INV-3: an unauthenticated caller is refused by the boundary; the
+    # ResolvedIdentity this takes carries a principal by type.
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
     tenant_id = tenant.tenant_id
 
     with AccountUoW(tenant_id) as uow:
@@ -219,7 +194,7 @@ def _list_accounts_impl(
         db_accounts.sort(key=lambda a: a.account_id)
 
         # Convert ORM models to schema models while session is alive
-        schema_accounts = [_db_account_to_schema(a) for a in db_accounts]
+        schema_accounts = [account_from_row(a) for a in db_accounts]
 
     # Apply pagination after conversion
     paginated, pagination_resp = _apply_pagination(schema_accounts, getattr(req, "pagination", None))
@@ -260,53 +235,6 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
 def _enum_to_str(val: object) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
     return enum_value(val)
-
-
-def _scrub_notification_credentials(
-    configs: Iterable[BaseModel | Mapping[str, object]] | None,
-) -> list[NotificationConfig] | None:
-    """Strip write-only ``authentication.credentials`` from an echoed subscriber set.
-
-    ``credentials`` is ``minLength: 32`` and documented write-only: the seller
-    stores it to authenticate its own outbound calls and MUST NOT reflect it.
-    Called from ``_build_sync_result`` and ``_db_account_to_schema`` — the two
-    places a persisted config becomes a response object — rather than at each
-    call site, so a future echo path cannot forget it.
-
-    Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
-    "explicitly cleared" are different states to the buyer.
-    """
-    if configs is None:
-        return None
-    scrubbed: list[NotificationConfig] = []
-    for config in configs:
-        data = as_json_dict(config)
-        auth = data.get("authentication")
-        if isinstance(auth, dict) and "credentials" in auth:
-            auth = {k: v for k, v in auth.items() if k != "credentials"}
-            data["authentication"] = auth
-        scrubbed.append(NotificationConfig.model_validate(data))
-    return scrubbed
-
-
-def _scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:
-    """Strip write-only ``bank`` from an echoed ``billing_entity``.
-
-    The response account item documents ``billing_entity`` as "echoed from the
-    request ... **Bank details are omitted (write-only)**" (v3.1.1
-    sync-accounts-response.json). Called from ``_build_sync_result`` and
-    ``_db_account_to_schema`` — the two places a persisted entity becomes a
-    response object — rather than at each call site, the same placement
-    rationale as :func:`_scrub_notification_credentials`, so a future echo path
-    cannot leak by forgetting a call.
-    """
-    from adcp.types.generated_poc.core.business_entity import BusinessEntity
-
-    if entity is None:
-        return None
-    data = as_json_dict(entity, exclude_none=True)
-    data.pop("bank", None)
-    return BusinessEntity.model_validate(data)
 
 
 def _resolve_notification_configs(
@@ -761,8 +689,8 @@ def _build_sync_result(
         sandbox=sandbox,
         errors=errors,
         setup=setup,
-        notification_configs=_scrub_notification_credentials(notification_configs),
-        billing_entity=_scrub_business_entity(billing_entity),
+        notification_configs=scrub_notification_credentials(notification_configs),
+        billing_entity=scrub_business_entity(billing_entity),
     )
 
 
@@ -1442,9 +1370,10 @@ async def _sync_accounts_impl(
     Returns:
         SyncAccountsResponse with per-account action results.
     """
-    # BR-RULE-055: sync requires auth (consistent with list_accounts).
-    principal_id = require_principal(identity).principal_id
-    tenant = require_tenant(identity)
+    # BR-RULE-055: sync requires auth (consistent with list_accounts); the boundary
+    # refused an anonymous caller before this ran.
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
     tenant_id = tenant.tenant_id
 
     # Validate non-empty accounts array. field= names WHICH input was rejected: the

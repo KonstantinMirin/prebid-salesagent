@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.credentials import hash_token, token_prefix
 from src.core.database.models import Principal
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity, PublicIdentity, ResolvedIdentity
 from src.core.schemas import Principal as SchemaPrincipal
+from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
 from tests.factories.core import TenantFactory
 
@@ -45,57 +44,97 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     token_prefix = LazyAttribute(lambda o: token_prefix(plaintext_token_for(o.principal_id)))
     platform_mappings = factory.LazyFunction(lambda: {"mock": {"advertiser_id": "test_adv"}})
 
+    @staticmethod
+    def _tenant_for(tenant: object, tenant_id: str, tenant_overrides: dict[str, object]) -> object:
+        """The TenantContext an identity carries: the one given, or the factory's own.
+
+        Swallows nothing. Every override is checked against ``TenantContext.model_fields``
+        and an unknown keyword is a ``TypeError`` naming it, never a key dropped on the
+        floor: ``principal={...}``, ``account_id=...`` or a misspelled field fails here
+        instead of building an identity that silently lacks it. An account is not an
+        override: the resolver resolves the one a request names (``AccountRepository.find``)
+        and builds the identity with it inside; a test that needs one calls
+        ``make_account_identity``.
+        """
+        unknown = sorted(set(tenant_overrides) - set(TenantContext.model_fields))
+        if unknown:
+            raise TypeError(
+                f"make_identity() got unknown keyword(s) {', '.join(unknown)}: "
+                "only TenantContext fields are accepted as overrides"
+            )
+        if tenant is not _UNSET and tenant_overrides:
+            raise TypeError(
+                f"make_identity() got tenant overrides {', '.join(sorted(tenant_overrides))} "
+                "alongside an explicit tenant; set the fields on the TenantContext instead"
+            )
+        return TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
+
+    @staticmethod
+    def _principal_for(principal_id: str) -> SchemaPrincipal:
+        """The principal the resolver would have loaded for this caller.
+
+        The factory's own shape (name and the mock platform mapping), so what a tool reads
+        off ``identity.principal`` is what a row would have given it.
+        """
+        return SchemaPrincipal(
+            principal_id=principal_id,
+            name=f"Test Advertiser {principal_id}",
+            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
+        )
+
     @classmethod
     def make_identity(
         cls,
-        principal_id: str | None = "test_principal",
+        principal_id: str = "test_principal",
         tenant_id: str = "test_tenant",
-        tenant: TenantContext | None | Any = _UNSET,
-        account_id: str | None = None,
+        tenant: TenantContext = _UNSET,  # type: ignore[assignment]
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
-        """Build a ResolvedIdentity without DB persistence.
+        """The AUTHENTICATED caller a protected tool takes, without DB persistence.
 
-        Auto-derives tenant dict via TenantFactory.make_tenant().
-        A principal always has a tenant: ``tenant=None`` is accepted only for the anonymous
-        caller (``principal_id=None``), and ``ResolvedIdentity`` refuses the other pairing.
-        Pass **tenant_overrides for domain fields (approval_mode, etc).
+        A ``ResolvedIdentity`` always carries a principal and a tenant, so both parameters
+        are non-optional here: the anonymous caller is ``make_public_identity``. When
+        ``tenant`` is not given, ``TenantFactory.make_tenant()`` builds the TenantContext;
+        pass **tenant_overrides for domain fields (approval_mode, etc).
 
-        ``account_id`` is DECLARED, not left to **tenant_overrides. It is a
-        ``ResolvedIdentity`` field, not a tenant one, so the catch-all swallowed it into the
-        tenant dict and the identity came back with account_id=None -- silently, which cost
-        an afternoon: the idempotency cache is scoped by (principal, account, key), so a
-        test that thought it had set the account was probing a different scope. It is what
-        ``enrich_identity_with_account`` resolves onto the identity in production.
-
-        ``tenant`` accepts whatever a test has to hand -- a dict or a ``TenantContext`` --
-        and normalizes it. THIS IS THE ONE NORMALIZER. ``ResolvedIdentity.tenant`` is
-        typed ``TenantContext | None``, a single type rather than a union, so a dict fails
-        validation at construction. Tests are not asked to know that: they pass data and
-        this converts it, which is why inline ``ResolvedIdentity(...)`` outside this factory
-        fails ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``. An inline site
-        carries its own copy of the conversion below, and 98 copies is how the previous
-        shape broke -- the union widened to fit them instead of them narrowing to fit it.
+        ``tenant`` is passed through as given. The factory normalizes nothing, and the
+        identity refuses a dict at construction (``InstanceOf`` on the field), so a test
+        that has a dict builds a TenantContext first. Inline ``ResolvedIdentity(...)``
+        outside this factory fails
+        ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``, so the
+        factory's defaults are the one source of identity defaults in tests.
         """
-        resolved_tenant: TenantContext | None = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
-        )
-        if principal_id and resolved_tenant is None:
-            raise TypeError("a principal always belongs to a tenant; tenant=None is only for the anonymous caller")
-        # The principal the resolver would have loaded for this caller: the factory's own
-        # shape (name and the mock platform mapping), so what a tool reads off
-        # ``identity.principal`` is what a row would have given it.
-        principal = (
-            SchemaPrincipal(
-                principal_id=principal_id,
-                name=f"Test Advertiser {principal_id}",
-                platform_mappings={"mock": {"advertiser_id": "test_adv"}},
-            )
-            if principal_id
-            else None
-        )
         return ResolvedIdentity(
-            principal=principal,
-            tenant=resolved_tenant,
-            account_id=account_id,
+            principal=cls._principal_for(principal_id),
+            tenant=cls._tenant_for(tenant, tenant_id, tenant_overrides),  # type: ignore[arg-type]
+        )
+
+    @classmethod
+    def make_account_identity(cls, identity: ResolvedIdentity, account: Account) -> AccountIdentity:
+        """*identity* with *account* resolved onto it: the type a tool whose DTO requires an account takes.
+
+        The account is per request and is passed as the schema ``Account`` it resolved to
+        (in production, ``AccountRepository.find`` through ``account_from_row``); the
+        factory builds the identity once with it inside, as the resolver does, and copies
+        nothing.
+        """
+        return AccountIdentity(principal=identity.principal, tenant=identity.tenant, account=account)
+
+    @classmethod
+    def make_public_identity(
+        cls,
+        principal_id: str | None = None,
+        tenant_id: str = "test_tenant",
+        tenant: TenantContext | None = _UNSET,  # type: ignore[assignment]
+        **tenant_overrides: object,
+    ) -> PublicIdentity:
+        """The caller of a PUBLIC tool, anonymous by default, without DB persistence.
+
+        ``principal_id=None`` (the default) is the anonymous caller; a string is a caller
+        whose credential resolved on a public tool. ``tenant=None`` is a request that named
+        no seller. The same override rules as ``make_identity`` apply.
+        """
+        return PublicIdentity(
+            principal=cls._principal_for(principal_id) if principal_id else None,
+            tenant=cls._tenant_for(tenant, tenant_id, tenant_overrides),  # type: ignore[arg-type]
         )

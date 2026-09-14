@@ -18,7 +18,7 @@ from src.core.errors.codes import Recovery
 from src.core.exceptions import AdCPSalesAgentError
 
 if TYPE_CHECKING:
-    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.resolved_identity import PublicIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def record_boundary_error(
     operation: str,
     error: Exception,
     *,
-    identity: ResolvedIdentity | None = None,
+    identity: PublicIdentity | None = None,
 ) -> None:
     """Record an error at a transport boundary uniformly across MCP/A2A/REST.
 

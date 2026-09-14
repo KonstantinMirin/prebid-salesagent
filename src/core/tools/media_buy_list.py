@@ -119,10 +119,6 @@ class _PackageData:
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
-from src.core.auth import (
-    require_principal,
-    require_tenant,
-)
 from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
@@ -163,10 +159,9 @@ def _get_media_buys_impl(
     # get-media-buys-request.json, `account`: "Account to retrieve media buys for. When
     # omitted, returns data across all accessible accounts."
     #
-    # Keyed on the REQUEST, not the identity: identity.account_id can hold a default the buyer
-    # never sent, and filtering on that would narrow a listing the spec says spans all
-    # accessible accounts.
-    account_filter = identity.account_id if req.account is not None else None
+    # The resolver puts an account on the identity iff the REQUEST named one, so a None here
+    # is exactly "omitted": a listing that spans all accessible accounts, as the spec says.
+    account_filter = identity.account.account_id if identity.account is not None else None
 
     # Both guards RAISE rather than degrading to an empty list plus a payload
     # advisory, and both now use the shared helpers every other media-buy tool
@@ -185,12 +180,9 @@ def _get_media_buys_impl(
     # unauthenticated request at the boundary and already return the two-layer
     # envelope -- which is why get_media_buys was the ONE tool of 16 answering a
     # fatal auth failure with HTTP 200 and isError:false (#1651).
-    principal_id = require_principal(identity).principal_id
-    principal = require_principal(identity)
-
-    # require_tenant raises the canonical auth envelope instead of a raw TypeError
-    # if no tenant resolved (the principal guards above take precedence).
-    tenant = require_tenant(identity)
+    principal = identity.principal
+    principal_id = principal.principal_id
+    tenant = identity.tenant
     today = datetime.now(UTC).date()
     tenant_id: str = tenant.tenant_id
 

@@ -53,10 +53,6 @@ logger = logging.getLogger(__name__)
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import (
-    require_principal,
-    require_tenant,
-)
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
     CreativeAssignment as DBAssignment,
@@ -80,7 +76,7 @@ from src.core.errors.details import (
     ValidationDetails,
 )
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
     SyncCreativesRequest,
@@ -297,10 +293,8 @@ def _verify_principal(
         AdCPMediaBuyNotFoundError: Media buy not found
         AdCPAuthorizationError: Principal doesn't own media buy
     """
-    principal_id = require_principal(identity).principal_id
-
-    # Tenant is resolved once, in the resolver invoke_tool runs
-    tenant = require_tenant(identity)
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
 
     # Fetch the media buy (raises AdCPMediaBuyNotFoundError if absent)
     media_buy = repo.get_by_id_or_raise(media_buy_id)
@@ -321,7 +315,7 @@ def _verify_principal(
 
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
-    identity: ResolvedIdentity,
+    identity: AccountIdentity,
 ) -> UpdateMediaBuyResult:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -340,10 +334,8 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    principal_id = require_principal(identity).principal_id
-
-    # Tenant is resolved once, in the resolver invoke_tool runs
-    tenant = require_tenant(identity)
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first, and ABOVE the UoW so no DB transaction is held and a refused URL is
@@ -463,7 +455,7 @@ def _update_media_buy_impl(
                 request_data=req,
             )
 
-            principal = require_principal(identity)
+            principal = identity.principal
 
             adapter = get_adapter(identity)
             today = date.today()

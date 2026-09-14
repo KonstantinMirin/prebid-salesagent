@@ -15,7 +15,6 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal
 from src.core.config import get_settings
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
@@ -26,7 +25,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
     GetProductsResponse,
@@ -168,7 +167,7 @@ def _products_message(count: int, *, anonymous: bool) -> str:
     return base
 
 
-async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity) -> GetProductsResponse:
+async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) -> GetProductsResponse:
     """Shared implementation for get_products.
 
     Contains all business logic for product discovery including policy checks,
@@ -193,9 +192,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         # No seller is addressed: there is no catalog to list, and nothing to refuse.
         return GetProductsResponse(products=[])
 
-    # The principal the resolver loaded with the token; None for the anonymous caller.
-    principal = identity.principal
-
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
     offering = None
@@ -215,11 +211,10 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         # "Brand manifest required by tenant policy" string is dropped for that
         # reason, not because the condition changed.
         raise AdCPAuthorizationError()
-    elif brand_manifest_policy == "require_auth":
-        # The tenant's policy makes this public tool need a caller: AUTH_MISSING, from the
-        # one helper that raises it.
-        require_principal(identity)
-    # public policy allows all requests (no brand_manifest or auth required)
+    # "require_auth" is enforced by the RESOLVER, not here: ToolSpec.requires_credential(tenant)
+    # answers True for this tool on such a seller, so the boundary refused an anonymous caller
+    # (AUTH_MISSING, BR-UC-001 INV-1) and ``identity`` is a ResolvedIdentity by the time this
+    # runs. "public" allows all requests (no brand_manifest or auth required).
 
     # For non-public policies, we need offering for policy checks and product matching
     # Use a generic offering if not provided

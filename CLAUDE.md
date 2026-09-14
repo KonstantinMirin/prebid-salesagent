@@ -50,10 +50,12 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
 | No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
-| `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)`; the DTO matches the registry row | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
-| One ResolvedIdentity constructor | `ResolvedIdentity(...)` only in the resolver and `PrincipalFactory.make_identity` | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
-| Principal rows are repository-private | `src.core.database.models.Principal` is importable only under `src/core/database/repositories/`; a tool reads `require_principal(identity)`, an admin view uses `PrincipalRepository` | `ruff-boundary.toml` (TID251) |
-| Auth refusals minted in two places | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver and `require_principal` / `require_tenant` | `ruff-boundary.toml` (TID251) |
+| `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)` for a protected tool, `identity: AccountIdentity` when the DTO requires `account`, or `identity: PublicIdentity` for a public one; the DTO matches the registry row, and the identity annotation IS the row's credential policy (`ToolSpec.requires_credential` derives it; the registry refuses `AccountIdentity` on a DTO whose `account` is optional) | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
+| One identity constructor | `ResolvedIdentity(...)` / `AccountIdentity(...)` / `PublicIdentity(...)` only in the resolver and `PrincipalFactory`; the resolver builds the identity once, account inside, and nothing `model_copy`s one | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
+| Principal rows are repository-private | `src.core.database.models.Principal` is importable only by the four repository modules that query it; a tool reads `identity.principal`, an admin view uses `PrincipalRepository` | `ruff-boundary.toml` (TID251) |
+| Principal and account obtained from the identity alone | `repositories.principal`, `repositories.principal_lookup`, `auth_utils`, `repositories.account` and `uow.AccountUoW` are importable only by the resolver, the repositories, the admin UI, the setup scripts and the two account-management tools; a tool reads `identity.principal` / `identity.account` | `ruff-ownership.toml` (TID251) |
+| Auth refusals minted by the resolver alone | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver; a protected tool's `ResolvedIdentity` carries principal and tenant by type, so nothing downstream re-checks (a seller's `require_auth` brand policy is asked by the resolver through `requires_credential(tenant)`) | `ruff-boundary.toml` (TID251) |
+| Account resolved by the resolver alone | `src.core.database.repositories.account_lookup` is importable only by the resolver, which builds the identity with the request's account inside; tools read `identity.account` | `ruff-boundary.toml` (TID251) |
 | Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
@@ -257,14 +259,20 @@ then delegates. The work itself belongs in a service function that takes an alre
 caller and asks nothing about transports, auth or idempotency:
 
 ```python
-def _sync_creatives_impl(req, identity):               # controller
-    principal_id = require_principal(identity).principal_id
-    tenant = require_tenant(identity)
-    return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
+def _sync_creatives_impl(req, identity: ResolvedIdentity):   # controller
+    # The type carries the boundary's decision: principal and tenant are not optional.
+    return sync_creatives(req, identity=identity, principal_id=identity.principal.principal_id, tenant=identity.tenant)
 
 def sync_creatives(req, *, identity, principal_id, tenant):   # service
     ...
 ```
+
+A tool never re-checks what the boundary decided. A protected tool declares
+`identity: ResolvedIdentity` and the resolver refuses an anonymous caller before it runs;
+a public tool (`get_products`, `list_creative_formats`, `get_adcp_capabilities`) declares
+`identity: PublicIdentity` and branches on `identity.principal is None` itself. The registry
+derives `requires_credential()` from that annotation, so there is no `auth=` literal on the
+row and no `require_principal` helper to call.
 
 **A controller never calls another controller.** When one tool needs another tool's work --
 `create_media_buy` and `update_media_buy` upload a package's inline creatives -- it calls the
@@ -274,11 +282,11 @@ outer request's `idempotency_key` into a function with no business seeing it. To
 not before.
 
 **Rules for `_impl` functions:**
-- Accept `ResolvedIdentity`, never `Context`, raw headers or a token
+- Accept `ResolvedIdentity` (protected) or `PublicIdentity` (public), never `Context`, raw headers or a token
 - Raise `AdCPSalesAgentError` subclasses, never `ToolError` (that's transport-specific)
 - Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
 - No auth extraction, tenant resolution, account resolution, idempotency or context echo — the boundary's job
-- Declare exactly `(req: <DTO>, identity: ResolvedIdentity)`: nothing else can be supplied
+- Declare exactly `(req: <DTO>, identity: ResolvedIdentity)` or `(req: <DTO>, identity: PublicIdentity)`: nothing else can be supplied, and the annotation is the credential policy
 
 **Rules for transports:**
 - Hand the raw payload and the request headers to `serve(tool_name, payload, headers, protocol)` — never resolve an identity, never call an implementation directly

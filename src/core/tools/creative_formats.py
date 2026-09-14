@@ -79,7 +79,7 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error as AdCPResponseError
 
 if TYPE_CHECKING:
@@ -135,7 +135,7 @@ def _make_asset(
 
 
 def _list_creative_formats_impl(
-    req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity
+    req: ListCreativeFormatsRequest | None, identity: PublicIdentity
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (AdCP spec endpoint).
 

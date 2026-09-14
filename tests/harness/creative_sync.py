@@ -688,8 +688,8 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
                     account_id = self.setup_default_account(
                         principal_id=getattr(identity, "principal_id", None)
                     ).account_id
-            # The TYPED reference, not a bare dict: the wrappers hand this straight to
-            # enrich_identity_with_account, which reads AccountReference.root. A dict gets
+            # The TYPED reference, not a bare dict: the resolver hands this straight to
+            # account_lookup.find_account, which reads AccountReference.root. A dict gets
             # as far as "'dict' object has no attribute 'root'". build_rest_body serialises
             # it for the wire itself.
             kwargs["account"] = AccountReference(root={"account_id": account_id})
@@ -705,10 +705,12 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         across a call signature, and would grade a shape production no longer has.
 
         The 'identity' kwarg defaults to self.identity. If 'account' is present it is
-        resolved via enrich_identity_with_account (the same call the boundary makes); an
-        absent one still reaches the REQUEST, because the schema requires the field, but is
-        never resolved -- so a scenario about an unknown tenant keeps reaching the auth
-        rejection it grades rather than an account-resolution error.
+        resolved through the resolver's own account read (``resolved_identity._load_account``)
+        for the identity's principal and the identity is rebuilt as an ``AccountIdentity``
+        with the account inside; an absent one still reaches the REQUEST, because the
+        schema requires the field, but is never resolved -- so a scenario about an unknown
+        tenant keeps reaching the auth rejection it grades rather than an
+        account-resolution error.
 
         This is the IN-PROCESS path, and it is the one production itself takes when
         ``create_media_buy`` uploads a package's inline creatives. It performs no idempotency
@@ -722,12 +724,16 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
         identity = kwargs.pop("identity")
 
-        # Handle account kwarg — resolve at boundary, same as the boundary does
+        # Handle account kwarg -- the resolver's own account read, so this path cannot drift
+        # from what a wire leg gets: one lookup, one conversion, the factory builds the type.
         account = kwargs.pop("account", None)
         if account is not None:
-            from src.core.transport_helpers import enrich_identity_with_account
+            from src.core.resolved_identity import _load_account
+            from tests.factories.principal import PrincipalFactory
 
-            identity = enrich_identity_with_account(identity, account)
+            identity = PrincipalFactory.make_account_identity(
+                identity, _load_account(account, identity.tenant_id, identity.principal)
+            )
 
         req = SyncCreativesRequest(
             # The schema REQUIRES account, and this path deliberately does not resolve one

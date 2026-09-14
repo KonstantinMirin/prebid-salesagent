@@ -9,12 +9,11 @@ from typing import Any
 from adcp.types import CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
-from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
 from src.core.helpers import enum_value, log_tool_activity
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.schemas.creative import SyncCreativesRequest
 from src.core.tenant_context import TenantContext
@@ -54,7 +53,7 @@ def _with_creative(details: ValidationDetails | None, creative_id: str) -> Valid
 
 def _sync_creatives_impl(
     req: SyncCreativesRequest,
-    identity: ResolvedIdentity,
+    identity: AccountIdentity,
 ) -> SyncCreativesResponse:
     """The sync_creatives CONTROLLER: resolve who is calling, then run the service.
 
@@ -68,9 +67,7 @@ def _sync_creatives_impl(
     carried the outer request's ``idempotency_key`` into a function that had no business
     seeing it, and inherited an auth check that had already run. They call the SERVICE now.
     """
-    principal_id = require_principal(identity).principal_id
-    tenant = require_tenant(identity)
-    return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
+    return sync_creatives(req, identity=identity, principal_id=identity.principal.principal_id, tenant=identity.tenant)
 
 
 def sync_creatives(

@@ -54,7 +54,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import (
     get_adapter_class_for_tenant,
 )
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from src.core.schemas.capability_declarations import (
     DEFAULT_SPECIALISMS,
@@ -297,7 +297,7 @@ def _build_geo_postal_areas(targeting_caps: TargetingCapabilities | None) -> Pos
 
 
 def _get_adcp_capabilities_impl(
-    req: GetAdcpCapabilitiesRequest | None, identity: ResolvedIdentity
+    req: GetAdcpCapabilitiesRequest | None, identity: PublicIdentity
 ) -> GetAdcpCapabilitiesResponse:
     """Shared implementation for get_adcp_capabilities.
 

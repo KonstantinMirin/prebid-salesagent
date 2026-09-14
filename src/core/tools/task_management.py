@@ -17,7 +17,6 @@ from adcp.types.generated_poc.protocol.get_task_status_response import HistoryIt
 from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_principal, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.errors.details import ConflictDetails, ValidationDetails
 from src.core.exceptions import (
@@ -242,8 +241,8 @@ async def _list_tasks_impl(
     limit = req.pagination.max_results if req.pagination and req.pagination.max_results else 20
     offset = 0
 
-    tenant = require_tenant(identity)
-    principal_id = require_principal(identity).principal_id  # F-03: authenticated principal required
+    tenant = identity.tenant
+    principal_id = identity.principal.principal_id  # F-03: the boundary refused an anonymous caller
 
     with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
@@ -318,9 +317,9 @@ async def _get_task_status_impl(
     """
     task_id = req.task_id
 
-    tenant = require_tenant(identity)
-    # F-03: an authenticated (non-anonymous) principal is required
-    principal_id = require_principal(identity).principal_id
+    tenant = identity.tenant
+    # F-03: an authenticated principal is required; the ResolvedIdentity carries one by type
+    principal_id = identity.principal.principal_id
 
     with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
@@ -437,8 +436,8 @@ async def _complete_task_impl(
     response_data = req.response_data
     error_message = req.error_message
 
-    tenant = require_tenant(identity)
-    principal_id = require_principal(identity).principal_id  # F-03: an authenticated principal is required
+    tenant = identity.tenant
+    principal_id = identity.principal.principal_id  # F-03: the boundary refused an anonymous caller
 
     with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
