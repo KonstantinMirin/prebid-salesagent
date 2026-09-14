@@ -1769,7 +1769,7 @@ async def _validate_and_convert_format_ids(
                 field=field,
                 details=AdapterFailureDetails(**where, agent_url=agent_url, format_id=format_id),
                 internal_detail=e,
-            )
+            ) from e
 
         # Format validated - add to results
         validated_format_ids.append({"agent_url": str(agent_url), "id": format_id})

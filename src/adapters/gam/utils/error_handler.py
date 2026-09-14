@@ -209,10 +209,14 @@ def with_retry(
 
                         time.sleep(delay)
                     else:
-                        # The error's own code identifies the fault; the upstream
-                        # text is on internal_detail, which the boundary logs.
+                        # The error's own code identifies the fault. A mapped error is
+                        # raised ``from`` the upstream fault so the boundary's one record
+                        # carries its traceback; an already-typed error is re-raised as
+                        # itself (``raise e from e`` would chain it to itself).
                         logger.error(f"{op_name} failed with {adcp_error.error_code}")
-                        raise adcp_error
+                        if adcp_error is e:
+                            raise
+                        raise adcp_error from e
 
             # All retries exhausted
             if last_exception is None:

@@ -10,7 +10,6 @@ to help buyer agents decide whether to retry, fix, or abandon a request.
 
 from __future__ import annotations
 
-import logging
 import math
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -40,8 +39,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
 
     from src.core.schemas._base import AdcpErrorResponse
-
-logger = logging.getLogger(__name__)
 
 # The recovery vocabulary is the ``Recovery`` StrEnum in src/core/errors/codes.py
 # -- one transcription of the wire schema's three values, not two. The parallel
@@ -222,9 +219,9 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     the spec reads it from: see ``AdCPVersionUnsupportedError`` below, whose
     recovery is "re-pin to a release in the returned
     ``error.details.supported_versions``". Structured values in ``details``,
-    third-party text in ``internal_detail`` (logged server-side by
-    ``adcp_error_for()``, never emitted), and nothing at all in
-    ``message``.
+    the caught exception in ``internal_detail`` and on the ``from`` chain (written
+    once to the server log by the boundary's ``record_boundary_error``, never
+    emitted), and nothing at all in ``message``.
     """
 
     #: The code this class IS. Annotation only on the base: a class that declares
@@ -1148,27 +1145,6 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     return "".join(parts)
 
 
-def _log_internal_detail(exc: AdCPSalesAgentError) -> None:
-    """Emit an ``AdCPSalesAgentError``'s non-wire ``internal_detail`` to the server log.
-
-    The single emission point for every raise site that hands its raw cause to
-    ``internal_detail=`` instead of interpolating it into the buyer-facing
-    ``message``. It lives here because ``adcp_error_for()`` is the one
-    place every error from every transport (MCP, A2A, REST) passes through, so
-    one line replaces a hand-rolled ``logger.error(raw)`` at each raise site —
-    and covers the sites that log nothing at all today.
-    """
-    detail = exc.internal_detail
-    if detail is None:
-        return
-    logger.error(
-        "AdCPSalesAgentError %s caused by %s (not emitted to the buyer)",
-        type(exc).__name__,
-        type(detail).__name__,
-        exc_info=detail,
-    )
-
-
 def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentError:
     """Normalize untyped exceptions to typed AdCPSalesAgentError subclasses.
 
@@ -1184,10 +1160,11 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
     upstream response body -- AdCP 3.1.1 transport-errors.mdx Security Considerations
     MUST-NOT list), and the code's own table sentence is what the buyer sees. The
     original exception is still logged in full server-side by the transport
-    boundary's record_boundary_error() / audit logger.
+    boundary's record_boundary_error() / audit logger. This function logs nothing:
+    a typed error's cause is on its ``__cause__`` chain (every raise site that wraps
+    an exception raises ``from`` it), and the boundary writes that chain once.
     """
     if isinstance(exc, AdCPSalesAgentError):
-        _log_internal_detail(exc)
         return exc
     # A pydantic ValidationError is BY CONSTRUCTION a schema-constraint violation, and
     # 3.1/enums/error-code.json is explicit about which code that earns:

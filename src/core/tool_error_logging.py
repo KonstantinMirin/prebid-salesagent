@@ -94,15 +94,21 @@ def record_boundary_error(
     error. Sink failures log at WARNING so a quiet outage in audit infrastructure is findable.
     """
     error_code, error_message, _recovery = extract_error_info(error)
-    is_typed = isinstance(error, AdCPSalesAgentError)
     transport_upper = transport.upper()
     tenant_id = identity.tenant_id if identity is not None else None
     principal_id = identity.principal_id if identity is not None else None
 
-    if is_typed:
-        # A typed error is the buyer-correctable path, so WARNING. When it was raised
-        # ``from`` a cause, the traceback carries that chain and is the one record of
-        # what broke underneath; without a cause there is nothing a traceback adds.
+    if isinstance(error, AdCPSalesAgentError):
+        # A typed error is the buyer-correctable path, so WARNING. This is the ONE
+        # record of what broke underneath: the traceback is attached when the error
+        # carries a cause, either raised ``from`` it (``__cause__``) or handed to
+        # ``internal_detail`` without ``from`` (``with_retry`` re-raised a mapped
+        # error bare), and ``exc_info`` on the error prints its ``__cause__`` or
+        # ``__context__`` chain, so the caught exception is in the record either way.
+        # Nothing logs ``internal_detail`` separately: ``adcp_error_for`` used to write
+        # it a second time at ERROR, and one cause was two tracebacks
+        # (salesagent-3cs7o.24). Without a cause of either kind there is nothing a
+        # traceback adds.
         logger.warning(
             "%s boundary translating %s to envelope: %s - %s (operation=%s)",
             transport_upper,
@@ -110,7 +116,7 @@ def record_boundary_error(
             error_code,
             error_message,
             operation,
-            exc_info=error if error.__cause__ is not None else None,
+            exc_info=error if (error.__cause__ is not None or error.internal_detail is not None) else None,
         )
     else:
         logger.error(

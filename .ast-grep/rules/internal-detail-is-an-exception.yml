@@ -8,11 +8,13 @@
 # a status) belongs on the declared details class, and a caught exception is passed as itself.
 #
 # WHY AST-GREP AND NOT RUFF. TID251 bans a NAME that is imported; a keyword argument's VALUE
-# being a string literal is a structural fact about the call site, which only a syntax rule
-# can state. The rule matches the keyword argument `internal_detail=` (and the attribute
-# assignment `x.internal_detail =`) whose value is a string, an f-string, an implicitly
-# concatenated string, or one of those in parentheses. `internal_detail=e` and
-# `internal_detail=None` match nothing.
+# being a string expression is a structural fact about the call site, which only a syntax
+# rule can state. The rule matches the keyword argument `internal_detail=` (and the
+# attribute assignment `x.internal_detail =`) whose value is an authored string in any of
+# its spellings: a string or f-string literal, an implicitly concatenated string, a `+`
+# with a string on either side, `%` formatting of a string, `.format(...)` on a string,
+# `str(...)`, a conditional expression with a string arm, or any of those in parentheses.
+# `internal_detail=e` and `internal_detail=None` match nothing.
 #
 # Files: src/, scripts/ AND tests/ -- the last is the scope mypy does not cover.
 id: internal-detail-is-an-exception
@@ -27,15 +29,42 @@ files:
   - "scripts/**/*.py"
   - "tests/**/*.py"
 utils:
+  # Recursive on purpose: `("a" + b)`, `str(x) if c else "y"` and their nestings all
+  # bottom out in a string literal, a `str(...)` call, or a `.format(...)` on a string.
+  # The metavariables are the non-capturing `$_` kind: a capturing `$A` is bound once
+  # per match, so `x + ("b" + y)` would require the inner `$A` to equal the outer one
+  # and the nested `+` would never match.
   authored-string:
     any:
       - kind: string
       - kind: concatenated_string
       - kind: parenthesized_expression
         has:
-          any:
-            - kind: string
-            - kind: concatenated_string
+          matches: authored-string
+      - pattern: $_L + $_R
+        has:
+          matches: authored-string
+      - pattern: $_L % $_R
+        has:
+          field: left
+          matches: authored-string
+      - pattern: $_S.format($$$_ARGS)
+        has:
+          field: function
+          has:
+            field: object
+            matches: authored-string
+      - pattern: str($$$_ARGS)
+      # tree-sitter-python gives conditional_expression no field names; its children
+      # are consequence, condition, alternative in that order.
+      - pattern: $_T if $_C else $_F
+        any:
+          - has:
+              nthChild: 1
+              matches: authored-string
+          - has:
+              nthChild: 3
+              matches: authored-string
 rule:
   any:
     - kind: keyword_argument
