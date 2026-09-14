@@ -2284,8 +2284,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "production reads a static rate and refuses when none is stored (#2229)",
                 True,
             ),
-            "T-UC-004-ext-a": ("partial-success Error needs suggestion field + authentication in message", True),
-            "T-UC-004-ext-b": ("partial-success Error model needs suggestion field — production enhancement", True),
+            # Graduated: T-UC-004-ext-a and T-UC-004-ext-b. Both reasons named a missing
+            # suggestion field; no suggestion was ever missing (every CODE_TABLE entry
+            # carries one, which is why the same reason was already retired on ext-f).
+            # What actually failed was each scenario's own demand: ext-a asked for the
+            # code "principal_id_missing" and ext-b for "principal_not_found", neither of
+            # which is among the pin's 92 codes. Corrected to AUTH_MISSING (nothing
+            # presented) and AUTH_INVALID (presented and rejected) per 3.1.1
+            # enums/error-code.json, with ext-b's setup replaced by a credential the
+            # resolver really rejects -- its old Given named an absent principal id that
+            # changed nothing about the request. Both now XPASS, wire-graded through
+            # then_error_code, which has no reconstructed fallback.
             "T-UC-004-ext-c": ("partial-success Error model needs suggestion field — production enhancement", True),
             "T-UC-004-ext-d": ("partial-success Error model needs suggestion field — production enhancement", True),
             # Graduated: T-UC-004-identify-partial, T-UC-004-identify-batch-ownership.

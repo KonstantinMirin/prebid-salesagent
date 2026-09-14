@@ -304,21 +304,13 @@ def given_principal_no_buys(ctx: dict, principal_id: str) -> None:
     ctx["media_buys"] = {}
 
 
-@given(parsers.parse('no principal "{principal_id}" exists in the tenant database'))
-def given_no_principal(ctx: dict, principal_id: str) -> None:
-    """No principal with this ID exists.
-
-    The harness seeds exactly one principal -- the authenticated one -- so any
-    other id is absent by construction. What this can establish is that the
-    scenario did not name THAT one: "no principal X exists" while X is the caller
-    would grade the opposite of what it says. The two ctx flags this replaced
-    were read by no step.
-    """
-    authenticated = ctx["env"]._principal_id
-    assert principal_id != authenticated, (
-        f"Step claims principal {principal_id!r} does not exist, but it is the "
-        "authenticated principal this scenario dispatches as."
-    )
+# REMOVED with the scenario it served: `no principal "<id>" exists in the tenant
+# database`. The harness seeds exactly one principal -- the authenticated one -- so any
+# other id is absent by construction and the step could only assert that the scenario did
+# not name THAT one. Naming an absent id changed nothing about the request, so ext-b went
+# out as the real authenticated principal and graded a successful read while claiming to
+# grade a refusal. It now uses the generic `a presented credential that resolves to no
+# principal`, which the resolver actually rejects (AUTH_INVALID).
 
 
 def _create_unique_media_buy(
@@ -1122,13 +1114,12 @@ def when_request_delivery_default(ctx: dict) -> None:
 
 @when("the Buyer Agent sends a delivery metrics request without authentication")
 def when_request_no_auth(ctx: dict) -> None:
-    """Request delivery metrics with missing principal (authenticated but no principal_id).
+    """Request delivery metrics presenting the env's tenant and no token.
 
-    The feature scenario 'Authentication error - missing principal' expects the
-    principal_id_missing error code: the tenant is addressed but no token is
-    presented, so no principal resolves.
+    The tenant is addressed so the request reaches a known seller, and nothing is
+    presented for it to verify, which is the pin's AUTH_MISSING state ("no Authorization
+    header was included in the request"). The refusal comes from the real resolver.
     """
-    ctx["has_auth"] = False
     dispatch_request(ctx, credential=ctx["env"].credential(token=None))
 
 

@@ -470,28 +470,46 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # Boundary: 32 chars (min)
 
   @T-UC-004-ext-a @extension @ext-a @error @nfr @nfr-001
-  Scenario: Authentication error - missing principal
+  Scenario: Authentication error - no credentials presented
     When the Buyer Agent sends a delivery metrics request without authentication
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "principal_id_missing"
+    And the error code should be "AUTH_MISSING"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error explains authentication required
     # POST-F3: Suggestion to provide credentials
+    #
+    # The code was "principal_id_missing", corrected against adcp 3.1.1
+    # enums/error-code.json: it declares 92 codes, none containing "PRINCIPAL", and every
+    # one is upper snake case, so that string is neither a member nor the shape of one.
+    # AUTH_MISSING is the member this scenario's state names -- "No credentials were
+    # presented. Sellers MUST return this code when no Authorization header was included
+    # in the request" -- and its recovery is "correctable", which is what POST-F3 asks for.
 
   @T-UC-004-ext-b @extension @ext-b @error
-  Scenario: Principal not found in tenant database
-    Given the Buyer is authenticated
-    And no principal "unknown-buyer" exists in the tenant database
+  Scenario: Credentials presented but resolving to no principal
+    Given a presented credential that resolves to no principal
     When the Buyer Agent requests delivery metrics
     Then the error is compliant with the AdCP error spec
     And the operation should fail
-    And the error code should be "principal_not_found"
+    And the error code should be "AUTH_INVALID"
     And the error should include "suggestion" field
     # POST-F1: System state unchanged
-    # POST-F2: Error explains principal not found
-    # POST-F3: Suggestion to verify account
+    # POST-F2: Error explains the credential was rejected
+    #
+    # Both halves were corrected against adcp 3.1.1. The code was "principal_not_found",
+    # which is not among the pin's 92 codes; AUTH_INVALID is the one it defines for this
+    # state -- "Credentials were presented but rejected -- revoked, malformed signature,
+    # or a key no longer in the seller's keystore. Sellers MUST return this code when an
+    # Authorization header was present but verification failed" -- with recovery
+    # "terminal".
+    #
+    # The setup was "the Buyer is authenticated / And no principal 'unknown-buyer' exists
+    # in the tenant database", which established nothing: the second sentence only
+    # asserted that the named id is not the caller, so the request went out as the real
+    # authenticated principal and the scenario graded a successful read. It now presents a
+    # credential that verifies against no principals row, so the real resolver refuses it.
 
   @T-UC-004-ext-c @extension @ext-c @error @tension
   Scenario: Media buy not found - nonexistent identifier

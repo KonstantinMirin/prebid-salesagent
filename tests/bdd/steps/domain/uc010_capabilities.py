@@ -546,14 +546,13 @@ def given_seller_build_version(ctx: dict, build_version: str) -> None:
 def _call_capabilities(ctx: dict, **kwargs: Any) -> None:
     """Single funnel for every capabilities dispatch (DRY).
 
-    Honors ctx["credential"] (the no-auth and no-tenant Givens) and appends each
-    dispatch's typed payload to ctx["response_history"] for dual-call
-    comparisons. The payload comes from payload_or_none, which reads THIS
-    dispatch's TransportResult: it is None exactly when the dispatch errored
-    (or never happened), which is the distinction the dual-call Then grades.
+    ``ctx["credential"]`` (the no-auth and no-tenant Givens) is honored by
+    ``dispatch_request`` itself. This funnel appends each dispatch's typed payload to
+    ctx["response_history"] for dual-call comparisons. The payload comes from
+    payload_or_none, which reads THIS dispatch's TransportResult: it is None exactly
+    when the dispatch errored (or never happened), which is the distinction the
+    dual-call Then grades.
     """
-    if "credential" not in kwargs and "credential" in ctx:
-        kwargs["credential"] = ctx["credential"]
     dispatch_request(ctx, **kwargs)
     ctx.setdefault("response_history", []).append((payload_or_none(ctx), ctx.get("error")))
 

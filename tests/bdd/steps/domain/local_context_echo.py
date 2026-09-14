@@ -24,7 +24,6 @@ existing seam's existing parameter.
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import uuid4
 
 from pytest_bdd import given, parsers, then, when
@@ -33,7 +32,6 @@ from tests.bdd.steps._outcome_helpers import wire_dict, wire_error_dict
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories.mint import mint
 from tests.factories.request import OMIT, GetMediaBuysRequestFactory, GetProductsRequestFactory
-from tests.harness.transport import NO_IDENTITY_OVERRIDE
 
 #: The ctx slot the Givens accumulate their perturbations into, applied over the
 #: factory baseline at the When. Named rather than reusing a generic key so
@@ -161,10 +159,10 @@ def _send(ctx: dict, *, tool: str) -> None:
     "sends the get_products request" would dispatch get_media_buys and grade
     something other than what it reads as.
 
-    ``credential`` is forwarded only when a Given set it — ``given_buyer_no_auth``
-    writes a token-less ``ctx["credential"]`` for the token-less scenarios, and
-    an empty dict is a MEANINGFUL value there (dispatch with no headers), which
-    is why the presence of the key decides rather than its truthiness.
+    A Given's ``ctx["credential"]`` is forwarded by ``dispatch_request`` itself —
+    ``given_buyer_no_auth`` writes a token-less one for the token-less scenarios, and an
+    empty dict is a MEANINGFUL value there (dispatch with no headers), which is why the
+    presence of the key decides rather than its truthiness.
     """
     env = ctx["env"]
     assert env.MCP_TOOL == tool, (
@@ -176,8 +174,7 @@ def _send(ctx: dict, *, tool: str) -> None:
         "would dispatch the bare baseline and grade the seller's answer to nothing it claims to send"
     )
     payload = _FACTORY_BY_TOOL[tool].payload(**ctx[_OVERRIDES])
-    credential: Any = ctx["credential"] if "credential" in ctx else NO_IDENTITY_OVERRIDE
-    dispatch_request(ctx, credential=credential, **payload)
+    dispatch_request(ctx, **payload)
 
 
 @when("the Buyer Agent sends the get_products request")

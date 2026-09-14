@@ -212,7 +212,20 @@ def dispatch_request(ctx: dict, *, credential: Any = NO_IDENTITY_OVERRIDE, **kwa
     (which uses kwargs.setdefault, so an explicit credential won't be clobbered).
     ``env.credential(token=None)`` presents nothing on the env's tenant; ``{}``
     sends no headers at all.
+
+    ``ctx["credential"]`` IS THAT OVERRIDE WHEN THE CALLER PASSES NONE. Every writer of
+    that key -- the generic no-auth, no-tenant and unresolvable-credential Givens, and
+    their per-use-case copies -- writes it to mean "present this instead of the env's
+    own", and five When steps each re-implemented the same three-line read (uc002,
+    uc006, uc010, uc019, local_context_echo). A When that did not know to make that
+    read presented the env's OWN valid credential, so the scenario dispatched an
+    authenticated request while its Given said there was none, and the auth row it was
+    grading passed on a success document. That is a wiring defect a step author cannot
+    see, so the read belongs in the one place every transport already goes through.
+    An explicit ``credential=`` still wins, which is what multi-agent steps pass.
     """
+    if credential is NO_IDENTITY_OVERRIDE:
+        credential = ctx.get("credential", NO_IDENTITY_OVERRIDE)
     if credential is not NO_IDENTITY_OVERRIDE:
         kwargs["credential"] = credential
 

@@ -964,10 +964,10 @@ def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
     """Build and dispatch a get_media_buys request, presenting whatever the Given set.
 
     A credential Given writes ``ctx["credential"]`` — a headers dict from
-    ``env.credential(...)`` — and this hands it to ``dispatch_request``, which is the one
-    place that overrides the env's own credential. That is how UC-002, UC-006 and UC-010
-    already do it (uc002_create_media_buy.py:741, uc006_sync_creatives.py:441,
-    uc010_capabilities.py:556), so the auth rows of this use case grade the same way.
+    ``env.credential(...)`` — and ``dispatch_request`` presents it in place of the env's
+    own, for every use case. UC-002, UC-006, UC-010 and the context-echo steps each used
+    to read that key here instead, four copies of one three-line override; the read now
+    lives in the dispatcher, so a When cannot omit it.
 
     What this replaced passed ``identity=None`` for the token-less row, which injected an
     absent identity instead of presenting an absent credential. That is the shape
@@ -982,10 +982,7 @@ def _dispatch_query(ctx: dict, **extra_kwargs: Any) -> None:
     query_kwargs = ctx.get("query_kwargs", {})
     query_kwargs.update(extra_kwargs)
 
-    if "credential" in ctx:
-        dispatch_request(ctx, credential=ctx["credential"], **query_kwargs)
-    else:
-        dispatch_request(ctx, **query_kwargs)
+    dispatch_request(ctx, **query_kwargs)
 
 
 @when("the Buyer Agent sends a get_media_buys request with include_snapshot true")

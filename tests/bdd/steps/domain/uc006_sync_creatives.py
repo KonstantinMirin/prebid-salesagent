@@ -412,9 +412,9 @@ def when_sync_creative(ctx: dict) -> None:
     the step text says "syncs the creative". Error handling is the production
     code's responsibility, not the step's.
 
-    Honors ``ctx["has_auth"] is False`` by presenting ``ctx["credential"]``
-    (a token-less credential, or one addressing a tenant that does not exist) so the
-    resolver's refusal fires on the wire.
+    A no-auth Given's ``ctx["credential"]`` (a token-less credential, or one addressing
+    a tenant that does not exist) is presented by ``dispatch_request`` itself, so the
+    resolver's refusal fires on the wire without this step reading the key.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
@@ -437,10 +437,7 @@ def when_sync_creative(ctx: dict) -> None:
         kwargs["delete_missing"] = ctx["delete_missing"]
     if "creative_ids" in ctx:
         kwargs["creative_ids"] = ctx["creative_ids"]
-    if ctx.get("has_auth") is False:
-        dispatch_request(ctx, credential=ctx["credential"], **kwargs)
-    else:
-        dispatch_request(ctx, **kwargs)
+    dispatch_request(ctx, **kwargs)
 
 
 def _action_str(action: object) -> str:

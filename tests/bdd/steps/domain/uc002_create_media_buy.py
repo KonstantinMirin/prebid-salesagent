@@ -735,12 +735,9 @@ def _dispatch_full_create(ctx: dict) -> None:
     # cannot fail when the server stops rejecting the payload, because it never asked one.
     kwargs = ctx.get("request_kwargs", {})
 
-    # No-auth scenarios (#1417) stash a token-less credential so the
-    # resolver's refusal is exercised on the wire.
-    if "credential" in ctx:
-        dispatch_request(ctx, credential=ctx["credential"], **kwargs)
-    else:
-        dispatch_request(ctx, **kwargs)
+    # No-auth scenarios (#1417) stash a token-less credential so the resolver's refusal
+    # is exercised on the wire. dispatch_request reads ctx["credential"] itself.
+    dispatch_request(ctx, **kwargs)
 
 
 def _dispatch_raw_create(ctx: dict) -> None:
