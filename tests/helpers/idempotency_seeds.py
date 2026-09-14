@@ -7,13 +7,17 @@ probe's ``find_by_key`` serves exactly what production would have stored.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from src.core.schemas._base import CreateMediaBuySuccess
+
+#: The instant the canonical seeded buy was confirmed. A literal, so every module
+#: seeding this body stores the same one.
+SEEDED_CONFIRMED_AT = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBuySuccess:
@@ -31,6 +35,16 @@ def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBu
     keys on ``errors`` first resolves this body to the error branch. Every seeded replay
     in the suite therefore grades the order, instead of passing on a body so plain that
     either order works.
+
+    This is the BUYER'S envelope, not an adapter carrier, and it has to be:
+    ``record_success`` stores ``response_model.model_dump(mode="json")`` as the
+    ``response`` half of the cached row, and a replay serves that body verbatim. So
+    ``sync_success`` is the right constructor and ``confirmed_at`` / ``revision`` are
+    passed explicitly — they carry no field default, which is what stops a seed from
+    fabricating them silently. The instant is a fixed literal rather than ``now()``
+    because this is the ONE canonical seeded body the whole suite shares, and a
+    deterministic one cannot make two modules disagree; a seeded row's expiry is
+    ``record_success``'s own ``ttl``/``now``, not this field.
     """
     from adcp.server.helpers import valid_actions_for_status
     from adcp.types import MediaBuyStatus
@@ -38,12 +52,14 @@ def make_active_cached_success(media_buy_id: str = "mb_seeded") -> CreateMediaBu
     from src.core.errors.codes import ErrorCode
     from src.core.schemas._base import CreateMediaBuySuccess, Error
 
-    return CreateMediaBuySuccess.carrier(
+    return CreateMediaBuySuccess.sync_success(
         media_buy_id=media_buy_id,
         packages=[],
         status=MediaBuyStatus.active,
         valid_actions=valid_actions_for_status(MediaBuyStatus.active.value),
         errors=[Error.of(ErrorCode.UNSUPPORTED_FEATURE, field="packages[0].targeting_overlay.property_list")],
+        confirmed_at=SEEDED_CONFIRMED_AT,
+        revision=1,
     )
 
 

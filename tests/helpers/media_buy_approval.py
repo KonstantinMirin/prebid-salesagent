@@ -28,10 +28,17 @@ ADAPTER_BOUNDARY = "src.core.tools.media_buy_create._execute_adapter_media_buy_c
 
 
 def adapter_success(*_args: Any, **_kwargs: Any) -> Any:
-    """What a healthy adapter hands back: an order id and no packages to map."""
-    from src.core.schemas import CreateMediaBuySuccess
+    """What a healthy adapter hands back: an order id and no packages to map.
 
-    return CreateMediaBuySuccess.carrier(media_buy_id=f"gam_order_{uuid.uuid4().hex[:8]}", packages=[])
+    This stands in for ``_execute_adapter_media_buy_creation``, whose return type
+    IS the adapter contract, so it returns ``AdapterCreateResult`` and not a wire
+    model. The carrier declares only what the tool reads off an adapter, and its
+    ``extra="forbid"`` refuses anything else, so this cannot claim a
+    ``confirmed_at`` or a ``revision`` that only the persisted row owns.
+    """
+    from src.adapters.base import AdapterCreateResult
+
+    return AdapterCreateResult(media_buy_id=f"gam_order_{uuid.uuid4().hex[:8]}", packages=[])
 
 
 def adapter_failure(*_args: Any, **_kwargs: Any) -> Any:

@@ -218,21 +218,25 @@ def _persist_simulation_config(env: Any, resp: AdapterGetMediaBuyDeliveryRespons
 def make_adapter_update_side_effect() -> Any:
     """Return a side_effect for a mocked ``adapter.update_media_buy``.
 
-    Produces an ``UpdateMediaBuySuccess`` echoing the media_buy_id from the
-    call and a resolved ``implementation_date``, mirroring the mock adapter's
-    own ``update_media_buy`` return (mock_ad_server.update_media_buy). Used by
+    Produces the adapter contract, ``AdapterUpdateResult``, echoing the
+    media_buy_id from the call and claiming no affected packages, which mirrors
+    what the mock adapter's own ``update_media_buy`` returns. Used by
     MediaBuyDualEnv to wire the update-path adapter mock.
-    """
-    from src.core.schemas._base import UpdateMediaBuySuccess
 
-    def _update_response(*args: Any, **kwargs: Any) -> UpdateMediaBuySuccess:
+    It passes no ``implementation_date``, and ``AdapterUpdateResult``'s
+    ``extra="forbid"`` is what makes that a check rather than a convention. The
+    field is not an adapter's to report: ``media_buy_update`` mints it itself
+    from ``_applied_instant()`` on the branch that applied the change. An
+    adapter kept passing it after the carrier split precisely because nothing
+    refused it, which is the case the carrier's own docstring cites.
+    """
+    from src.adapters.base import AdapterUpdateResult
+
+    def _update_response(*args: Any, **kwargs: Any) -> AdapterUpdateResult:
+        # The tool calls adapter.update_media_buy with every argument by
+        # keyword, so media_buy_id arrives in kwargs.
         media_buy_id = kwargs.get("media_buy_id") or (args[0] if args else "")
-        today = kwargs.get("today") or datetime.now(UTC)
-        return UpdateMediaBuySuccess.carrier(
-            media_buy_id=media_buy_id,
-            affected_packages=[],
-            implementation_date=today,
-        )
+        return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
 
     return _update_response
 
