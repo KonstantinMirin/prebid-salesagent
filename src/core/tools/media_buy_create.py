@@ -110,7 +110,6 @@ from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
 from src.core.database.models import Creative as DBCreative
-from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Product as ProductModel
@@ -2882,9 +2881,9 @@ async def _create_media_buy_impl(
             # This must happen AFTER media packages are created so we have package_ids
             if req.packages:
                 with MediaBuyUoW(tenant.tenant_id) as assign_uow:
-                    # FIXME(#1788): assignment creation should use repository methods
                     assert assign_uow.session is not None
                     assert assign_uow.creatives is not None
+                    assert assign_uow.assignments is not None
                     session = assign_uow.session
                     # Batch load all creatives upfront
                     all_creative_ids = []
@@ -2933,19 +2932,15 @@ async def _create_media_buy_impl(
                                     continue
 
                                 # Create database assignment
-                                assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
-                                assignment = DBAssignment(
-                                    assignment_id=assignment_id,
-                                    tenant_id=tenant.tenant_id,
-                                    principal_id=principal_id,
+                                assignment = assign_uow.assignments.create(
                                     media_buy_id=media_buy_id,
                                     package_id=pkg_id,
                                     creative_id=creative_id,
+                                    principal_id=principal_id,
                                 )
-                                session.add(assignment)
                                 logger.info(
                                     log_safe(
-                                        f"[CREATIVE_ASSIGN_DEBUG] Created assignment {assignment_id} "
+                                        f"[CREATIVE_ASSIGN_DEBUG] Created assignment {assignment.assignment_id} "
                                         f"for creative {creative_id}"
                                     )
                                 )
@@ -3575,9 +3570,9 @@ async def _create_media_buy_impl(
         # Handle creative_ids in packages if provided (immediate association)
         if req.packages:
             with MediaBuyUoW(tenant.tenant_id) as creative_uow:
-                # FIXME(#1788): creative assignment should use repository methods
                 assert creative_uow.session is not None
                 assert creative_uow.creatives is not None
+                assert creative_uow.assignments is not None
                 session = creative_uow.session
                 # Batch load all creatives upfront to avoid N+1 queries
                 all_creative_ids = []
@@ -3768,16 +3763,12 @@ async def _create_media_buy_impl(
                                     raise AdCPAdapterError() from upload_error
 
                             # Create database assignment
-                            assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
-                            assignment = DBAssignment(
-                                assignment_id=assignment_id,
-                                tenant_id=tenant.tenant_id,
-                                principal_id=principal_id,
+                            creative_uow.assignments.create(
                                 media_buy_id=response.media_buy_id,
                                 package_id=response_package_id,
                                 creative_id=creative_id,
+                                principal_id=principal_id,
                             )
-                            session.add(assignment)
 
                         session.flush()  # Flush assignments before adapter call
 

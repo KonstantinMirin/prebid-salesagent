@@ -137,7 +137,7 @@ def init_db(exit_on_error=False):
             session.add(default_currency_limit)
 
             # Create adapter config for mock adapter
-            adapter_config = AdapterConfig(tenant_id="default", adapter_type="mock", mock_dry_run=False)
+            adapter_config = AdapterConfig(tenant_id="default", adapter_type="mock")
             session.add(adapter_config)
 
             # Create default principal with well-known token for easy testing

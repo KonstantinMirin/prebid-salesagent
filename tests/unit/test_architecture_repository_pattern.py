@@ -355,7 +355,8 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_tenant_isolation_breach_fix.py
     # tests/integration/test_tenant_isolation_fix.py
     # tests/integration/test_tenant_management_api_integration.py
-    ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
+    # mock_api_key_auth fixed — stores the API key digest through
+    # TenantManagementConfigRepository (salesagent-3cs7o.18)
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
     # tests/integration/test_tenant_settings_comprehensive.py
     ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),

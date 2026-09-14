@@ -89,14 +89,11 @@ class SignalsAgentRegistry:
         agents: list[SignalsAgent] = []
 
         # Load tenant-specific agents from database
-        from sqlalchemy import select
-
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import SignalsAgent as SignalsAgentModel
+        from src.core.database.repositories.agent import SignalsAgentRepository
 
         with get_db_session() as session:
-            stmt = select(SignalsAgentModel).filter_by(tenant_id=tenant_id, enabled=True)
-            db_agents = session.scalars(stmt).all()
+            db_agents = SignalsAgentRepository(session, tenant_id).get_enabled()
 
             agents.extend(self.config_for(db_agent) for db_agent in db_agents)
 

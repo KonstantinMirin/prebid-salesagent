@@ -223,8 +223,9 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/sync_api.py", "get_sync_history"),
     ("src/admin/sync_api.py", "get_sync_stats"),
     ("src/admin/sync_api.py", "get_sync_status"),
-    ("src/admin/auth_helpers.py", "get_api_key_from_config"),  # Shared auth helper — single select for API key lookup
-    ("src/admin/sync_api.py", "initialize_tenant_management_api_key"),
+    # auth_helpers.get_api_key_from_config and sync_api.initialize_tenant_management_api_key
+    # fixed — both went through TenantManagementConfigRepository when the operator API key
+    # stopped being stored in plaintext (salesagent-3cs7o.18)
     ("src/admin/sync_api.py", "list_tenants"),
     ("src/admin/sync_api.py", "sync_tenant_orders"),
     ("src/admin/sync_api.py", "trigger_sync"),

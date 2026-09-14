@@ -165,7 +165,19 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
-    principals = relationship("Principal", back_populates="tenant", cascade="all, delete-orphan")
+    # No `principals` collection. It had no reader, and a relationship traversal is the
+    # one way to reach Principal rows without importing the class — which is what the
+    # TID251 ban on `src.core.database.models.Principal` outside the four repository
+    # modules exists to prevent. Deleting a tenant still deletes its principals: the
+    # DATABASE does it, because alembic revision 390461e816ea sets the
+    # principals.tenant_id foreign key to ON DELETE CASCADE. Before that revision the
+    # migrated schema had NO ACTION — the `ondelete="CASCADE"` declared on the mapped
+    # column never altered the constraint `initial_schema` had already created — and this
+    # collection's `cascade="all, delete-orphan"` was the only thing deleting them, which
+    # is why the constraint had to change when the collection went. The hard-delete path
+    # in src/admin/tenant_management_api.py also deletes principals explicitly through
+    # PrincipalRepository.delete_all; that is now belt-and-braces, not the guarantee.
+    # Principal.tenant survives: the other direction yields a tenant, not a principal.
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     accounts = relationship("Account", back_populates="tenant", cascade="all, delete-orphan")
     media_buys = relationship("MediaBuy", back_populates="tenant", cascade="all, delete-orphan", overlaps="media_buys")
@@ -653,8 +665,12 @@ class Principal(Base, JSONValidatorMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships
-    tenant = relationship("Tenant", back_populates="principals")
+    # Relationships. `tenant` has no back_populates any more: the collection it paired
+    # with, Tenant.principals, is deleted (salesagent-3cs7o.26). This direction stays —
+    # it yields a TENANT row from a principal, which is not the traversal the ban on
+    # importing this class is about, and every ORM factory in tests/factories builds its
+    # parent row through exactly this attribute.
+    tenant = relationship("Tenant", overlaps="principals")
     media_buys = relationship("MediaBuy", back_populates="principal", overlaps="media_buys")
     strategies = relationship("Strategy", back_populates="principal", overlaps="strategies")
     push_notification_configs = relationship(
@@ -1347,6 +1363,12 @@ class MediaBuy(Base):
 
     # Relationships
     tenant = relationship("Tenant", back_populates="media_buys", overlaps="media_buys")
+    #: ADMIN-ONLY READ. One reader: src/admin/services/dashboard_service.py, which needs
+    #: the advertiser's display name and joinedloads this through MediaBuyRepository. A
+    #: tool must not traverse it — a tool reads `identity.principal`, and reaching a
+    #: Principal row off a media buy is the traversal the TID251 ban on the ORM class
+    #: cannot see. Tenant.principals was deleted for that reason (salesagent-3cs7o.26);
+    #: this one survives because the admin UI genuinely reads it.
     principal = relationship(
         "Principal",
         foreign_keys=[tenant_id, principal_id],
@@ -1614,9 +1636,6 @@ class AdapterConfig(Base):
         primary_key=True,
     )
     adapter_type: Mapped[str] = mapped_column(String(50), nullable=False)
-
-    # Mock adapter
-    mock_dry_run: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
     # Google Ad Manager
     gam_network_code: Mapped[str | None] = mapped_column(String(50), nullable=True)

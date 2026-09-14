@@ -415,6 +415,25 @@ class CreativeAssignmentRepository:
             ).all()
         )
 
+    def get_by_media_buy_and_package(self, media_buy_id: str, package_id: str) -> list[CreativeAssignment]:
+        """Every assignment on one package OF one media buy, within the tenant.
+
+        ``package_id`` alone is not that question: the column is not unique across
+        buys, so ``get_by_package`` answers a wider one. Both of ``update_media_buy``'s
+        replace-the-package's-creatives branches need this narrower key — they compute
+        the added and removed creative ids from it — and each open-coded it against the
+        raw session with the model imported as ``DBAssignment``.
+        """
+        return list(
+            self._session.scalars(
+                select(CreativeAssignment).where(
+                    CreativeAssignment.tenant_id == self._tenant_id,
+                    CreativeAssignment.media_buy_id == media_buy_id,
+                    CreativeAssignment.package_id == package_id,
+                )
+            ).all()
+        )
+
     def get_existing(
         self,
         media_buy_id: str,
@@ -450,12 +469,21 @@ class CreativeAssignmentRepository:
         creative_id: str,
         principal_id: str,
         weight: int = 100,
+        placement_ids: list[str] | None = None,
     ) -> CreativeAssignment:
         """Create a new assignment within this tenant.
 
         ``principal_id`` is required — the column is NOT NULL (part of the
         composite FK to creatives), so a defaulted None here would only fail
         at flush time, far from the caller.
+
+        ``placement_ids`` is placement-specific targeting (adcp#208), carried for
+        the ``creative_assignments`` branch of ``update_media_buy``; None leaves the
+        column as the model defaults it, which is what every other caller wants.
+
+        The assignment id is minted HERE and nowhere else. ``create_media_buy`` and
+        ``update_media_buy`` each generated their own ``assign_<hex>``, so the table
+        carried two id shapes from four sites; nothing reads the shape.
 
         Does NOT commit - the caller handles that.
         """
@@ -469,8 +497,19 @@ class CreativeAssignmentRepository:
             weight=weight,
             created_at=datetime.now(UTC),
         )
+        if placement_ids is not None:
+            assignment.placement_ids = placement_ids
         self._session.add(assignment)
         return assignment
+
+    def delete_row(self, assignment: CreativeAssignment) -> None:
+        """Delete an assignment this repository already handed the caller.
+
+        ``delete(assignment_id)`` re-selects; the replace-a-package's-creatives paths
+        have just listed the rows and know which to drop, so re-reading each one by id
+        is a query per row for information already in hand.
+        """
+        self._session.delete(assignment)
 
     def delete(self, assignment_id: str) -> bool:
         """Delete an assignment by its ID within this tenant.

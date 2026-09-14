@@ -260,7 +260,6 @@ def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdMan
         adapter_type = config_row.adapter_type
         logger.info(f"[ADAPTER_SELECT] adapter_type from AdapterConfig: {adapter_type}")
         if adapter_type == "mock":
-            adapter_config["dry_run"] = config_row.mock_dry_run or False
             # Default to True (require approval) for safety
             adapter_config["manual_approval_required"] = (
                 config_row.mock_manual_approval_required

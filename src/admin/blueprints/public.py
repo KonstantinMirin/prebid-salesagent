@@ -201,9 +201,7 @@ def provision_tenant():
                 else:
                     flash("Kevel configuration incomplete. You can configure it later in settings.", "warning")
 
-            elif adapter_type == "mock":
-                # Mock adapter needs no additional configuration
-                adapter_config.mock_dry_run = False
+            # The mock adapter needs no additional configuration.
 
             db_session.add(adapter_config)
 

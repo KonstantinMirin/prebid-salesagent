@@ -91,63 +91,111 @@ class TestRequireTenant:
         assert exc_info.value.context == sentinel_context
 
 
-class TestGetApiKeyFromConfig:
-    """Test the key retrieval function (env var → DB fallback)."""
+class _FakeConfigStore:
+    """Stands in for TenantManagementConfigRepository over a dict.
 
-    def test_env_var_takes_priority_over_db(self):
-        """When both env var and DB have keys, env var wins."""
-        from src.admin.auth_helpers import get_api_key_from_config
+    The repository's own interface, so what these tests grade is what auth_helpers
+    hands the store and what it asks back — not a mock's call log. Keyed the way the
+    real rows are keyed, via the shared ``prefix_config_key``, so a change to that
+    derivation breaks here too.
+    """
 
-        with patch.dict("os.environ", {"TEST_API_KEY": "env-key"}):
-            with patch("src.admin.auth_helpers.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_config = MagicMock()
-                mock_config.config_value = "db-key"
-                mock_session.scalars.return_value.first.return_value = mock_config
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
+    rows: dict[str, str] = {}
 
-                result = get_api_key_from_config("TEST_API_KEY", "test_config_key")
-                assert result == "env-key"
+    def __init__(self, session=None):
+        pass
 
-    def test_falls_back_to_db_when_no_env_var(self):
-        """When env var not set, falls back to DB lookup."""
-        from src.admin.auth_helpers import get_api_key_from_config
+    def api_key_digest(self, config_key):
+        return self.rows.get(config_key)
 
-        with patch.dict("os.environ", {}, clear=False):
-            # Ensure TEST_API_KEY is not in env
-            import os
+    def api_key_prefix(self, config_key):
+        from src.core.database.repositories.tenant_management_config import prefix_config_key
 
-            os.environ.pop("TEST_API_KEY", None)
+        return self.rows.get(prefix_config_key(config_key))
 
-            with patch("src.admin.auth_helpers.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_config = MagicMock()
-                mock_config.config_value = "db-key"
-                mock_session.scalars.return_value.first.return_value = mock_config
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
+    def store_api_key(self, config_key, *, digest, prefix, description):
+        from src.core.database.repositories.tenant_management_config import prefix_config_key
 
-                result = get_api_key_from_config("TEST_API_KEY", "test_config_key")
-                assert result == "db-key"
+        self.rows[config_key] = digest
+        self.rows[prefix_config_key(config_key)] = prefix
 
-    def test_returns_none_when_neither_configured(self):
-        """When neither env var nor DB has a key, returns None."""
-        from src.admin.auth_helpers import get_api_key_from_config
 
-        with patch.dict("os.environ", {}, clear=False):
-            import os
+@pytest.fixture
+def fake_config_store():
+    """auth_helpers wired to an in-memory store, with its session context neutralized."""
+    _FakeConfigStore.rows = {}
+    with (
+        patch("src.admin.auth_helpers.TenantManagementConfigRepository", _FakeConfigStore),
+        patch("src.admin.auth_helpers.get_db_session") as mock_db,
+    ):
+        # A session whose only job is to be commit-able; the store above is the state.
+        mock_db.return_value.__enter__ = MagicMock(return_value=MagicMock())
+        mock_db.return_value.__exit__ = MagicMock(return_value=False)
+        yield _FakeConfigStore.rows
 
-            os.environ.pop("TEST_API_KEY", None)
 
-            with patch("src.admin.auth_helpers.get_db_session") as mock_db:
-                mock_session = MagicMock()
-                mock_session.scalars.return_value.first.return_value = None
-                mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
-                mock_db.return_value.__exit__ = MagicMock(return_value=False)
+class TestStoredApiKeyIsHashed:
+    """The operator API key is minted once, stored as sha256, and matched by hash.
 
-                result = get_api_key_from_config("TEST_API_KEY", "test_config_key")
-                assert result is None
+    Same treatment as a principal token (salesagent-3cs7o.7): the row used to hold the
+    plaintext and hand it back on every call, so anyone who could read the table — or
+    call the initializer — held a working credential.
+    """
+
+    def test_mint_stores_sha256_and_prefix_and_returns_the_plaintext_once(self, fake_config_store):
+        import hashlib
+
+        from src.admin.auth_helpers import mint_stored_api_key
+
+        key = mint_stored_api_key("test_config_key", "a description")
+
+        assert key.startswith("sk_")
+        assert fake_config_store["test_config_key"] == hashlib.sha256(key.encode("utf-8")).hexdigest()
+        assert fake_config_store["test_config_key_prefix"] == key[:12]
+        # The plaintext exists in the return value and NOWHERE in the store. The prefix
+        # row is a 12-character head, which is not the key and cannot be presented as one.
+        assert key not in fake_config_store.values()
+
+    def test_matching_hashes_the_presented_key_rather_than_comparing_a_stored_plaintext(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_matches, mint_stored_api_key
+
+        key = mint_stored_api_key("test_config_key", "a description")
+
+        assert api_key_matches(key, None, "test_config_key") is True
+        assert api_key_matches("sk_not-the-key", None, "test_config_key") is False
+        # The stored digest itself is not a credential: presenting it does not authenticate.
+        assert api_key_matches(fake_config_store["test_config_key"], None, "test_config_key") is False
+
+    def test_rotation_invalidates_the_previous_key(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_matches, mint_stored_api_key
+
+        first = mint_stored_api_key("test_config_key", "a description")
+        second = mint_stored_api_key("test_config_key", "a description")
+
+        assert first != second
+        assert api_key_matches(first, None, "test_config_key") is False
+        assert api_key_matches(second, None, "test_config_key") is True
+
+    def test_the_settings_value_wins_and_is_compared_as_the_plaintext_it_is(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_matches, mint_stored_api_key
+
+        stored = mint_stored_api_key("test_config_key", "a description")
+
+        # An operator-supplied deployment secret is a plaintext this process was handed,
+        # not a row this application minted, so it is compared directly — and it wins.
+        assert api_key_matches("env-key", "env-key", "test_config_key") is True
+        assert api_key_matches(stored, "env-key", "test_config_key") is False
+
+    def test_configured_check_answers_existence_without_recovering_a_key(self, fake_config_store):
+        from src.admin.auth_helpers import api_key_is_configured, api_key_prefix, mint_stored_api_key
+
+        assert api_key_is_configured(None, "test_config_key") is False
+        assert api_key_prefix("test_config_key") is None
+
+        key = mint_stored_api_key("test_config_key", "a description")
+
+        assert api_key_is_configured(None, "test_config_key") is True
+        assert api_key_prefix("test_config_key") == key[:12]
 
 
 class TestRequireApiKeyAuth:

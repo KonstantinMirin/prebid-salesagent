@@ -335,14 +335,11 @@ class CreativeAgentRegistry:
             return agents
 
         # Load tenant-specific agents from database
-        from sqlalchemy import select
-
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import CreativeAgent as CreativeAgentModel
+        from src.core.database.repositories.agent import CreativeAgentRepository
 
         with get_db_session() as session:
-            stmt = select(CreativeAgentModel).filter_by(tenant_id=tenant_id, enabled=True)
-            db_agents = session.scalars(stmt).all()
+            db_agents = CreativeAgentRepository(session, tenant_id).get_enabled()
 
             # config_for, not a second mapping: the inline block here also wrote an
             # auth["header"] key with ZERO readers in src/, while auth_header was

@@ -6,9 +6,9 @@ Makes multi-tenant setup as easy as single-tenant.
 
 import argparse
 import json
-import secrets
 import sys
 
+from src.core.credentials import mint_token
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant, User
 from src.core.database.repositories.principal import PrincipalRepository
@@ -92,7 +92,7 @@ def create_tenant(args):
             )
             session.add(adapter_config)
         elif args.adapter == "mock":
-            adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="mock", mock_dry_run=False)
+            adapter_config = AdapterConfig(tenant_id=tenant_id, adapter_type="mock")
             session.add(adapter_config)
 
         # Create initial admin user if email provided
@@ -124,7 +124,7 @@ def create_tenant(args):
             session.add(currency_limit)
 
         # Create default principal for immediate MCP/A2A access
-        principal_token = secrets.token_urlsafe(32)
+        principal_token = mint_token()
         principal_id = f"{tenant_id}_default"
 
         # Build platform_mappings based on adapter type

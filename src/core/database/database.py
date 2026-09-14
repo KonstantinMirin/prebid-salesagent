@@ -89,7 +89,7 @@ def init_db(exit_on_error=False):
 
             if create_demo_tenant:
                 # Demo mode: Add mock adapter config, test principal, currencies, etc.
-                new_adapter = AdapterConfig(tenant_id="default", adapter_type="mock", mock_dry_run=False)
+                new_adapter = AdapterConfig(tenant_id="default", adapter_type="mock")
                 db_session.add(new_adapter)
 
                 # Create a CI test principal for E2E testing

@@ -16,38 +16,30 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 @pytest.fixture
 def mock_api_key_auth(integration_db):
-    """Mock API key authentication to always pass.
+    """A known-good tenant-management API key, stored the way production stores one.
 
-    This fixture bypasses the require_tenant_management_api_key decorator
-    by creating a valid API key in the database that all tests can use.
+    The table keeps sha256(key) plus a display prefix, never the key, so this fixture
+    stores the digest of a key it alone knows and hands the plaintext to the test. A
+    fixture that wrote the plaintext into config_value would authenticate nothing —
+    the decorator hashes what the request presents (salesagent-3cs7o.18).
 
-    API key is provisioned via TENANT_MANAGEMENT_API_KEY env var in production.
+    In production the key is either minted through sync_api/auth_helpers or supplied
+    via the TENANT_MANAGEMENT_API_KEY env var.
     """
-    from datetime import UTC, datetime
-
+    from src.core.credentials import hash_token, token_prefix
     from src.core.database.database_session import get_db_session
-    from src.core.database.models import TenantManagementConfig
+    from src.core.database.repositories.tenant_management_config import TenantManagementConfigRepository
 
-    # Create a test API key in the database
     test_api_key = "sk-test-integration-key"
 
     with get_db_session() as session:
-        # Check if key already exists
-        from sqlalchemy import select
-
-        stmt = select(TenantManagementConfig).filter_by(config_key="tenant_management_api_key")
-        existing = session.scalars(stmt).first()
-
-        if not existing:
-            config = TenantManagementConfig(
-                config_key="tenant_management_api_key",
-                config_value=test_api_key,
-                description="Test API key for integration tests",
-                updated_at=datetime.now(UTC),
-                updated_by="pytest",
-            )
-            session.add(config)
-            session.commit()
+        TenantManagementConfigRepository(session).store_api_key(
+            "tenant_management_api_key",
+            digest=hash_token(test_api_key),
+            prefix=token_prefix(test_api_key),
+            description="Test API key for integration tests",
+        )
+        session.commit()
 
     return test_api_key
 

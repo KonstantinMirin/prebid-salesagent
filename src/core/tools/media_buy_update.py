@@ -47,9 +47,6 @@ from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
-    CreativeAssignment as DBAssignment,
-)
-from src.core.database.models import (
     MediaBuy,
     ObjectWorkflowMapping,
     PersistedMediaBuyStatus,
@@ -798,12 +795,10 @@ def _update_media_buy_impl(
                         )
 
                         # Get existing assignments for this package
-                        assignment_stmt = select(DBAssignment).where(
-                            DBAssignment.tenant_id == tenant.tenant_id,
-                            DBAssignment.media_buy_id == actual_media_buy_id,
-                            DBAssignment.package_id == pkg_update.package_id,
+                        assert uow.assignments is not None
+                        existing_assignments = uow.assignments.get_by_media_buy_and_package(
+                            actual_media_buy_id, pkg_update.package_id
                         )
-                        existing_assignments = session.scalars(assignment_stmt).all()
                         existing_creative_ids = {a.creative_id for a in existing_assignments}
 
                         # Determine added and removed creative IDs
@@ -814,20 +809,16 @@ def _update_media_buy_impl(
                         # Remove old assignments
                         for assignment in existing_assignments:
                             if assignment.creative_id in removed_ids:
-                                session.delete(assignment)
+                                uow.assignments.delete_row(assignment)
 
                         # Add new assignments
                         for creative_id in added_ids:
-                            assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
-                            assignment = DBAssignment(
-                                assignment_id=assignment_id,
-                                tenant_id=tenant.tenant_id,
-                                principal_id=principal_id,
+                            uow.assignments.create(
                                 media_buy_id=actual_media_buy_id,
                                 package_id=pkg_update.package_id,
                                 creative_id=creative_id,
+                                principal_id=principal_id,
                             )
-                            session.add(assignment)
 
                         # If media buy was approved (approved_at set) but is in draft status
                         # (meaning it was approved without creatives), transition to pending_creatives
@@ -1013,15 +1004,13 @@ def _update_media_buy_impl(
                         # assignments for this package. Delete existing assignments not
                         # in the new list, matching the creative_ids handler pattern.
                         requested_creative_ids = {ca.creative_id for ca in pkg_update.creative_assignments}
-                        existing_stmt = select(DBAssignment).where(
-                            DBAssignment.tenant_id == tenant.tenant_id,
-                            DBAssignment.media_buy_id == actual_media_buy_id,
-                            DBAssignment.package_id == pkg_update.package_id,
+                        assert uow.assignments is not None
+                        existing_assignments = uow.assignments.get_by_media_buy_and_package(
+                            actual_media_buy_id, pkg_update.package_id
                         )
-                        existing_assignments = session.scalars(existing_stmt).all()
                         for existing in existing_assignments:
                             if existing.creative_id not in requested_creative_ids:
-                                session.delete(existing)
+                                uow.assignments.delete_row(existing)
 
                         for ca in pkg_update.creative_assignments:
                             # Schema validates and coerces dict inputs to LibraryCreativeAssignment
@@ -1033,14 +1022,12 @@ def _update_media_buy_impl(
                             # the match key: the same creative_id can exist under two
                             # principals (composite creatives PK), and the create branch
                             # below inserts under the requester's principal.
-                            assign_stmt = select(DBAssignment).where(
-                                DBAssignment.tenant_id == tenant.tenant_id,
-                                DBAssignment.principal_id == principal_id,
-                                DBAssignment.media_buy_id == actual_media_buy_id,
-                                DBAssignment.package_id == pkg_update.package_id,
-                                DBAssignment.creative_id == creative_id,
+                            db_assignment = uow.assignments.get_existing(
+                                actual_media_buy_id,
+                                pkg_update.package_id,
+                                creative_id,
+                                principal_id,
                             )
-                            db_assignment = session.scalars(assign_stmt).first()
 
                             if db_assignment:
                                 # Update existing assignment
@@ -1052,21 +1039,15 @@ def _update_media_buy_impl(
                                 updated_assignments.append(creative_id)
                             else:
                                 # Create new assignment with weight and placement_ids
-                                import uuid as uuid_module
-
-                                assignment_id = f"assign_{uuid_module.uuid4().hex[:12]}"
-                                new_assignment = DBAssignment(
-                                    assignment_id=assignment_id,
-                                    tenant_id=tenant.tenant_id,
-                                    principal_id=principal_id,
+                                uow.assignments.create(
                                     media_buy_id=actual_media_buy_id,
                                     package_id=pkg_update.package_id,
                                     creative_id=creative_id,
+                                    principal_id=principal_id,
                                     weight=int(weight) if weight is not None else 100,
                                     # adcp#208: placement-specific targeting
                                     placement_ids=placement_ids,
                                 )
-                                session.add(new_assignment)
                                 updated_assignments.append(creative_id)
                                 new_assignments_created.append(creative_id)
 

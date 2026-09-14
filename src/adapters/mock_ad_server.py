@@ -80,9 +80,13 @@ def simulate_breakdowns(impressions: float, spend: float) -> tuple[list[dict], l
 
 
 class MockConnectionConfig(BaseConnectionConfig):
-    """Connection config for Mock adapter."""
+    """Connection config for Mock adapter.
 
-    dry_run: bool = Field(default=False, description="When true, simulates operations without persisting state")
+    Adds nothing to the base: ``manual_approval_required`` is the whole of the mock
+    adapter's connection configuration. It once carried ``dry_run``, which the
+    adapter stopped reading when the testing-hook channel went away (a1b79d22d);
+    the field and the adapter-config column behind it are gone.
+    """
 
 
 class MockProductConfig(BaseProductConfig):

@@ -105,7 +105,6 @@ def _tenants(integration_db, _encryption_key):
             AdapterConfig(
                 tenant_id="repo_test_mock",
                 adapter_type="mock",
-                mock_dry_run=True,
             )
         )
 

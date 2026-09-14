@@ -165,7 +165,7 @@ class MediaBuyUoW(BaseUoW):
 
     Wraps a database session and provides tenant-scoped repositories for
     media buys, products (read-side; create_media_buy resolves product_map
-    via this), and currency limits.
+    via this), creative assignments, and currency limits.
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -175,6 +175,12 @@ class MediaBuyUoW(BaseUoW):
     media_buys: MediaBuyRepository | None
     products: ProductRepository | None
     creatives: CreativeRepository | None
+    # create_media_buy and update_media_buy both write a package's creative
+    # assignments in the same transaction as the buy itself. They used to do it
+    # through the raw session with the model imported as ``DBAssignment`` — an
+    # alias the raw-select guard cannot resolve, so four such queries were
+    # invisible to it and to its allowlist (salesagent-3cs7o.27).
+    assignments: CreativeAssignmentRepository | None
     currency_limits: CurrencyLimitRepository | None
     idempotency_attempts: IdempotencyAttemptRepository | None
 
@@ -183,6 +189,7 @@ class MediaBuyUoW(BaseUoW):
         self.media_buys = MediaBuyRepository(self._session, self._tenant_id)
         self.products = ProductRepository(self._session, self._tenant_id)
         self.creatives = CreativeRepository(self._session, self._tenant_id)
+        self.assignments = CreativeAssignmentRepository(self._session, self._tenant_id)
         self.currency_limits = CurrencyLimitRepository(self._session, self._tenant_id)
         self.idempotency_attempts = IdempotencyAttemptRepository(self._session, self._tenant_id)
 
@@ -190,6 +197,7 @@ class MediaBuyUoW(BaseUoW):
         self.media_buys = None
         self.products = None
         self.creatives = None
+        self.assignments = None
         self.currency_limits = None
         self.idempotency_attempts = None
 

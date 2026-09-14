@@ -484,12 +484,9 @@ def update_adapter(tenant_id):
                 adapter_config_obj.gam_manual_approval_required = manual_approval
             elif new_adapter == "mock":
                 if request.is_json:
-                    dry_run = request.json.get("mock_dry_run", False)
                     manual_approval = request.json.get("mock_manual_approval", False)
                 else:
-                    dry_run = request.form.get("mock_dry_run") == "on"
                     manual_approval = request.form.get("mock_manual_approval") == "on"
-                adapter_config_obj.mock_dry_run = dry_run
                 adapter_config_obj.mock_manual_approval_required = manual_approval
 
             # Update the tenant

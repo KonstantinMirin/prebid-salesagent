@@ -107,8 +107,6 @@ def get_tenant_config_from_db(tenant_id):
                     adapter_config[adapter_type]["manual_approval_required"] = (
                         adapter_obj.gam_manual_approval_required or False
                     )
-                elif adapter_type == "mock":
-                    adapter_config[adapter_type]["dry_run"] = adapter_obj.mock_dry_run or False
                 elif adapter_type == "kevel":
                     if adapter_obj.kevel_network_id:
                         adapter_config[adapter_type]["network_id"] = adapter_obj.kevel_network_id

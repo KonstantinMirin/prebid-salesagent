@@ -256,7 +256,6 @@ def create_tenant():
                 new_adapter = AdapterConfig(
                     tenant_id=tenant_id,
                     adapter_type=adapter_type,
-                    mock_dry_run=data.get("mock_dry_run", False),
                     created_at=datetime.now(UTC),
                     updated_at=datetime.now(UTC),
                 )
@@ -380,9 +379,6 @@ def get_tenant(tenant_id):
                     adapter_data.update(
                         {"triton_station_id": adapter.triton_station_id, "has_api_key": bool(adapter.triton_api_key)}
                     )
-                elif adapter.adapter_type == "mock":
-                    adapter_data.update({"mock_dry_run": bool(adapter.mock_dry_run)})
-
                 result["adapter_config"] = adapter_data
 
             # Get principals count
@@ -481,9 +477,7 @@ def update_tenant(tenant_id):
                         if "triton_api_key" in adapter_data:
                             adapter.triton_api_key = adapter_data["triton_api_key"]
 
-                    elif adapter.adapter_type == "mock":
-                        if "mock_dry_run" in adapter_data:
-                            adapter.mock_dry_run = adapter_data["mock_dry_run"]
+                    # The mock adapter has no connection fields this API can set.
 
                     adapter.updated_at = datetime.now(UTC)
 
