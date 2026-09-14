@@ -90,6 +90,14 @@ case "$*" in
       # the report here would simulate a stack whose BDD suites all died halfway, which
       # is the failure this stub's comment above already warns against.
       case "$_s" in bdd*) printf '%s' '{"run": {"collected": 1}, "nodes": {}}' > ".tox/${_s}_payloads.json" ;; esac
+      # The storyboard suite publishes the runner's per-protocol summary to
+      # test-results/ (tests/storyboard/test_storyboard_conformance.py, _publish_summary),
+      # and the runner keeps that score inside the run directory -- a storyboard env that
+      # produced no summary reads as not measured, so a healthy simulation writes both.
+      case "$_s" in storyboard)
+        mkdir -p test-results
+        for _p in mcp a2a; do printf '%s' '{"passed": 1, "failed": 0, "failures": []}' > "test-results/storyboard_summary_${_p}.json"; done ;;
+      esac
     done
     ;;
 esac
