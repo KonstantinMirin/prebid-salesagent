@@ -46,7 +46,9 @@ def upgrade() -> None:
     op.alter_column("principals", "token_prefix", nullable=False)
     op.create_unique_constraint("uq_principals_token_hash", "principals", ["token_hash"])
     op.create_index("idx_principals_token_hash", "principals", ["token_hash"])
-    op.drop_index("idx_principals_token", table_name="principals")
+    # No migration in the chain creates this index; a database built by the ORM's
+    # create_all carries it and a database built by the chain does not.
+    op.execute("DROP INDEX IF EXISTS idx_principals_token")
     op.drop_column("principals", "access_token")
 
     op.drop_column("tenants", "admin_token")
