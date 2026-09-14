@@ -30,7 +30,6 @@ from __future__ import annotations
 import argparse
 import ast
 import json
-import os
 import re
 import sys
 import textwrap
@@ -42,6 +41,8 @@ from typing import Any
 
 import adcp
 import yaml
+
+from src.core.config import ToolingSettings
 
 
 class StoryboardAuditError(Exception):
@@ -88,6 +89,7 @@ def pinned_version(repo: Path) -> str:
     return version
 
 
+#: The variable behind ``ToolingSettings.adcp_home``; named here for the tests that set it.
 ADCP_HOME_ENV_VAR = "ADCP_HOME"
 ADCP_REPO = "adcontextprotocol/adcp"
 # Where `gh release download <tag> --repo adcontextprotocol/adcp` + `tar -xzf`
@@ -114,9 +116,9 @@ def adcp_home(repo: Path | None = None, version: str | None = None) -> Path:
     Six structural guards hardcoded (3) and gated on it, so 23 guards were dead
     in every CI run — they pass whenever they can actually resolve a tree.
     """
-    override = os.environ.get(ADCP_HOME_ENV_VAR)
+    override = ToolingSettings().adcp_home  # ADCP_HOME_ENV_VAR
     if override:
-        return Path(override)
+        return override
     if repo is not None:
         resolved = version or pinned_version(repo)
         bundle = repo / BUNDLE_PARENT / f"adcp-{resolved}"
@@ -668,8 +670,8 @@ def tag_literal(tag: str = STORYBOARD_TAG) -> str:
 
 
 #: Environment variable naming where the BDD liveness artifact is written, and
-#: the default filename when it is unset. Read by the pytest plugin that WRITES
-#: the artifact and by the audit join that READS it — hence shared.
+#: the default filename when it is unset. Set by the pytest plugin that WRITES
+#: the artifact; the audit join READS it as ``ToolingSettings.bdd_liveness_artifact``.
 ARTIFACT_ENV_VAR = "BDD_LIVENESS_ARTIFACT"
 DEFAULT_ARTIFACT_PATH = "bdd_scenario_liveness.json"
 

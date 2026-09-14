@@ -729,19 +729,42 @@ validate is dropped with a warning rather than crashing the whole listing on one
 
 ## Settings
 
-`src/core/config.py` is the one reader of the process environment. It loads a `Settings`
-object with named groups, `runtime`, `testing`, `database`, `auth`, `integrations`, and
-`limits`, and named derived properties. A bad numeric knob fails at startup instead of being
-logged and ignored. Business logic reads a fact off that object, never the environment. The
-three spellings of "production" collapse to one property, so a security-sensitive check
-cannot drift on the difference.
+`src/core/config.py` is the one reader of the process environment. Six `BaseSettings`
+groups read it, `RuntimeSettings`, `TestingSettings`, `DatabaseSettings`, `AuthSettings`,
+`IntegrationSettings`, and `LimitSettings`, and `Settings` is a plain frozen dataclass that
+holds them, with named derived properties. The composite is deliberately not a
+`BaseSettings`: as one, its six field names were environment variables, and a shell with
+`TESTING=1` could not start the process. An empty value is an unset value
+(`env_ignore_empty`), because CI and the compose files hand a process `ADCP_TESTING=""`.
+A bad numeric knob or a malformed credential fails at startup instead of being logged and
+ignored. Business logic reads a fact off that object, never the environment. The three
+spellings of "production" collapse to one property, so a security-sensitive check cannot
+drift on the difference.
+
+Each composition root calls `load_settings()` once: `src/app.py` at the top of the module,
+and it hands the object to `create_app(settings=...)`; the standalone admin server and
+`src/core/startup.py` do the same for their processes. Nothing builds `Settings` at import.
+The one runtime fact a module needs while its classes are being defined, the request DTOs'
+`extra` mode, is read through `get_pydantic_extra_mode()`, which constructs
+`RuntimeSettings` alone, so importing a schema is never where a bad credential fails. The
+audit logger reads its log directory the same way.
 
 `ADCP_TESTING` is never read by business code. Each allowance it implies has its own name,
 such as `debug_routes_enabled`, `reference_formats_only`, and `loopback_webhooks_allowed`.
 Where an allowance selects a component, the selection happens at composition. The debug
-router is mounted or absent, and the creative registry is the reference-formats registry or
-the live one. The `extra` mode of every request model is the settings object's
-`pydantic_extra_mode`.
+router is mounted or absent, the creative registry is the reference-formats registry or the
+live one, and the admin UI's test-credential login blueprint is registered or absent
+(`src/admin/blueprints/test_auth.py`; a request-time reader asks the app whether it was
+composed, through `test_login_composed()`). An allowance that gates one predicate inside one
+function, such as `loopback_webhooks_allowed` or `relaxed_brand_validation`, is read per call
+off the settings object: a swapped component would carry only that bool.
+
+`ruff-environment.toml` bans `os.environ` and `os.getenv` everywhere under `src/` and
+`scripts/` except the loader and two writes of variables another library reads (Werkzeug's
+flags in `src/admin/server.py`, `GOOGLE_APPLICATION_CREDENTIALS` in the GCP service). A
+script is a composition root of its own and calls `load_settings()` where it starts; a
+repo-tooling knob such as `ADCP_HOME` is a field on `ToolingSettings`, which is not part of
+`Settings` because nothing the application serves depends on it.
 
 ## Credentials
 
@@ -938,7 +961,8 @@ unbounded. Prefer, in order:
    parameter, so a raise site cannot author a sentence. `ToolSpec` refuses an identity
    annotation that disagrees with its DTO. An identity refuses a dict.
 2. **Ban the import or the call spelling with ruff.** `ruff-boundary.toml`,
-   `ruff-ownership.toml`, and `ruff-egress.toml` each run as their own quality line.
+   `ruff-ownership.toml`, `ruff-serialization.toml`, `ruff-environment.toml`, and
+   `ruff-egress.toml` each run as their own quality line.
    `tests/unit/test_ruff_boundary_bans.py` proves every banned name fires.
 3. **Write an AST guard only for what neither can express.** Write it against the call graph
    rather than a file list, and prove it non-vacuous by breaking the code on purpose.
@@ -976,7 +1000,7 @@ generator for each, not a list to edit.
 | REST routes | `src/routes/api_v1.py` |
 | Request base, response base, and strip | `src/core/schemas/_base.py`, `src/core/schemas/_accepted_shape.py` |
 | Errors and the code table | `src/core/exceptions.py`, `src/core/errors/codes.py` |
-| Import bans | `ruff-boundary.toml`, `ruff-ownership.toml`, `ruff-egress.toml` |
+| Import bans | `ruff-boundary.toml`, `ruff-ownership.toml`, `ruff-serialization.toml`, `ruff-environment.toml`, `ruff-egress.toml` |
 | Adapter result types | `src/adapters/base.py` |
 | The JSON column type | `src/core/database/json_type.py` |
 | Settings | `src/core/config.py` |

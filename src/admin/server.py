@@ -76,11 +76,13 @@ def main():
     from src.admin.app import create_app
     from src.core.config import load_settings
 
-    # Read the environment once; create_app reads the same object.
-    runtime = load_settings().runtime
+    # The composition root for the standalone admin server: the environment is read
+    # here, once, and create_app receives the object.
+    settings = load_settings()
+    runtime = settings.runtime
 
     # Create the Flask app
-    app = create_app()
+    app = create_app(settings=settings)
 
     port = runtime.adcp_sales_port
     debug = runtime.flask_debug

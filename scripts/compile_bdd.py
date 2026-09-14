@@ -17,7 +17,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import subprocess
 import sys
@@ -35,7 +34,14 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRACEABILITY_PATH = PROJECT_ROOT / "docs" / "test-obligations" / "bdd-traceability.yaml"
 OUTPUT_DIR = PROJECT_ROOT / "tests" / "bdd" / "features"
 
-DEFAULT_ADCP_REQ_PATH = Path(os.environ.get("ADCP_REQ_PATH", str(Path.home() / "projects" / "adcp-req")))
+
+def _default_adcp_req_path() -> Path:
+    """``ADCP_REQ_PATH``, read through the settings loader, the one reader of the environment."""
+    sys.path.insert(0, str(PROJECT_ROOT))
+    from src.core.config import ToolingSettings
+
+    return ToolingSettings().adcp_req_path
+
 
 # ---------------------------------------------------------------------------
 # Data structures for parsed Gherkin
@@ -1827,11 +1833,12 @@ def main() -> None:
         default=None,
         help="Where to write .merge-manifest.json (default: <salesagent>/.merge-manifest.json).",
     )
+    default_adcp_req_path = _default_adcp_req_path()
     parser.add_argument(
         "--adcp-req-path",
         type=Path,
-        default=DEFAULT_ADCP_REQ_PATH,
-        help=f"Path to adcp-req repository (default: {DEFAULT_ADCP_REQ_PATH}).",
+        default=default_adcp_req_path,
+        help=f"Path to adcp-req repository (default: {default_adcp_req_path}).",
     )
     parser.add_argument(
         "--lockfile-root",

@@ -34,7 +34,7 @@ from src.a2a_server.adcp_a2a_server import (
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import AuthChallengeResponder
-from src.core.config import get_settings
+from src.core.config import load_settings
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
@@ -52,6 +52,11 @@ from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
 
 logger = logging.getLogger(__name__)
+
+# The composition root: the environment is read here, once, and every component this
+# module composes is selected from the result. The embedded Flask admin app receives the
+# same object rather than reading the environment again.
+settings = load_settings()
 
 
 def _install_admin_mounts() -> None:
@@ -599,7 +604,7 @@ def _openapi_with_rest_components() -> dict[str, Any]:
 app.include_router(health_router)
 # The debug and reset routes EXIST only where the deployment allows them. Selected here,
 # at composition, rather than answering 404 per request from inside the route.
-if get_settings().debug_routes_enabled:
+if settings.debug_routes_enabled:
     app.include_router(health_debug_router)
 
 # ---------------------------------------------------------------------------
@@ -613,7 +618,7 @@ if get_settings().debug_routes_enabled:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=get_settings().runtime.allowed_origin_list,
+    allow_origins=settings.runtime.allowed_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -627,7 +632,7 @@ app.add_middleware(AuthChallengeResponder)
 # Admin UI — mount Flask admin via WSGIMiddleware
 # ---------------------------------------------------------------------------
 
-flask_admin_app = create_app()
+flask_admin_app = create_app(settings=settings)
 admin_wsgi = WSGIMiddleware(flask_admin_app)
 
 

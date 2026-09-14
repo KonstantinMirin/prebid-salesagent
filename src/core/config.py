@@ -17,20 +17,27 @@ Two shapes of fact live here:
 
 ``load_settings`` rebuilds the object (a test that changes the environment calls it);
 ``get_settings`` returns the current one, building it on first use so a script that never
-composed an app still gets a consistent view.
+composed an app still gets a consistent view. Nothing builds it at import: a module that
+needs one runtime fact while its classes are being defined (the request DTOs' extra mode)
+reads :class:`RuntimeSettings` alone, so a bad credential fails where the app is composed,
+not when a schema is imported.
+
+An empty value is an unset value. CI and the compose files hand a process ``ADCP_TESTING=""``
+or ``DB_PORT=""`` (``${VAR:-}``), and the helpers this module replaced read those as the
+default; ``env_ignore_empty`` keeps that reading.
 """
 
 from __future__ import annotations
 
 import secrets
-from decimal import Decimal
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore")
+_ENV = SettingsConfigDict(env_prefix="", case_sensitive=False, extra="ignore", env_ignore_empty=True)
 
 
 def _csv(value: str | None) -> list[str]:
@@ -46,7 +53,9 @@ class RuntimeSettings(BaseSettings):
     production: bool = False
     fly_app_name: str | None = None
     adcp_sales_port: int = 8080
+    adcp_sales_host: str = "0.0.0.0"
     skip_nginx: bool = False
+    skip_cron: bool = False
     allowed_origins: str = "http://localhost:8000"
     admin_ui_url: str = "http://localhost:8001"
     sales_agent_domain: str | None = None
@@ -96,6 +105,23 @@ class RuntimeSettings(BaseSettings):
     @property
     def session_cookie_domain(self) -> str | None:
         return f".{self.sales_agent_domain}" if self.sales_agent_domain else None
+
+    # --- production-derived selections; runtime facts only, so a module that needs one
+    # while its classes are being defined can read this group without composing the rest.
+
+    @property
+    def structured_logging(self) -> bool:
+        return self.is_production
+
+    @property
+    def verbose_auth_log(self) -> bool:
+        return not self.is_production
+
+    @property
+    def pydantic_extra_mode(self) -> Literal["ignore", "forbid"]:
+        """Production ignores undeclared request fields (a newer buyer is served); everywhere
+        else they are a hard rejection (an unimplemented spec field is loud)."""
+        return "ignore" if self.is_production else "forbid"
 
 
 class TestingSettings(BaseSettings):
@@ -156,6 +182,8 @@ class AuthSettings(BaseSettings):
     oauth_scopes: str = "openid email profile"
     super_admin_emails: str = ""
     super_admin_domains: str = ""
+    tenant_management_emails: str | None = None
+    tenant_management_domains: str | None = None
     tenant_management_api_key: str | None = None
     sync_api_key: str | None = None
     encryption_key: str | None = None
@@ -190,6 +218,15 @@ class AuthSettings(BaseSettings):
     @property
     def gam_oauth_configured(self) -> bool:
         return bool(self.gam_oauth_client_id and self.gam_oauth_client_secret)
+
+    @property
+    def tenant_management_email_list_source(self) -> str:
+        """The operator list the database seed stores: the tenant-management spelling wins."""
+        return self.tenant_management_emails or self.super_admin_emails
+
+    @property
+    def tenant_management_domain_list_source(self) -> str:
+        return self.tenant_management_domains or self.super_admin_domains
 
 
 class IntegrationSettings(BaseSettings):
@@ -228,7 +265,6 @@ class LimitSettings(BaseSettings):
 
     model_config = _ENV
 
-    max_campaign_budget_usd: Decimal = Decimal("10000000")
     idempotency_max_active_attempts_per_scope: int = 1000
     idempotency_insert_rate_window_seconds: int = 10
     idempotency_max_inserts_per_window: int = 300
@@ -242,17 +278,46 @@ class LimitSettings(BaseSettings):
     adcp_webhook_breaker_timeout_seconds: int = Field(default=60, gt=0)
 
 
-class Settings(BaseSettings):
-    """Everything the environment says, as one object."""
+class ToolingSettings(BaseSettings):
+    """Knobs the repo's own scripts and audits read; nothing the application serves depends
+    on them, so they are not part of :class:`Settings`. A script reads them where it starts."""
 
     model_config = _ENV
 
-    runtime: RuntimeSettings = Field(default_factory=RuntimeSettings)
-    testing: TestingSettings = Field(default_factory=TestingSettings)
-    database: DatabaseSettings = Field(default_factory=DatabaseSettings)
-    auth: AuthSettings = Field(default_factory=AuthSettings)
-    integrations: IntegrationSettings = Field(default_factory=IntegrationSettings)
-    limits: LimitSettings = Field(default_factory=LimitSettings)
+    adcp_home: Path | None = None
+    adcp_req_path: Path = Path.home() / "projects" / "adcp-req"
+    bdd_liveness_artifact: Path | None = None
+    storyboard_ledger_path: Path | None = None
+    allow_live_creative_agent: bool = False
+
+
+@dataclass(frozen=True)
+class Settings:
+    """Everything the environment says, as one object.
+
+    A plain composite, deliberately not a ``BaseSettings``: the groups read the environment,
+    and this object only holds them. As a ``BaseSettings`` its six field names were themselves
+    environment variables, so a shell with ``TESTING=1`` or ``DATABASE=x`` could not start
+    the process.
+    """
+
+    runtime: RuntimeSettings
+    testing: TestingSettings
+    database: DatabaseSettings
+    auth: AuthSettings
+    integrations: IntegrationSettings
+    limits: LimitSettings
+
+    @classmethod
+    def from_environment(cls) -> Settings:
+        return cls(
+            runtime=RuntimeSettings(),
+            testing=TestingSettings(),
+            database=DatabaseSettings(),
+            auth=AuthSettings(),
+            integrations=IntegrationSettings(),
+            limits=LimitSettings(),
+        )
 
     # --- the allowances ADCP_TESTING implies, each under its own name ---------------
 
@@ -294,18 +359,22 @@ class Settings(BaseSettings):
     # --- production-derived selections ------------------------------------------------
 
     @property
-    def structured_logging(self) -> bool:
-        return self.runtime.is_production
-
-    @property
-    def verbose_auth_log(self) -> bool:
+    def publisher_auto_verify_allowed(self) -> bool:
+        """A publisher partner is verified without an adagents.json check: a local server
+        is in nobody's file. Anywhere that is not production."""
         return not self.runtime.is_production
 
     @property
+    def structured_logging(self) -> bool:
+        return self.runtime.structured_logging
+
+    @property
+    def verbose_auth_log(self) -> bool:
+        return self.runtime.verbose_auth_log
+
+    @property
     def pydantic_extra_mode(self) -> Literal["ignore", "forbid"]:
-        """Production ignores undeclared request fields (a newer buyer is served); everywhere
-        else they are a hard rejection (an unimplemented spec field is loud)."""
-        return "ignore" if self.runtime.is_production else "forbid"
+        return self.runtime.pydantic_extra_mode
 
 
 _settings: Settings | None = None
@@ -318,7 +387,7 @@ def load_settings() -> Settings:
     environment. Validation failures raise here, at startup, not at the first request.
     """
     global _settings
-    _settings = Settings()
+    _settings = Settings.from_environment()
     return _settings
 
 
@@ -326,7 +395,7 @@ def get_settings() -> Settings:
     """The current settings, built on first use."""
     global _settings
     if _settings is None:
-        _settings = Settings()
+        _settings = Settings.from_environment()
     return _settings
 
 
@@ -353,4 +422,9 @@ def is_production() -> bool:
 
 
 def get_pydantic_extra_mode() -> Literal["ignore", "forbid"]:
-    return get_settings().pydantic_extra_mode
+    """The request DTOs' extra mode, read while the schema modules define their classes.
+
+    Reads :class:`RuntimeSettings` alone and never builds :class:`Settings`: importing a
+    schema must not be where a bad credential fails.
+    """
+    return RuntimeSettings().pydantic_extra_mode

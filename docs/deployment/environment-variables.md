@@ -230,8 +230,14 @@ proxy headers, and the absence of verbose auth logging.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
+| `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
 | `SKIP_CRON` | `false` | Skip cron job scheduling |
+
+Every variable above is read once, by `src/core/config.py`, when a process is composed; an
+empty value means unset. Knobs that only the repo's own scripts read (`ADCP_HOME`,
+`ADCP_REQ_PATH`, `BDD_LIVENESS_ARTIFACT`, `STORYBOARD_LEDGER_PATH`,
+`ALLOW_LIVE_CREATIVE_AGENT`) are fields on `ToolingSettings` in the same module.
 
 `CONDUCTOR_PORT` (default `8000`) is read by `docker-compose.yml` only - it sets the host port the nginx proxy publishes, which is useful when running multiple worktrees.
 

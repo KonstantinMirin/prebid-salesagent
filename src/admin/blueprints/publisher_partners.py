@@ -113,7 +113,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
             # Development: Local dev servers won't be in any publisher's adagents.json
             # Mock: Testing tenants use fake domains
-            is_dev = get_settings().runtime.environment == "development"
+            is_dev = get_settings().publisher_auto_verify_allowed
             is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
             should_auto_verify = is_dev or is_mock
 
@@ -220,7 +220,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             # For development environment or mock adapters, auto-verify publishers
             # (don't require our agent to be in their adagents.json)
             # BUT still fetch real properties from adagents.json if available
-            is_dev = get_settings().runtime.environment == "development"
+            is_dev = get_settings().publisher_auto_verify_allowed
             is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
             should_auto_verify = is_dev or is_mock
 

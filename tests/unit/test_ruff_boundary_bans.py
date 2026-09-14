@@ -6,9 +6,10 @@ It bans the names that would let a caller re-create the architecture the boundar
 removed: every tool's ``_impl``, the private identity resolver, the stamped entry, and
 fastmcp's ``ToolError``. ``ruff-ownership.toml`` is the third, run the same way: it bans the
 modules that can load a principal or account row, so a tool obtains both from the identity
-and nowhere else. Both tables are proven here; the ownership bans are a separate config
-because ruff exempts a whole rule per path, and the admin tree is exempt from those bans
-and from nothing else.
+and nowhere else. ``ruff-serialization.toml`` bans the bare serialization calls outside the
+named edges, and ``ruff-environment.toml`` bans ``os.environ`` / ``os.getenv`` outside the
+settings loader. Every table is proven here; each is a separate config because ruff exempts
+a whole rule per path, so a file exempt from one table stays under the others.
 
 Until this module existed those bans were unproven. ``ruff-egress.toml`` has had a
 non-vacuity proof since GH #1589 and this one did not, so a ban could have been misspelled,
@@ -38,6 +39,7 @@ CONFIGS = (
     REPO_ROOT / "ruff-boundary.toml",
     REPO_ROOT / "ruff-ownership.toml",
     REPO_ROOT / "ruff-serialization.toml",
+    REPO_ROOT / "ruff-environment.toml",
 )
 
 

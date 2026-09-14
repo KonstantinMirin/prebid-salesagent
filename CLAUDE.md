@@ -59,6 +59,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | Serialize only at the edges | No `.model_dump()`, `.model_dump_json()`, `pydantic_core.to_json` or `to_jsonable_python` outside the named edge modules; a tool hands the model through | `ruff-serialization.toml` (TID251) + `.ast-grep/rules/serialize-only-at-the-edges.yml` |
+| Environment read once | No `os.environ` / `os.getenv` under `src/` or `scripts/` outside the settings loader (`src/core/config.py`) and the two writes of variables another library reads; a composition root calls `load_settings()` and everything else reads a named fact off the object | `ruff-environment.toml` (TID251) + `test_ruff_boundary_bans.py` |
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
 | Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
 | No raw MediaPackage select | All MediaPackage access goes through repository, not raw `select()` | `test_architecture_no_raw_media_package_select.py` |
@@ -332,7 +333,10 @@ fetch(apiUrl, { credentials: 'same-origin' });
 Never hardcode `/api/endpoint` — it breaks behind an nginx prefix.
 
 ### 7. Schema validation: environment-based
-- **Production**: `ENVIRONMENT=production` → `extra="ignore"` (forward compatible)
+- **Production**: `extra="ignore"` (forward compatible). Production is any one of the three
+  spellings a deployment sets: `PRODUCTION=true`, `ENVIRONMENT=production`, or a Fly app name
+  (`FLY_APP_NAME`). `RuntimeSettings.is_production` in `src/core/config.py` is the one predicate;
+  nothing compares the environment string itself.
 - **Development/CI**: Default → `extra="forbid"` (strict validation)
 
 **THE DTO IS THE ACCEPTED SHAPE. `additionalProperties: true` IN THE PIN DOES NOT WIDEN IT.**

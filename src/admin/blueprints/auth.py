@@ -20,7 +20,7 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
-from src.admin.utils import is_admin_production, is_super_admin
+from src.admin.utils import is_super_admin, test_login_composed
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
@@ -202,9 +202,10 @@ def login():
     client_id, client_secret, discovery_url, _ = get_oauth_config()
     oauth_configured = bool(client_id and client_secret and discovery_url)
 
-    # Determine test_mode from the global setting only
-    # tenant.auth_setup_mode is only used when NO global OAuth is configured
-    test_mode = get_settings().testing.adcp_auth_test_mode
+    # The test-credential form is offered only where create_app composed the path that
+    # serves it. A tenant's auth_setup_mode alone never shows it: /test/auth refuses a
+    # tenant in setup mode without the global flag, so the form it used to show was dead.
+    test_mode = test_login_composed()
 
     from src.core.config_loader import is_single_tenant_mode
 
@@ -225,9 +226,6 @@ def login():
             if tenant:
                 tenant_context = tenant.tenant_id
                 tenant_name = tenant.name
-                # Only use auth_setup_mode if no global OAuth configured
-                if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
-                    test_mode = True
                 logger.info(
                     f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
                 )
@@ -244,9 +242,6 @@ def login():
                 if tenant:
                     tenant_context = tenant.tenant_id
                     tenant_name = tenant.name
-                    # Only use auth_setup_mode if no global OAuth configured
-                    if not oauth_configured and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
-                        test_mode = True
                     logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
 
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
@@ -273,14 +268,10 @@ def login():
         from src.core.database.models import TenantAuthConfig
 
         with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id="default")).first()
             config = db_session.scalars(select(TenantAuthConfig).filter_by(tenant_id="default")).first()
             if config and config.oidc_client_id:
                 oidc_configured = True
                 oidc_enabled = config.oidc_enabled
-            # Only use auth_setup_mode in single-tenant mode if no global OAuth
-            if not oauth_configured and tenant and hasattr(tenant, "auth_setup_mode") and tenant.auth_setup_mode:
-                test_mode = True
 
         if oidc_enabled and not test_mode and not just_logged_out:
             return redirect(url_for("oidc.login", tenant_id="default"))
@@ -326,14 +317,9 @@ def tenant_login(tenant_id):
             abort(404)
         tenant_name = tenant.name
 
-        # Determine test_mode:
-        # - ADCP_AUTH_TEST_MODE env var enables test mode globally
-        # - tenant.auth_setup_mode enables test mode for this tenant ONLY if no global OAuth
-        #   (for multi-tenant with global OAuth, tenants use global OAuth, not setup mode)
-        test_mode = get_settings().testing.adcp_auth_test_mode
-        if not test_mode and not oauth_configured:
-            # No global OAuth - use tenant's auth_setup_mode (for single-tenant SSO setup)
-            test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
+        # The test-credential form is offered only where create_app composed the path that
+        # serves it; /test/auth then also requires this tenant to be in setup mode.
+        test_mode = test_login_composed()
 
         # Check if tenant-specific OIDC is configured and enabled
         from src.services.auth_config_service import get_oidc_config_for_auth
@@ -769,127 +755,6 @@ def logout():
     flash("You have been logged out", "info")
     # Add logged_out param to prevent auto-redirect to SSO
     return redirect(url_for("auth.login", logged_out=1))
-
-
-# Test authentication endpoints (only enabled in test mode)
-@auth_bp.route("/test/auth", methods=["POST"])
-def test_auth():
-    """Test authentication endpoint.
-
-    Works only when BOTH conditions are true:
-    - ADCP_AUTH_TEST_MODE=true (global deployment flag), AND
-    - The requested tenant has auth_setup_mode=True (per-tenant setting)
-
-    Either condition alone is no longer sufficient. A tenant operator
-    disabling Setup Mode via the Admin UI immediately blocks test auth
-    for that tenant, regardless of the global env var.
-    """
-    email = request.form.get("email", "").lower()
-    password = request.form.get("password")
-    tenant_id = request.form.get("tenant_id")
-
-    # In single-tenant mode, default to "default" tenant if not specified
-    from src.core.config_loader import is_single_tenant_mode
-
-    if is_single_tenant_mode() and not tenant_id:
-        tenant_id = "default"
-
-    # Production-like deployments must never expose test auth, regardless of flags.
-    if is_admin_production():
-        logger.warning(
-            "[SECURITY] test_auth blocked: production mode detected. "
-            "Switch to SSO or disable production mode for non-production use."
-        )
-        abort(404)
-
-    # Check if test auth is allowed
-    testing = get_settings().testing
-    env_test_mode = testing.adcp_auth_test_mode
-    tenant_setup_mode = False
-
-    if tenant_id:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-            if tenant and hasattr(tenant, "auth_setup_mode"):
-                tenant_setup_mode = tenant.auth_setup_mode
-
-    # Require BOTH: env var enabled AND tenant still in setup mode (F-02).
-    # The env var alone is no longer sufficient — the tenant operator's
-    # decision to disable Setup Mode via the UI must also be respected.
-    if not env_test_mode or not tenant_setup_mode:
-        if not env_test_mode:
-            logger.debug("[SECURITY] test_auth blocked: ADCP_AUTH_TEST_MODE not set.")
-        else:
-            logger.warning(
-                "[SECURITY] test_auth blocked for tenant %r: auth_setup_mode is disabled. "
-                "Re-enable Setup Mode or configure SSO.",
-                tenant_id,
-            )
-        abort(404)
-
-    # Define test users — credentials come from the settings, never hardcoded
-    test_users = {
-        testing.test_super_admin_email: {
-            "password": testing.test_super_admin_password,
-            "name": "Test Super Admin",
-            "role": "super_admin",
-        },
-        testing.test_tenant_admin_email: {
-            "password": testing.test_tenant_admin_password,
-            "name": "Test Tenant Admin",
-            "role": "tenant_admin",
-        },
-        testing.test_tenant_user_email: {
-            "password": testing.test_tenant_user_password,
-            "name": "Test Tenant User",
-            "role": "tenant_user",
-        },
-    }
-
-    # Check test users — all credentials go through the test_users table, no bypasses
-    if email in test_users and test_users[email]["password"] == password:
-        user_info = test_users[email]
-        session["test_user"] = email
-        session["test_user_name"] = user_info["name"]
-        session["test_user_role"] = user_info["role"]
-        session["user"] = email
-        session["user_name"] = user_info["name"]
-        session["role"] = user_info["role"]
-        session["authenticated"] = True
-        session["email"] = email
-
-        if user_info["role"] == "super_admin":
-            session["is_super_admin"] = True
-
-        if tenant_id:
-            session["test_tenant_id"] = tenant_id
-            session["tenant_id"] = tenant_id
-            next_url = _safe_redirect(
-                session.pop("login_next_url", None),
-                fallback=url_for("tenants.dashboard", tenant_id=tenant_id),
-            )
-            return redirect(next_url)
-        else:
-            next_url = _safe_redirect(session.pop("login_next_url", None), fallback=url_for("core.index"))
-            return redirect(next_url)
-
-    flash("Invalid test credentials", "error")
-    return redirect(request.referrer or url_for("auth.login"))
-
-
-@auth_bp.route("/test/login")
-def test_login_form():
-    """Show test login form.
-
-    Works when ADCP_AUTH_TEST_MODE=true as a global override.
-    For per-tenant setup mode, use /tenant/<tenant_id>/login instead.
-    """
-    if not get_settings().testing.adcp_auth_test_mode:
-        abort(404)
-
-    from src.core.config_loader import is_single_tenant_mode
-
-    return render_template("login.html", test_mode=True, test_only=True, single_tenant_mode=is_single_tenant_mode())
 
 
 # GAM OAuth Flow endpoints

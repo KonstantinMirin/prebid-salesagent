@@ -7,7 +7,7 @@ import logging
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
-from flask import abort, g, jsonify, redirect, session, url_for
+from flask import abort, current_app, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
@@ -32,6 +32,19 @@ def is_admin_production() -> bool:
     do not drift between deployment styles.
     """
     return get_settings().runtime.is_production
+
+
+#: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
+TEST_LOGIN_BLUEPRINT = "test_auth"
+
+
+def test_login_composed() -> bool:
+    """Whether create_app registered the test-credential login path.
+
+    The path exists only where the deployment allows it, selected once in create_app. A
+    request-time reader asks the app what was composed; it never asks the environment.
+    """
+    return TEST_LOGIN_BLUEPRINT in current_app.blueprints
 
 
 def parse_json_config(config_str):
@@ -257,9 +270,8 @@ def require_auth(admin_only=False):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # Check for test mode
-            test_mode = get_settings().testing.adcp_auth_test_mode
-            if test_mode and "test_user" in session:
+            # A test-user session is honoured only where the path that mints one was composed
+            if test_login_composed() and "test_user" in session:
                 g.user = session["test_user"]
                 return f(*args, **kwargs)
 
@@ -306,8 +318,8 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # Check for test mode (global setting OR per-tenant auth_setup_mode)
-            test_mode = get_settings().testing.adcp_auth_test_mode
+            # Test mode: the composed test-login path OR per-tenant auth_setup_mode
+            test_mode = test_login_composed()
 
             # Also check per-tenant auth_setup_mode if test_user is in session
             if not test_mode and "test_user" in session:
