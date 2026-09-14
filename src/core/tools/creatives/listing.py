@@ -5,8 +5,9 @@ import time
 from datetime import UTC, datetime
 from typing import Any, cast
 
+from pydantic import ValidationError
+
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import EntityRefDetails
@@ -19,6 +20,7 @@ from src.core.schemas import (
     ListCreativesRequest,
     ListCreativesResponse,
 )
+from src.core.tools.creatives._assets import ASSET_MAP
 
 logger = logging.getLogger(__name__)
 
@@ -72,29 +74,25 @@ def _coerce_blob_scalar(value: Any, field_label: str, *, log_context: str = "") 
     return None
 
 
-def _coerce_blob_dict(value: Any, field_label: str, *, log_context: str = "") -> dict[str, Any] | None:
-    """Coerce an untyped JSON-blob value to a spec object (dict) field.
+def _coerce_blob_assets(value: Any, field_label: str, *, log_context: str = "") -> Any:
+    """Validate an untyped JSON-blob value into the typed ``Creative.assets`` map.
 
-    ``Creative.assets`` is typed ``dict[str, Any] | None`` but is read from the untyped
-    ``data`` blob, where the same out-of-band producer that can corrupt the scalar and
-    list fields may write a non-object value. A non-dict is corrupt for an object field
-    and dropped to ``None`` with a warning (No Quiet Failures) instead of failing
-    Creative validation and crashing the whole listing on one bad row — the object-field
-    sibling of :func:`_coerce_blob_scalar` / :func:`_coerce_blob_str_list`. ``log_context``
-    is the same optional operator-attribution suffix documented on :func:`_coerce_blob_scalar`.
-
-    This guarantees dict-*ness* only: a well-formed ``dict`` passes through unvalidated, so a
-    corrupt inner value (a ``null`` asset value, a non-``^[a-z0-9_]+$`` key) still reaches the
-    wire — inner asset-union validation against ``core/creative-asset.json`` is tracked in
-    #1779. Unlike the empty-list collapse in :func:`_coerce_blob_str_list`, an empty ``{}`` is
-    *preserved* (not collapsed to absent): ``assets`` is required on the sync input
-    (``core/creative-asset.json``), so ``{}`` is the presence-preserving projection and
-    ``exclude_none`` keeps it on the wire.
+    ``assets`` is read from the untyped ``data`` blob, where an out-of-band producer may
+    have written anything. The stored value is validated against the library's asset
+    union (``core/creative-asset.json``) here, in the one place a row becomes a model; a
+    value that does not validate is corrupt and dropped to ``None`` with a warning (No
+    Quiet Failures) instead of failing Creative validation and crashing the whole listing
+    on one bad row -- the object-field sibling of :func:`_coerce_blob_scalar` /
+    :func:`_coerce_blob_str_list`. An empty ``{}`` is preserved: ``assets`` is required on
+    the sync input, so ``{}`` is the presence-preserving projection.
     """
-    if value is None or isinstance(value, dict):
-        return value
-    _log_blob_drop("non-dict", field_label, log_context, value_type=type(value).__name__)
-    return None
+    if value is None:
+        return None
+    try:
+        return ASSET_MAP.validate_python(value)
+    except ValidationError:
+        _log_blob_drop("invalid-assets", field_label, log_context, value_type=type(value).__name__)
+        return None
 
 
 def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = "") -> list[str] | None:
@@ -115,7 +113,7 @@ def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = ""
     Finally an empty (or fully-emptied) list collapses to ``None`` so ``exclude_none``
     omits the key: the pinned 3.1.1 ``creative/list-creatives-response`` schema permits
     both ``[]`` and omission, and this list field standardizes on omission (the object-field
-    sibling :func:`_coerce_blob_dict` instead *preserves* an empty ``{}`` — see its docstring).
+    sibling :func:`_coerce_blob_assets` instead *preserves* an empty ``{}`` — see its docstring).
     That collapse is a valid-input serialization choice, not a corruption drop, so — unlike
     the drops above — it is logged at ``debug`` (traceability), never ``warning``.
     """
@@ -158,7 +156,7 @@ def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> st
 
 def _list_creatives_impl(
     req: "ListCreativesRequest",
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> ListCreativesResponse:
     """List and search creative library (AdCP v2.5 spec endpoint).
 
@@ -223,14 +221,11 @@ def _list_creatives_impl(
 
     start_time = time.time()
 
-    # Authentication - REQUIRED (creatives contain sensitive data)
-    # Unlike discovery endpoints (list_creative_formats), this returns actual creative assets
-    # which are principal-specific and must be access-controlled
-    # require_principal_id first so the canonical auth message surfaces for missing/anonymous auth;
-    # require_identity narrows the type for the tenant lookup below.
-    principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
+    # Authentication is REQUIRED (creatives contain sensitive data): unlike a discovery
+    # tool, this returns creative assets that are principal-specific. The boundary refused
+    # an anonymous caller; the ResolvedIdentity carries the principal by type.
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
 
     creatives = []
     total_count = 0
@@ -239,7 +234,7 @@ def _list_creatives_impl(
     # response's errors[] at the bottom of this function.
     unreadable_status_advisories: list[Error] = []
 
-    with CreativeUoW(tenant["tenant_id"]) as uow:
+    with CreativeUoW(tenant.tenant_id) as uow:
         assert uow.creatives is not None
         result = uow.creatives.get_by_principal(
             principal_id,
@@ -350,7 +345,7 @@ def _list_creatives_impl(
                     "Creative %s (tenant %s) has unreadable stored status %r; reporting it as "
                     "'processing' and surfacing an advisory",
                     db_creative.creative_id,
-                    tenant["tenant_id"],
+                    tenant.tenant_id,
                     db_creative.status,
                 )
                 unreadable_status_advisories.append(
@@ -385,7 +380,7 @@ def _list_creatives_impl(
             # would be a visible mislabel, and the wiring test pins it either way).
             row_log_context = _blob_log_context(
                 creative_id=db_creative.creative_id,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 principal_id=db_creative.principal_id,
             )
 
@@ -393,11 +388,10 @@ def _list_creatives_impl(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
-                # assets is read from the same untyped blob; a stored non-dict value
-                # would fail Creative validation and crash the whole listing, so coerce
-                # it (drop+log a non-dict) — the object-field sibling of the tags/concept
-                # coercion (#1508).
-                assets=_coerce_blob_dict(assets_dict, "assets", log_context=row_log_context),
+                # assets is read from the same untyped blob and validated into the typed
+                # map here; a stored value that does not validate is dropped with a log
+                # rather than crashing the whole listing (#1508).
+                assets=_coerce_blob_assets(assets_dict, "assets", log_context=row_log_context),
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
                 # [1, 2]) that would fail Creative validation and crash the whole
@@ -447,7 +441,7 @@ def _list_creatives_impl(
         sort_applied = {"field": req.sort.field.value, "direction": req.sort.direction.value}
 
     # Audit logging
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
     audit_logger.log_operation(
         operation="list_creatives",
         principal_name=principal_id,
@@ -462,10 +456,7 @@ def _list_creatives_impl(
         },
     )
 
-    # Log activity
-    # Activity logging imported at module level
-    if identity is not None:
-        log_tool_activity(identity, "list_creatives", start_time)
+    log_tool_activity(identity, "list_creatives", start_time)
 
     message = f"Found {len(creatives)} creatives"
     if total_count > len(creatives):
@@ -493,7 +484,6 @@ def _list_creatives_impl(
         format_summary=None,
         status_summary=None,
         errors=unreadable_status_advisories or None,
-        context=req.context,
         message=(
             f"Found {len(creatives)} creative{'s' if len(creatives) != 1 else ''}."
             if len(creatives) == total_count

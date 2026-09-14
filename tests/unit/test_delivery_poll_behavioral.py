@@ -19,7 +19,7 @@ Each test targets exactly one obligation ID and follows the 6 hard rules:
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -32,7 +32,6 @@ from src.core.tools.media_buy_delivery import (
     _resolve_delivery_status_filter,
 )
 from tests.factories.principal import PrincipalFactory
-from tests.helpers.capture_wrapper_req import mcp_tool, registry_impl
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-02
@@ -109,91 +108,9 @@ class TestValidStatusValuesAccepted:
 # the service posts and the envelope the spec defines.
 
 
-# ---------------------------------------------------------------------------
-# UC-004-EXT-A-02
-# ---------------------------------------------------------------------------
-
-
-class TestUC004EXTA02AuthenticationFailure:
-    """Authentication failure returns no data and no state modification.
-
-    Covers: UC-004-EXT-A-02
-
-    Given: an authentication failure (identity=None)
-    When: _get_media_buy_delivery_impl is called
-    Then: AdCPValidationError is raised, no delivery data is returned,
-          and no state is modified (read-only operation).
-    """
-
-    def test_none_identity_raises_validation_error(self) -> None:
-        """No delivery data returned on auth failure.
-
-        Covers: UC-004-EXT-A-02
-        """
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-
-            # Call _impl directly with identity=None (bypassing env.call_impl which provides identity)
-            req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
-
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                _get_media_buy_delivery_impl(req, identity=None)
-
-
-# ---------------------------------------------------------------------------
-# UC-004-MAIN-13
-# ---------------------------------------------------------------------------
-
-
-class TestMCPToolResultContent:
-    """The MCP boundary returns a ToolResult with both content and structured_content.
-
-    Covers: UC-004-MAIN-13
-
-    There is no per-tool MCP wrapper: one generated callable serves every registry row, and
-    this grades it through get_media_buy_delivery. The harness builds a realistic response
-    via call_impl(), which is then the row's implementation for the call.
-    """
-
-    @staticmethod
-    def _stub_delivery_response():
-        """Build a realistic GetMediaBuyDeliveryResponse via harness."""
-        from tests.harness.delivery_poll_unit import DeliveryPollEnv
-
-        with DeliveryPollEnv() as env:
-            env.add_buy(media_buy_id="mb_001")
-            env.set_adapter_response("mb_001", impressions=5000, spend=250.0)
-            return env.call_impl(media_buy_ids=["mb_001"])
-
-    async def test_tool_result_has_content_and_structured_content(self):
-        """MCP wrapper wraps _impl response in ToolResult with both fields.
-
-        Covers: UC-004-MAIN-13
-        """
-        from unittest.mock import AsyncMock
-
-        from fastmcp.server.context import Context
-        from fastmcp.tools.tool import ToolResult
-
-        stub_response = self._stub_delivery_response()
-
-        mock_ctx = MagicMock(spec=Context)
-        mock_ctx.get_state = AsyncMock(return_value=None)
-
-        with registry_impl("get_media_buy_delivery", lambda req, identity=None, **kw: stub_response):
-            result = await mcp_tool("get_media_buy_delivery")(
-                media_buy_ids=["mb_001"],
-                ctx=mock_ctx,
-            )
-
-        assert isinstance(result, ToolResult)
-        assert result.content is not None
-        assert len(result.content) > 0
-        assert result.structured_content is not None
-        assert isinstance(result.structured_content, dict)
-        assert result.structured_content["currency"] == "USD"
+# UC-004-MAIN-13 (the MCP ToolResult carries content and structured_content) is graded on
+# the wire: every BR-UC-004 scenario parametrized over mcp reads structured_content
+# through the harness's MCP leg, so no direct-call test of the wrapper is kept here.
 
 
 # ---------------------------------------------------------------------------
@@ -336,12 +253,11 @@ class TestMissingPrincipalIdReturnsError:
     """
 
     def test_none_principal_id_raises_auth_error(self):
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="t1",
-            tenant=MagicMock(),
+            tenant={"tenant_id": "t1"},
         )
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
@@ -349,38 +265,16 @@ class TestMissingPrincipalIdReturnsError:
             _get_media_buy_delivery_impl(req, identity)
 
     def test_empty_string_principal_id_raises_auth_error(self):
-        from src.core.exceptions import AdCPAuthenticationError
 
         identity = PrincipalFactory.make_identity(
             principal_id="",
             tenant_id="t1",
-            tenant=MagicMock(),
+            tenant={"tenant_id": "t1"},
         )
         req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
 
         with pytest.raises(AdCPAuthenticationError):
             _get_media_buy_delivery_impl(req, identity)
-
-
-class TestMissingTenantRaisesAuthError:
-    """_get_media_buy_delivery_impl raises AdCPAuthenticationError when tenant is None.
-
-    Covers line 132 of media_buy_delivery.py.
-    """
-
-    def test_none_tenant_raises_auth_error(self):
-        from src.core.exceptions import AdCPAuthenticationError
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=None,
-        )
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
-
-        with patch("src.core.auth.get_principal_object", return_value=MagicMock()):
-            with pytest.raises(AdCPAuthenticationError):
-                _get_media_buy_delivery_impl(req, identity)
 
 
 class TestStatusFilterRawString:

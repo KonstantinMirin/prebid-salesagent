@@ -1227,6 +1227,7 @@ class AccountListDispatchMixin:
         from src.core.tools.accounts import _list_accounts_impl
 
         self._commit_factory_data()  # type: ignore[attr-defined]
+        kwargs.setdefault("req", None)
         kwargs.setdefault("identity", self.identity)  # type: ignore[attr-defined]
         return _list_accounts_impl(**kwargs)
 

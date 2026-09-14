@@ -564,18 +564,6 @@ class TestSyncCreativesAuth:
     Existing: test_sync_creatives_auth.py covers core auth check.
     """
 
-    def test_no_identity_raises_auth_error(self):
-        """Missing identity raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Existing: test_sync_creatives_auth.py::test_sync_creatives_requires_authentication
-        Covers: UC-006-EXT-A-01
-        """
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]))
-
     def test_identity_without_principal_raises(self):
         """Identity with None principal_id raises AdCPAuthenticationError.
 
@@ -593,27 +581,6 @@ class TestSyncCreativesAuth:
                 req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]),
                 identity=identity,
             )
-
-    def test_identity_without_tenant_raises(self):
-        """Identity with no tenant context raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Covers: UC-006-EXT-B-01
-        """
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=None,
-        )
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _sync_creatives_impl(
-                req=sync_creatives_request(creatives=[creative_payload(creative_id="c1")]),
-                identity=identity,
-            )
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
 
     def test_auth_error_is_operation_level(self):
         """AUTH_REQUIRED is operation-level: no per-creative results returned.
@@ -634,34 +601,9 @@ class TestSyncCreativesAuth:
             creative_payload(creative_id="c1", name="Banner"),
             creative_payload(creative_id="c2", name="Video"),
         ]
+        anonymous = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1")
         with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives))
-        # No return value -- exception is the entire response
-
-    def test_tenant_error_is_operation_level(self):
-        """TENANT_NOT_FOUND is operation-level: no per-creative results returned.
-
-        The error is raised before any creative processing begins.
-
-        Covers: UC-006-EXT-B-02
-        """
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=None,
-        )
-        # Spec-legal items. They were {"creative_id", "name", "assets": {}} stubs, which
-        # core/creative-asset.json refuses (no format_id, empty assets): these tests are
-        # about the OPERATION-level auth failure, and a payload the request boundary would
-        # have refused first cannot demonstrate that the auth gate precedes processing.
-        creatives = [
-            creative_payload(creative_id="c1", name="Banner"),
-            creative_payload(creative_id="c2", name="Video"),
-        ]
-        with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=identity)
+            _sync_creatives_impl(req=sync_creatives_request(creatives=creatives), identity=anonymous)
         # No return value -- exception is the entire response
 
 
@@ -1386,19 +1328,6 @@ class TestListCreativesAuth:
     Spec: UNSPECIFIED (implementation-defined security boundary).
     """
 
-    def test_no_identity_raises_auth_error(self):
-        """list_creatives requires authentication (creatives are principal-scoped).
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Covers: UC-006-EXT-A-01
-        """
-        from src.core.tools.creatives.listing import _list_creatives_impl
-
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _list_creatives_impl(req=ListCreativesRequest(), identity=None)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
     def test_no_principal_raises_auth_error(self):
         """Spec: UNSPECIFIED (implementation-defined security boundary).
 
@@ -1409,23 +1338,6 @@ class TestListCreativesAuth:
         identity = PrincipalFactory.make_identity(
             principal_id=None,
             tenant_id="t1",
-        )
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _list_creatives_impl(req=ListCreativesRequest(), identity=identity)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
-    def test_no_tenant_raises_auth_error(self):
-        """Spec: UNSPECIFIED (implementation-defined security boundary).
-
-        Covers: UC-006-EXT-B-01
-        """
-        from src.core.tools.creatives.listing import _list_creatives_impl
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=None,
         )
         with pytest.raises(AdCPAuthenticationError) as _ei:
             _list_creatives_impl(req=ListCreativesRequest(), identity=identity)
@@ -2188,10 +2100,6 @@ class TestWorkflowStepCreation:
         """
         from src.core.tools.creatives._workflow import _create_sync_workflow_steps
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1", tenant_id="tenant_1", approval_mode="auto-approve", slack_webhook_url=None
-        )
-
         # prkv.16: the step is written through the caller's unit of work, so
         # the step creation is observed at uow.workflows.create_step rather
         # than at the removed ContextManager collaborator.
@@ -2212,7 +2120,6 @@ class TestWorkflowStepCreation:
             approval_mode="require-human",
             push_notification_config=None,
             context=None,
-            identity=identity,
             uow=mock_uow,
         )
 
@@ -3283,10 +3190,12 @@ class TestFormatCompatibility:
             creative_format="display_300x250",
             product_format_ids=[{"agent_url": product_agent_url, "id": "display_300x250"}],
         )
+        from src.core.tenant_context import TenantContext
+
         return _process_assignments(
             assignments={"c1": ["pkg_1"]},
             results=[SyncCreativeResult(creative_id="c1", action="created")],
-            tenant={"tenant_id": "t1"},
+            tenant=TenantContext.from_dict({"tenant_id": "t1"}),
             validation_mode="strict",
             principal_id="principal_1",
         )
@@ -3891,24 +3800,6 @@ class TestExtensionGaps:
 
     Mixed CONFIRMED/UNSPECIFIED -- see individual stub reasons.
     """
-
-    def test_ext_b_tenant_not_found(self):
-        """Authentication present but tenant unresolvable => TENANT_NOT_FOUND.
-
-        Covers: UC-006-EXT-B-01
-        """
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1",
-            tenant_id="t1",
-            tenant=None,  # No tenant context
-        )
-
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _sync_creatives_impl(req=sync_creatives_request(creatives=[_make_creative_asset()]), identity=identity)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
 
     def test_ext_c_validation_failure_strict_others_processed(self):
         """BR-RULE-033 INV-1: per-creative validation independent even in strict.

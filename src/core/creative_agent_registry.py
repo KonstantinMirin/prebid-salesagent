@@ -20,7 +20,6 @@ Testing:
 
 import copy
 import logging
-import os
 import typing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -31,6 +30,7 @@ from adcp import ListCreativeFormatsRequest
 from adcp.types import AssetContentType as AssetType
 from pydantic import ValidationError
 
+from src.core.config import get_settings
 from src.core.database.models import CreativeAgent as DBCreativeAgent
 from src.core.errors.codes import AppErrorCode
 from src.core.exceptions import AdCPValidationError
@@ -201,7 +201,7 @@ def _is_operator_agent(agent_url: str) -> bool:
     letting a genuinely foreign destination reach the seam and be refused.
     """
     known = {canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL)}
-    configured = os.environ.get("CREATIVE_AGENT_URL")
+    configured = get_settings().integrations.creative_agent_url
     if configured:
         known.add(canonical_agent_url(configured))
     return canonical_agent_url(agent_url) in known
@@ -216,11 +216,8 @@ def _connection_agent_url(agent_url: str) -> str:
     CI load and must never be a test dependency (the catalog also drifts).
     Only the connection reroutes: cache keys and format_id federation
     identity stay on the canonical url. Non-default agents are untouched.
-
-    Read at call time (not import) so test stacks that set the env after
-    import still take effect.
     """
-    configured = os.environ.get("CREATIVE_AGENT_URL")
+    configured = get_settings().integrations.creative_agent_url
     if not configured:
         return agent_url
     if canonical_agent_url(agent_url) != canonical_agent_url(PUBLIC_DEFAULT_AGENT_URL):
@@ -293,20 +290,27 @@ class CreativeAgentRegistry:
         )
     """
 
-    # Default creative agent (always available)
-    # Note: agent_url is the base URL for the creative agent (e.g., https://creative.adcontextprotocol.org)
-    # The MCP server endpoint (/mcp) is appended by the MCP client when connecting
-    # Reads CREATIVE_AGENT_URL env var so CI can point at a containerized agent.
-    DEFAULT_AGENT = CreativeAgent(
-        agent_url=os.environ.get("CREATIVE_AGENT_URL", "https://creative.adcontextprotocol.org"),
-        name="AdCP Standard Creative Agent",
-        enabled=True,
-        priority=1,
-    )
-
     def __init__(self):
-        """Initialize registry with empty cache."""
+        """Initialize registry with empty cache and the deployment's default agent."""
         self._format_cache: dict[str, CachedFormats] = {}  # Key: normalized agent_url
+        # Default creative agent (always available). agent_url is the base URL; the MCP
+        # endpoint (/mcp) is appended by the client. CREATIVE_AGENT_URL lets CI point it at
+        # a containerized agent.
+        self.DEFAULT_AGENT = CreativeAgent(
+            agent_url=get_settings().integrations.creative_agent_url or PUBLIC_DEFAULT_AGENT_URL,
+            name="AdCP Standard Creative Agent",
+            enabled=True,
+            priority=1,
+        )
+
+    def _operator_formats_override(self) -> list[Format] | None:
+        """What this registry serves for an OPERATOR agent instead of dialling it, or None.
+
+        The live registry dials; :class:`ReferenceFormatsRegistry` answers with the
+        checked-in reference catalog. A counterparty URL never reaches this: it is judged
+        by the egress seam before the override is consulted.
+        """
+        return None
 
     @staticmethod
     def _cache_key(agent_url: str) -> str:
@@ -538,15 +542,10 @@ class CreativeAgentRegistry:
             if "result" in data:
                 return self._parse_mcp_tool_result(data["result"], logger, field=field)
 
-        raise AdCPValidationError(
-            field=field,
-            # The endpoint stays OFF the wire: ``message`` is a read-only
-            # CODE_TABLE property and ``agent.agent_url`` is a URL this seller
-            # does not publish (transport-errors.mdx § Security Considerations).
-            # ``field`` is what the buyer needs; the address is a server-side
-            # diagnostic, so it goes to the non-wire channel.
-            internal_detail=f"No parseable result in MCP response from {agent.agent_url}",
-        )
+        # The endpoint stays OFF the wire: ``agent.agent_url`` is a URL this seller
+        # does not publish (transport-errors.mdx § Security Considerations).
+        # ``field`` is what the buyer needs.
+        raise AdCPValidationError(field=field)
 
     def _parse_mcp_tool_result(self, result: dict, logger: Any, *, field: str | None = None) -> list[Format]:
         """Parse formats from an MCP tools/call result.
@@ -564,7 +563,7 @@ class CreativeAgentRegistry:
                 formats = _validate_formats_tolerant(formats_list, logger)
                 logger.info(f"_fetch_formats_raw_mcp: Parsed {len(formats)} formats from TextContent")
                 return formats
-        raise AdCPValidationError(field=field, internal_detail="No text content in MCP tool result")
+        raise AdCPValidationError(field=field)
 
     async def get_formats_for_agent(
         self,
@@ -625,10 +624,8 @@ class CreativeAgentRegistry:
                 agent, await self._fetch_formats_raw_mcp(agent, provenance=provenance), has_filters=False
             )
 
-        # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
-        # to avoid external HTTP calls (and to match the e2e server by construction).
-        if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            return _get_reference_formats()
+        if (reference := self._operator_formats_override()) is not None:
+            return reference
 
         # Check cache - only use cache if no filtering parameters provided
         has_filters = any(
@@ -724,11 +721,8 @@ class CreativeAgentRegistry:
         When all agents succeed, errors is empty.
         When some agents fail, returns partial results + errors for failed agents.
         """
-        # In testing mode (ADCP_TESTING=true), serve the checked-in reference formats
-        # to avoid external HTTP calls (and to match the e2e server by construction).
-        if os.environ.get("ADCP_TESTING", "").lower() == "true":
-            logger.info("list_all_formats: Using reference formats (ADCP_TESTING=true)")
-            return FormatFetchResult(formats=_get_reference_formats(), errors=[])
+        if (reference := self._operator_formats_override()) is not None:
+            return FormatFetchResult(formats=reference, errors=[])
 
         agents = self._get_tenant_agents(tenant_id)
         all_formats: list[Format] = []
@@ -946,12 +940,21 @@ class CreativeAgentRegistry:
 
 
 # Global registry instance
+class ReferenceFormatsRegistry(CreativeAgentRegistry):
+    """The registry a test deployment runs: operator agents answer from the checked-in
+    reference catalog, so no test ever dials a creative agent and the in-process and e2e
+    servers agree by construction. Counterparty URLs still go through the egress seam."""
+
+    def _operator_formats_override(self) -> list[Format] | None:
+        return _get_reference_formats()
+
+
 _registry: CreativeAgentRegistry | None = None
 
 
 def get_creative_agent_registry() -> CreativeAgentRegistry:
-    """Get the global creative agent registry instance."""
+    """The process's creative agent registry, selected once from the settings."""
     global _registry
     if _registry is None:
-        _registry = CreativeAgentRegistry()
+        _registry = ReferenceFormatsRegistry() if get_settings().reference_formats_only else CreativeAgentRegistry()
     return _registry

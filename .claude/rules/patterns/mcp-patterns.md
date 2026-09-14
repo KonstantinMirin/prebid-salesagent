@@ -21,7 +21,7 @@ async with client:
 # List available tools
 uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 
-# Get a real token from Admin UI -> Advertisers -> API Token
+# A real token is shown once, when the advertiser is created (or rotated) in Admin UI -> Advertisers
 uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"video"}'
 ```
 
@@ -34,27 +34,30 @@ ONE seam, `src/core/tools/_boundary.py`. There are no per-tool wrappers.
 ```python
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity | None = None,    # NOT Context/ToolContext
-    context_id: str | None = None,
+    identity: ResolvedIdentity,    # never Context, headers or a token
 ) -> CreateMediaBuyResult:
     ...
 ```
 
-**Every transport** names the tool and hands over the request it validated:
+**Every transport** names the tool and hands over the raw payload and the request headers:
 ```python
-identity = resolve_identity(headers, protocol="a2a")   # or the MCP middleware / REST auth dep
-response = await invoke_tool("create_media_buy", req, identity)
+response = await serve("create_media_buy", payload, headers, TransportProtocol.A2A)
 ```
 
-`invoke_tool` reads `src/core/tools/registry.py` for the implementation, resolves the account
-the request names, and honours its `idempotency_key` — once, for every transport.
+`serve` validates the payload into the registry row's DTO, resolves the identity once
+(the resolver is private to the boundary), resolves the account the request names, honours
+its `idempotency_key`, and stamps the buyer's `context` onto the response — once, for every
+transport.
 
-**`_impl` rules:** Accept `ResolvedIdentity` (not Context). Raise `AdCPSalesAgentError` (not
-ToolError). Zero imports from fastmcp/a2a/starlette/fastapi. No account resolution and no
-idempotency. Declare only `req`, `identity`, `context_id`.
+**`_impl` rules:** Accept `ResolvedIdentity` (protected tool: principal and tenant are not
+optional, read them directly) or `PublicIdentity` (public tool: branch on
+`identity.principal is None`), never a Context. Raise `AdCPSalesAgentError` (not ToolError).
+Zero imports from fastmcp/a2a/starlette/fastapi. No account resolution, no idempotency, no
+context echo. Declare exactly `(req: <DTO>, identity: <one of the two>)`; the registry derives
+the tool's credential policy from that annotation.
 
-**Transport rules:** Resolve identity, call `invoke_tool`, translate `AdCPSalesAgentError` to
-the transport's error format.
+**Transport rules:** Hand over the headers, call `serve`, catch `AdcpFailure`, serialize
+its response with `to_wire`, add only the transport's own failure marker.
 
 **Substituting an implementation in a test** patches the registry ROW — `TOOLS` holds the
 function object, so patching a module attribute renames something nothing consults. Use

@@ -5,7 +5,6 @@ shared implementation pattern from CLAUDE.md.
 """
 
 import logging
-import os
 import time
 from typing import Any, cast
 
@@ -16,25 +15,22 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import get_principal_object, require_identity, require_tenant
+from src.core.config import get_settings
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
-    AdCPAuthRequiredError,
-    AdCPConfigurationError,
     AdCPInternalError,
     AdCPPolicyViolationError,
     AdCPSalesAgentError,
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
     GetProductsResponse,
     Product,  # Extends library Product
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
 
@@ -171,7 +167,7 @@ def _products_message(count: int, *, anonymous: bool) -> str:
     return base
 
 
-async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity | None) -> GetProductsResponse:
+async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) -> GetProductsResponse:
     """Shared implementation for get_products.
 
     Contains all business logic for product discovery including policy checks,
@@ -190,16 +186,11 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     if not req.brief and not req.brand and not req.filters:
         raise AdCPValidationError()
 
-    # Extract identity fields
-    identity = require_identity(identity, context=req.context)
-
-    testing_ctx: AdCPTestContext | None = identity.testing_context or AdCPTestContext()
     principal_id: str | None = identity.principal_id
-    tenant = require_tenant(identity, context=req.context)
-    logger.info(f"[GET_PRODUCTS] Tenant context: {tenant['tenant_id']}")
-
-    # Get the Principal object with ad server mappings
-    principal = get_principal_object(principal_id, tenant_id=identity.tenant_id) if principal_id else None
+    tenant = identity.tenant
+    if tenant is None:
+        # No seller is addressed: there is no catalog to list, and nothing to refuse.
+        return GetProductsResponse(products=[])
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).
@@ -210,7 +201,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
             offering = f"Brand at {domain}"
 
     # Check brand_manifest_policy from tenant settings
-    brand_manifest_policy = tenant.get("brand_manifest_policy", "require_auth")
+    brand_manifest_policy = tenant.brand_manifest_policy
 
     # Enforce policy-based validation
     if brand_manifest_policy == "require_brand" and not offering:
@@ -220,27 +211,23 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         # "Brand manifest required by tenant policy" string is dropped for that
         # reason, not because the condition changed.
         raise AdCPAuthorizationError()
-    elif brand_manifest_policy == "require_auth" and not principal_id:
-        # No credential presented at all -> AUTH_MISSING per v3.1.1
-        # error-code.json.
-        raise AdCPAuthRequiredError()
-    # public policy allows all requests (no brand_manifest or auth required)
+    # "require_auth" is enforced by the RESOLVER, not here: ToolSpec.requires_credential(tenant)
+    # answers True for this tool on such a seller, so the boundary refused an anonymous caller
+    # (AUTH_MISSING, BR-UC-001 INV-1) and ``identity`` is a ResolvedIdentity by the time this
+    # runs. "public" allows all requests (no brand_manifest or auth required).
 
     # For non-public policies, we need offering for policy checks and product matching
     # Use a generic offering if not provided
     if not offering:
         offering = "Generic product inquiry"
 
-    # Skip strict validation in test environments (allow simple test values)
-
-    is_test_mode = (testing_ctx and testing_ctx.test_session_id is not None) or os.getenv("ADCP_TESTING") == "true"
+    # Under test, simple placeholder values pass where a real brand would be demanded.
+    is_test_mode = get_settings().relaxed_brand_validation
 
     # Note: brand_manifest validation is handled by Pydantic schema, no need for runtime validation here
 
     # Check policy compliance first (if enabled)
-    advertising_policy = safe_parse_json_field(
-        tenant.get("advertising_policy"), field_name="advertising_policy", default={}
-    )
+    advertising_policy = safe_parse_json_field(tenant.advertising_policy, field_name="advertising_policy", default={})
 
     # Only run policy checks if enabled in tenant settings
     policy_check_enabled = advertising_policy.get("enabled", False)  # Default to False for new tenants
@@ -251,14 +238,14 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     if not policy_check_enabled:
         # Skip policy checks if disabled
         policy_result = None
-        logger.info(f"Policy checks disabled for tenant {tenant['tenant_id']}")
+        logger.info(f"Policy checks disabled for tenant {tenant.tenant_id}")
     else:
         # Get tenant's Gemini API key for policy checks
-        tenant_gemini_key = tenant.get("gemini_api_key")
+        tenant_gemini_key = tenant.gemini_api_key
         if not tenant_gemini_key:
             # No API key - cannot run policy checks
             policy_result = None
-            logger.warning(f"Policy checks enabled but no Gemini API key configured for tenant {tenant['tenant_id']}")
+            logger.warning(f"Policy checks enabled but no Gemini API key configured for tenant {tenant.tenant_id}")
         else:
             policy_service = PolicyCheckService(gemini_api_key=tenant_gemini_key)
 
@@ -274,7 +261,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
                 )
 
                 # Log successful policy check
-                audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+                audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
                 audit_logger.log_operation(
                     operation="policy_check",
                     principal_name=principal_id or "anonymous",
@@ -304,8 +291,8 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
                 # because two of those sites are seller-side CONFIGURATION states
                 # (policy disabled by tenant, no Gemini key) whose disclosure would leak
                 # the seller's operational posture to the buyer for no spec reason.
-                logger.error(f"Policy check failed for tenant {tenant['tenant_id']}: {e}")
-                audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+                logger.error(f"Policy check failed for tenant {tenant.tenant_id}: {e}")
+                audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
                 audit_logger.log_operation(
                     operation="policy_check_failure",
                     principal_name=principal_id or "anonymous",
@@ -339,7 +326,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         and advertising_policy.get("require_manual_review", False)
     ):
         # Log policy violation for audit trail and compliance
-        audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+        audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
         principal_name = principal_id if principal_id else "anonymous"
         audit_logger.log_operation(
             operation="get_products_policy_violation",
@@ -364,15 +351,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         )
 
     # Resolve adapter type for delivery_measurement defaults
-    ad_server_config = tenant.get("ad_server", {})
-    tenant_adapter_type = (
-        ad_server_config.get("adapter", "mock") if isinstance(ad_server_config, dict) else ad_server_config
-    )
+    tenant_adapter_type = tenant.ad_server
 
     # Query products via repository (tenant-scoped)
     from src.core.database.repositories.uow import ProductUoW
 
-    with ProductUoW(tenant["tenant_id"]) as uow:
+    with ProductUoW(tenant.tenant_id) as uow:
         assert uow.products is not None
         db_products = uow.products.list_all()
 
@@ -393,7 +377,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
                 logger.error(error_msg)
                 raise AdCPInternalError() from e
 
-    logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant['tenant_id']}")
+    logger.info(f"[GET_PRODUCTS] Got {len(products)} products from database for tenant {tenant.tenant_id}")
 
     # Filter products by principal access control
     # Products with allowed_principal_ids set are only visible to those specific principals
@@ -456,9 +440,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         from src.services.dynamic_products import generate_variants_for_brief
 
         # Get our agent URL for deployment specification
-        our_agent_url = tenant.get("virtual_host")  # Our sales agent URL (e.g., https://sales.example.com)
+        our_agent_url = tenant.virtual_host  # Our sales agent URL (e.g., https://sales.example.com)
 
-        dynamic_variants = await generate_variants_for_brief(tenant["tenant_id"], brief_text, our_agent_url)
+        dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
         if dynamic_variants:
             # Convert Product models to Product schemas for response
 
@@ -495,13 +479,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         # Extract country from request if available (future enhancement: parse from targeting)
         country_code = None  # TODO: Extract from targeting if provided
 
-        with ProductUoW(tenant["tenant_id"]) as pricing_uow:
+        with ProductUoW(tenant.tenant_id) as pricing_uow:
             # FIXME(#1119): DynamicPricingService needs a repository, not raw session
             assert pricing_uow.session is not None
             pricing_service = DynamicPricingService(pricing_uow.session)
             products = pricing_service.enrich_products_with_pricing(
                 products,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 country_code=country_code,
                 min_exposures=getattr(req.filters, "min_exposures", None) if req.filters else None,
             )
@@ -633,14 +617,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
                         continue
                 else:
                     # Product has no channels - use adapter defaults
-                    # Get adapter type from tenant config
-                    ad_server_config = tenant.get("ad_server", {})
-                    adapter_type = (
-                        ad_server_config.get("adapter", "mock")
-                        if isinstance(ad_server_config, dict)
-                        else ad_server_config
-                    )
-                    adapter_channels = get_adapter_default_channels(adapter_type)
+                    adapter_channels = get_adapter_default_channels(tenant.ad_server)
 
                     # Product matches if any of adapter's default channels is in request
                     if adapter_channels and not request_channels.intersection(set(adapter_channels)):
@@ -698,7 +675,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
         eligible_products = filtered_products
 
     # AI-powered product ranking (when tenant has product_ranking_prompt configured)
-    product_ranking_prompt = tenant.get("product_ranking_prompt")
+    product_ranking_prompt = tenant.product_ranking_prompt
     if product_ranking_prompt and brief_text and eligible_products:
         try:
             from src.services.ai.agents.ranking_agent import (
@@ -752,44 +729,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
             # get_products and no `incomplete[]` scope for ranking.
             logger.warning(f"Failed to apply AI product ranking: {e}. Returning unranked products.")
 
-    # Annotate pricing options with adapter support (AdCP PR #88)
-    # Do this BEFORE serialization to avoid reconstruction issues.
-    # Tenant-level (not Principal-level) resolution: which pricing models an
-    # adapter supports is a fact about the SELLER's ad server, not the caller
-    # (same INV-4 pattern as get_targeting_capabilities(), salesagent-dn2s) —
-    # must not depend on whether principal_id happens to resolve to a DB
-    # Principal (salesagent-r9rf).
-    if eligible_products:
-        try:
-            from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
-
-            adapter_class = get_adapter_class_for_tenant(tenant)
-            supported_models = adapter_class.get_supported_pricing_models()
-
-            for product in eligible_products:
-                if product.pricing_options:
-                    # Annotate each pricing option with "supported" flag.
-                    # supported / unsupported_reason are declared (excluded)
-                    # fields on every local pricing member, so these are plain
-                    # attribute writes that never reach the wire.
-                    for option in product.pricing_options:
-                        inner = option.root
-                        pricing_model = inner.pricing_model
-                        is_supported = pricing_model in supported_models
-                        inner.supported = is_supported
-                        if not is_supported:
-                            inner.unsupported_reason = (
-                                f"Current adapter does not support {pricing_model.upper()} pricing"
-                            )
-        except (ImportError, RuntimeError, OSError, ValueError, AdCPConfigurationError) as e:
-            # structural-guard: spec-neutral — the dropped fields are not in
-            # the pin. `supported` / `unsupported_reason` do not exist in
-            # AdCP 3.1.1 core/pricing-option.json at all; that schema declares no
-            # additionalProperties, so draft-07 permits them as extensions. Dropping a
-            # non-spec extension field cannot violate the pin, so there is no
-            # conformance obligation to surface here.
-            logger.warning(f"Failed to annotate pricing options with adapter support: {e}")
-
     # Filter pricing data for anonymous users
     # Do this BEFORE serialization to avoid reconstruction issues
     if principal_id is None:  # Anonymous user
@@ -809,13 +748,12 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     resp = GetProductsResponse(
         products=cast(list[LibraryProduct], eligible_products),
         errors=None,
-        context=req.context,
         message=_products_message(len(eligible_products), anonymous=principal_id is None),
     )
 
     # Log successful get_products call
     elapsed_ms = int((time.time() - start_time) * 1000)
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
     audit_logger.log_operation(
         operation="get_products",
         principal_name=principal_id or "anonymous",
@@ -834,21 +772,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
     return resp
 
 
-def get_product_catalog(tenant_id: str | None = None) -> list[Product]:
+def get_product_catalog(tenant_id: str) -> list[Product]:
     """Get products for a tenant.
-
-    Args:
-        tenant_id: Tenant ID to load products for. Falls back to ContextVar if not provided.
 
     Returns:
         List of Product objects with full pricing options
     """
     from src.core.database.repositories.uow import ProductUoW
-
-    if tenant_id is None:
-        from src.core.config_loader import get_current_tenant
-
-        tenant_id = get_current_tenant()["tenant_id"]
 
     with ProductUoW(tenant_id) as uow:
         assert uow.products is not None

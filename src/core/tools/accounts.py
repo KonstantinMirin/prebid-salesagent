@@ -33,10 +33,13 @@ from adcp.types.generated_poc.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.models import Account as DBAccount
 from src.core.database.repositories.account import AccountRepository, NaturalKey, NaturalKeyConflict
-from src.core.database.repositories.account_serialization import as_json_dict
+from src.core.database.repositories.account_serialization import (
+    account_from_row,
+    scrub_business_entity,
+    scrub_notification_credentials,
+)
 from src.core.database.repositories.uow import AccountUoW
 from src.core.errors.codes import ErrorCode, ErrorCodeT
 from src.core.errors.details import BillingNotSupportedDetails, ConfigurationDetails, ErrorDetails, ValidationDetails
@@ -52,7 +55,7 @@ from src.core.schemas.account import (
     SyncAccountsResponse,
     SyncResponseAccount,
 )
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.webhooks.registration import accept_push_notification_config
 from src.services.notification_proof_service import NotificationProofService, get_notification_proof_service
 
@@ -73,35 +76,6 @@ SyncEntry = SyncAccountInput | SettingsUpdateAccountInput
 #: carries: the seller-assigned handle (AccountReference1) or the natural key
 #: (AccountReference2).
 AccountRef = AccountReference1 | AccountReference2
-
-
-def _db_account_to_schema(db_account: DBAccount) -> Account:
-    """Convert ORM Account to Pydantic schema Account."""
-    return Account(
-        account_id=db_account.account_id,
-        name=db_account.name,
-        status=db_account.status,
-        advertiser=db_account.advertiser,
-        billing_proxy=db_account.billing_proxy,
-        brand=db_account.brand,
-        operator=db_account.operator,
-        billing=db_account.billing,
-        rate_card=db_account.rate_card,
-        payment_terms=db_account.payment_terms,
-        credit_limit=db_account.credit_limit,
-        setup=db_account.setup,
-        account_scope=db_account.account_scope,
-        governance_agents=db_account.governance_agents,
-        sandbox=db_account.sandbox,
-        # Same scrub as the sync echo: list_accounts must not reflect write-only
-        # credentials either, and the read-back leg of the register scenario goes
-        # through here.
-        notification_configs=_scrub_notification_credentials(db_account.notification_configs),
-        # Same scrub rationale as notification_configs: `bank` is write-only, and
-        # list_accounts is an echo path too.
-        billing_entity=_scrub_business_entity(db_account.billing_entity),
-        ext=db_account.ext,
-    )
 
 
 def _encode_cursor(offset: int) -> str:
@@ -186,8 +160,8 @@ def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsR
 
 
 def _list_accounts_impl(
-    req: ListAccountsRequest | None = None,
-    identity: ResolvedIdentity | None = None,
+    req: ListAccountsRequest | None,
+    identity: ResolvedIdentity,
 ) -> ListAccountsResponse:
     """List accounts accessible to the authenticated agent.
 
@@ -204,10 +178,11 @@ def _list_accounts_impl(
     if req is None:
         req = ListAccountsRequest()
 
-    # BR-RULE-055 INV-3: unauthenticated → auth error (consistent with sync_accounts)
-    principal_id = require_principal_id(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    tenant_id = tenant["tenant_id"]
+    # BR-RULE-055 INV-3: an unauthenticated caller is refused by the boundary; the
+    # ResolvedIdentity this takes carries a principal by type.
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
+    tenant_id = tenant.tenant_id
 
     with AccountUoW(tenant_id) as uow:
         assert uow.accounts is not None
@@ -219,7 +194,7 @@ def _list_accounts_impl(
         db_accounts.sort(key=lambda a: a.account_id)
 
         # Convert ORM models to schema models while session is alive
-        schema_accounts = [_db_account_to_schema(a) for a in db_accounts]
+        schema_accounts = [account_from_row(a) for a in db_accounts]
 
     # Apply pagination after conversion
     paginated, pagination_resp = _apply_pagination(schema_accounts, getattr(req, "pagination", None))
@@ -227,7 +202,6 @@ def _list_accounts_impl(
     return ListAccountsResponse(
         accounts=paginated,
         pagination=pagination_resp,
-        context=req.context,
         message=f"Found {len(paginated)} account{'s' if len(paginated) != 1 else ''}.",
     )
 
@@ -261,53 +235,6 @@ def _generate_account_name(brand_domain: str, operator: str, brand_id: str | Non
 def _enum_to_str(val: object) -> str | None:
     """Extract string value from an enum or return as-is. Returns None for None."""
     return enum_value(val)
-
-
-def _scrub_notification_credentials(
-    configs: Iterable[BaseModel | Mapping[str, object]] | None,
-) -> list[NotificationConfig] | None:
-    """Strip write-only ``authentication.credentials`` from an echoed subscriber set.
-
-    ``credentials`` is ``minLength: 32`` and documented write-only: the seller
-    stores it to authenticate its own outbound calls and MUST NOT reflect it.
-    Called from ``_build_sync_result`` and ``_db_account_to_schema`` — the two
-    places a persisted config becomes a response object — rather than at each
-    call site, so a future echo path cannot forget it.
-
-    Returns ``None`` for ``None`` and ``[]`` for ``[]``: "never configured" and
-    "explicitly cleared" are different states to the buyer.
-    """
-    if configs is None:
-        return None
-    scrubbed: list[NotificationConfig] = []
-    for config in configs:
-        data = as_json_dict(config)
-        auth = data.get("authentication")
-        if isinstance(auth, dict) and "credentials" in auth:
-            auth = {k: v for k, v in auth.items() if k != "credentials"}
-            data["authentication"] = auth
-        scrubbed.append(NotificationConfig.model_validate(data))
-    return scrubbed
-
-
-def _scrub_business_entity(entity: BusinessEntity | Mapping[str, object] | None) -> BusinessEntity | None:
-    """Strip write-only ``bank`` from an echoed ``billing_entity``.
-
-    The response account item documents ``billing_entity`` as "echoed from the
-    request ... **Bank details are omitted (write-only)**" (v3.1.1
-    sync-accounts-response.json). Called from ``_build_sync_result`` and
-    ``_db_account_to_schema`` — the two places a persisted entity becomes a
-    response object — rather than at each call site, the same placement
-    rationale as :func:`_scrub_notification_credentials`, so a future echo path
-    cannot leak by forgetting a call.
-    """
-    from adcp.types.generated_poc.core.business_entity import BusinessEntity
-
-    if entity is None:
-        return None
-    data = as_json_dict(entity, exclude_none=True)
-    data.pop("bank", None)
-    return BusinessEntity.model_validate(data)
 
 
 def _resolve_notification_configs(
@@ -762,8 +689,8 @@ def _build_sync_result(
         sandbox=sandbox,
         errors=errors,
         setup=setup,
-        notification_configs=_scrub_notification_credentials(notification_configs),
-        billing_entity=_scrub_business_entity(billing_entity),
+        notification_configs=scrub_notification_credentials(notification_configs),
+        billing_entity=scrub_business_entity(billing_entity),
     )
 
 
@@ -823,7 +750,7 @@ def _provisioning_gates(
     billing_val: str | None,
     identity: ResolvedIdentity,
     sandbox: bool | None,
-    tenant: LazyTenantContext | None,
+    tenant: TenantContext | None,
     index: int,
     entry: SyncEntry,
     proof_failures: dict[int, list[GateFailure]],
@@ -889,8 +816,7 @@ def _check_billing_policy(
 
     # Read billing policy from tenant configuration (not identity).
     # Both dict and TenantContext expose .get() identically, so no branching needed.
-    tenant = identity.tenant if identity else None
-    supported = resolve_supported_billing(tenant)
+    supported = resolve_supported_billing(identity.tenant)
 
     if billing_val not in supported:
         # billing-not-supported.json: supported_billing minItems 1, "Sellers MAY
@@ -938,7 +864,7 @@ def _extract_natural_key(entry: SyncEntry) -> NaturalKey:
     return NaturalKey.from_parts(brand_domain, brand_id, operator, entry.sandbox)
 
 
-def _check_sandbox_capability(entry_sandbox: bool | None, tenant: LazyTenantContext | None) -> list[GateFailure] | None:
+def _check_sandbox_capability(entry_sandbox: bool | None, tenant: TenantContext | None) -> list[GateFailure] | None:
     """Reject sandbox provisioning when the seller has not declared account.sandbox support.
 
     Mirrors the ``_check_billing_policy`` per-entry gate shape.
@@ -1042,12 +968,11 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
         # `exc.field` is the gate's own pointer -- it is built from this prefix, so
         # it names the refused half (`.url` or `.authentication.credentials`)
         # without carrying any refused host or credential into buyer-facing text.
-        auth = getattr(config, "authentication", None)
         try:
             accept_push_notification_config(
                 {
                     "url": getattr(config, "url", None),
-                    "authentication": auth.model_dump(mode="json", exclude_none=True) if auth is not None else None,
+                    "authentication": getattr(config, "authentication", None),
                 },
                 field_prefix=f"notification_configs[{index}]",
             )
@@ -1425,7 +1350,7 @@ def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBA
 
 async def _sync_accounts_impl(
     req: SyncAccountsRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> SyncAccountsResponse:
     """Sync accounts by natural key — upsert, delete_missing, dry_run.
 
@@ -1445,13 +1370,11 @@ async def _sync_accounts_impl(
     Returns:
         SyncAccountsResponse with per-account action results.
     """
-    # BR-RULE-055: sync requires auth (consistent with list_accounts). require_principal_id
-    # first so the canonical auth message surfaces for a missing/anonymous token; require_identity
-    # then narrows the type for _check_billing_policy below.
-    principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    tenant_id = tenant["tenant_id"]
+    # BR-RULE-055: sync requires auth (consistent with list_accounts); the boundary
+    # refused an anonymous caller before this ran.
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
+    tenant_id = tenant.tenant_id
 
     # Validate non-empty accounts array. field= names WHICH input was rejected: the
     # buyer-facing sentence is derived from the code through CODE_TABLE and so cannot say
@@ -1471,7 +1394,6 @@ async def _sync_accounts_impl(
         accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
 
     # bool() here narrows the ANNOTATION, it does not supply the default. The model
@@ -1594,7 +1516,7 @@ async def _sync_accounts_impl(
                 # BR-RULE-060: determine approval status from tenant config.
                 # account_approval_mode is a distinct field from creative approval_mode
                 # (BR-RULE-037) — do NOT fall back to approval_mode.
-                approval_mode = tenant.get("account_approval_mode")
+                approval_mode = tenant.account_approval_mode
                 setup = _build_setup_for_approval(approval_mode or "auto", tenant_id)
                 initial_status = "pending_approval" if setup else "active"
 
@@ -1691,7 +1613,6 @@ async def _sync_accounts_impl(
     return SyncAccountsResponse(
         accounts=results,
         dry_run=dry_run if dry_run else None,
-        context=req.context,
         message=f"Synced {len(results)} account{'s' if len(results) != 1 else ''}{' (dry run)' if dry_run else ''}.",
     )
 

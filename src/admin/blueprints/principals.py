@@ -2,7 +2,6 @@
 
 import json
 import logging
-import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -14,7 +13,8 @@ from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
+from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
 from src.core.webhook_validator import webhook_url_for_log
@@ -43,8 +43,7 @@ def list_principals(tenant_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            stmt = select(Principal).filter_by(tenant_id=tenant_id).order_by(Principal.name)
-            principals = db_session.scalars(stmt).all()
+            principals = PrincipalRepository(db_session, tenant_id).list_all()
 
             # Convert to dict format for template
             principals_list = []
@@ -67,7 +66,7 @@ def list_principals(tenant_id):
                 principal_dict = {
                     "principal_id": principal.principal_id,
                     "name": principal.name,
-                    "access_token": principal.access_token,
+                    "token_prefix": principal.token_prefix,
                     "platform_mappings": mappings,
                     "media_buy_count": media_buy_count,
                     "created_at": principal.created_at,
@@ -153,9 +152,7 @@ def create_principal(tenant_id):
             flash("Principal name is required", "error")
             return redirect(request.url)
 
-        # Generate unique ID and token
         principal_id = f"prin_{uuid.uuid4().hex[:8]}"
-        access_token = f"tok_{secrets.token_urlsafe(32)}"
 
         # Build platform mappings
         platform_mappings = {}
@@ -194,21 +191,21 @@ def create_principal(tenant_id):
             # pre-check here read as a guarantee it could not hold under
             # concurrency. Identity is (tenant_id, principal_id).
 
-            # Create the principal
-            principal = Principal(
-                tenant_id=tenant_id,
+            # The token is minted here and shown ONCE, in the flash below; the row keeps
+            # its hash. An operator who loses it rotates it.
+            principal, token = PrincipalRepository(db_session, tenant_id).issue(
                 principal_id=principal_id,
                 name=principal_name,
-                access_token=access_token,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-
-            db_session.add(principal)
             db_session.commit()
 
-            flash(f"Advertiser '{principal_name}' created successfully", "success")
+            flash(
+                f"Advertiser '{principal_name}' created. Its API token, shown only now: {token}",
+                "success",
+            )
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="advertisers"))
 
     except Exception as e:
@@ -232,9 +229,7 @@ def edit_principal(tenant_id, principal_id):
                 flash("Tenant not found", "error")
                 return redirect(url_for("core.index"))
 
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
@@ -262,9 +257,7 @@ def edit_principal(tenant_id, principal_id):
     # POST - Update the principal
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Advertiser not found", "error")
                 return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
@@ -310,9 +303,7 @@ def get_principal(tenant_id, principal_id):
     """Get principal details including platform mappings (API endpoint)."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -332,7 +323,7 @@ def get_principal(tenant_id, principal_id):
                     "principal": {
                         "principal_id": principal.principal_id,
                         "name": principal.name,
-                        "access_token": principal.access_token,
+                        "token_prefix": principal.token_prefix,
                         "platform_mappings": mappings,
                         "created_at": principal.created_at.isoformat() if principal.created_at else None,
                     },
@@ -342,6 +333,31 @@ def get_principal(tenant_id, principal_id):
     except Exception as e:
         logger.error(f"Error getting principal {principal_id}: {e}", exc_info=True)
         return jsonify({"error": f"Failed to get principal: {str(e)}"}), 500
+
+
+@principals_bp.route("/principal/<principal_id>/rotate-token", methods=["POST"])
+@log_admin_action("rotate_principal_token")
+@require_tenant_access()
+def rotate_token(tenant_id, principal_id):
+    """Replace the principal's API token. The new token is in the response, once.
+
+    The stored hash is the only record of a token, so a lost token cannot be shown again;
+    rotation is the recovery. The old token stops resolving on commit.
+    """
+    try:
+        with get_db_session() as db_session:
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
+            if not principal:
+                return jsonify({"error": "Principal not found"}), 404
+
+            token = principal.rotate_token()
+            principal.updated_at = datetime.now(UTC)
+            db_session.commit()
+            return jsonify({"success": True, "token": token, "token_prefix": principal.token_prefix})
+
+    except Exception as e:
+        logger.error(f"Error rotating token for principal {principal_id}: {e}", exc_info=True)
+        return jsonify({"error": "Failed to rotate token"}), 500
 
 
 @principals_bp.route("/principal/<principal_id>/update_mappings", methods=["POST"])
@@ -377,9 +393,7 @@ def update_mappings(tenant_id, principal_id):
                     )
 
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -482,7 +496,6 @@ def get_gam_advertisers(tenant_id):
                     network_code=tenant.adapter_config.gam_network_code,
                     advertiser_id=None,
                     trafficker_id=tenant.adapter_config.gam_trafficker_id,
-                    dry_run=False,
                     tenant_id=tenant_id,
                 )
 
@@ -516,9 +529,7 @@ def get_principal_config(tenant_id, principal_id):
     """Get principal configuration including platform mappings for testing UI."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -556,9 +567,7 @@ def save_testing_config(tenant_id, principal_id):
         hitl_config = data["hitl_config"]
 
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404
@@ -597,9 +606,7 @@ def manage_webhooks(tenant_id, principal_id):
     """Manage webhook configurations for a principal."""
     try:
         with get_db_session() as db_session:
-            principal = db_session.scalars(
-                select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            ).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
             if not principal:
                 flash("Principal not found", "error")
                 return redirect(url_for("principals.list_principals", tenant_id=tenant_id))
@@ -835,8 +842,7 @@ def delete_principal(tenant_id, principal_id):
     try:
         with get_db_session() as db_session:
             # Find the principal
-            stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
-            principal = db_session.scalars(stmt).first()
+            principal = PrincipalRepository(db_session, tenant_id).get(principal_id)
 
             if not principal:
                 return jsonify({"error": "Principal not found"}), 404

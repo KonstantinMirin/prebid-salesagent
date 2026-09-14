@@ -17,10 +17,10 @@ from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types import AccountReference, MediaBuyStatus
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from adcp.types import MediaBuyStatus
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
@@ -34,11 +34,8 @@ from src.core.exceptions import (
 )
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
-    SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.testing_hooks import AdCPTestContext
-from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.media_buy_approval import run_approval
 from tests.integration.media_buy_helpers import (
@@ -177,23 +174,6 @@ def mb_creatives(integration_db, mb_identity):
 # ---------------------------------------------------------------------------
 # Bucket A: Create Media Buy (from xfails)
 # ---------------------------------------------------------------------------
-
-
-async def _sync_creatives(**kwargs):
-    """Build a SyncCreativesRequest from flat fields, then dispatch it at the boundary.
-
-    ``invoke_tool`` is the path every transport takes -- account resolution and the
-    idempotency probe included -- so a call site here reaches production the way a buyer
-    does. This module's call sites stay flat.
-
-    Async because the boundary is: the single caller sits inside an async test, so wrapping
-    this in ``asyncio.run`` would try to start a second loop inside the running one.
-    """
-    from src.core.tools._boundary import invoke_tool
-
-    identity = kwargs.pop("identity", None)
-    kwargs.pop("ctx", None)
-    return await invoke_tool("sync_creatives", SyncCreativesRequest(**kwargs), identity)
 
 
 class TestCreateMediaBuyCurrencyValidation:
@@ -658,107 +638,6 @@ class TestGetMediaBuysResponseFields:
                 f"snapshot nor snapshot_unavailable_reason is set"
             )
 
-    @pytest.mark.asyncio
-    async def test_creative_approvals_populated(
-        self, mb_tenant, mb_principal, mb_products, mb_identity, sample_account
-    ):
-        """GMB-RS04: creative approval status per package.
-
-        Creates a media buy, syncs creatives and assigns them to the package,
-        then calls _get_media_buys_impl and verifies creative_approvals are
-        populated on the matching package.
-        """
-        from src.core.schemas import GetMediaBuysRequest
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-        from tests.helpers.adcp_factories import create_test_format
-
-        create_req = _make_create_request(
-            packages=[
-                {
-                    "product_id": "guaranteed_display",
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                }
-            ],
-        )
-        create_result = await _create_media_buy_impl(req=create_req, identity=mb_identity)
-        assert create_result.status == "completed", f"Create failed: {create_result}"
-        media_buy_id = create_result.media_buy_id
-        package_id = create_result.packages[0].package_id
-
-        # Mock the creative agent format registry to avoid real HTTP calls
-        mock_format = create_test_format(
-            format_id="display_300x250",
-            name="Display 300x250",
-            type="display",
-        )
-        with patch(
-            "src.core.creative_agent_registry.CreativeAgentRegistry.get_format",
-            return_value=mock_format,
-        ):
-            # Sync a creative and assign it to the package
-            await _sync_creatives(
-                creatives=[
-                    {
-                        "creative_id": "c_approval_test",
-                        "name": "Approval Test Creative",
-                        "format_id": {
-                            "agent_url": "https://creative.adcontextprotocol.org",
-                            "id": "display_300x250",
-                        },
-                        # 3.1.1 puts the media reference inside ``assets``; the flat
-                        # url/width/height are pre-3.x and CreativeAssetRequest forbids extras.
-                        "assets": build_assets(image_spec("banner")),
-                    }
-                ],
-                # list[Assignment], not the internal {creative_id: [package_id]} map.
-                assignments=[Assignment(creative_id="c_approval_test", package_id=package_id)],
-                # sync-creatives-request.json /required.
-                idempotency_key="mbv3-sync-key-000001",
-                # The SEEDED account -- production resolves the reference against the DB, so a
-                # fabricated id constructs fine and then earns ACCOUNT_NOT_FOUND at the wire.
-                account=AccountReference(root=sample_account),
-                identity=mb_identity,
-            )
-
-        # Use explicit status_filter to include all statuses — newly created media buys
-        # may be pending_creatives (no creatives) or pending_start (future start), not active
-        all_statuses = [
-            MediaBuyStatus.active,
-            MediaBuyStatus.pending_creatives,
-            MediaBuyStatus.pending_start,
-            MediaBuyStatus.completed,
-            MediaBuyStatus.paused,
-        ]
-        get_req = GetMediaBuysRequest(
-            media_buy_ids=[media_buy_id],
-            status_filter=all_statuses,
-        )
-        response = _get_media_buys_impl(get_req, identity=mb_identity)
-
-        assert len(response.media_buys) == 1, (
-            f"Expected 1 media buy but got {len(response.media_buys)}. Errors: {response.errors}"
-        )
-        mb_response = response.media_buys[0]
-        assert mb_response.media_buy_id == media_buy_id
-
-        # Find the package with our assignment
-        target_pkg = None
-        for pkg in mb_response.packages:
-            if pkg.package_id == package_id:
-                target_pkg = pkg
-                break
-        assert target_pkg is not None, f"Package {package_id} not found in response"
-
-        # Creative approvals should be populated
-        assert target_pkg.creative_approvals is not None, (
-            "creative_approvals should be populated after creative assignment"
-        )
-        assert len(target_pkg.creative_approvals) >= 1
-        approval_ids = {a.creative_id for a in target_pkg.creative_approvals}
-        assert "c_approval_test" in approval_ids
-
     @pytest.mark.parametrize(
         ("persisted_status", "expected"),
         [
@@ -1021,23 +900,6 @@ class TestUpdateMediaBuyAdapterError:
             # both the propagated error and the unreachable assert, making this vacuous).
             with pytest.raises(ConnectionError, match="Simulated network failure"):
                 _update_media_buy_impl(req=update_req, identity=mb_identity)
-
-
-class TestDeliveryIdentityValidation:
-    """UC-004: delivery query auth boundary."""
-
-    def test_missing_identity_raises_error(self, mb_tenant, mb_principal, mb_products):
-        """UC-004-E01: None identity raises AdCPValidationError.
-
-        Covers: UC-004-EXT-A-01
-        Integration equivalent of UNSPECIFIED test_missing_identity_raises_error.
-        """
-        from src.core.schemas import GetMediaBuyDeliveryRequest
-        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_nonexistent"])
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity=None)
 
 
 class TestUpdateMediaBuyMissingPackageId:

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from fastmcp.client.client import CallToolResult
 
 
-def _require_json_object(payload: Any, source: str) -> dict[str, Any]:
+def _require_json_object(payload: Any) -> dict[str, Any]:
     """Return *payload* when it is a JSON object; refuse it otherwise.
 
     Both non-object shapes — ``structured_content`` carrying a JSON array, and a
@@ -27,8 +27,7 @@ def _require_json_object(payload: Any, source: str) -> dict[str, Any]:
     are the same fault (the agent didn't answer with the shape this call
     expects), so they are refused in one place rather than at each branch.
 
-    The diagnostic travels in ``internal_detail``, which is server-log only
-    (ADR-010): ``MCPCompatibilityError`` authors no buyer-facing text, and its
+    ``MCPCompatibilityError`` authors no buyer-facing text (ADR-010), and its
     ``AdapterFailureDetails`` has no field for "what shape the agent sent" — its
     axes are which entity the call was about, what the upstream call did, and
     per-item problems. Nothing this function is handed fills one of those (the
@@ -36,9 +35,7 @@ def _require_json_object(payload: Any, source: str) -> dict[str, Any]:
     stays unset rather than being filled with a field that means something else.
     """
     if not isinstance(payload, dict):
-        raise MCPCompatibilityError(
-            internal_detail=(f"Expected a JSON object from the tool result {source}, got {type(payload).__name__}")
-        )
+        raise MCPCompatibilityError()
     return payload
 
 
@@ -60,7 +57,7 @@ def extract_tool_payload(result: CallToolResult) -> dict[str, Any]:
         # this check is about the value fastmcp actually hands us across
         # versions, not about the annotation — which is why it is a runtime
         # refusal and not an assertion mypy can narrow away.
-        return _require_json_object(structured, "structured_content")
+        return _require_json_object(structured)
 
     # `text` stays a getattr: ContentBlock is a UNION (TextContent, ImageContent,
     # EmbeddedResource, ...) and only some members carry `.text`, so this probe is
@@ -72,9 +69,7 @@ def extract_tool_payload(result: CallToolResult) -> dict[str, Any]:
             try:
                 payload = json.loads(text)
             except json.JSONDecodeError as exc:
-                raise MCPCompatibilityError(
-                    internal_detail=f"Tool result text content is not valid JSON: {exc}"
-                ) from exc
-            return _require_json_object(payload, "text content")
+                raise MCPCompatibilityError(internal_detail=exc) from exc
+            return _require_json_object(payload)
 
     return {}

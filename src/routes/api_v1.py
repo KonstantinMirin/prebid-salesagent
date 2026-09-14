@@ -15,7 +15,6 @@ from typing import Any, cast
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-from src.core.auth_context import AuthContext, get_auth_context
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
 from src.core.tools._announced_shape import apply_signature
@@ -64,7 +63,7 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
     the URL is the resource identity, so the path value WINS over a body that disagrees.
     """
 
-    async def handler(request: Request, auth_ctx: AuthContext = get_auth_context, **path_values: Any) -> Any:
+    async def handler(request: Request, **path_values: Any) -> Any:
         # ONE try around everything that can produce a failure response, so every failure
         # leaves through the same except and none can escape as a 500.
         try:
@@ -77,9 +76,9 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
                     body = {**body, **path_values}
                 except TypeError:
                     pass
-            # The CREDENTIAL, not an identity: the boundary resolves the caller and reads the
-            # row's auth declaration itself.
-            response = await serve(tool_name, body, auth_ctx, TransportProtocol.REST)
+            # The request HEADERS, not an identity: the boundary resolves the caller and reads
+            # the row's auth declaration itself.
+            response = await serve(tool_name, body, request.headers, TransportProtocol.REST)
         except AdcpFailure as failure:
             # REST's wire failure marker is the HTTP STATUS, and that is all this transport
             # adds. The BODY is the response the boundary built, serialized by the same
@@ -106,13 +105,6 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
                 # ``Request``, not the DTO: a typed body parameter is exactly what makes
                 # FastAPI validate before the handler runs.
                 inspect.Parameter("request", inspect.Parameter.POSITIONAL_OR_KEYWORD, annotation=Request),
-                # ONE credential parameter for every row; the boundary decides what it must be.
-                inspect.Parameter(
-                    "auth_ctx",
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                    default=get_auth_context,
-                    annotation=AuthContext,
-                ),
             ]
         ),
     )

@@ -95,12 +95,10 @@ class MediaBuyUpdateEnv(BaseTestEnv):
     MODULE = _MODULE
     EXTERNAL_PATCHES = {
         "uow": f"{_MODULE}.MediaBuyUoW",
-        "principal": "src.core.auth.get_principal_object",
         "verify": f"{_MODULE}._verify_principal",
         "ctx_mgr": f"{_MODULE}.get_context_manager",
         "adapter": f"{_MODULE}.get_adapter",
         "audit": f"{_MODULE}.get_audit_logger",
-        "tenant": "src.core.helpers.context_helpers.ensure_tenant_context",
         "db": f"{_DB_MODULE}.get_db_session",
     }
 
@@ -189,13 +187,6 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         default_cl.min_package_budget = Decimal("0")
         self._uow_instance.currency_limits.get_for_currency.return_value = default_cl
 
-        # Principal
-        self.mock["principal"].return_value = MagicMock(
-            principal_id=self._principal_id,
-            name="Test Principal",
-            platform_mappings={},
-        )
-
         # Context manager: workflow step
         mock_step = MagicMock()
         mock_step.step_id = "step_001"
@@ -211,7 +202,6 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         self.mock["adapter"].return_value = mock_adapter
 
         # Tenant context
-        self.mock["tenant"].return_value = {"tenant_id": self._tenant_id, "name": "Test"}
 
         # Audit logger
         self.mock["audit"].return_value = MagicMock()

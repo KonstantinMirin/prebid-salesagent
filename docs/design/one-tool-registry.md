@@ -1,5 +1,9 @@
 # One tool registry
 
+> **Superseded.** The decisions here are recorded, as they stand, in
+> [Building a tool](../development/building-tools.md). This file is kept as the record of
+> how they were reached and is not maintained.
+
 **Status:** design, not implemented.
 **Measured at:** `c7a3a98d5`, 2026-09-04.
 
@@ -280,8 +284,9 @@ and they are gone because idempotency is not the implementation's job:
 `src/core/tools/_boundary.py` probes the replay cache and writes to it around the call, so
 `_sync_creatives_impl` needs no `request_hash` and `_create_media_buy_impl` needs no
 `raw_wire_payload`. What each transport threaded down, and got subtly different, is now taken
-once from the model. `tests/unit/test_architecture_boundary_completeness.py` grades the
-closed set: an implementation declaring anything else fails, because nothing could fill it.
+once from the model. The `ToolImpl` protocol typing `ToolSpec.impl` (mypy) and
+`.ast-grep/rules/impl-signature-is-request-and-identity.yml` grade the closed set: an
+implementation declaring anything else fails, because nothing could fill it.
 
 **No implementation takes `**kwargs`**, and none may. The generic call passes only
 what the target declares — `accepted_kwargs(impl)` already exists for exactly
@@ -406,7 +411,7 @@ Each step leaves the tree green and is independently revertible.
 9. **Delete the fifteen `*_raw` wrappers**, and with them the last per-tool
    declaration of anything. Steps 6–8 left each transport naming its own
    pass-through; this one gives them a single seam, `src/core/tools/_boundary.py`,
-   that every transport enters with `invoke_tool(name, req, identity)`.
+   that every transport enters with `invoke_tool(name, req, headers, protocol)`.
 
    The wrappers were not only pass-throughs, which is why this step was needed and
    not merely tidy. Between them they disagreed about the two things they each did
@@ -444,8 +449,9 @@ One guard was REPLACED rather than deleted, and it is the cautionary one.
 `test_architecture_boundary_completeness.py` used to scan each wrapper for the
 arguments it forwarded, and its wrapper lookup returned `None` — meaning "nothing
 to check" — when it could not find one. The day the wrappers were deleted it went
-green while grading nothing. It now reads the signature of every `TOOLS[...].impl`
-and rejects any parameter the seam cannot supply, which is the obligation that
-survives: one call site passes one argument list, so "does the wrapper forward
-everything" is answered by construction, and the only question left is whether an
-implementation asks for something no caller exists to give it.
+green while grading nothing. The obligation that survives -- one call site passes one
+argument list, so the only question left is whether an implementation asks for
+something no caller exists to give it -- is now pinned by the type of the registry row
+itself (`ToolSpec.impl` is a `ToolImpl` protocol, checked by mypy against the row's
+DTO) and by `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, which matches
+the parameter list exactly. The test that read `inspect.signature` is deleted.

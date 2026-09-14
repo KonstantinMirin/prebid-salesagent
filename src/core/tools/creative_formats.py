@@ -79,8 +79,7 @@ def _ensure_backward_compatible_format[FormatT: AdcpFormat](f: FormatT) -> Forma
 from adcp import ErrorCode
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_tenant
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error as AdCPResponseError
 
 if TYPE_CHECKING:
@@ -136,7 +135,7 @@ def _make_asset(
 
 
 def _list_creative_formats_impl(
-    req: ListCreativeFormatsRequest | None, identity: ResolvedIdentity | None
+    req: ListCreativeFormatsRequest | None, identity: PublicIdentity
 ) -> ListCreativeFormatsResponse:
     """List all available creative formats (AdCP spec endpoint).
 
@@ -151,9 +150,11 @@ def _list_creative_formats_impl(
     if req is None:
         req = ListCreativeFormatsRequest()
 
-    # Extract principal and tenant from resolved identity
-    principal_id = identity.principal_id if identity else None
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = identity.principal_id
+    tenant = identity.tenant
+    if tenant is None:
+        # No seller is addressed: there are no formats to list, and nothing to refuse.
+        return ListCreativeFormatsResponse(formats=[])
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry
@@ -164,24 +165,21 @@ def _list_creative_formats_impl(
         raise
     except Exception as e:
         logger.error(f"Failed to create creative agent registry: {e}", exc_info=True)
-        raise AdCPServiceUnavailableError(
-            internal_detail=e,
-            context=req.context,
-        ) from e
+        raise AdCPServiceUnavailableError(internal_detail=e) from e
 
     # Use list_all_formats_with_errors() to get per-agent error reporting (FD-ERR-01, FD-ERR-02)
     try:
         loop = asyncio.get_running_loop()
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future = executor.submit(
-                lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
+                lambda: asyncio.run(registry.list_all_formats_with_errors(tenant_id=tenant.tenant_id))
             )
             fetch_result: FormatFetchResult = future.result()
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            fetch_result = loop.run_until_complete(registry.list_all_formats_with_errors(tenant_id=tenant["tenant_id"]))
+            fetch_result = loop.run_until_complete(registry.list_all_formats_with_errors(tenant_id=tenant.tenant_id))
         finally:
             loop.close()
 
@@ -193,7 +191,7 @@ def _list_creative_formats_impl(
     try:
         from src.core.database.repositories.uow import TenantConfigUoW
 
-        with TenantConfigUoW(tenant["tenant_id"]) as uow:
+        with TenantConfigUoW(tenant.tenant_id) as uow:
             assert uow.tenant_config is not None
             config_row = uow.tenant_config.get_adapter_config()
             adapter_type = config_row.adapter_type if config_row else None
@@ -203,7 +201,7 @@ def _list_creative_formats_impl(
                 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
                 from src.core.schemas import Format, FormatId, url
 
-                agent_url = f"broadstreet://{tenant['tenant_id']}"
+                agent_url = f"broadstreet://{tenant.tenant_id}"
 
                 for template_id, template in BROADSTREET_TEMPLATES.items():
                     try:
@@ -431,7 +429,7 @@ def _list_creative_formats_impl(
 
     creative_agents_list: list[AdcpCreativeAgent] | None = None
     try:
-        agents = registry._get_tenant_agents(tenant["tenant_id"])
+        agents = registry._get_tenant_agents(tenant.tenant_id)
         if agents:
             creative_agents_list = []
             for agent in agents:
@@ -447,10 +445,10 @@ def _list_creative_formats_impl(
         # from the response with no errors[] entry, so the buyer reads a referral
         # lookup failure as "this seller federates to no creative agents".
         # Allowlisted in test_architecture_no_silent_loop_failures.py.
-        logger.warning("Failed to build agent referrals for tenant %s", tenant["tenant_id"], exc_info=True)
+        logger.warning("Failed to build agent referrals for tenant %s", tenant.tenant_id, exc_info=True)
 
     # Log the operation
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
     audit_logger.log_operation(
         operation="list_creative_formats",
         principal_name=principal_id or "anonymous",
@@ -469,8 +467,6 @@ def _list_creative_formats_impl(
     # Create response (no message/specification_version - not in adapter schema)
     # Determine sandbox flag from identity (BR-RULE-209 INV-4)
     sandbox_flag: bool | None = None
-    if identity and identity.testing_context and identity.testing_context.dry_run:
-        sandbox_flag = True
 
     # Format list from registry is compatible with library Format type
     response = ListCreativeFormatsResponse(
@@ -480,7 +476,6 @@ def _list_creative_formats_impl(
         formats=page_formats,
         creative_agents=creative_agents_list,
         errors=agent_errors if agent_errors else None,
-        context=req.context,
         pagination=pagination_response,
         sandbox=sandbox_flag,
     )

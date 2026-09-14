@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 from src.adapters.creative_engine import CreativeEngineAdapter
+from src.core.helpers.creative_helpers import asset_value_attr
 from src.core.schemas import Creative, CreativeAdaptation, CreativeApprovalStatus, FormatId
 
 
@@ -69,12 +70,13 @@ class MockCreativeEngine(CreativeEngineAdapter):
                             estimated_performance_lift=35.0,
                         )
                     )
-                # Suggest shorter version for long videos
-                # Extract duration from assets dict if available
+                # Suggest shorter version for long videos: the first asset that carries a
+                # duration decides, read through the one asset-value reader.
                 duration_ms = 0
-                for asset_data in (creative.assets or {}).values():
-                    if isinstance(asset_data, dict) and "duration_ms" in asset_data:
-                        duration_ms = asset_data["duration_ms"]
+                for asset_value in (creative.assets or {}).values():
+                    found = asset_value_attr(asset_value, "duration_ms")
+                    if found:
+                        duration_ms = int(found)
                         break
 
                 if duration_ms / 1000.0 > 15:

@@ -630,8 +630,8 @@ class GAMTargetingManager:
             return unsupported
 
         # Check device types
-        if targeting_overlay.device_type_any_of:
-            for device in targeting_overlay.device_type_any_of:
+        if targeting_overlay.device_form_factors:
+            for device in targeting_overlay.device_form_factors:
                 if device not in self.DEVICE_TYPE_MAP:
                     unsupported.append(f"Device type '{device}' not supported")
 
@@ -644,10 +644,6 @@ class GAMTargetingManager:
         # Audio-specific targeting not supported
         if targeting_overlay.media_type_any_of and "audio" in targeting_overlay.media_type_any_of:
             unsupported.append("Audio media type not supported by Google Ad Manager")
-
-        # City targeting removed in v3; check transient flag from normalizer
-        if targeting_overlay.had_city_targeting:
-            unsupported.append("City targeting is not supported (removed in v3)")
 
         # Postal code targeting requires GAM geo service integration (not implemented)
         if targeting_overlay.geo_postal_areas or targeting_overlay.geo_postal_areas_exclude:
@@ -676,10 +672,6 @@ class GAMTargetingManager:
 
         # Geographic targeting
         geo_targeting: dict[str, Any] = {}
-
-        # City targeting removed in v3; check transient flag from normalizer
-        if targeting_overlay.had_city_targeting:
-            raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability="geo_city"))
 
         # Postal code targeting not implemented in static mapping - fail loudly.
         # The capability NAME travels as structured detail; the buyer-facing sentence is
@@ -780,11 +772,13 @@ class GAMTargetingManager:
         if geo_targeting:
             gam_targeting["geoTargeting"] = geo_targeting
 
-        # Technology/Device targeting - NOT SUPPORTED, MUST FAIL LOUDLY
-        if targeting_overlay.device_type_any_of:
+        # Technology/Device targeting - NOT SUPPORTED, MUST FAIL LOUDLY. Named by the
+        # field the buyer actually sent: the seller extension, or the spec's device_platform.
+        if targeting_overlay.device_form_factors:
             raise AdCPCapabilityNotSupportedError(
                 details=CapabilityRefusalDetails(
-                    capability="device_type_any_of", rejected_value=targeting_overlay.device_type_any_of
+                    capability="device_type_any_of" if targeting_overlay.device_type_any_of else "device_platform",
+                    rejected_value=targeting_overlay.device_form_factors,
                 )
             )
 

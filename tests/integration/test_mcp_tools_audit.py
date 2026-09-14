@@ -27,6 +27,7 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import delete
+from src.core.testing_hooks import TestingContext, apply_testing_hooks
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy as MediaBuyModel
@@ -35,7 +36,6 @@ from src.core.database.models import Product as ProductModel
 from src.core.schemas import (
     MediaBuyDeliveryData,
 )
-from src.core.testing_hooks import TestingContext, apply_testing_hooks
 from tests.integration.conftest import add_required_setup_data
 from tests.utils.database_helpers import create_tenant_with_timestamps
 

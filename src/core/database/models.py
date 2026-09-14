@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
+from typing import Any
 from uuid import uuid4
 
 from adcp.types import BrandReference, NotificationConfig
@@ -36,6 +37,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
+from src.core.credentials import hash_token, mint_token, token_prefix
 from src.core.database.json_type import JSONType
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError, AdCPPersistedStateError
@@ -74,7 +76,6 @@ class Tenant(Base, JSONValidatorMixin):
     slack_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     slack_audit_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     hitl_webhook_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    admin_token: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # List of format ID strings (just the id part, not full FormatId objects)
     # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
     auto_approve_format_ids: Mapped[list[str] | None] = mapped_column(JSONType, nullable=True)
@@ -637,7 +638,11 @@ class Principal(Base, JSONValidatorMixin):
     principal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     platform_mappings: Mapped[dict] = mapped_column(JSONType, nullable=False)
-    access_token: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    #: sha256 of the token, never the token (src/core/credentials.py). Unique across tenants
+    #: so a lookup by hash is an index hit; the resolver still scopes it by tenant.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    #: The displayable head of the token, so an operator can tell tokens apart.
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -655,8 +660,33 @@ class Principal(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_principals_tenant", "tenant_id"),
-        Index("idx_principals_token", "access_token"),
+        Index("idx_principals_token_hash", "token_hash"),
     )
+
+    @classmethod
+    def issue(cls, **fields: Any) -> "tuple[Principal, str]":
+        """A new principal with a freshly minted token, and the token itself.
+
+        The ONE way a principal gets a credential. The plaintext is returned to the caller
+        for showing once and is stored nowhere; the row carries its hash and prefix.
+        """
+        token = mint_token()
+        return cls.with_token(token, **fields), token
+
+    @classmethod
+    def with_token(cls, token: str, **fields: Any) -> "Principal":
+        """A new principal whose token is *token*: for seeds and CI fixtures whose token is
+        documented in advance. The row still stores only the hash."""
+        return cls(token_hash=hash_token(token), token_prefix=token_prefix(token), **fields)
+
+    def rotate_token(self) -> str:
+        """Replace this principal's token; returns the new plaintext, to be shown once.
+
+        The old token stops resolving the moment the row is committed."""
+        token = mint_token()
+        self.token_hash = hash_token(token)
+        self.token_prefix = token_prefix(token)
+        return token
 
     def get_adapter_id(self, adapter_name: str) -> str | None:
         """Get the adapter-specific ID for this principal.

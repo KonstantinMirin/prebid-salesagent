@@ -16,9 +16,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from functools import wraps
 from typing import Any
-from unittest.mock import DEFAULT, AsyncMock, MagicMock, patch
-
-from fastmcp.server.context import Context
+from unittest.mock import DEFAULT, AsyncMock, patch
 
 # _TOOLS, not TOOLS: the public registry is a read-only MappingProxyType, and the proxy
 # reads through to this dict -- so patching it substitutes the row everywhere TOOLS is
@@ -39,28 +37,25 @@ def registry_impl(tool_name: str, impl: Any) -> Any:
 
 
 def mcp_tool(tool_name: str) -> Any:
-    """``await mcp_tool(name)(ctx=..., **arguments)`` -> the REGISTERED tool's ``ToolResult``.
+    """``await mcp_tool(name)(credential=..., **arguments)`` -> the REGISTERED tool's ``ToolResult``.
 
     Runs the tool object the server actually serves, not a reconstruction of it, so a test
     exercises the same validate-invoke-serialize path a buyer reaches. ``RegistryTool.run``
     reads its row per call, so this picks up a :func:`registry_impl` substitution without
     being rebuilt.
 
-    ``ctx`` stands in for the FastMCP request context the middleware would have populated;
-    it is supplied by patching the dependency ``run`` resolves rather than passed as an
-    argument, because a buyer sends arguments only. Omit it to run as an unauthenticated
-    caller -- a context whose ``identity`` state is unset, which is what the middleware
-    leaves behind for an auth-optional tool called without a token.
+    ``credential`` is the headers dict the request presents (``env.credential()`` or
+    ``credential_headers(...)``); it is supplied by patching the header dependency ``run``
+    resolves rather than passed as an argument, because a buyer sends arguments only.
+    Omit it to run as an unauthenticated caller with no headers at all, which is what the
+    server sees for an auth-optional tool called without a token.
     """
     from src.core import main
 
-    async def _run(ctx: Any = None, **arguments: Any) -> Any:
-        if ctx is None:
-            ctx = MagicMock(spec=Context)
-            ctx.get_state = AsyncMock(return_value=None)
+    async def _run(credential: dict[str, str] | None = None, **arguments: Any) -> Any:
         tool = await main.mcp.get_tool(tool_name)
         assert tool is not None, f"{tool_name} is not registered"
-        with patch("fastmcp.server.dependencies.get_context", return_value=ctx):
+        with patch("fastmcp.server.dependencies.get_http_headers", return_value=dict(credential or {})):
             return await tool.run(arguments)
 
     return _run
@@ -79,10 +74,8 @@ def capture_req_via_wrapper(
         captured["req"] = req
         return stub_response
 
-    mock_ctx = MagicMock(spec=Context)
-    mock_ctx.get_state = AsyncMock(return_value=None)
     with registry_impl(tool_name, _impl):
-        asyncio.run(mcp_tool(tool_name)(ctx=mock_ctx, **wrapper_kwargs))
+        asyncio.run(mcp_tool(tool_name)(**wrapper_kwargs))
     return captured["req"]
 
 
@@ -100,6 +93,19 @@ def _enter_all(stack: ExitStack, patchings: list[Any]) -> list[Any]:
     return injected
 
 
+def stub_account_for(account_ref: Any, tenant_id: str, principal: Any) -> Any:
+    """The resolver's account read, without a database: an active Account named by the ref.
+
+    Shared by :class:`stub_impl` and the unit harness's resolver substitutes, so the two
+    database-free paths answer the same account for the same reference.
+    """
+    from src.core.schemas.account import Account
+
+    inner = account_ref.root
+    account_id = getattr(inner, "account_id", None) or "acct_stub"
+    return Account(account_id=account_id, name=f"Stub account {account_id}", status="active")
+
+
 class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every call site
     """Substitute ``tool_name``'s implementation with an ``AsyncMock``.
 
@@ -112,9 +118,9 @@ class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every ca
     Usable as a context manager (``with stub_impl("get_products") as mock_impl:``) or as a
     decorator, where it injects the mock like ``patch`` does -- bottom decorator first::
 
-        @resolves_to(some_identity)
+        @patch("src.core.resolved_identity._load_account")
         @stub_impl("get_products")
-        def test_x(self, mock_impl, mock_resolve, ...):
+        def test_x(self, mock_impl, mock_load_account, ...):
 
     The stub is called exactly as the boundary calls a real implementation --
     ``impl(req=..., identity=...)`` -- so ``assert_called_once_with(req=..., identity=...)``
@@ -146,9 +152,10 @@ class stub_impl:  # noqa: N801 -- reads as a patch()-style decorator at every ca
         self._stack.enter_context(patch("src.core.tools._boundary.lookup_cached_replay", return_value=None))
         self._stack.enter_context(patch("src.core.tools._boundary.cache_success"))
         self._stack.enter_context(patch("src.core.tools._boundary.maybe_evict_expired"))
-        self._stack.enter_context(
-            patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i)
-        )
+        # The resolver's account read: answers a schema Account named by the reference (or a
+        # fixed id for the natural-key form), so a request that names an account resolves
+        # without a database and the identity still carries one.
+        self._stack.enter_context(patch("src.core.resolved_identity._load_account", side_effect=stub_account_for))
         return stub
 
     def __exit__(self, *exc: Any) -> None:

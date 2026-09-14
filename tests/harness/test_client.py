@@ -4,7 +4,7 @@
 hand-written ``call_a2a``/``call_mcp``/``build_rest_body``/``parse_rest_response``
 quartet (design doc §1) and dispatches purely from the derived
 ``ADDRESS_TABLE`` + the shared ``_run_mcp_client``/``_run_a2a_handler``/
-``_prepare_rest_request`` primitives on ``BaseTestEnv``/``IntegrationEnv``.
+``get_rest_client`` primitives on ``BaseTestEnv``/``IntegrationEnv``.
 
 These tests deliberately use envs that do NOT implement ``call_a2a``/
 ``call_mcp`` (e.g. ``tests.harness.product_unit.ProductEnv``) to prove the
@@ -22,6 +22,7 @@ from tests.harness._base import BaseTestEnv
 from tests.harness.address_table import NoAddressForTransport, ToolAddress
 from tests.harness.client import AdCPTestClient, _wrap_rest, unwrap_rest_response
 from tests.harness.transport import Transport
+from tests.helpers.credentials import credential_headers
 
 
 class TestClientMcpDispatchNoDb:
@@ -43,29 +44,6 @@ class TestClientMcpDispatchNoDb:
         # attribute access, not subscripting.
         product_ids = [p.product_id for p in result.payload.products]
         assert product_ids == ["prod_001"]
-
-    def test_unauthenticated_dispatch_surfaces_auth_required(self):
-        """identity=None (EXPLICIT) reaches the server unauthenticated — the same
-        convention env._run_mcp_client already gives identity=None (design doc §3
-        table). Proves the client's _NO_IDENTITY_OVERRIDE sentinel correctly
-        distinguishes "no override" from "explicit unauthenticated"."""
-
-        class _UnitEnv(BaseTestEnv):
-            pass
-
-        with _UnitEnv() as env:
-            client = AdCPTestClient(env)
-            result = client.call("list_accounts", {}, Transport.MCP, identity=None)
-
-        assert result.is_error
-        # An absent credential is AUTH_MISSING under the pinned AdCP 3.1.1
-        # ``enums/error-code.json``: "No credentials were presented. Sellers MUST
-        # return this code when no ``Authorization`` header was included in the
-        # request." Its sibling AUTH_REQUIRED is documented there as
-        # "**Deprecated** — use ``AUTH_MISSING`` ... or ``AUTH_INVALID``", retained
-        # only as a backward-compatible alias, and no ``AdCPSalesAgentError``
-        # subclass emits it. Production is conformant here; the expectation was not.
-        result.assert_wire_error("AUTH_MISSING")
 
 
 class TestClientA2ADispatchNoDb:
@@ -212,8 +190,6 @@ class TestClientE2eRestDelivery:
     def test_e2e_rest_delivery_sends_real_http_request(self, monkeypatch):
         import httpx
 
-        from tests.factories.principal import PrincipalFactory
-
         captured = {}
 
         class _FakeResponse:
@@ -242,32 +218,29 @@ class TestClientE2eRestDelivery:
 
         monkeypatch.setattr(httpx, "Client", _FakeClient)
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1", tenant_id="t1", protocol="rest", auth_token="tok_abc"
-        )
+        credential = credential_headers(token="tok_abc", tenant="t1")
 
         with self._make_env_with_e2e_config() as env:
             client = AdCPTestClient(env)
-            result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_REST, identity=identity)
+            result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_REST, credential=credential)
 
         assert result.is_success, result.error
         assert captured["base_url"] == "http://e2e-stack.test"
         assert captured["url"] == "/api/v1/products"
         assert captured["json"] == {"brief": "video ads"}
         assert captured["headers"]["Authorization"] == "Bearer tok_abc"
-        assert captured["headers"]["x-adcp-tenant"] == identity.tenant["subdomain"]
+        assert captured["headers"]["x-adcp-tenant"] == "t1"
 
     def test_e2e_rest_delivery_sends_same_header_set_the_deleted_inline_code_did(self, monkeypatch):
-        """``_deliver_e2e_rest`` (via ``identity_credential_headers``) must emit the full
-        Authorization / x-adcp-tenant / x-dry-run header set that ``RestE2EDispatcher``
-        used to build inline, before commit 4363757dc deleted that code and routed
-        delivery through the shared producer instead. e2e_rest is a live caller (real
-        HTTP to the Docker stack), so a regression here silently drops a header a real
-        server request depends on. The auth/tenant pair has coverage above; this is the
-        one place x-dry-run — the third header the deleted code built — is checked."""
+        """``_deliver_e2e_rest`` must emit the full Authorization / x-adcp-tenant /
+        x-dry-run header set that ``RestE2EDispatcher`` used to build inline, before
+        commit 4363757dc deleted that code and routed delivery through the shared
+        producer instead. e2e_rest is a live caller (real HTTP to the Docker stack), so a
+        regression here silently drops a header a real server request depends on. The
+        auth/tenant pair has coverage above; this is the one place x-dry-run — the third
+        header the deleted code built — is checked, through the env's own ``credential()``
+        so the dry-run flag travels the way a dry-run env sends it."""
         import httpx
-
-        from tests.factories.principal import PrincipalFactory
 
         captured = {}
 
@@ -294,19 +267,26 @@ class TestClientE2eRestDelivery:
 
         monkeypatch.setattr(httpx, "Client", _FakeClient)
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1", tenant_id="t1", protocol="rest", auth_token="tok_dry", dry_run=True
-        )
+        from tests.harness.transport import E2EConfig
 
-        with self._make_env_with_e2e_config() as env:
+        class _UnitEnv(BaseTestEnv):
+            pass
+
+        env = _UnitEnv(
+            principal_id="p1",
+            tenant_id="t1",
+            dry_run=True,
+            e2e_config=E2EConfig(base_url="http://e2e-stack.test", postgres_url="postgresql://x/y"),
+        )
+        with env:
             client = AdCPTestClient(env)
-            result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_REST, identity=identity)
+            result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_REST)
 
         assert result.is_success, result.error
         assert captured["headers"] == {
             "Content-Type": "application/json",
-            "Authorization": "Bearer tok_dry",
-            "x-adcp-tenant": identity.tenant["subdomain"],
+            "Authorization": env.credential()["Authorization"],
+            "x-adcp-tenant": "t1",
             "x-dry-run": "true",
         }
 
@@ -350,7 +330,7 @@ class TestClientE2eRestDelivery:
 
         with self._make_env_with_e2e_config() as env:
             client = AdCPTestClient(env)
-            result = client.call("get_products", {"brief": "x"}, Transport.E2E_REST, identity=None)
+            result = client.call("get_products", {"brief": "x"}, Transport.E2E_REST, credential={})
 
         assert "Authorization" not in captured["headers"]
         assert result.is_error
@@ -373,63 +353,7 @@ class TestClientE2eRestDelivery:
         with _UnitEnv() as env:
             address = ToolAddress(Transport.E2E_REST, name="/api/v1/products", method="post")
             with pytest.raises(RuntimeError, match="e2e_config"):
-                _deliver_e2e_rest(env, address, {"url": "/api/v1/products", "body": {}}, None)
-
-
-class TestRestE2EDispatcherIdentityDefault:
-    """``RestE2EDispatcher`` (``tests/harness/dispatchers.py``) -- the legacy
-    ``env.call_via(Transport.E2E_REST, **kwargs)`` entry point. Regression
-    coverage for: omitting ``identity=`` entirely (not
-    ``identity=None``) must fall back to ``env.identity_for(Transport.E2E_REST)``
-    inside ``_deliver_e2e_rest`` -- before the fix, ``kwargs.pop("identity",
-    None)`` forwarded a bare ``None`` on omission, which ``_deliver_e2e_rest``
-    cannot distinguish from an explicit unauthenticated request."""
-
-    def test_omitted_identity_falls_back_to_env_identity_for(self, monkeypatch):
-        import httpx
-
-        from tests.harness.dispatchers import RestE2EDispatcher
-        from tests.harness.transport import E2EConfig, Transport
-
-        captured = {}
-
-        class _FakeResponse:
-            status_code = 200
-            headers = {"content-type": "application/json"}
-
-            def json(self):
-                return {}
-
-        class _FakeClient:
-            def __init__(self, *, base_url, timeout):
-                pass
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc_info):
-                return False
-
-            def post(self, url, *, json, headers):
-                captured["headers"] = headers
-                return _FakeResponse()
-
-        monkeypatch.setattr(httpx, "Client", _FakeClient)
-
-        class _RestUnitEnv(BaseTestEnv):
-            REST_ENDPOINT = "/api/v1/products"
-
-            def parse_rest_response(self, data):
-                return data
-
-        env = _RestUnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack.test", postgres_url="postgresql://x/y"))
-        expected_tenant = env.identity_for(Transport.E2E_REST).tenant["subdomain"]
-
-        # No identity= kwarg at all -- the omission case, not identity=None.
-        result = RestE2EDispatcher().dispatch(env)
-
-        assert result.is_success, result.error
-        assert captured["headers"]["x-adcp-tenant"] == expected_tenant
+                _deliver_e2e_rest(env, address, {"url": "/api/v1/products", "body": {}}, {})
 
 
 class TestClientE2eMcpDelivery:
@@ -483,7 +407,7 @@ class TestClientE2eMcpDelivery:
         env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
         client = AdCPTestClient(env)
 
-        result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, identity=None)
+        result = client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, credential={})
 
         assert result.is_success, result.error
         # Tag derived from Transport.E2E_MCP.value ("e2e_mcp") — before
@@ -495,11 +419,10 @@ class TestClientE2eMcpDelivery:
 
         fake_client = self._FakeMcpClient.instances[0]
         assert fake_client.transport.url == "http://e2e-host:9000/mcp/"
-        assert fake_client.transport.headers == {}  # identity=None -> no auth headers
+        assert fake_client.transport.headers == {}  # credential={} -> no headers at all
         assert fake_client.calls == [("get_products", {"brief": "video ads"})]
 
-    def test_e2e_mcp_dispatch_sends_auth_headers_from_identity(self, monkeypatch):
-        from tests.factories.principal import PrincipalFactory
+    def test_e2e_mcp_dispatch_sends_the_credential_as_headers(self, monkeypatch):
         from tests.harness._base import BaseTestEnv
         from tests.harness.transport import E2EConfig
 
@@ -511,14 +434,17 @@ class TestClientE2eMcpDelivery:
 
         env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
         client = AdCPTestClient(env)
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1", tenant_id="t1", protocol="mcp", auth_token="tok_123"
-        )
 
-        client.call("get_products", {"brief": "video ads"}, Transport.E2E_MCP, identity=identity)
+        client.call(
+            "get_products",
+            {"brief": "video ads"},
+            Transport.E2E_MCP,
+            credential=credential_headers(token="tok_123", tenant="t1"),
+        )
 
         fake_client = self._FakeMcpClient.instances[0]
         assert fake_client.transport.headers["Authorization"] == "Bearer tok_123"
+        assert fake_client.transport.headers["x-adcp-tenant"] == "t1"
 
     def test_e2e_mcp_dispatch_requires_e2e_config(self):
         """Missing env.e2e_config is a genuine precondition failure (mirrors
@@ -533,7 +459,7 @@ class TestClientE2eMcpDelivery:
 
         with _UnitEnv() as env:
             client = AdCPTestClient(env)
-            result = client.call("get_products", {"brief": "x"}, Transport.E2E_MCP, identity=None)
+            result = client.call("get_products", {"brief": "x"}, Transport.E2E_MCP, credential={})
 
         assert result.is_error
         assert "e2e_config" in str(result.error)
@@ -559,7 +485,7 @@ class TestClientE2eMcpDelivery:
         env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
         client = AdCPTestClient(env)
 
-        result = client.call("get_products", {"brief": "x"}, Transport.E2E_MCP, identity=None)
+        result = client.call("get_products", {"brief": "x"}, Transport.E2E_MCP, credential={})
 
         assert result.is_error
         result.assert_wire_error("AUTH_REQUIRED")
@@ -631,18 +557,15 @@ class TestClientE2eA2aDelivery:
         assert skill_part["skill"] == "get_products"
         assert skill_part["parameters"] == {"brief": "video ads"}
 
-    def test_identity_maps_to_auth_and_tenant_headers(self):
+    def test_credential_is_sent_as_auth_and_tenant_headers(self):
         from unittest.mock import MagicMock, patch
 
-        from tests.factories.principal import PrincipalFactory
         from tests.harness.transport import E2EConfig
 
         class _UnitEnv(BaseTestEnv):
             pass
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="p1", tenant_id="t1", protocol="a2a", auth_token="tok_123"
-        )
+        credential = credential_headers(token="tok_123", tenant="t1")
         rpc_response = self._rpc_success_body(artifact_data={"message": "ok", "success": True})
 
         with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
@@ -654,12 +577,12 @@ class TestClientE2eA2aDelivery:
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
-                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=identity)
+                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, credential=credential)
 
         assert result.is_success, result.error
         headers = mock_post.call_args.kwargs["headers"]
         assert headers["Authorization"] == "Bearer tok_123"
-        assert headers["x-adcp-tenant"] == identity.tenant["subdomain"]
+        assert headers["x-adcp-tenant"] == "t1"
 
     def test_unauthenticated_dispatch_sends_no_auth_header(self):
         from unittest.mock import MagicMock, patch
@@ -680,7 +603,7 @@ class TestClientE2eA2aDelivery:
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
-                client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=None)
+                client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, credential={})
 
         headers = mock_post.call_args.kwargs["headers"]
         assert "Authorization" not in headers
@@ -848,7 +771,7 @@ class TestClientE2eA2aDelivery:
                 mock_post = mock_client_cls.return_value.__enter__.return_value.post
                 mock_post.return_value = mock_response
 
-                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, identity=None)
+                result = client.call("get_products", {"brief": "x"}, Transport.E2E_A2A, credential={})
 
         assert result.is_error, f"a 401 must be an error result, got payload {result.payload!r}"
         result.assert_wire_error("AUTH_REQUIRED", recovery="correctable")
@@ -919,44 +842,6 @@ class TestA2AE2EDispatcher:
         assert skill_part["skill"] == "get_products"
         assert skill_part["parameters"] == {"brief": "video ads"}
 
-    def test_omitted_identity_falls_back_to_env_identity_for(self):
-        """Consistency/regression coverage for the identity-default reconciliation
-        : A2AE2EDispatcher already handled omission
-         correctly before this ticket (its own local ``_NO_OVERRIDE``), so this
-         proves the refactor onto the shared ``NO_IDENTITY_OVERRIDE`` sentinel +
-         ``_dispatch_core`` preserves that behavior — the sibling assertion to
-         McpE2EDispatcher's/RestE2EDispatcher's genuine bug-fix regression tests
-         (acceptance criterion: identical call_via omissions authenticate
-         identically on every transport)."""
-        from unittest.mock import MagicMock, patch
-
-        from tests.harness.dispatchers import A2AE2EDispatcher
-        from tests.harness.transport import E2EConfig, Transport
-
-        class _UnitEnv(BaseTestEnv):
-            pass
-
-        rpc_response = TestClientE2eA2aDelivery._rpc_success_body(
-            artifact_data={"products": [], "message": "ok", "success": True}
-        )
-
-        with _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-stack:8080", postgres_url="postgresql://x")) as env:
-            expected_tenant = env.identity_for(Transport.E2E_A2A).tenant["subdomain"]
-
-            with patch("httpx.Client") as mock_client_cls:
-                mock_response = MagicMock()
-                mock_response.json.side_effect = lambda: json.loads(json.dumps(rpc_response))
-                mock_response.raise_for_status.return_value = None
-                mock_post = mock_client_cls.return_value.__enter__.return_value.post
-                mock_post.return_value = mock_response
-
-                # No identity= kwarg at all -- the omission case, not identity=None.
-                result = A2AE2EDispatcher().dispatch(env, tool_name="get_products", brief="video ads")
-
-        assert result.is_success, result.error
-        headers = mock_post.call_args.kwargs["headers"]
-        assert headers["x-adcp-tenant"] == expected_tenant
-
 
 class TestMcpE2EDispatcherDelegation:
     """``McpE2EDispatcher`` (``tests/harness/dispatchers.py``) is the legacy
@@ -978,7 +863,7 @@ class TestMcpE2EDispatcherDelegation:
             # per-dispatcher fork (TypeError here, NotImplementedError on
             # A2AE2EDispatcher below).
             with pytest.raises(MissingToolNameError, match="tool_name"):
-                McpE2EDispatcher().dispatch(env, identity=None)
+                McpE2EDispatcher().dispatch(env, credential={})
 
     def test_delegates_to_client_with_flattened_req(self, monkeypatch):
         from tests.harness._base import BaseTestEnv
@@ -997,45 +882,8 @@ class TestMcpE2EDispatcherDelegation:
 
         env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
 
-        result = McpE2EDispatcher().dispatch(env, tool_name="get_products", req=_FakeReq(), identity=None)
+        result = McpE2EDispatcher().dispatch(env, tool_name="get_products", req=_FakeReq(), credential={})
 
         assert result.is_success, result.error
         fake_client = TestClientE2eMcpDelivery._FakeMcpClient.instances[0]
         assert fake_client.calls == [("get_products", {"brief": "video ads"})]
-
-    def test_omitted_identity_falls_back_to_env_identity_for(self, monkeypatch):
-        """The regression this ticket fixes: omitting
-        ``identity=`` entirely (not passing ``identity=None``) must fall back
-        to ``env.identity_for(transport)`` — same as every other transport's
-        omission semantics — not force unauthenticated dispatch.
-
-        Only observable by calling ``.dispatch()`` directly: the legacy
-        ``env.call_via(...)`` entry point already injects
-        ``kwargs.setdefault("identity", self.identity_for(transport))`` before
-        any dispatcher runs (``_base.py:538``), which masks the bug for every
-        caller that goes through it.
-
-        A unit env's ``identity_for()`` never carries a real ``auth_token``
-        (only integration mode resolves one, ``_base.py:450-453``), so the
-        ``x-adcp-auth`` header cannot distinguish the two cases here — the
-        ``x-adcp-tenant`` header (set unconditionally from
-        ``identity.tenant["subdomain"]``) is the signal that actually moves.
-        """
-        from tests.harness._base import BaseTestEnv
-        from tests.harness.dispatchers import McpE2EDispatcher
-        from tests.harness.transport import E2EConfig, Transport
-
-        TestClientE2eMcpDelivery._FakeMcpClient.instances = []
-        monkeypatch.setattr("fastmcp.Client", TestClientE2eMcpDelivery._FakeMcpClient)
-
-        class _UnitEnv(BaseTestEnv):
-            pass
-
-        env = _UnitEnv(e2e_config=E2EConfig(base_url="http://e2e-host:9000", postgres_url="postgresql://x/y"))
-        expected_tenant = env.identity_for(Transport.E2E_MCP).tenant["subdomain"]
-
-        result = McpE2EDispatcher().dispatch(env, tool_name="get_products", brief="video ads")
-
-        assert result.is_success, result.error
-        fake_client = TestClientE2eMcpDelivery._FakeMcpClient.instances[0]
-        assert fake_client.transport.headers["x-adcp-tenant"] == expected_tenant

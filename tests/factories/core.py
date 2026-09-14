@@ -24,6 +24,7 @@ from src.core.database.models import (
     SignalsAgent,
     Tenant,
 )
+from src.core.tenant_context import TenantContext
 
 
 def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
@@ -100,21 +101,19 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
     capability_declarations = None
 
     @classmethod
-    def make_tenant(cls, tenant_id: str = "test_tenant", **overrides: Any) -> dict[str, Any]:
-        """Build a tenant dict without DB persistence.
+    def make_tenant(cls, tenant_id: str = "test_tenant", **overrides: Any) -> TenantContext:
+        """Build a TenantContext without DB persistence, the type the resolver hands on.
 
         Uses same defaults as TenantFactory fields.
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
-        subdomain = tenant_subdomain(tenant_id)
-        tenant: dict[str, Any] = {
-            "tenant_id": tenant_id,
-            "name": f"Test Publisher {tenant_id}",
-            "subdomain": subdomain,
-            "ad_server": "mock",
-        }
-        tenant.update(overrides)
-        return tenant
+        return TenantContext(
+            tenant_id=tenant_id,
+            name=f"Test Publisher {tenant_id}",
+            subdomain=tenant_subdomain(tenant_id),
+            ad_server="mock",
+            **overrides,
+        )
 
     # Auto-create required CurrencyLimit (USD) for budget validation
     currency_usd = RelatedFactory(

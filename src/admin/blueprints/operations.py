@@ -11,9 +11,10 @@ from adcp.types import Package
 from flask import Blueprint, request
 from sqlalchemy import select
 
-from src.admin.utils import approve_media_buy_through_writer, echo_context, require_auth, require_tenant_access
+from src.admin.utils import approve_media_buy_through_writer, require_auth, require_tenant_access
 from src.core.database.models import PersistedMediaBuyStatus, PushNotificationConfig
 from src.core.database.repositories.media_buy import MediaBuyRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.errors.details import RejectionReasonDetails
 from src.core.exceptions import AdCPMediaBuyRejectedError
 from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess, Error
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 
 def _as_request_dict(value: dict[str, Any] | str | None) -> dict[str, Any]:
-    """Narrow JSONType (dict|str|None) to a dict for .get() / echo_context."""
+    """Narrow JSONType (dict|str|None) to a dict for .get()."""
     return value if isinstance(value, dict) else {}
 
 
@@ -108,7 +109,6 @@ def media_buy_detail(tenant_id, media_buy_id):
     from src.core.database.models import (
         Creative,
         CreativeAssignment,
-        Principal,
         Product,
         WorkflowStep,
     )
@@ -121,11 +121,19 @@ def media_buy_detail(tenant_id, media_buy_id):
             if not media_buy:
                 return "Media buy not found", 404
 
-            # Get principal info
-            principal = None
+            # The buy's owner, loaded ONCE: the same stored-ids resolution the approval
+            # path uses, so the template's principal and the adapter's identity are one
+            # load. A buy whose owner row is gone renders without one.
+            from src.core.exceptions import AdCPConfigurationError
+            from src.core.resolved_identity import identity_of
+
+            owner = None
             if media_buy.principal_id:
-                stmt = select(Principal).filter_by(tenant_id=tenant_id, principal_id=media_buy.principal_id)
-                principal = db_session.scalars(stmt).first()
+                try:
+                    owner = identity_of(tenant_id, media_buy.principal_id)
+                except AdCPConfigurationError:
+                    owner = None
+            principal = owner.principal if owner else None
 
             # Get packages for this media buy from MediaPackage table
             media_packages = repo.get_packages(media_buy_id)
@@ -221,31 +229,12 @@ def media_buy_detail(tenant_id, media_buy_id):
                 try:
                     from datetime import UTC, datetime, timedelta
 
-                    from src.core.config_loader import set_current_tenant
-                    from src.core.database.models import Tenant
                     from src.core.helpers.adapter_helpers import get_adapter
-                    from src.core.schemas import Principal as PrincipalSchema
                     from src.core.schemas import ReportingPeriod
 
-                    # Get adapter for this principal
-                    if principal:
-                        # Set tenant context before calling get_adapter (required for adapter initialization)
-                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                        if tenant:
-                            set_current_tenant(
-                                {
-                                    "tenant_id": tenant_id,
-                                    "ad_server": tenant.ad_server or "mock",
-                                }
-                            )
-
-                        # Convert SQLAlchemy model to Pydantic schema (get_adapter expects schema)
-                        principal_schema = PrincipalSchema(
-                            principal_id=principal.principal_id,
-                            name=principal.name,
-                            platform_mappings=principal.platform_mappings or {},
-                        )
-                        adapter = get_adapter(principal_schema, dry_run=False)
+                    if owner:
+                        # The operator view acts as the buy's owner, resolved above.
+                        adapter = get_adapter(owner)
 
                         # Calculate date range (last 7 days or campaign duration) - always use UTC
                         end_date = datetime.now(UTC)
@@ -361,7 +350,7 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                 return redirect(url_for("operations.media_buy_detail", tenant_id=tenant_id, media_buy_id=media_buy_id))
 
             # Extract step data to dict to avoid detached instance errors after commit/nested sessions.
-            # JSONType columns are typed as dict|str|None; narrow before echo_context / .get().
+            # JSONType columns are typed as dict|str|None; narrow before .get().
             request_data = _as_request_dict(step.request_data)
             step_data = {
                 "step_id": step.step_id,
@@ -436,10 +425,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                         approve_repo = MediaBuyRepository(db_session, tenant_id)
                         all_packages = approve_repo.get_packages(media_buy_id)
 
-                        # Echo the buyer's request context (shared helper, also used by
-                        # the creative approval webhook in blueprints/creatives.py).
-                        approve_context = echo_context(request_data)
-
                         # Both columns come off the ApprovalResult, not a re-read. The
                         # writer reports what it wrote; a route that re-reads the row after
                         # the call is the shape that made a detached read possible here.
@@ -449,7 +434,6 @@ def approve_media_buy(tenant_id, media_buy_id, **kwargs):
                             packages=[Package(package_id=x.package_id) for x in all_packages],
                             confirmed_at=approval.confirmed_at,
                             revision=approval.revision,
-                            context=approve_context,
                         )
                         webhook_task = _media_buy_webhook_task(step_data, tenant_id, media_buy_id, media_buy_data)
 
@@ -599,7 +583,6 @@ def webhooks(tenant_id, **kwargs):
 
     from src.core.database.database_session import get_db_session
     from src.core.database.models import AuditLog, MediaBuy, Tenant
-    from src.core.database.models import Principal as ModelPrincipal
 
     try:
         with get_db_session() as db:
@@ -635,7 +618,7 @@ def webhooks(tenant_id, **kwargs):
             )
 
             # Get all principals for filter dropdown
-            principals = db.query(ModelPrincipal).filter_by(tenant_id=tenant_id).all()
+            principals = PrincipalRepository(db, tenant_id).list_all()
 
             # Calculate summary stats
             total_webhooks = query.count()

@@ -10,7 +10,6 @@ from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
-from adcp.types import Error as LibraryError
 from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
     ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
@@ -62,7 +61,6 @@ from pydantic import (
 from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
-from src.core.enum_helpers import enum_value
 from src.core.schemas._base import (
     AdcpResponse,
     BuyerRequest,
@@ -70,8 +68,6 @@ from src.core.schemas._base import (
     NestedModelSerializerMixin,
     SalesAgentBaseModel,
     Targeting,
-    copy_before_mutating,
-    strip_none_deep,
 )
 
 #: IPTC Digital Source Type, for AI provenance under EU AI Act Article 50.
@@ -291,41 +287,30 @@ class Creative(LibraryCreative):
     # AwareDatetime, matching the pin: a naive value is schema-invalid here.
     created_date: AwareDatetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Creation timestamp")
     updated_date: AwareDatetime = Field(default_factory=lambda: datetime.now(tz=UTC), description="Update timestamp")
-    # Override assets to untyped dict (our DB stores arbitrary asset dicts, not typed models)
-    assets: dict[str, Any] | None = Field(default=None, description="Creative assets")
+    # assets is INHERITED as the library's typed asset map. It used to be redeclared as
+    # dict[str, Any] because the JSON column stores what the buyer sent; the row-to-model
+    # read (listing.py) now validates the stored value into the typed map instead.
 
     # === AI Provenance (EU AI Act Article 50) ===
     provenance: Provenance | None = Field(default=None, description="AI provenance metadata per EU AI Act Article 50")
+
+    @field_validator("provenance", mode="before")
+    @classmethod
+    def _adopt_library_provenance(cls, v: Any) -> Any:
+        """A request carries the LIBRARY ``Provenance``; this field is the local subclass.
+
+        Pydantic validates a model-typed field by instance, so the library instance would be
+        refused. Rebuilt from its attributes -- a model-to-model step, never a dump -- so a
+        creative asset's provenance passes through as the model it is.
+        """
+        if isinstance(v, LibraryProvenance) and not isinstance(v, Provenance):
+            return Provenance.model_validate(v, from_attributes=True)
+        return v
 
     # === Internal Fields (excluded from AdCP responses) ===
     principal_id: str | None = Field(
         default=None, exclude=True, description="Associates creative with advertiser (workflow tracking)"
     )
-
-    @model_validator(mode="before")
-    @classmethod
-    def validate_format_id(cls, values):
-        """Strip fields this model does not declare.
-
-        It used to also accept a bare-string ``format_id`` and a ``format`` alias,
-        upgrading both into a ``FormatId`` by looking the id up in the reference
-        cache. Both are shapes the pinned schema does not define, and a DTO is the
-        pinned schema -- see docs/design/one-tool-registry-remaining.md. Neither had
-        a producer: ``CreativeAssetRequest`` refuses a string on the buyer path, and
-        the listing path builds the ``FormatId`` explicitly from the row's own
-        ``agent_url`` and ``format`` columns (creatives/listing.py).
-        """
-        if not isinstance(values, dict):
-            return values
-
-        values = copy_before_mutating(values)
-
-        # Strip delivery-only fields that callers may still pass from old code.
-        # These fields existed on the delivery Creative base but not on the listing base.
-        for field in ("variants", "variant_count", "totals", "media_buy_id"):
-            values.pop(field, None)
-
-        return values
 
     # Helper properties for format_id (still present in 3.6.0)
     @property
@@ -342,30 +327,6 @@ class Creative(LibraryCreative):
     def format_agent_url(self) -> str | None:
         """Get agent URL string from FormatId object."""
         return str(self.format_id.agent_url) if self.format_id else None
-
-    def model_dump(self, **kwargs: Any) -> dict[str, Any]:
-        """AdCP-compliant dump. ``assets`` is an untyped dict[str, Any] (the DB
-        stores arbitrary asset shapes), so Pydantic's exclude_none=True default
-        never sees inside it — a None field on a stored asset survives as a
-        literal null instead of being omitted, failing AdCP schema validation.
-        """
-        data = super().model_dump(**kwargs)
-        if data.get("assets") is not None:
-            data["assets"] = strip_none_deep(data["assets"])
-        return data
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including internal fields for database storage.
-
-        Pydantic v2's Field(exclude=True) cannot be overridden via model_dump parameters.
-        We manually include the principal_id field which is excluded from public responses.
-        """
-        data = super().model_dump(exclude=set(), **kwargs)
-        if self.principal_id is not None:
-            data["principal_id"] = self.principal_id
-        # Ensure status is always present as string value for DB storage
-        data["status"] = enum_value(self.status)
-        return data
 
 
 class CreativeAdaptation(SalesAgentBaseModel):
@@ -545,23 +506,13 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
     # rather than shadowing the inherited spec field. The spec `status` is DERIVED from it in
     # `_advisory_status_from_review_state` below: the row's review state is exactly the
     # "advisory review-lifecycle state of the creative after this sync" the pin describes.
-    # MCP serializes through `to_wire` (model_dump, exclude_none), so an unset status is omitted
-    # on every transport.
-    # platform_id/assigned_to/assignment_errors are type-compatible and inherited as-is.
-    #
-    # changes/warnings/errors are REDECLARED (sanctioned redeclaration, CLAUDE.md pattern 1)
-    # with default_factory=list rather than inheriting the parent's None default: spec 3.1.1
-    # sync-creatives-response.json types all three as `array`, and the MCP structured_content
-    # path above serializes a None default as the spec-invalid `null` (PR #1567 round-2 item 3).
-    # Wire outcome per transport — both spec-valid: MCP emits [] (array); A2A/REST OMIT empty
-    # lists via the model_dump strip below (byte-identical to the pre-6.6 wire).
-    changes: list[str] = Field(
-        default_factory=list, description="Field names that were modified (only populated when action='updated')"
-    )
-    warnings: list[str] = Field(default_factory=list, description="Non-fatal warnings about this creative")
-    errors: list[LibraryError] = Field(
-        default_factory=list, description="Validation or processing errors (only populated when action='failed')"
-    )
+    # An unset status is omitted on every transport: the library base dumps with
+    # exclude_none, and MCP serializes through the same model_dump.
+    # platform_id/assigned_to/assignment_errors/changes/warnings/errors are inherited as-is,
+    # with the parent's None defaults: an optional array the tool did not populate is
+    # OMITTED by exclude_none on every path (the wire serializer runs on model_dump,
+    # model_dump_json and structured_content alike), which is the spec-valid absence.
+    # Writers materialize the list before appending (_append_warning in _sync.py).
     internal_status: str | None = Field(
         None, exclude=True, description="Internal review-routing status (INTERNAL - excluded from AdCP responses)"
     )
@@ -583,42 +534,13 @@ class SyncCreativeResult(LibrarySyncCreativeResult):
         CreativeStatus member, pinned by test_architecture_creative_status_vocabulary -- so
         the wire field is derived here once rather than at the three sites that build a
         result. A failed or deleted result carries no row state and its status stays unset,
-        which ``model_dump`` then omits.
+        which the exclude_none serialization then omits.
         """
         if self.action in ("failed", "deleted"):
             self.status = None
         elif self.status is None and self.internal_status is not None:
             self.status = CreativeStatus(self.internal_status)
         return self
-
-    def model_dump(self, **kwargs):
-        """Override to strip empty lists for AdCP spec compliance.
-
-        Internal fields (internal_status, review_feedback) are excluded via Field(exclude=True).
-        This override handles empty-list stripping: changes, errors, warnings are
-        optional in the AdCP spec, so omit them when empty rather than serializing [].
-        """
-        exclude = set(kwargs.get("exclude") or ())
-        kwargs["exclude"] = exclude
-
-        # Exclude None values by default for AdCP compliance
-        if "exclude_none" not in kwargs:
-            kwargs["exclude_none"] = True
-
-        # Call parent model_dump
-        result = super().model_dump(**kwargs)
-
-        # Strip empty lists for cleaner responses (AdCP spec: optional, omit if empty)
-        for key in ("changes", "errors", "warnings"):
-            if key in result and not result[key]:
-                result.pop(key, None)
-
-        return result
-
-    def model_dump_internal(self, **kwargs):
-        """Dump including all fields for database storage and internal processing."""
-        kwargs.pop("exclude", None)  # Remove any exclude parameter
-        return super().model_dump(**kwargs)
 
 
 class AssignmentsSummary(SalesAgentBaseModel):
@@ -647,7 +569,7 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(LibrarySyncCreativesSuccess, AdcpResponse):
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
     """Extends library SyncCreativesResponse success variant.
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
@@ -692,13 +614,6 @@ class SyncCreativesResponse(LibrarySyncCreativesSuccess, AdcpResponse):
     # synchronously-processed sync always carries a creatives array, even all-failed
     # (#1399 R3-F2).
     creatives: list[SyncCreativeResult]  # type: ignore[assignment]
-
-    def model_dump(self, **kwargs):
-        """Override to call child model_dump() for nested SyncCreativeResult (Pattern #4)."""
-        result = super().model_dump(**kwargs)
-        if "creatives" in result and self.creatives:
-            result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        return result
 
 
 class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest):

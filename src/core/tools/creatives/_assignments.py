@@ -16,7 +16,7 @@ from src.core.exceptions import (
 from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
 from src.core.logging_config import log_safe
 from src.core.schemas import SyncCreativeResult
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.tools.creatives._processing import _failed_sync_result
 
 logger = logging.getLogger(__name__)
@@ -89,7 +89,7 @@ def _normalise_assignments(entries: list[Any]) -> AssignmentMap:
 def _process_assignments(
     assignments: dict | list | None,
     results: list[SyncCreativeResult],
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     validation_mode: str,
     principal_id: str,
     uow: CreativeUoW | None = None,
@@ -148,7 +148,7 @@ def _process_assignments(
             # Join the caller's transaction when given one; otherwise own a
             # transaction for the duration, exactly as before.
             if uow is None:
-                uow = stack.enter_context(CreativeUoW(tenant["tenant_id"]))
+                uow = stack.enter_context(CreativeUoW(tenant.tenant_id))
             assert uow.assignments is not None
             assignment_repo = uow.assignments
 

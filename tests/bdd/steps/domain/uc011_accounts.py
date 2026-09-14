@@ -324,8 +324,8 @@ def given_unauthenticated(ctx: dict, transport: str | None = None) -> None:
     controls which transport is used for dispatch.
     """
     ctx["has_auth"] = False
-    # Call dispatch_request with identity=None to trigger auth error
-    ctx["force_identity"] = None
+    # Present no token, on the env's tenant, so the resolver answers AUTH_MISSING.
+    ctx["force_credential"] = ctx["env"].credential(token=None)
 
 
 @given("the Buyer Agent has an A2A connection with an expired token")
@@ -336,21 +336,17 @@ def given_expired_token(ctx: dict) -> None:
     AdCP v3.1.1 splits the two auth rejections on exactly that axis (absent ->
     AUTH_MISSING/correctable, presented-but-rejected -> AUTH_INVALID/terminal),
     so the Given has to drive a real token through the real resolution chain on
-    every transport, not stand in for the token-less case.
-
-    All four transports now do: A2A and MCP patch real headers off the
-    identity's ``auth_token``, e2e_rest sends them over real HTTP, and REST
-    leaves the production ``_require_auth_dep`` in place for an identity that
-    presents an unresolvable credential (``BaseTestEnv._configure_rest_auth``).
-    Previously REST's dependency override treated ANY non-None identity as an
-    already-resolved valid token, which is why this Given was pinned to
-    ``force_identity = None`` and graded the wrong code (GH #1886).
+    every transport, not stand in for the token-less case. Every transport
+    presents the same headers and the same resolver answers them (GH #1886 was
+    a REST-only override disagreeing with the wire).
     """
+    from tests.harness._base import INVALID_TOKEN
+
     ctx["has_auth"] = False
     # Seed the tenant so tenant detection still resolves: the realistic shape is
     # a known seller reached with a dead credential, not an unknown seller.
     _setup_tenant_and_principal(ctx)
-    ctx["force_identity"] = ctx["env"].invalid_token_identity()
+    ctx["force_credential"] = ctx["env"].credential(token=INVALID_TOKEN)
 
 
 # `the sync_accounts response schema uses oneOf` bound here and is deleted: no feature carries
@@ -641,14 +637,16 @@ def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
 @when("the Buyer Agent sends a list_accounts request without an authentication token")
 def when_list_accounts_no_auth(ctx: dict) -> None:
     """Send list_accounts without authentication."""
-    dispatch_request(ctx, identity=None)
+    dispatch_request(ctx, credential=ctx["env"].credential(token=None))
 
 
 @when("the Buyer Agent sends a list_accounts skill request via A2A with the token")
 def when_list_accounts_a2a_invalid_token(ctx: dict) -> None:
     """Send list_accounts via A2A with an invalid (presented but not valid) token."""
+    from tests.harness._base import INVALID_TOKEN
+
     ctx["transport"] = "A2A"
-    dispatch_request(ctx, identity=ctx["env"].invalid_token_identity())
+    dispatch_request(ctx, credential=ctx["env"].credential(token=INVALID_TOKEN))
 
 
 @when(parsers.parse("the Buyer Agent sends a list_accounts request with max_results {value:d}"))
@@ -1248,7 +1246,7 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
     """Parse a Gherkin sync_accounts data table and dispatch it on the wire.
 
     pytest-bdd datatable: list of lists. First row = headers, rest = data rows.
-    Handles force_identity (unauthenticated) and force_internal_error contexts.
+    Handles force_credential (unauthenticated) and force_internal_error contexts.
     Shared by the plain ``with:`` table When and the ``carrying idempotency_key … and:``
     variant so the two paths cannot drift (DRY invariant).
 
@@ -1269,9 +1267,9 @@ def _dispatch_sync_table(ctx: dict, datatable: Any, *, idempotency_key: str | No
 
     kwargs: dict[str, Any] = {}
 
-    # Handle forced identity (unauthenticated/expired token)
-    if "force_identity" in ctx:
-        kwargs["identity"] = ctx["force_identity"]
+    # Handle a forced credential (unauthenticated/expired token)
+    if "force_credential" in ctx:
+        kwargs["credential"] = ctx["force_credential"]
 
     # Handle forced internal error
     # ONE dispatch shape for both branches. The idempotency branch already sent a raw
@@ -2550,21 +2548,17 @@ def _create_agent(ctx: dict, agent_name: str) -> Any:
     return agent_principal
 
 
-def _make_identity_for_agent(ctx: dict, agent_name: str) -> Any:
-    """Build a ResolvedIdentity for a named agent.
+def _credential_for_agent(ctx: dict, agent_name: str) -> dict[str, str]:
+    """The credential a named agent presents: its own principal row's token.
 
-    Carries the agent principal's access_token: the REST e2e dispatcher only
-    sends x-adcp-auth when the identity has an auth_token, and the live server
-    401s tokenless agent syncs (PR #1430 items 1-2).
+    The server resolves the agent from these headers, on every transport, so a
+    tokenless agent sync is refused there rather than let through (PR #1430 items 1-2).
     """
-    from tests.factories.principal import PrincipalFactory
+    from tests.helpers.credentials import credential_headers
 
     agent = _create_agent(ctx, agent_name)
-    return PrincipalFactory.make_identity(
-        principal_id=agent.principal_id,
-        tenant_id=agent.tenant_id,
-        auth_token=agent.access_token,
-    )
+    ctx["env"]._commit_factory_data()
+    return credential_headers(token=agent.access_token, tenant=agent.tenant_id)
 
 
 def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
@@ -2577,12 +2571,12 @@ def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:
     from src.core.schemas.account import SyncAccountsRequest
 
     _setup_tenant_and_principal(ctx)
-    identity = _make_identity_for_agent(ctx, agent_name)
+    credential = _credential_for_agent(ctx, agent_name)
     req = SyncAccountsRequest(
         idempotency_key=fresh_idempotency_key(),
         accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
     )
-    dispatch_request(ctx, req=req, identity=identity)
+    dispatch_request(ctx, req=req, credential=credential)
     error = ctx.get("error")
     assert error is None, f"Given: agent {agent_name} sync for {domain!r} failed: {error!r}"
     # Clear response so the next When step's response is fresh
@@ -2674,7 +2668,7 @@ def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
     rows = table_rows(datatable)
     accounts = _parse_sync_table(rows)
 
-    identity_a = _make_identity_for_agent(ctx, "A")
+    credential_a = _credential_for_agent(ctx, "A")
 
     try:
         req = SyncAccountsRequest(
@@ -2682,7 +2676,7 @@ def when_agent_a_sync_delete_missing(ctx: dict, datatable: Any) -> None:
             accounts=accounts,
             delete_missing=True,
         )
-        dispatch_request(ctx, req=req, identity=identity_a)
+        dispatch_request(ctx, req=req, credential=credential_a)
     except Exception as exc:
         ctx["error"] = exc
 
@@ -3017,8 +3011,8 @@ def when_request_with_context(ctx: dict, operation: str, ctx_json: str) -> None:
         )
 
     dispatch_kwargs: dict[str, Any] = {}
-    if "force_identity" in ctx:
-        dispatch_kwargs["identity"] = ctx["force_identity"]
+    if "force_credential" in ctx:
+        dispatch_kwargs["credential"] = ctx["force_credential"]
 
     try:
         dispatch_request(ctx, req=req, **dispatch_kwargs)
@@ -3988,40 +3982,26 @@ def given_agent_b_accounts_same_tenant(ctx: dict, name: str, count: int) -> None
 @when(parsers.parse('agent "{name}" sends a list_accounts request'))
 def when_agent_list_accounts(ctx: dict, name: str) -> None:
     """Send list_accounts as a specific named agent."""
-    identity = _make_identity_for_agent(ctx, name)
-    dispatch_request(ctx, identity=identity)
+    dispatch_request(ctx, credential=_credential_for_agent(ctx, name))
 
 
 @when("the Buyer Agent sends a list_accounts request with no principal_id")
 def when_list_accounts_no_principal(ctx: dict) -> None:
-    """Send list_accounts with an identity that has tenant_id but no principal_id."""
-    from tests.factories.principal import PrincipalFactory
-
+    """Send list_accounts addressing the tenant but presenting no token: no principal resolves."""
     tenant = ctx["tenant"]
-    broken_identity = PrincipalFactory.make_identity(
-        tenant_id=tenant.tenant_id,
-        principal_id=None,
-        protocol="mcp",
-    )
-    dispatch_request(ctx, identity=broken_identity)
+    dispatch_request(ctx, credential=ctx["env"].credential(token=None, tenant=tenant.tenant_id))
 
 
 @when("the Buyer Agent sends a sync_accounts request with no principal_id and:")
 def when_sync_no_principal(ctx: dict, datatable: Any) -> None:
-    """Send sync_accounts with an identity that has tenant_id but no principal_id."""
+    """Send sync_accounts addressing the tenant but presenting no token: no principal resolves."""
     from src.core.schemas.account import SyncAccountsRequest
-    from tests.factories.principal import PrincipalFactory
 
     tenant = ctx["tenant"]
-    broken_identity = PrincipalFactory.make_identity(
-        tenant_id=tenant.tenant_id,
-        principal_id=None,
-        protocol="mcp",
-    )
     rows = table_rows(datatable)
     accounts = _parse_sync_table(rows)
     req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts)
-    dispatch_request(ctx, req=req, identity=broken_identity)
+    dispatch_request(ctx, req=req, credential=ctx["env"].credential(token=None, tenant=tenant.tenant_id))
 
 
 @then(parsers.parse('none of the returned accounts belong to agent "{name}"'))
@@ -4158,11 +4138,11 @@ def when_named_agent_sync_delete_missing(ctx: dict, name: str, datatable: Any) -
     """Send sync_accounts under a named agent's identity with delete_missing=True."""
     from src.core.schemas.account import SyncAccountsRequest
 
-    identity = _make_identity_for_agent(ctx, name)
+    credential = _credential_for_agent(ctx, name)
     rows = table_rows(datatable)
     accounts = _parse_sync_table(rows)
     req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=accounts, delete_missing=True)
-    dispatch_request(ctx, req=req, identity=identity)
+    dispatch_request(ctx, req=req, credential=credential)
 
 
 @given(parsers.parse('agent "{name}" created account for brand domain "{domain}"'))

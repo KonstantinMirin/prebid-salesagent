@@ -8,7 +8,6 @@
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 from typing import Any
 
@@ -20,6 +19,7 @@ from src.admin.utils import require_auth, require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import redirect_if_url_blocked
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
@@ -127,12 +127,13 @@ def validate_policy_list(
 @require_auth(admin_only=True)
 def tenant_management_settings():
     """Tenant management settings page."""
-    # GAM OAuth credentials are now configured via environment variables
-    gam_client_id = os.environ.get("GAM_OAUTH_CLIENT_ID", "")
-    gam_client_secret = os.environ.get("GAM_OAUTH_CLIENT_SECRET", "")
+    # GAM OAuth credentials are configured at startup, in the settings
+    gam_auth = get_settings().auth
+    gam_client_id = gam_auth.gam_oauth_client_id
+    gam_client_secret = gam_auth.gam_oauth_client_secret
 
     # Check if credentials are configured
-    gam_configured = bool(gam_client_id and gam_client_secret)
+    gam_configured = gam_auth.gam_oauth_configured
 
     # Show status of environment configuration
     config_items = {
@@ -1311,7 +1312,7 @@ def check_approximated_domain_status(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain required"}), 400
 
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
@@ -1364,7 +1365,7 @@ def register_approximated_domain(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain required"}), 400
 
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
@@ -1379,8 +1380,8 @@ def register_approximated_domain(tenant_id):
             # owned change. The RULE is the same one the helper applies.
             owned = tenant_owns_domain(tenant, domain)
 
-        # Get backend target address from environment
-        backend_url = os.getenv("APPROXIMATED_BACKEND_URL", "adcp-sales-agent.fly.dev")
+        # Get backend target address from the settings
+        backend_url = get_settings().integrations.approximated_backend_url
 
         # Register the domain via the Approximated service. Already-registered
         # is a meaningful result the service already translated from the
@@ -1417,7 +1418,7 @@ def unregister_approximated_domain(tenant_id):
         if not domain:
             return jsonify({"success": False, "error": "Domain required"}), 400
 
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             return jsonify({"success": False, "error": "Approximated not configured"}), 500
 
@@ -1455,14 +1456,13 @@ def get_approximated_token(tenant_id):
     """Generate an Approximated DNS widget token and get DNS target."""
     try:
         # Get API key from environment
-        approximated_api_key = os.getenv("APPROXIMATED_API_KEY")
+        approximated_api_key = get_settings().integrations.approximated_api_key
         if not approximated_api_key:
             logger.error("APPROXIMATED_API_KEY not configured in environment")
             return jsonify({"success": False, "error": "DNS widget not configured on server"}), 500
 
-        # Get the Approximated proxy IP from environment
-        # This is the IP address of your Approximated proxy cluster
-        approximated_proxy_ip = os.getenv("APPROXIMATED_PROXY_IP", "37.16.24.200")
+        # The IP address of your Approximated proxy cluster
+        approximated_proxy_ip = get_settings().integrations.approximated_proxy_ip
 
         with get_db_session() as db_session:
             tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()

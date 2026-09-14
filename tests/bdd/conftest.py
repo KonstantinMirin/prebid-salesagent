@@ -5282,8 +5282,8 @@ ENV_ROUTES: list[EnvRoute] = [
         # account (the field is optional on get-products-request.json) and no
         # Product row — an empty catalog is a valid SUCCESS, and the echo is
         # what these scenarios read off it. Without the seed there is no
-        # Principal for identity_for() to resolve, so every scenario would
-        # dispatch unauthenticated and grade the wrong refusal.
+        # Principal row for credential() to read a token from, so every scenario
+        # would dispatch unauthenticated and grade the wrong refusal.
         seed=_seed_tenant_and_principal,
     ),
     EnvRoute(
@@ -5321,11 +5321,11 @@ ENV_ROUTES: list[EnvRoute] = [
         # src/core/tools/creatives/_sync.py) and its request now carries a
         # spec-required `account`, which the wrappers resolve through
         # `enrich_identity_with_account` — the first thing that asks the identity
-        # for a principal. `identity_for` no longer fabricates one: with no
-        # Principal row it nulls `principal_id`, so an unseeded row dispatches
-        # UNAUTHENTICATED and production correctly answers AUTH_MISSING before the
-        # egress seam is ever reached. Same seed the @egress_create/@egress_update
-        # rows below carry, for the same reason.
+        # for a principal. `credential()` fabricates nothing: with no Principal row
+        # it presents no token, so an unseeded row dispatches UNAUTHENTICATED and
+        # production correctly answers AUTH_MISSING before the egress seam is ever
+        # reached. Same seed the @egress_create/@egress_update rows below carry,
+        # for the same reason.
         seed=_seed_default_data,
     ),
     EnvRoute(

@@ -32,11 +32,14 @@ Feature: A credential reaches exactly one tenant's data
   # this guards against is the request being served ANYWAY -- either as the addressed
   # tenant (contamination) or as the token's own tenant (the address silently ignored).
   #
-  # No error CODE is pinned here, on purpose. get_products is auth="optional", so a rejected
-  # credential is downgraded to anonymous before the tool runs and the refusal comes from the
-  # tenant's own brand_manifest_policy -- which reports AUTH_MISSING to a buyer who did
-  # present a credential. That confusion is real and filed separately; this scenario grades
-  # the security property, which is that the request is not served.
+  # No error CODE is pinned here, on purpose. get_products declares identity: PublicIdentity,
+  # and that annotation is the tool's credential policy: on its own the row requires none. A
+  # tenant whose brand_manifest_policy is require_auth makes the resolver require one
+  # (ToolSpec.requires_credential(tenant)), and a credential that was presented and rejected
+  # is then AUTH_INVALID per the pinned error-code enum, an absent one AUTH_MISSING. What a
+  # public tool on a tenant with no such policy should answer to a REJECTED token is filed as
+  # its own child; this scenario grades the security property, which is that the request is
+  # not served.
   @T-SECURITY-002-credential-does-not-cross-tenants
   Scenario Outline: A credential minted for one tenant is refused by the other
     When the buyer presents tenant "<holder>" credentials addressed to tenant "<target>"

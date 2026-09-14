@@ -77,18 +77,19 @@ def get_adapter_class(adapter_type: str) -> type[AdServerAdapter]:
     return cast("type[AdServerAdapter]", adapter_class)
 
 
-def get_adapter_default_channels(adapter_type: str) -> list[str]:
+def get_adapter_default_channels(adapter_type: str | None) -> list[str]:
     """Get default advertising channels for an adapter type.
 
     Default channels are defined on each adapter class's default_channels attribute.
 
     Args:
-        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton")
+        adapter_type: Adapter type name (e.g., "google_ad_manager", "mock", "kevel", "triton"),
+            or ``None`` for a tenant with no ad server configured, which has no defaults.
 
     Returns:
-        List of default channel names for the adapter
+        List of default channel names for the adapter; empty when none is configured.
     """
-    adapter_class = ADAPTER_REGISTRY.get(adapter_type)
+    adapter_class = ADAPTER_REGISTRY.get(adapter_type) if adapter_type else None
     if adapter_class and hasattr(adapter_class, "default_channels"):
         return adapter_class.default_channels
     return []

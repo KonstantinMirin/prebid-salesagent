@@ -20,6 +20,7 @@ The following table maps the questions contributors arrive with to the document 
 |---|---|---|
 | What is this system, and what are its parts? | [Architecture guide](architecture.md) | The top-level map: topology, component locations, data model, adapters, and extension points, each section linking to the document with the details |
 | Why does code belong in this layer and not that one? | [Architecture principles](architecture-principles.md) | Six principles — logic only in `_impl`, models everywhere, construction and serialization at the boundary, typed errors — each short enough to apply on sight |
+| How do I add or change a tool? | [Building a tool](building-tools.md) | One registry row, the three identity types and what each guarantees, the boundary's steps, server-initiated work, errors, and how to substitute an implementation in a test |
 | What happens to my request before `_impl` runs? | [Request lifecycle](request-lifecycle.md) | The middleware stack in execution order, identity resolution, the per-transport path, and a placement table for changes to the request path |
 | Which file do I copy from — and which files must I not imitate? | [Patterns reference](patterns-reference.md) | The canonical implementation file per pattern, the test harness, and the legacy files whose surrounding code is tracked debt |
 | What is this change going to be held to? | [Engineering standards](engineering-standards.md) | The standards every pull request is reviewed against — layering, duplication, test integrity, spec grounding — ending in a verification list |

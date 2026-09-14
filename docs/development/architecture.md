@@ -97,8 +97,9 @@ tenant-scoped through the repository layer. A request's tenant is resolved from 
 - **Tenant** — a publisher. Configuration lives in individual columns on the
   row (ad server, policy settings, authorized emails/domains, webhooks), not
   in a single JSON column.
-- **Principal** — an advertiser within a tenant, identified by its API
-  `access_token`; `platform_mappings` ties it to accounts on the ad server.
+- **Principal** — an advertiser within a tenant, identified by its API token
+  (stored as `token_hash`; the token itself is shown once); `platform_mappings`
+  ties it to accounts on the ad server.
 - Admin users, products, media buys, creatives, and audit logs all belong to
   the tenant.
 
@@ -125,7 +126,7 @@ erDiagram
     WorkflowStep ||--o{ ObjectWorkflowMapping : "maps to objects"
 
     Principal {
-        string access_token "API identity"
+        string token_hash "sha256 of the API token"
     }
     MediaBuy {
         int revision "repository-managed"

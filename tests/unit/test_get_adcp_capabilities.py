@@ -16,6 +16,8 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
 
+from tests.factories.principal import PrincipalFactory
+
 if TYPE_CHECKING:
     from src.core.resolved_identity import ResolvedIdentity
 
@@ -146,7 +148,7 @@ class TestGetAdcpCapabilitiesImpl:
         current_tenant.set(None)
 
         # Call without context - should return minimal response
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
 
         assert isinstance(response, GetAdcpCapabilitiesResponse)
         assert response.adcp is not None
@@ -169,7 +171,7 @@ class TestGetAdcpCapabilitiesImpl:
         # Reset tenant context to ensure clean state
         current_tenant.set(None)
 
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
 
         # Should be able to serialize - use mode="json" for JSON-compatible output
         data = response.model_dump(mode="json")
@@ -653,7 +655,7 @@ class TestResponseShapeCapabilities:
         """Response has no last_updated when no tenant context (minimal response)."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
@@ -697,7 +699,7 @@ class TestResponseShapeCapabilities:
         """Minimal response (no tenant) omits media_buy from serialized output."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
         assert response.media_buy is None
         data = response.model_dump(mode="json")
         # media_buy is excluded from serialization when None
@@ -730,7 +732,7 @@ class TestAccountBlockAndSigningDeclarations:
 
         current_tenant.set(None)
 
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
 
         assert response.account is None
 

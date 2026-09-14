@@ -23,7 +23,7 @@ from uuid import uuid4
 from adcp import get_adcp_spec_version
 from adcp.webhooks import GeneratedTaskStatus
 
-from src.core.security.egress.attempts import env_float
+from src.core.config import get_settings
 from src.core.security.webhook_egress import deliver_webhook
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext, build_webhook_envelope
@@ -39,15 +39,15 @@ logger = logging.getLogger(__name__)
 DELIVERY_REPORT_TASK_TYPE = "delivery_report"
 
 
-# How long a single delivery attempt may take. Read at CALL time, not import, so a
-# test can shorten it without patching a transport — which is what lets the timeout
-# path be graded against an origin that really stalls, rather than against a mocked
-# clock. Production's value is unchanged.
-_DELIVERY_TIMEOUT_ENV = "ADCP_WEBHOOK_DELIVERY_TIMEOUT_SECONDS"
-_DEFAULT_DELIVERY_TIMEOUT_SECONDS = 10.0
+# How long a single delivery attempt may take (ADCP_WEBHOOK_DELIVERY_TIMEOUT_SECONDS on
+# the settings). Read at CALL time, not import, so a test can shorten it without
+# patching a transport — which is what lets the timeout path be graded against an
+# origin that really stalls, rather than against a mocked clock. Production's value
+# is unchanged.
 
-# The breaker's three policy parameters, read at CALL time for the same reason the
-# delivery timeout above is: an import-time read would freeze the first value.
+# The breaker's three policy parameters (ADCP_WEBHOOK_BREAKER_* on the settings), read
+# at CALL time for the same reason the delivery timeout above is: an import-time read
+# would freeze the first value.
 #
 # These are POLICY, not a test hatch. 5 / 2 / 60s is a default a deployment may
 # legitimately disagree with — a seller with flaky buyers may want to trip later,
@@ -59,20 +59,15 @@ _DEFAULT_DELIVERY_TIMEOUT_SECONDS = 10.0
 # The code path is identical in both environments — only the VALUE differs, which
 # is the line between configuration and a branch that behaves differently under
 # test. See prebid/salesagent#2094 for the general case.
-_BREAKER_FAILURE_THRESHOLD_ENV = "ADCP_WEBHOOK_BREAKER_FAILURE_THRESHOLD"
-_BREAKER_SUCCESS_THRESHOLD_ENV = "ADCP_WEBHOOK_BREAKER_SUCCESS_THRESHOLD"
-_BREAKER_TIMEOUT_ENV = "ADCP_WEBHOOK_BREAKER_TIMEOUT_SECONDS"
-_DEFAULT_BREAKER_FAILURE_THRESHOLD = 5
-_DEFAULT_BREAKER_SUCCESS_THRESHOLD = 2
-_DEFAULT_BREAKER_TIMEOUT_SECONDS = 60
 
 
 def _configured_breaker() -> "CircuitBreaker":
     """Build a breaker from the configured policy, falling back to the shipped defaults."""
+    limits = get_settings().limits
     return CircuitBreaker(
-        failure_threshold=int(env_float(_BREAKER_FAILURE_THRESHOLD_ENV, _DEFAULT_BREAKER_FAILURE_THRESHOLD)),
-        success_threshold=int(env_float(_BREAKER_SUCCESS_THRESHOLD_ENV, _DEFAULT_BREAKER_SUCCESS_THRESHOLD)),
-        timeout_seconds=int(env_float(_BREAKER_TIMEOUT_ENV, _DEFAULT_BREAKER_TIMEOUT_SECONDS)),
+        failure_threshold=limits.adcp_webhook_breaker_failure_threshold,
+        success_threshold=limits.adcp_webhook_breaker_success_threshold,
+        timeout_seconds=limits.adcp_webhook_breaker_timeout_seconds,
     )
 
 
@@ -617,7 +612,7 @@ class WebhookDeliveryService:
                 scheme=config.authentication_type,
                 credentials=config.authentication_token,
                 headers=headers,
-                timeout=env_float(_DELIVERY_TIMEOUT_ENV, _DEFAULT_DELIVERY_TIMEOUT_SECONDS),
+                timeout=get_settings().limits.adcp_webhook_delivery_timeout_seconds,
                 max_attempts=3,
             )
         except Exception as e:

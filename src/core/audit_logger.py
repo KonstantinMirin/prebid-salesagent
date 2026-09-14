@@ -11,7 +11,6 @@ Implements security-compliant logging with:
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -19,6 +18,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog
 
@@ -37,7 +37,7 @@ from src.core.database.models import AuditLog
 # ADCP_LOG_DIR exists so a process that SHARES its working directory with another
 # process running as a different uid can be pointed somewhere private, instead of
 # the two contending over the same files. Default is unchanged.
-LOG_DIR = Path(os.environ.get("ADCP_LOG_DIR") or "logs")
+LOG_DIR = get_settings().runtime.adcp_log_dir
 
 
 def _ensure_log_dir(directory: Path) -> Path:
@@ -121,7 +121,7 @@ audit_logger.addHandler(error_handler)
 
 # In development, also log to console for debugging
 # In production, the root logger already handles console output with JSON formatting
-if not os.environ.get("FLY_APP_NAME") and not os.environ.get("PRODUCTION"):
+if not get_settings().structured_logging:
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(LOG_FORMAT, DATE_FORMAT))
     audit_logger.addHandler(console_handler)

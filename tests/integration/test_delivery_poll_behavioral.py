@@ -120,6 +120,7 @@ class TestSimulationReachesFinalThroughRealHook:
 
     def test_mock_time_past_flight_reaches_completed_and_final(self, integration_db):
         from src.core.testing_hooks import AdCPTestContext
+
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -154,6 +155,7 @@ class TestSimulationReachesFinalThroughRealHook:
     def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
         """The in-flight companion: simulated clock inside the window -> active/scheduled."""
         from src.core.testing_hooks import AdCPTestContext
+
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
@@ -2210,12 +2212,10 @@ class TestPrincipalNotFoundReturnsError:
     def test_principal_not_found_returns_error_in_response(self, integration_db):
         """No Principal row for the given principal_id -> AUTH_MISSING (salesagent-z9e0).
 
-        No Principal row exists, so no auth_token can be resolved for it —
-        the harness's identity_for() nulls principal_id to mirror production's
-        resolve_identity() (a token/principal_id that doesn't resolve to a DB
-        row is indistinguishable from no credentials presented), and
-        require_principal_id raises AdCPAuthRequiredError (AUTH_MISSING)
-        before any delivery-lookup logic runs.
+        No Principal row exists, so the harness's credential() reads no token for
+        it and presents none; production's resolver answers the absent credential
+        with AdCPAuthRequiredError (AUTH_MISSING) before any delivery-lookup logic
+        runs.
 
         Covers: UC-004-EXT-B-01
         """

@@ -12,11 +12,9 @@ plain BaseModel and subclasses cleanly.
 This module therefore defines:
 
 - Nine local subclasses of the SDK union members. Each inherits its full field
-  set from the library type (Pattern #1 — never copy fields) and mixes in the
-  internal ``supported`` / ``unsupported_reason`` annotations, declared once on
-  a shared mixin with ``exclude=True`` so they exist as typed attributes but
-  never serialize. The mixin also applies this project's ``extra`` policy
-  (``forbid`` outside production), replacing the SDK's ``allow``.
+  set from the library type (Pattern #1 — never copy fields) and mixes in a
+  derived ``is_fixed`` property. The mixin also applies this project's ``extra``
+  policy (``forbid`` outside production), replacing the SDK's ``allow``.
 - A ``PricingOption`` wrapper subclassing the SDK's RootModel with its root
   narrowed to OUR union, so ``option.root`` and proxied attribute access keep
   working at call sites.
@@ -71,32 +69,23 @@ __all__ = [
 
 
 class _AdapterSupportAnnotations(BaseModel):
-    """Internal adapter-capability annotations shared by all pricing members.
-
-    ``supported`` / ``unsupported_reason`` are populated at discovery time
-    (get_products) to record whether the tenant's ad-server adapter can honor
-    the pricing model. Neither field exists in AdCP 3.1.1
-    core/pricing-option.json, so both are ``exclude=True``: readable as model
-    attributes, never serialized to the wire.
+    """What every local pricing member adds to its library parent: nothing on the wire.
 
     The ``extra`` policy declared here replaces the SDK members'
     ``extra="allow"``. For the mixin's config to win pydantic's base-config
     merge, subclasses must list the library parent FIRST and this mixin LAST
     (pydantic applies base configs in ``__bases__`` order, last one wins).
+
+    ``is_fixed`` is DERIVED, not stored: AdCP V3 decides fixed-rate versus auction by
+    which price field is present, so a property reads it off the member and there is
+    no field to keep off the wire.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    supported: bool | None = Field(
-        default=None,
-        exclude=True,
-        description="Internal: whether the tenant's adapter supports this pricing model (set at discovery time)",
-    )
-    unsupported_reason: str | None = Field(
-        default=None,
-        exclude=True,
-        description="Internal: why this pricing model is unsupported (set when supported=False)",
-    )
+    @property
+    def is_fixed(self) -> bool:
+        return getattr(self, "fixed_price", None) is not None
 
 
 # Base order matters in every subclass below: (Library*, _AdapterSupportAnnotations)

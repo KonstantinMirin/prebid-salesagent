@@ -750,12 +750,7 @@ class GAMInventoryService:
             self.db.rollback()
             # A DB commit timeout is SERVICE_UNAVAILABLE, per AdCP 3.1.1
             # transport-errors.mdx Rule 1, which names this exact translation.
-            raise AdCPServiceUnavailableError(
-                internal_detail=(
-                    "database commit timed out after 120s - possible lost connection, "
-                    "lock contention, or large transaction"
-                )
-            ) from e
+            raise AdCPServiceUnavailableError(internal_detail=e) from e
         except (OperationalError, DBAPIError) as e:
             # Connection errors - log and re-raise with context
             logger.error(f"❌ Database connection error during batch write: {e}")
@@ -1548,7 +1543,6 @@ def create_inventory_endpoints(app):
                 advertiser_id=None,  # Not needed for inventory sync
                 trafficker_id=None,  # Not needed for inventory sync
                 tenant_id=tenant_id,
-                dry_run=False,
             )
 
             # Perform sync
@@ -1752,7 +1746,6 @@ def create_inventory_endpoints(app):
                 advertiser_id=None,
                 trafficker_id=None,
                 tenant_id=tenant_id,
-                dry_run=False,
             )
 
             # Fetch values using GAM API

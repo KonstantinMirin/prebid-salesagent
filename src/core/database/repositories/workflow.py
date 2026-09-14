@@ -450,7 +450,7 @@ class WorkflowRepository:
     def create_step(
         self,
         *,
-        context: DBContext,
+        persistent_context: DBContext,
         **fields: Any,
     ) -> WorkflowStep:
         """Create a WorkflowStep row inside the caller's transaction.
@@ -479,12 +479,12 @@ class WorkflowRepository:
 
         issue: #2002
         """
-        if context.tenant_id != self._tenant_id:
+        if persistent_context.tenant_id != self._tenant_id:
             raise ValueError(
-                f"Context {context.context_id} belongs to tenant {context.tenant_id}, "
+                f"Context {persistent_context.context_id} belongs to tenant {persistent_context.tenant_id}, "
                 f"not {self._tenant_id} — refusing to attach a workflow step across tenants"
             )
-        return build_workflow_step(self._session, context_id=context.context_id, **fields)
+        return build_workflow_step(self._session, context_id=persistent_context.context_id, **fields)
 
     # ------------------------------------------------------------------
     # ObjectWorkflowMapping writes

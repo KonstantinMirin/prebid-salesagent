@@ -15,7 +15,7 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
 from src.admin.utils.operator_errors import safe_error_message
-from src.core.config import get_config
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AuthorizedProperty, PropertyTag, PublisherPartner, Tenant
@@ -113,8 +113,7 @@ def add_publisher_partner(tenant_id: str) -> Response | tuple[Response, int]:
             # For mock adapters OR development environment, auto-verify publishers (no adagents.json to check)
             # Development: Local dev servers won't be in any publisher's adagents.json
             # Mock: Testing tenants use fake domains
-            config = get_config()
-            is_dev = config.environment == "development"
+            is_dev = get_settings().runtime.environment == "development"
             is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
             should_auto_verify = is_dev or is_mock
 
@@ -221,8 +220,7 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
             # For development environment or mock adapters, auto-verify publishers
             # (don't require our agent to be in their adagents.json)
             # BUT still fetch real properties from adagents.json if available
-            config = get_config()
-            is_dev = config.environment == "development"
+            is_dev = get_settings().runtime.environment == "development"
             is_mock = tenant.adapter_config and tenant.adapter_config.adapter_type == "mock"
             should_auto_verify = is_dev or is_mock
 

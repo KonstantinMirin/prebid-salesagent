@@ -1,8 +1,6 @@
 """Public routes blueprint for self-service tenant signup."""
 
 import logging
-import secrets
-import string
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -11,7 +9,8 @@ from sqlalchemy import or_, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AdapterConfig, CurrencyLimit, Principal, Tenant, User
+from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.domain_config import extract_subdomain_from_host, get_sales_agent_domain, is_sales_agent_domain
 
 logger = logging.getLogger(__name__)
@@ -136,9 +135,6 @@ def provision_tenant():
                 tenant_id = str(uuid.uuid4())
                 subdomain = tenant_id[:8]
 
-        # Generate admin token
-        admin_token = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-
         # Get user info from session
         user_email = session.get("user")
         user_name = session.get("user_name", user_email.split("@")[0].title())
@@ -161,7 +157,6 @@ def provision_tenant():
                 # Configuration
                 enable_axe_signals=True,
                 human_review_required=True,
-                admin_token=admin_token,
                 auto_approve_format_ids=["display_300x250", "display_728x90"],
                 # Access control
                 authorized_emails=[user_email.lower()],
@@ -260,12 +255,11 @@ def provision_tenant():
             if adopted is None:
                 logger.info(f"Created new user {user_email} for tenant {tenant_id}")
 
-            # Create default principal (for testing/demo purposes)
-            default_principal = Principal(
-                tenant_id=tenant_id,
+            # Create default principal (for testing/demo purposes). Its token is shown once,
+            # on the completion page; the row keeps the hash.
+            default_principal, demo_token = PrincipalRepository(db_session, tenant_id).issue(
                 principal_id=f"{tenant_id}_default",
                 name=f"{publisher_name} Demo Principal",
-                access_token=admin_token,
                 platform_mappings={
                     "mock": {
                         "advertiser_id": f"default_{tenant_id[:8]}",
@@ -274,7 +268,6 @@ def provision_tenant():
                 },
                 created_at=now,
             )
-            db_session.add(default_principal)
 
             db_session.commit()
 
@@ -289,6 +282,7 @@ def provision_tenant():
 
             logger.info(f"New tenant self-provisioned: {tenant_id} by {user_email}")
 
+            flash(f"Your demo advertiser's API token, shown only now: {demo_token}", "success")
             # Redirect to completion page
             return redirect(url_for("public.signup_complete", tenant_id=tenant_id))
 

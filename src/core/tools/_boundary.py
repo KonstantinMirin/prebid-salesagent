@@ -54,17 +54,16 @@ import asyncio
 import inspect
 import logging
 import typing
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, NoReturn
 
 from adcp.types import ContextObject
 from pydantic import ValidationError
 
-from src.core.auth_context import AuthContext
 from src.core.exceptions import AdcpFailure, adcp_error_for
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
-from src.core.resolved_identity import ResolvedIdentity, TransportProtocol
+from src.core.resolved_identity import PublicIdentity, TransportProtocol
 from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
 from src.core.tool_error_logging import record_boundary_error
 from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
@@ -143,7 +142,7 @@ async def _run(impl: Callable[..., Any], /, **kwargs: Any) -> Any:
     return await result if inspect.isawaitable(result) else result
 
 
-def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[str, str, str | None, str] | None:
+def _keyed_scope(req: BuyerRequest, identity: PublicIdentity) -> tuple[str, str, str | None, str] | None:
     """``(tenant_id, principal_id, account_id, idempotency_key)`` when this request is cacheable.
 
     None whenever any part is absent: a request whose schema declares no key, one carrying
@@ -152,11 +151,13 @@ def _keyed_scope(req: BuyerRequest, identity: ResolvedIdentity | None) -> tuple[
     every request model is the pinned schema and nothing else.
     """
     key = req.get_idempotency_key()
-    if not key or identity is None:
+    if not key:
         return None
-    if identity.tenant_id is None or identity.principal_id is None:
+    scope = identity.replay_scope()
+    if scope is None:
         return None
-    return identity.tenant_id, identity.principal_id, identity.account_id, key
+    tenant_id, principal_id, account_id = scope
+    return tenant_id, principal_id, account_id, key
 
 
 def failure_response(
@@ -165,7 +166,7 @@ def failure_response(
     exc: Exception,
     *,
     echo: ContextObject | None = None,
-    identity: ResolvedIdentity | None = None,
+    identity: PublicIdentity | None = None,
 ) -> AdcpErrorResponse:
     """Record one failure and build the response that answers it. THE one failure builder.
 
@@ -189,7 +190,7 @@ def _failed(
     tool_name: str,
     exc: Exception,
     echo: ContextObject | None,
-    identity: ResolvedIdentity | None = None,
+    identity: PublicIdentity | None = None,
 ) -> NoReturn:
     """Leave the boundary with the failure response for ``exc``, scoped to the caller once resolved."""
     raise AdcpFailure(failure_response(protocol, tool_name, exc, echo=echo, identity=identity)) from exc
@@ -223,7 +224,7 @@ def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> 
 async def serve(
     tool_name: str,
     raw: Any,
-    credential: AuthContext,
+    headers: Mapping[str, str],
     protocol: TransportProtocol,
 ) -> AdcpResponse:
     """Answer one buyer payload. THE transport entry.
@@ -233,35 +234,30 @@ async def serve(
     ONE call in ONE ``try``. ``invoke_tool`` is the entry for a caller that already holds a
     validated request.
     """
-    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), credential, protocol)
+    return await invoke_tool(tool_name, validated_request(tool_name, raw, protocol), headers, protocol)
 
 
 async def invoke_tool(
     tool_name: str,
     req: BuyerRequest,
-    credential: AuthContext,
+    headers: Mapping[str, str],
     protocol: TransportProtocol,
 ) -> AdcpResponse:
-    """Run the registry's tool named ``tool_name``, for the caller holding *credential*.
+    """Run the registry's tool named ``tool_name``, for the caller the request *headers* present.
 
     The form every transport calls. A transport names the TOOL and hands over the request it
-    validated plus the credential the request arrived with; which function runs, and whether
-    that credential must verify, are the registry's answers -- not the caller's.
+    validated plus the headers the request arrived with; which function runs, and whether the
+    credential in those headers must verify, are the registry's answers -- not the caller's.
 
-    IT TAKES A CREDENTIAL, NOT AN IDENTITY. Whether that credential must verify is the
-    registry row's declaration, read here, so no transport decides it. ``protocol`` labels the
-    resulting identity for the observability record and decides nothing.
+    IT TAKES HEADERS, NOT AN IDENTITY. Nothing here reads them: the resolver is their one
+    reader, and it is handed the registry row's declaration of whether the credential must
+    verify, so no transport decides it. ``protocol`` labels the observability record a
+    failure writes and decides nothing; the identity does not carry it.
     """
     from src.core.resolved_identity import _resolve_identity
-    from src.core.testing_hooks import AdCPTestContext
     from src.core.tools.registry import TOOLS
 
     spec = TOOLS[tool_name]
-
-    # The testing context rides the same headers: thirteen readers under src/core/tools branch
-    # on ``identity.testing_context`` for dry-run and delivery simulation, so a boundary that
-    # resolves the caller resolves the WHOLE caller.
-    testing_context = AdCPTestContext.from_headers(dict(credential.headers))
 
     # CAPTURED at entry and stamped on the way out, and that is the whole mechanism. The
     # buyer's ``context`` is opaque data this seller carries and returns: validation does not
@@ -270,17 +266,27 @@ async def invoke_tool(
     # IS what arrived. Nothing between here and the stamp may read it, pass it, or set it.
     echo = req.get_context()
 
-    # In a worker thread because ``_resolve_identity`` is SYNC and hits the database twice
-    # (tenant detection, then the principal lookup); psycopg2 has no async path. Its own block,
-    # so ``identity`` is bound wherever it is read below.
+    # In a worker thread because ``_resolve_identity`` is SYNC and hits the database
+    # (tenant detection, the principal lookup, and the account lookup when the request names
+    # one); psycopg2 has no async path. Its own block, so ``identity`` is bound wherever it is
+    # read below.
+    #
+    # Naming an account is itself a claim that needs a credential: a request that carries
+    # ``account`` requires a valid token even on a public tool, so the resolver refuses an
+    # anonymous caller (AUTH_MISSING / AUTH_INVALID) before the access-scoped account lookup
+    # could run for it (#1417). The account is resolved iff the DTO declares the field and the
+    # request carries it, and the resolver builds the identity once with it inside. The flag
+    # is computed here, from the row, and the resolver's overloads type the result; the
+    # tenant-dependent half of the row's policy (``requires_credential(tenant)``) is handed
+    # over for the resolver to ask once it holds the tenant.
+    account_ref = req.get_account()
     try:
         identity = await asyncio.to_thread(
             _resolve_identity,
-            headers=dict(credential.headers),
-            auth_token=credential.auth_token,
-            require_valid_token=spec.requires_credential(),
-            protocol=protocol,
-            testing_context=testing_context,
+            headers,
+            require_valid_token=spec.requires_credential() or account_ref is not None,
+            account_ref=account_ref,
+            credential_required_for=spec.requires_credential,
         )
     except Exception as exc:
         _failed(protocol, tool_name, exc, echo)
@@ -301,7 +307,7 @@ async def _invoke_stamped(
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: PublicIdentity,
 ) -> AdcpResponse:
     """Run ``tool_name`` for a request that arrived over a transport.
 
@@ -336,7 +342,10 @@ def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) 
     the caller being served, rather than the context of whichever request filled the cache.
     """
     response.adcp_version = SERVED_ADCP_VERSION
-    response.context = echo
+    # ``object.__setattr__``, not assignment: ``AdcpResponse.__setattr__`` refuses ``context``
+    # so that no code outside this function can write it. This is the one bypass, and it is
+    # the reason the refusal can be unconditional everywhere else.
+    object.__setattr__(response, "context", echo)
     return response
 
 
@@ -344,15 +353,13 @@ async def _invoke(
     tool_name: str,
     impl: Callable[..., Any],
     req: BuyerRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: PublicIdentity,
 ) -> AdcpResponse:
-    """``invoke`` without the envelope stamp: resolve the account, honour the key, run it."""
-    account = req.get_account()
-    if account is not None and identity is not None:
-        from src.core.transport_helpers import enrich_identity_with_account
+    """``invoke`` without the envelope stamp: honour the key, run it.
 
-        identity = enrich_identity_with_account(identity, account)
-
+    The account the request named is already ON the identity: the resolver built it with
+    the account inside, before this ran, so the replay scope below reads it off the type.
+    """
     scope = _keyed_scope(req, identity)
     if scope is None:
         return await _run(impl, req=req, identity=identity)

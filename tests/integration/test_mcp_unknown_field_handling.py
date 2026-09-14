@@ -23,8 +23,8 @@ def _create_tenant_with_product():
     """Create minimal tenant with a product inside an active env session.
 
     Includes a Principal row matching ProductEnv's default principal_id
-    ("test_principal") — the harness's identity_for() now nulls principal_id
-    when no matching DB row exists, so a real row is
+    ("test_principal") — the harness's credential() reads its token from that
+    row and presents none when it is absent, so a real row is
     required for these calls to actually authenticate rather than fall
     through to the tenant's default require_auth brand_manifest_policy gate.
     """

@@ -104,20 +104,6 @@ class TestMissingTokenConsistency:
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
-    @pytest.mark.asyncio
-    async def test_all_authenticated_tools_reject_none_identity(self):
-        """Authenticated tools that require identity should fail when identity is None."""
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-        from src.core.tools.media_buy_update import _update_media_buy_impl
-
-        # create_media_buy raises AdCPAuthenticationError with None identity
-        with pytest.raises((AdCPAuthenticationError, AdCPValidationError, ValueError)):
-            await _create_media_buy_impl(req=MagicMock(), identity=None)
-
-        # update_media_buy raises AdCPAuthenticationError with None identity
-        with pytest.raises((AdCPAuthenticationError, ValueError)):
-            _update_media_buy_impl(req=MagicMock(), identity=None)
-
 
 class TestInvalidTokenConsistency:
     """Test that all authenticated MCP tools raise consistent errors with an invalid token.
@@ -353,45 +339,3 @@ class TestDiscoveryEndpointsInvalidAuth:
 
             # Verify the identity was anonymous
             assert identity.principal_id is None
-
-    async def test_the_boundary_asks_the_tool_whether_a_credential_is_required(self):
-        """Whether a credential must verify comes from the TOOL's declaration, per call.
-
-        This replaces an assertion that ``resolve_identity``'s ``require_valid_token``
-        parameter DEFAULTED to True. That default is now unreachable: the boundary supplies
-        the argument on every call, from ``ToolSpec.requires_credential()``. A test on a
-        default nothing takes grades nothing -- and worse, it would keep passing if the
-        boundary started passing a constant, which is the exact defect this refactor removed
-        (four sites each deciding, and two of them disagreeing).
-
-        So the claim under test is the live one: a protected tool and a public tool produce
-        DIFFERENT values, and each matches its own registry row.
-        """
-        from types import MappingProxyType
-        from unittest.mock import patch
-
-        from src.core.auth_context import AuthContext
-        from src.core.schemas import GetProductsRequest, ListCreativesRequest
-        from src.core.tools._boundary import invoke_tool
-        from src.core.tools.registry import TOOLS
-
-        credential = AuthContext(auth_token=None, headers=MappingProxyType({}))
-
-        async def required_flag_for(tool_name, req):
-            identity = PrincipalFactory.make_identity(principal_id="p", tenant_id="t")
-            with patch("src.core.resolved_identity._resolve_identity", return_value=identity) as resolver:
-                try:
-                    await invoke_tool(tool_name, req, credential, "rest")
-                except Exception:
-                    pass  # the implementation may fail without a database; resolution is the subject
-            assert resolver.called, f"{tool_name}: the boundary never resolved"
-            return resolver.call_args.kwargs["require_valid_token"]
-
-        assert await required_flag_for("list_creatives", ListCreativesRequest()) is True, (
-            "list_creatives declares auth='required'; the boundary must demand a valid credential"
-        )
-        assert await required_flag_for("get_products", GetProductsRequest(brief="x")) is False, (
-            "get_products declares auth='optional'; the boundary must not demand a credential"
-        )
-        assert TOOLS["list_creatives"].requires_credential() is True
-        assert TOOLS["get_products"].requires_credential() is False

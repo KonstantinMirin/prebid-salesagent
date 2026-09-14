@@ -15,7 +15,7 @@ from typing import Any
 
 from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
 from adcp.types import FormatId as LibraryFormatId
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
@@ -32,13 +32,13 @@ FormatRef = str | LibraryFormatId | Mapping[str, Any]
 def _as_ref(value: FormatRef) -> Any:
     """Normalize a reference to the shape the SDK predicates accept.
 
-    A Pydantic model is dumped to its wire dict: the SDK reads (agent_url, id)
-    off a mapping, and dumping is also what strips the LOCAL SUBCLASS identity
-    that made ``==`` fail in the first place — the value survives, the class
-    does not, which is the whole point.
+    A local ``FormatId`` subclass is rebuilt as the LIBRARY type from its attributes:
+    pydantic model equality is by class, so a subclass instance never compares equal to
+    the library instance the SDK builds, and the predicate would report every format
+    as different. The value survives, the class does not, which is the whole point.
     """
-    if hasattr(value, "model_dump"):
-        return value.model_dump(mode="json", exclude_none=True)
+    if isinstance(value, BaseModel):
+        return LibraryFormatId.model_validate(value, from_attributes=True)
     return value
 
 
@@ -148,17 +148,19 @@ def format_identity_or_none(entry: Any) -> tuple[str, str] | None:
     canonical form before two references may be treated as the same, and
     :func:`format_identity` is the one place that applies it.
     """
-    # A model is dumped to its wire dict so the absent-field handling below applies
-    # uniformly, whatever shape the reference arrived in.
-    ref: Any = _as_ref(entry) if not isinstance(entry, (str, Mapping)) else entry
-    if isinstance(ref, Mapping):
-        ref = {k: v for k, v in ref.items() if v is not None}
-        if "id" not in ref and "format_id" in ref:
-            ref["id"] = ref["format_id"]
-        ref.pop("format_id", None)
-        if "id" not in ref:
-            return None
+    # The absent-field and legacy-key handling applies to the persisted dict
+    # shape only. A model already carries a validated ``agent_url`` and ``id`` (both
+    # required on the library type), so it is handed to ``_as_ref`` as a model and
+    # never dumped here — business logic does not serialize a model to inspect it.
     try:
+        ref: Any = entry if isinstance(entry, (str, Mapping)) else _as_ref(entry)
+        if isinstance(ref, Mapping):
+            ref = {k: v for k, v in ref.items() if v is not None}
+            if "id" not in ref and "format_id" in ref:
+                ref["id"] = ref["format_id"]
+            ref.pop("format_id", None)
+            if "id" not in ref:
+                return None
         return format_identity(ref)
     except (ValidationError, ValueError, TypeError, AttributeError):
         logger.warning("Unusable stored format reference, ignored: %r", entry)

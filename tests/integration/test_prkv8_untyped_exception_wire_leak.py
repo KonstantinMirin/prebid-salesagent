@@ -33,9 +33,10 @@ class TestInternalErrorCarriesTheEnvelope:
     failure is the boundary's ``AdcpErrorResponse``, which ``_dispatch_skill`` serializes with
     ``to_wire``; tests/unit/test_error_envelope.py grades that body directly.
 
-    The test raises while the handler reads the credential off the call context, which runs
-    inside that outer try/except before skill dispatch. Nothing raised inside dispatch can
-    reach it: ``serve`` answers every tool failure as a response.
+    The fault is a call context built from no request: the handler subscripts
+    ``state["headers"]`` inside that outer try/except before skill dispatch, and a context
+    without them raises there. Nothing raised inside dispatch can reach it: ``serve``
+    answers every tool failure as a response.
     """
 
     def test_internal_error_carries_the_envelope_in_data(self, integration_db):
@@ -48,7 +49,6 @@ class TestInternalErrorCarriesTheEnvelope:
         from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
         handler = AdCPRequestHandler()
-        handler._credential_of = lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom"))  # type: ignore[method-assign]
 
         message = create_a2a_message_with_skill(skill_name="get_products", parameters={"brief": "video ads"})
         params = SendMessageRequest(message=message)

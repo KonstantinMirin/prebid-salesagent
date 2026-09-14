@@ -4,7 +4,6 @@ This package contains modular helper functions extracted from main.py for better
 - adapter_helpers: Adapter instance creation and configuration
 - creative_helpers: Creative format parsing and asset conversion
 - activity_helpers: Tool activity logging and tracking
-- context_helpers: Context extraction for authentication and tenant setup
 - enum_helpers: Re-exported from src.core.enum_helpers (zero project imports, safe from circular deps)
 """
 

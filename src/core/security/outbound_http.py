@@ -148,7 +148,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -180,11 +179,10 @@ from src.core.security.egress.response import OutboundResult
 
 logger = logging.getLogger(__name__)
 
-# Escape hatch. Defaults OFF — a guarded posture is the default, and an
-# operator has to say so out loud to leave it. The scheme requirement
-# (https-only) has NO escape hatch (GH #1757): the outbound origins
-# that used to need one are all TLS-fronted now (GH #1757).
-_ALLOW_PRIVATE_ENV = "ADCP_OUTBOUND_ALLOW_PRIVATE"
+# Escape hatch: ``limits.adcp_outbound_allow_private`` on the settings (ADCP_OUTBOUND_ALLOW_PRIVATE).
+# Defaults OFF — a guarded posture is the default, and an operator has to say so out
+# loud to leave it. The scheme requirement (https-only) has NO escape hatch (GH #1757):
+# the outbound origins that used to need one are all TLS-fronted now (GH #1757).
 
 #: A query string, as the seam accepts it. Scalars only: httpx would also take a
 #: sequence value or its own ``_httpx.QueryParams``, and admitting either would
@@ -417,13 +415,11 @@ def _find_wrapped[Wrapped: BaseException](
     return None
 
 
-def _env_flag(name: str) -> bool:
-    """Read a boolean env flag the way the rest of the repo does.
+def _allow_private() -> bool:
+    """The operator's escape hatch for private destinations, read off the settings."""
+    from src.core.config import get_settings
 
-    Read at CALL time, never at import: tests flip these with
-    ``monkeypatch.setenv`` and an import-time read would freeze the first value.
-    """
-    return os.environ.get(name, "").lower() == "true"
+    return get_settings().limits.adcp_outbound_allow_private
 
 
 def refusal_field(provenance: UrlProvenance | None) -> str | None:
@@ -727,7 +723,7 @@ def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
     point 6).
     """
     field = _checked_field(provenance, url)
-    EgressPolicy.resolve_for_dial(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
+    EgressPolicy.resolve_for_dial(url, field=field, allow_private=_allow_private())
 
 
 def guarded_async_client(
@@ -757,7 +753,7 @@ def guarded_async_client(
     verdict :func:`validate_url` and :func:`asend` reach, because all three go
     through the same policy method.
     """
-    transport = _async_transport(url, field=None, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
+    transport = _async_transport(url, field=None, allow_private=_allow_private())
     kwargs: dict[str, Any] = {}
     if headers is not None:
         kwargs["headers"] = headers
@@ -851,7 +847,7 @@ def send(
     site that only logs can catch that one type.
     """
     field = _checked_field(provenance, url)
-    transport = _sync_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
+    transport = _sync_transport(url, field=field, allow_private=_allow_private())
 
     started = time.monotonic()
     attempts = Attempts(max_attempts)
@@ -912,7 +908,7 @@ async def asend(
     difference appearing here means a policy decision has been written twice.
     """
     field = _checked_field(provenance, url)
-    transport = _async_transport(url, field=field, allow_private=_env_flag(_ALLOW_PRIVATE_ENV))
+    transport = _async_transport(url, field=field, allow_private=_allow_private())
 
     started = time.monotonic()
     attempts = Attempts(max_attempts)

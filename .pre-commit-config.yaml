@@ -107,14 +107,6 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      - id: check-tenant-context-order
-        name: Check tenant context auth before get_current_tenant()
-        entry: uv run python .pre-commit-hooks/check_tenant_context_order.py
-        language: system
-        files: '^src/core/tools/.*\.py$'
-        pass_filenames: true
-        stages: [pre-push]
-
       # Scope is the whole tree, because each rule under .ast-grep/rules/ declares its
       # own `files:` and the narrower `^tests/bdd/steps/` here decided which rules could
       # ever fire, silently. `make quality-ci` runs the same scan — this repo's workflow

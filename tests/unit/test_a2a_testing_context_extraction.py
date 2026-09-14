@@ -1,78 +1,10 @@
-"""Regression tests: test headers reach the implementation as a testing context.
+"""AdCPTestContext parsing: from_headers, and the UTC-awareness regression from #1545.
 
-Originally A2A-only, because A2A was the transport that dropped them: MCP extracted a
-testing context from headers and A2A had no equivalent path, so X-Dry-Run and
-X-Test-Session-ID sent to an A2A endpoint were silently ignored
-(https://github.com/prebid/salesagent/pull/1066).
-
-The extraction now happens once, in ``src/core/tools/_boundary.invoke_tool``, so there is no
-per-transport path left to differ and the top class is written against the boundary and
-parametrized over all three transports. That is not a weakening -- it is the same claim with
-the per-transport hole closed, and it keeps grading a behaviour that has already regressed
-once SINCE the collapse: the boundary briefly stopped forwarding testing_context at all,
-thirteen readers took the None branch, nothing failed, and review caught it rather than a test
-(fixed in 1e03f3671). A dropped testing context is silent by construction -- the field is
-Optional and every reader has an else branch -- so it needs a test asserting the value ARRIVED.
-
-The classes below it grade AdCPTestContext itself (parsing, and the UTC-awareness regression
-from #1545) and are untouched by any of that.
+This file used to also grade that the boundary hands the testing context to the
+implementation on every transport. That is transport behaviour and is not graded by a unit
+test any more; it is a BDD gap (see the step-1 report) until a scenario presents
+``x-dry-run`` / ``x-test-session-id`` on the wire and reads the effect off the response.
 """
-
-from types import MappingProxyType
-from unittest.mock import patch
-
-import pytest
-
-from src.core.auth_context import AuthContext
-from src.core.schemas import GetProductsRequest
-from src.core.tools._boundary import invoke_tool
-from tests.factories.principal import PrincipalFactory
-
-
-def _credential(**headers: str) -> AuthContext:
-    """The AuthContext UnifiedAuthMiddleware parks on ASGI scope state, built by hand."""
-    # ast-grep-ignore: test-credential-header-single-producer - lowercase spelling is the subject: production reads headers case-insensitively
-    base = {"authorization": "Bearer test-token", "x-adcp-tenant": "test-tenant"}
-    return AuthContext(auth_token="test-token", headers=MappingProxyType({**base, **headers}))
-
-
-async def _testing_context_reaching_the_resolver(credential: AuthContext, protocol: str):
-    """Call the boundary and return the testing_context it handed the resolver."""
-    identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test-tenant", protocol=protocol)
-    with patch("src.core.resolved_identity._resolve_identity", return_value=identity) as resolver:
-        try:
-            await invoke_tool("get_products", GetProductsRequest(brief="x"), credential, protocol)
-        except Exception:
-            # The IMPLEMENTATION may fail without a database. The resolver call happens
-            # before it, and the resolver call is the subject.
-            pass
-    assert resolver.called, "invoke_tool did not resolve identity"
-    return resolver.call_args.kwargs.get("testing_context")
-
-
-@pytest.mark.parametrize("protocol", ["a2a", "mcp", "rest"])
-class TestTestingContextReachesTheBoundary:
-    """Every transport, one extraction. The parametrization IS the anti-regression."""
-
-    async def test_dry_run_header_becomes_a_testing_context(self, protocol):
-        ctx = await _testing_context_reaching_the_resolver(_credential(**{"x-dry-run": "true"}), protocol)
-        assert ctx is not None, f"{protocol}: X-Dry-Run header did not reach the resolver as a testing context"
-        assert ctx.dry_run is True, f"{protocol}: X-Dry-Run: true must set testing_context.dry_run=True"
-
-    async def test_test_session_id_becomes_a_testing_context(self, protocol):
-        ctx = await _testing_context_reaching_the_resolver(
-            _credential(**{"x-test-session-id": "session-abc"}), protocol
-        )
-        assert ctx is not None, f"{protocol}: X-Test-Session-ID did not reach the resolver"
-        assert ctx.test_session_id == "session-abc", (
-            f"{protocol}: X-Test-Session-ID must arrive verbatim, got {ctx.test_session_id!r}"
-        )
-
-    async def test_no_test_headers_yields_no_testing_context(self, protocol):
-        ctx = await _testing_context_reaching_the_resolver(_credential(), protocol)
-        assert ctx is None or (ctx.dry_run is False and ctx.test_session_id is None), (
-            f"{protocol}: a request carrying no test headers must not acquire a populated testing context, got {ctx!r}"
-        )
 
 
 class TestAdCPTestContextFromHeaders:

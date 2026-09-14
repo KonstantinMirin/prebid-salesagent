@@ -30,7 +30,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         ...     stmt = select(Tenant).filter_by(tenant_id="example")
         ...     tenant = session.scalars(stmt).first()
         ...     tenant_dict = serialize_tenant_to_dict(tenant)
-        ...     set_current_tenant(tenant_dict)
     """
     return {
         "tenant_id": tenant.tenant_id,
@@ -42,7 +41,6 @@ def serialize_tenant_to_dict(tenant: Tenant) -> dict[str, Any]:
         "authorized_emails": safe_json_loads(tenant.authorized_emails, []),
         "authorized_domains": safe_json_loads(tenant.authorized_domains, []),
         "slack_webhook_url": tenant.slack_webhook_url,
-        "admin_token": tenant.admin_token,
         "auto_approve_formats": safe_json_loads(tenant.auto_approve_format_ids, []),
         "human_review_required": tenant.human_review_required,
         "slack_audit_webhook_url": tenant.slack_audit_webhook_url,

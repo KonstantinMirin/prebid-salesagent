@@ -41,12 +41,11 @@ coercion) that happens to live in this file.
 
 from __future__ import annotations
 
-import os
-from typing import Any
 from urllib.parse import urlparse
 
-from adcp.types import ContextObject, TaskType
+from adcp.types import TaskType
 
+from src.core.config import get_settings
 from src.core.exceptions import AdCPBlockedUrlError
 from src.core.security.egress.policy import EgressPolicy
 
@@ -61,8 +60,8 @@ UNPARSEABLE_WEBHOOK_URL_FOR_LOG = "<unparseable-url>"
 
 
 def _adcp_testing() -> bool:
-    """True when ADCP_TESTING allows localhost/HTTP for capture servers."""
-    return os.environ.get("ADCP_TESTING") == "true"
+    """True when a buyer webhook may target localhost over plain HTTP (a capture server)."""
+    return get_settings().loopback_webhooks_allowed
 
 
 def validate_webhook_task_type(task_type: str, fallback: str = WEBHOOK_TASK_TYPE_FALLBACK) -> str:
@@ -133,7 +132,6 @@ def reject_unsafe_webhook_registration_url(
     url: str | None,
     *,
     field: str,
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> None:
     """Raise AdCPBlockedUrlError when ``url`` fails the registration SSRF gate.
 
@@ -162,10 +160,7 @@ def reject_unsafe_webhook_registration_url(
         #
         # No suggestion= either: it is a read-only property off CODE_TABLE keyed by
         # the error code, never a per-raise-site or per-class override (ADR-010).
-        raise AdCPBlockedUrlError(
-            field=field,
-            context=context,
-        )
+        raise AdCPBlockedUrlError(field=field)
 
 
 class WebhookURLValidator:

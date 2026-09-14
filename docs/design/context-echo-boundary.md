@@ -98,6 +98,28 @@ class AdcpFailure(Exception):
 | `_serialize_context` | serialized a context off an exception |
 | per-transport `build_two_layer_error_envelope(exc)` calls in `app.py`, `tool_error_logging.py`, `adcp_a2a_server.py` | each transport assembled its own error body |
 
+## Refused after the deletes
+
+The deleted plumbing cannot grow back, because each road it took is refused:
+
+- **The type**: `ruff-boundary.toml` bans importing `adcp.types.ContextObject` outside
+  `src/core/schemas/` (which declares the field) and `src/core/tools/_boundary.py` (which
+  reads and writes it).
+- **The call site**: `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` fails
+  any `context=` keyword argument under `src/` and `scripts/` outside the boundary module.
+  Nothing is excluded but the boundary module: the one pydantic `model_dump(context=...)`
+  serializer switch the tree had was dead and is deleted. `context_id` is a different field
+  and never matches.
+- **The object**: `AdcpResponse` refuses a non-None `context` on construction (an `after`
+  validator) and on assignment (`__setattr__`). `_served` writes it through
+  `object.__setattr__`, the one bypass, so a dict-splat that slips past the rule still fails.
+- **The error**: `AdCPSalesAgentError.__init__` has no `context` parameter, so an error
+  cannot carry one; the boundary echoes onto the failure it builds from the error.
+
+Each refusal is proven by breaking it: `tests/unit/test_ast_grep_identity_rules.py`,
+`tests/unit/test_ruff_boundary_bans.py` and
+`tests/unit/test_response_context_is_boundary_owned.py`.
+
 ## Kept from the superseded lane
 
 `validated_request(tool_name, raw, protocol)` stays: a schema rejection has no `req`, so the

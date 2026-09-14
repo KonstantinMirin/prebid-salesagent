@@ -11,8 +11,6 @@ Utility scripts for setup, deployment, and operations.
 
 ### `/ops/` - Operations
 - `migrate.py` - Run database migrations
-- `manage_auth.py` - Manage authentication tokens
-- `get_tokens.py` - Retrieve access tokens
 - `check_tenants.py` - Check tenant health
 - `sync_all_tenants.py` - Sync all GAM tenants (cron job)
 - `aggregate_format_metrics.py` - Aggregate format metrics from GAM

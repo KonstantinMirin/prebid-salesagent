@@ -19,11 +19,14 @@ not a description of one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Literal, Protocol, get_type_hints
 
+from pydantic import BaseModel
+
+from src.core.resolved_identity import AccountIdentity, PublicIdentity, ResolvedIdentity
 from src.core.schemas import (
     CompleteTaskRequest,
     CreateMediaBuyRequest,
@@ -40,7 +43,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.schemas._base import BuyerRequest
+from src.core.schemas._base import AdcpResponse, BuyerRequest
 from src.core.tools.accounts import _list_accounts_impl, _sync_accounts_impl
 from src.core.tools.capabilities import _get_adcp_capabilities_impl
 from src.core.tools.creative_formats import _list_creative_formats_impl
@@ -52,6 +55,9 @@ from src.core.tools.media_buy_list import _get_media_buys_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
 from src.core.tools.products import _get_products_impl
 from src.core.tools.task_management import _complete_task_impl, _get_task_status_impl, _list_tasks_impl
+
+if TYPE_CHECKING:
+    from src.core.tenant_context import TenantContext
 
 
 @dataclass(frozen=True)
@@ -76,32 +82,102 @@ class RestBinding:
     path_fields: frozenset[str] = frozenset()
 
 
-@dataclass(frozen=True)
-class ToolSpec:
-    """One tool's wiring: what runs it, what shape it takes, and where it is reachable."""
+class ToolImpl[Req: BuyerRequest, Id: PublicIdentity](Protocol):
+    """How the boundary calls an implementation: ``impl(req=<DTO>, identity=<identity>)``.
 
-    dto: type[BuyerRequest]
-    impl: Callable[..., Any]
+    Typing ``ToolSpec.impl`` with this is what makes mypy grade every row: an implementation
+    whose ``req`` is not the row's ``dto`` (or a supertype of it), whose ``identity`` is not
+    one of the three identity types, or which declares a third parameter without a default,
+    fails to type-check at the row that names it. Sync and async implementations both
+    satisfy it -- a coroutine is an ``Awaitable`` of the response -- and the boundary awaits
+    whichever comes back.
+
+    ``Id`` is the identity type the implementation declared -- ``ResolvedIdentity`` for a
+    protected tool, ``AccountIdentity`` for one whose DTO requires an account,
+    ``PublicIdentity`` for a public one -- and it is the row's whole credential policy:
+    see ``ToolSpec.requires_credential``.
+
+    A protocol accepts a callable that takes MORE than it asks for, so two things it cannot
+    pin are pinned by ``.ast-grep/rules/impl-signature-is-request-and-identity.yml``:
+    ``identity`` declared Optional or defaulted, and an extra defaulted parameter.
+    """
+
+    def __call__(self, *, req: Req, identity: Id) -> AdcpResponse | Awaitable[AdcpResponse]: ...
+
+
+_IDENTITY_TYPES: tuple[type[PublicIdentity], ...] = (PublicIdentity, ResolvedIdentity, AccountIdentity)
+
+
+def _declared_identity_type(impl: object) -> type[PublicIdentity]:
+    """The class an implementation annotates its ``identity`` parameter with."""
+    declared = get_type_hints(impl)["identity"]
+    if declared not in _IDENTITY_TYPES:
+        raise TypeError(f"{impl!r} declares identity: {declared!r}; expected one of {_IDENTITY_TYPES}")
+    return declared
+
+
+@dataclass(frozen=True)
+class ToolSpec[Req: BuyerRequest, Id: PublicIdentity]:
+    """One tool's wiring: what runs it, what shape it takes, and where it is reachable.
+
+    Generic in the request so that ``dto`` and ``impl`` are checked against EACH OTHER: the
+    DTO the transports validate into is the one the implementation is typed to receive.
+    Generic in the identity for the same reason: the type the resolver hands over is the
+    type the implementation declared, and mypy checks the two at the row.
+    """
+
+    dto: type[Req]
+    impl: ToolImpl[Req, Id]
     rest: RestBinding | None
     a2a: bool = True
-    #: Whether a request reaches the implementation without an authenticated caller. A
-    #: property of the TOOL, not of a transport: it cannot be true that a tool needs a
-    #: caller over REST and not over MCP.
-    #:
-    #: This is the DECLARATION, written once per row. Ask about it through
-    #: ``requires_credential()`` -- never by comparing it -- for the reason that method
-    #: documents.
-    auth: Literal["required", "optional"] = "required"
 
-    def requires_credential(self) -> bool:
+    def __post_init__(self) -> None:
+        """Refuse, at load, an identity annotation that disagrees with the DTO about the account.
+
+        Whether the boundary resolves an account is DERIVED from the DTO: it resolves one
+        iff the DTO declares ``account`` and the request carries it, so the DTO alone
+        determines the identity type. Both mismatches are refused:
+
+        - ``identity: AccountIdentity`` on a DTO whose ``account`` is optional or absent
+          asserts an account that is not always there;
+        - ``identity: ResolvedIdentity`` on a DTO that REQUIRES ``account`` declares an
+          Optional the resolver never leaves empty, so the tool would be written to narrow
+          it -- the re-check this whole design removes.
+        """
+        declared = _declared_identity_type(self.impl)
+        claims_account = declared is AccountIdentity
+        if claims_account != self.requires_account():
+            expected = "AccountIdentity" if self.requires_account() else "ResolvedIdentity"
+            raise TypeError(
+                f"{self.impl!r} declares identity: {declared.__name__} but {self.dto.__name__} "
+                f"{'requires' if self.requires_account() else 'does not require'} account; annotate {expected}"
+            )
+
+    def requires_account(self) -> bool:
+        """Whether every request to this tool names an account: the DTO declares it required."""
+        if not issubclass(self.dto, BaseModel):
+            raise TypeError(f"{self.dto!r} is not a pydantic model")
+        field = self.dto.model_fields.get("account")
+        return field is not None and field.is_required()
+
+    def requires_credential(self, tenant: TenantContext | None = None) -> bool:
         """Whether a caller must present a credential that resolves to a principal.
 
-        THE question, asked one way. Consumers used to compare ``auth`` directly and drifted
-        into three spellings of the same test -- ``== "required"``, ``== "optional"`` and
-        ``!= "optional"`` -- across five sites. Three spellings is why a hand-written audit
-        of "who decides?" found four of them and missed the fifth
-        (``src/routes/api_v1.py``), and why the census that did find all five had to walk the
-        AST instead of grepping. One name is greppable, and cannot be spelled two ways.
+        DERIVED, never declared on the row. Two sources, both read here:
+
+        - the implementation's identity annotation: ``ResolvedIdentity`` (or its
+          ``AccountIdentity`` subclass) needs a caller, ``PublicIdentity`` serves anybody;
+        - the SELLER's policy, when a ``tenant`` is given: a DTO that declares ``brand`` on
+          a tenant whose ``brand_manifest_policy`` is ``require_auth`` needs a caller too
+          (BR-UC-001 INV-1). The resolver asks with the tenant once it has loaded the row,
+          so the refusal is minted there and nowhere else; without a tenant the answer is
+          the annotation's alone, which is what the boundary uses to type the result.
+
+        The row used to carry a required-or-optional ``auth`` literal beside the impl, which
+        is a second statement of the same fact -- and a tool whose row said required while
+        its body re-checked ``identity.principal`` for ``None`` was the symptom. Now the
+        annotation is the policy, the resolver builds the type the annotation names, and the
+        body reads the fields without a check.
 
         What it means is fixed by the pinned graded contract:
         ``dist/compliance/3.1.1/universal/security.yaml`` runs BOTH its unauth probe and its
@@ -110,7 +186,15 @@ class ToolSpec:
         protected tool refuses a missing credential (AUTH_MISSING) and a rejected one
         (AUTH_INVALID); a public tool refuses neither and does not check.
         """
-        return self.auth == "required"
+        if issubclass(_declared_identity_type(self.impl), ResolvedIdentity):
+            return True
+        return tenant is not None and self.accepts_brand() and tenant.brand_manifest_policy == "require_auth"
+
+    def accepts_brand(self) -> bool:
+        """Whether the DTO declares ``brand``: the field a seller's brand policy governs."""
+        if not issubclass(self.dto, BaseModel):
+            raise TypeError(f"{self.dto!r} is not a pydantic model")
+        return "brand" in self.dto.model_fields
 
 
 #: Every tool this seller implements, keyed by its AdCP tool name.
@@ -119,19 +203,16 @@ _TOOLS: dict[str, ToolSpec] = {
         dto=GetAdcpCapabilitiesRequest,
         impl=_get_adcp_capabilities_impl,
         rest=RestBinding("POST", "/capabilities"),
-        auth="optional",
     ),
     "get_products": ToolSpec(
         dto=GetProductsRequest,
         impl=_get_products_impl,
         rest=RestBinding("POST", "/products"),
-        auth="optional",
     ),
     "list_creative_formats": ToolSpec(
         dto=ListCreativeFormatsRequest,
         impl=_list_creative_formats_impl,
         rest=RestBinding("POST", "/creative-formats"),
-        auth="optional",
     ),
     "list_accounts": ToolSpec(
         dto=ListAccountsRequest,

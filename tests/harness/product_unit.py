@@ -14,7 +14,6 @@ Usage::
 
 Available mocks via env.mock:
     "uow"                  -- ProductUoW class mock
-    "principal"            -- get_principal_object mock
     "convert"              -- convert_product_model_to_schema mock (identity)
     "policy_service"       -- PolicyCheckService class mock
     "dynamic_variants"     -- generate_variants_for_brief AsyncMock
@@ -100,7 +99,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
     MODULE = "src.core.tools.products"
     EXTERNAL_PATCHES = {
         "uow": "src.core.database.repositories.uow.ProductUoW",
-        "principal": f"{MODULE}.get_principal_object",
         "convert": f"{MODULE}.convert_product_model_to_schema",
         "policy_service": f"{MODULE}.PolicyCheckService",
         "dynamic_variants": "src.services.dynamic_products.generate_variants_for_brief",
@@ -118,13 +116,6 @@ class ProductEnv(ProductMixin, BaseTestEnv):
         self._uow_instance: MagicMock | None = None
 
     def _configure_mocks(self) -> None:
-        # Principal: return a valid mock principal
-        self.mock["principal"].return_value = MagicMock(
-            principal_id=self._principal_id,
-            name="Test Principal",
-            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
-        )
-
         # UoW: context manager with product repository
         self._uow_instance = MagicMock()
         self._uow_instance.products = MagicMock()

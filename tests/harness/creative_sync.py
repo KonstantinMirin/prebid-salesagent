@@ -1,6 +1,6 @@
 """CreativeSyncEnv — integration test environment for _sync_creatives_impl.
 
-Patches: creative agent registry, run_async_in_sync_context, notifications, audit, config.
+Patches: creative agent registry, run_async_in_sync_context, notifications, audit; pins the Gemini key in the environment.
 Real: get_db_session, CreativeRepository, all validation/processing (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -46,15 +46,15 @@ Available mocks via env.mock:
     "slack_notifier"      -- get_slack_notifier (src.services.slack_notifier), the Slack sender
                              that function reaches: "was Slack sent" is read off this mock
     "audit_log"           -- _audit_log_sync (from _workflow)
-    "config"              -- get_config (lazy import in _processing.py)
     "ai_review_executor"  -- _ai_review_executor (lazy import in _processing.py, ai-powered branch)
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from adcp.types import AccountReference
@@ -155,7 +155,6 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # INV-2/INV-6 grade -- while nothing is posted anywhere.
         "slack_notifier": "src.services.slack_notifier.get_slack_notifier",
         "audit_log": "src.core.tools.creatives._sync._audit_log_sync",
-        "config": "src.core.config.get_config",
         # The ai-powered branch of _processing.py hands a job to a real
         # ThreadPoolExecutor that opens its OWN AdminCreativeUoW, COMMITS a review
         # verdict, and then fires Slack + the push webhook
@@ -235,10 +234,32 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         self.ai_review_commit_observations = {}
         self.mock[self._AI_REVIEW_PATCH_NAME].submit.side_effect = self._observe_at_ai_review_submit
 
-        # Config: default with no gemini key (safe for static creatives)
-        mock_config = MagicMock()
-        mock_config.gemini_api_key = None
-        self.mock["config"].return_value = mock_config
+        # Gemini key: default None (safe for static creatives). Production reads it off
+        # the typed settings, and a composition root rebuilds those from the ENVIRONMENT
+        # whenever it starts -- the REST leg imports src.app, which mounts the admin app,
+        # which calls load_settings() -- so pinning the settings object would be undone
+        # by the first REST dispatch. The environment is what gets pinned, and the
+        # settings are rebuilt from it on every change and again on release, which is
+        # the contract load_settings() documents for a test that changes the environment.
+        self._gemini_env = patch.dict(os.environ)
+        self._gemini_env.start()
+        self._guard("gemini_api_key_env", self._release_gemini_env)
+        self._apply_gemini_api_key(None)
+
+    def _apply_gemini_api_key(self, value: str | None) -> None:
+        from src.core.config import load_settings
+
+        if value is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = value
+        load_settings()
+
+    def _release_gemini_env(self) -> None:
+        from src.core.config import load_settings
+
+        self._gemini_env.stop()
+        load_settings()
 
     def _observe_at_ai_review_submit(self, *args: Any, **kwargs: Any) -> MagicMock:
         """Stand in for ``_ai_review_executor.submit`` and record DB visibility.
@@ -600,12 +621,14 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         # Configure run_async to return this format for list_all_formats
         self.set_run_async_result([mock_format])
 
-        # Configure build_creative return value
+        # Configure build_creative return value. The generated assets are spelled the
+        # way the pinned asset union spells them (core/assets/text-asset.json: asset_type
+        # + content), because production types the agent's output before storing it.
         default_build = {
             "status": "draft",
             "context_id": "ctx-test-123",
             "creative_output": {
-                "assets": {"headline": {"text": "Generated headline"}},
+                "assets": {"headline": {"asset_type": "text", "content": "Generated headline"}},
                 "output_format": {"url": "https://generated.example.com/creative.html"},
             },
         }
@@ -649,7 +672,9 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         unconfigured server state. It cannot be realized (the key belongs to another
         process's configuration), so it says so rather than pretending.
         """
-        self.mock["config"].return_value.gemini_api_key = value
+        # The environment is under the patch.dict started in _configure_mocks, so this
+        # write lives exactly as long as the env and is undone with it.
+        self._apply_gemini_api_key(value)
 
     def set_run_async_result(self, formats: list[Any]) -> None:
         """Configure run_async_in_sync_context to return *formats*.
@@ -733,8 +758,8 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
                     account_id = self.setup_default_account(
                         principal_id=getattr(identity, "principal_id", None)
                     ).account_id
-            # The TYPED reference, not a bare dict: the wrappers hand this straight to
-            # enrich_identity_with_account, which reads AccountReference.root. A dict gets
+            # The TYPED reference, not a bare dict: the resolver hands this straight to
+            # account_lookup.find_account, which reads AccountReference.root. A dict gets
             # as far as "'dict' object has no attribute 'root'". build_rest_body serialises
             # it for the wire itself.
             kwargs["account"] = AccountReference(root={"account_id": account_id})
@@ -750,10 +775,12 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         across a call signature, and would grade a shape production no longer has.
 
         The 'identity' kwarg defaults to self.identity. If 'account' is present it is
-        resolved via enrich_identity_with_account (the same call the boundary makes); an
-        absent one still reaches the REQUEST, because the schema requires the field, but is
-        never resolved -- so a scenario about an unknown tenant keeps reaching the auth
-        rejection it grades rather than an account-resolution error.
+        resolved through the resolver's own account read (``resolved_identity._load_account``)
+        for the identity's principal and the identity is rebuilt as an ``AccountIdentity``
+        with the account inside; an absent one still reaches the REQUEST, because the
+        schema requires the field, but is never resolved -- so a scenario about an unknown
+        tenant keeps reaching the auth rejection it grades rather than an
+        account-resolution error.
 
         This is the IN-PROCESS path, and it is the one production itself takes when
         ``create_media_buy`` uploads a package's inline creatives. It performs no idempotency
@@ -767,12 +794,16 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
 
         identity = kwargs.pop("identity")
 
-        # Handle account kwarg — resolve at boundary, same as the boundary does
+        # Handle account kwarg -- the resolver's own account read, so this path cannot drift
+        # from what a wire leg gets: one lookup, one conversion, the factory builds the type.
         account = kwargs.pop("account", None)
         if account is not None:
-            from src.core.transport_helpers import enrich_identity_with_account
+            from src.core.resolved_identity import _load_account
+            from tests.factories.principal import PrincipalFactory
 
-            identity = enrich_identity_with_account(identity, account)
+            identity = PrincipalFactory.make_account_identity(
+                identity, _load_account(account, identity.tenant_id, identity.principal)
+            )
 
         req = SyncCreativesRequest(
             # The schema REQUIRES account, and this path deliberately does not resolve one

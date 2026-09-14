@@ -198,10 +198,10 @@ def _become(env, principal_id: str) -> str:
     leaking build.
     """
     env.switch_principal(principal_id)
-    token = env.identity.auth_token
+    token = env.credential().get("Authorization")
     assert token, (
-        f"{principal_id} resolved no auth_token, so the dispatch would fall back to a "
-        "mocked identity instead of the real header -> token -> DB chain"
+        f"{principal_id} has no token in the database, so the dispatch would present no "
+        "credential instead of running the real header -> token -> DB chain"
     )
     return token
 

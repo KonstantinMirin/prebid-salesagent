@@ -2,8 +2,6 @@
 
 import json
 import logging
-import os
-import secrets
 
 import markdown
 from flask import Flask, request
@@ -38,6 +36,7 @@ from src.admin.blueprints.signals_agents import signals_agents_bp
 from src.admin.blueprints.tenants import tenants_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
+from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
@@ -104,14 +103,19 @@ class CustomProxyFix:
 
 def create_app(config=None):
     """Create and configure the Flask application."""
+    # The composition root: the environment is read here, once, and the app is
+    # composed from what it says.
+    settings = load_settings()
+    is_production = settings.runtime.is_production
+
     app = Flask(__name__, template_folder="../../templates", static_folder="../../static")
 
     # Configuration
-    app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
+    app.secret_key = settings.runtime.flask_secret_key
     app.logger.setLevel(logging.INFO)
 
     # Configure session cookies for EventSource compatibility
-    if os.environ.get("PRODUCTION") == "true":
+    if is_production:
         app.config["SESSION_COOKIE_SECURE"] = True  # Required for SameSite=None over HTTPS
         app.config["SESSION_COOKIE_HTTPONLY"] = False  # Allow EventSource to access cookies
         app.config["SESSION_COOKIE_SAMESITE"] = "None"  # Required for EventSource cross-origin requests
@@ -155,7 +159,7 @@ def create_app(config=None):
     app.jinja_env.filters["markdown"] = markdown_filter
 
     # Trust proxy headers in production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_production:
         app.config["PREFERRED_URL_SCHEME"] = "https"
         # Force external URLs to use HTTPS
         app.config["SERVER_NAME"] = None  # Let Flask detect from request
@@ -166,7 +170,7 @@ def create_app(config=None):
         app.config.update(config)
 
     # Apply proxy fixes for production
-    if os.environ.get("PRODUCTION") == "true":
+    if is_production:
         # Create a middleware to copy Fly.io headers to standard headers
         # Fly sends Fly-Forwarded-Proto but Werkzeug expects X-Forwarded-Proto
         class FlyHeadersMiddleware:
@@ -242,14 +246,14 @@ def create_app(config=None):
 
         # External domain detected - redirect to tenant subdomain
         logger.info(f"External domain /admin request detected: {apx_host} -> {request.path}")
-        tenant = get_tenant_by_virtual_host(apx_host)
-        if not tenant:
+        tenant_row = get_tenant_by_virtual_host(apx_host)
+        if not tenant_row:
             logger.warning(f"No tenant found for external domain: {apx_host}")
             return None  # Can't determine tenant, let normal routing handle it
 
-        tenant_subdomain = tenant.get("subdomain")
+        tenant_subdomain = tenant_row.get("subdomain")
         if not tenant_subdomain:
-            logger.warning(f"Tenant {tenant.get('tenant_id')} has no subdomain configured")
+            logger.warning(f"Tenant {tenant_row.get('tenant_id')} has no subdomain configured")
             return None  # No subdomain configured, let normal routing handle it
 
         # Build redirect URL to tenant subdomain
@@ -258,11 +262,11 @@ def create_app(config=None):
             f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
         )
 
-        if os.environ.get("PRODUCTION") == "true":
+        if is_production:
             redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
         else:
             # Local dev: Use localhost with port (unified FastAPI port)
-            port = os.environ.get("ADCP_SALES_PORT", "8080")
+            port = settings.runtime.adcp_sales_port
             redirect_url = f"http://{tenant_subdomain}.localhost:{port}{path_with_admin}"
 
         logger.info(f"Redirecting external domain {apx_host}/admin to subdomain: {redirect_url}")
@@ -409,7 +413,7 @@ def register_adapter_routes(app):
         # Note: We skip instantiation errors since routes are optional
         adapter_configs = [
             (GoogleAdManager, {"config": {}, "principal": None}),
-            (MockAdServer, {"principal": None, "dry_run": False}),
+            (MockAdServer, {"principal": None}),
         ]
 
         for adapter_class, kwargs in adapter_configs:

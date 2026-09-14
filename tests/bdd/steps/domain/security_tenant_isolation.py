@@ -26,11 +26,10 @@ These fail for different reasons and neither substitutes for the other.
 
 How a scenario addresses a tenant
 ---------------------------------
-No harness change was needed. ``BaseTestEnv._credential_headers`` builds the wire headers
-from whatever identity the dispatch is given -- ``Authorization: Bearer`` from
-``auth_token`` and ``x-adcp-tenant`` from ``tenant_id`` -- so handing
-``dispatch_request`` an identity carrying A's token and B's tenant id puts exactly that
-mismatch on the wire, and production resolves it for real: header -> ``_detect_tenant`` ->
+The credential a dispatch presents IS a token/tenant pair: ``credential_headers`` builds
+``Authorization: Bearer`` from the token and ``x-adcp-tenant`` from the tenant id, so
+handing ``dispatch_request`` A's token with B's tenant id puts exactly that mismatch on
+the wire, and production resolves it for real: header -> ``_detect_tenant`` ->
 tenant-scoped principal lookup. Nothing is stubbed, and the same request goes out on every
 transport the scenario is parametrized over.
 """
@@ -40,6 +39,7 @@ from __future__ import annotations
 from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.helpers.credentials import credential_headers
 
 #: The two tenants and the product each one alone owns. Ids are literals rather than
 #: factory sequences because the Then steps name them: a scenario that asserts "none of
@@ -81,24 +81,6 @@ def _seed_tenant(ctx: dict, tenant_id: str, principal_id: str, product_id: str):
     return tenant, principal
 
 
-class _Credential:
-    """The identity a dispatch presents, as a token/tenant PAIR that need not agree.
-
-    Deliberately not a ``ResolvedIdentity``. This object never reaches business logic: the
-    harness reads ``auth_token`` and ``tenant_id`` off it to build request headers, and the
-    server resolves a real identity from those headers. Building a ``ResolvedIdentity`` here
-    would suggest the test is supplying the resolved answer, which is the thing under test
-    and the thing a scenario must never inject.
-    """
-
-    __slots__ = ("auth_token", "tenant_id", "principal_id")
-
-    def __init__(self, auth_token: str | None, tenant_id: str | None) -> None:
-        self.auth_token = auth_token
-        self.tenant_id = tenant_id
-        self.principal_id = None  # unresolved by construction; the server decides
-
-
 # ── Given ───────────────────────────────────────────────────────────
 
 
@@ -122,7 +104,7 @@ def when_request_products_as(ctx: dict, tenant: str) -> None:
     """Present a tenant's own credential, addressed to that same tenant."""
     token = ctx["token_a"] if tenant == "A" else ctx["token_b"]
     tenant_id = TENANT_A if tenant == "A" else TENANT_B
-    dispatch_request(ctx, identity=_Credential(token, tenant_id), brief="video ads")
+    dispatch_request(ctx, credential=credential_headers(token=token, tenant=tenant_id), brief="video ads")
 
 
 @when(parsers.parse('the buyer presents tenant "{holder}" credentials addressed to tenant "{target}"'))
@@ -130,7 +112,7 @@ def when_request_products_cross_tenant(ctx: dict, holder: str, target: str) -> N
     """Present one tenant's credential while addressing the other."""
     token = ctx["token_a"] if holder == "A" else ctx["token_b"]
     tenant_id = TENANT_A if target == "A" else TENANT_B
-    dispatch_request(ctx, identity=_Credential(token, tenant_id), brief="video ads")
+    dispatch_request(ctx, credential=credential_headers(token=token, tenant=tenant_id), brief="video ads")
 
 
 # ── Then ────────────────────────────────────────────────────────────

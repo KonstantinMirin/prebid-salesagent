@@ -429,18 +429,6 @@ class TestA2ARequestHandler:
         for tool_name in ("get_products", "create_media_buy", "sync_creatives", "list_creatives"):
             assert TOOLS[tool_name].a2a is True, f"{tool_name} is not dispatchable over A2A"
 
-    def test_auth_methods_exist(self):
-        """Test that authentication-related methods exist."""
-        # A2A neither resolves an identity nor builds a tool context: identity is resolved
-        # inside ``serve``, once, for every transport. Reading the credential off the call
-        # context with ``_credential_of`` is the only auth-shaped thing the handler does.
-        auth_methods = ["_credential_of"]
-
-        for method_name in auth_methods:
-            assert hasattr(self.handler, method_name), f"Handler missing auth method: {method_name}"
-            method = getattr(self.handler, method_name)
-            assert callable(method), f"Auth method {method_name} is not callable"
-
 
 class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""

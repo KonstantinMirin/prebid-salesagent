@@ -158,17 +158,12 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
-    ("src/admin/blueprints/principals.py", "delete_principal"),
     # delete_webhook / register_webhook / toggle_webhook removed — rewired onto
     # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg)
     ("src/admin/blueprints/principals.py", "edit_principal"),
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
-    ("src/admin/blueprints/principals.py", "get_principal"),
-    ("src/admin/blueprints/principals.py", "get_principal_config"),
     ("src/admin/blueprints/principals.py", "list_principals"),
     ("src/admin/blueprints/principals.py", "manage_webhooks"),
-    ("src/admin/blueprints/principals.py", "save_testing_config"),
-    ("src/admin/blueprints/principals.py", "update_mappings"),
     ("src/admin/blueprints/products.py", "_render_add_product_form"),
     ("src/admin/blueprints/products.py", "add_product"),
     ("src/admin/blueprints/products.py", "assign_inventory_to_product"),
@@ -246,8 +241,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),
-    ("src/core/auth_utils.py", "_lookup_principal"),
-    ("src/core/auth_utils.py", "get_principal_from_token"),
     ("src/core/config_loader.py", "ensure_default_tenant_exists"),
     ("src/core/config_loader.py", "get_default_tenant"),
     ("src/core/config_loader.py", "get_tenant_by_id"),
@@ -268,8 +261,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/database/queries.py", "get_creatives_needing_human_review"),
     ("src/core/database/queries.py", "get_recent_reviews"),
     # adapter_helpers.py removed — now uses AdapterConfigRepository
-    ("src/core/strategy.py", "_load_state"),
-    ("src/core/strategy.py", "_upsert_state"),
     ("src/core/tenant_status.py", "get_tenant_status"),
     ("src/core/tenant_status.py", "is_tenant_ad_server_configured"),
     # ── Core tools ──

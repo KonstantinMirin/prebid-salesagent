@@ -141,7 +141,6 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
     MODULE = "src.core.tools.media_buy_delivery"
     EXTERNAL_PATCHES = {
         "uow": f"{MODULE}.MediaBuyUoW",
-        "principal": f"{MODULE}.get_principal_object",
         "adapter": f"{MODULE}.get_adapter",
         "pricing": f"{MODULE}._get_pricing_options",
         "circuit_open": f"{MODULE}._is_circuit_breaker_open",
@@ -281,22 +280,22 @@ All tools have two layers: transport wrappers (MCP, A2A, REST) and business logi
 
 **`_impl` rules:** Accept `ResolvedIdentity` (not `Context`). Raise `AdCPSalesAgentError` subclasses (not `ToolError`). Zero imports from `fastmcp`/`a2a`/`starlette`/`fastapi`.
 
-**Transport wrapper rules:** Call `resolve_identity()` first. Forward every `_impl` parameter. Translate `AdCPSalesAgentError` to transport-specific format.
+**Transport rules:** Hand the raw payload and the request headers to
+`serve(tool_name, payload, headers, protocol)` (`src/core/tools/_boundary.py`); never resolve
+an identity and never call an implementation directly. Catch `AdcpFailure`, serialize its
+response with `to_wire`, and add only the transport's own failure marker.
 
-**Anti-pattern** (exists in `task_management.py`):
+**Anti-pattern:**
 ```python
-# WRONG: business logic function accepts Context directly
-async def list_tasks(
-    context: Context | None = None,  # Should be ResolvedIdentity only
-    identity: ResolvedIdentity | None = None,
-) -> dict:
-    if identity is None and context is not None:
-        identity = await context.get_state("identity")  # Auth resolution in _impl
+# WRONG: business logic reads the caller off a transport object
+async def list_tasks(context: Context) -> dict:
+    identity = await context.get_state("identity")  # identity resolution in _impl
 ```
 
-This is tracked debt — functions should be split into `_list_tasks_impl` + transport wrappers.
+The resolver is private to the boundary and `ruff-boundary.toml` bans importing it, so this
+shape fails the build rather than review.
 
-**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `ruff-boundary.toml`'s TID251 ban on `ToolError`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `review-architecture` (CP-5), `review-layering` (Transport → _impl leaks), `test_transport_agnostic_impl.py`, the `ToolImpl` protocol on `ToolSpec.impl` (mypy) with `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, `ruff-boundary.toml`'s TID251 bans on `ToolError` and on the two auth errors outside the resolver and `require_*`
 
 ## 7. Error hierarchy
 

@@ -6,35 +6,27 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NoReturn
 
-from pydantic import ValidationError
-
 if TYPE_CHECKING:
     from adcp.exceptions import ADCPError
 
     from src.adapters import AdServerAdapter
-    from src.adapters.base import TargetingCapabilities
     from src.core.database.models import Tenant as DBTenant
-    from src.core.tenant_context import LazyTenantContext, TenantContext
-    from src.core.testing_hooks import TestingContext
+    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.tenant_context import TenantContext
 
-    #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py), which is a
-    #: tenant CONTEXT -- hydrated or lazy. The lazy one is what the boundary builds on every
-    #: request: it carries tenant_id and loads the row on first access to any other field.
-    #: ``dict`` stays only for the call sites that still pass raw rows; identity.tenant is
-    #: never a dict.
-    IdentityTenant = TenantContext | LazyTenantContext | dict[str, object]
+    #: Same shape as ResolvedIdentity.tenant (src/core/resolved_identity.py): the tenant
+    #: context the resolver loaded. Never a dict.
+    IdentityTenant = TenantContext
     #: IdentityTenant plus the raw ORM row some call sites pass directly (e.g.
     #: media_buy_create.py's session.scalars(...).first()) instead of routing
     #: through identity.tenant.
-    TenantLike = DBTenant | IdentityTenant | None
+    TenantLike = DBTenant | IdentityTenant
 
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.adapters.kevel import Kevel
 from src.adapters.mock_ad_server import MockAdServer as MockAdServerAdapter
 from src.adapters.triton_digital import TritonDigital
-from src.core.schemas import Principal
-from src.core.testing_hooks import MockTestBehavior
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +59,7 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
     carries host:port and resolver detail. AdCP 3.1.1 transport-errors.mdx
     § Security Considerations forbids that on a buyer-facing message, so the
     buyer gets the stable first-party sentence from the mapping table below and
-    the raw text goes to ``internal_detail`` (logged, not serialized).
+    the SDK exception goes to ``internal_detail`` (logged, not serialized).
     """
     from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPTimeoutError
 
@@ -102,51 +94,25 @@ def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging
             break
 
     logger.error("%s for %s: %s", failure_mode, agent_label, exc.message)
-    # The mode is an operator label, i.e. prose — it belongs in the log and on
-    # internal_detail, not in details. Four lines above, this file's own comment says a
-    # mode needing its own buyer sentence needs its own AppErrorCode, "not a message
-    # argument"; parking the sentence in details would be the same thing by another route.
-    raise error_class(
-        details={"agent": agent_label},
-        internal_detail=f"{failure_mode}: {exc.message}",
-    ) from exc
+    # The mode is an operator label, i.e. prose — it belongs in the log, not in
+    # details. Four lines above, this file's own comment says a mode needing its own
+    # buyer sentence needs its own AppErrorCode, "not a message argument"; parking
+    # the sentence in details would be the same thing by another route. The SDK
+    # exception itself is the cause, logged with its traceback by the boundary.
+    raise error_class(details={"agent": agent_label}, internal_detail=exc) from exc
 
 
-def _resolve_tenant_id_and_fallback_adapter(tenant: DBTenant | IdentityTenant) -> tuple[str, str]:
+def _resolve_tenant_id_and_fallback_adapter(tenant: TenantLike) -> tuple[str, str]:
     """Extract tenant_id and the tenant.ad_server fallback adapter type.
 
-    Supports both the ORM model (Tenant) and the dict shape (identity.tenant).
-    This is the pre-AdapterConfig fallback only — callers needing the
+    Takes the ORM model (Tenant) or the TenantContext off the identity; both carry the
+    two columns. This is the pre-AdapterConfig fallback only — callers needing the
     authoritative adapter type must go through ``resolve_tenant_adapter_type``.
     """
-    if isinstance(tenant, dict):
-        tenant_id = tenant["tenant_id"]
-        ad_server = tenant.get("ad_server")
-        return (
-            tenant_id if isinstance(tenant_id, str) else str(tenant_id),
-            ad_server if isinstance(ad_server, str) and ad_server else "mock",
-        )
-    # ORM model or TenantContext — use attribute access
     return tenant.tenant_id, tenant.ad_server or "mock"
 
 
-def _resolved_tenant(tenant: TenantLike) -> DBTenant | IdentityTenant:
-    """Resolve an Optional tenant param to a concrete tenant, falling back to
-    the ContextVar for callers that haven't threaded identity.tenant through yet.
-
-    Single home for the ``tenant is None`` fallback (previously duplicated --
-    and, in three of the five callers below, MISSING entirely, meaning
-    ``_resolve_tenant_id_and_fallback_adapter(None)`` would crash on a bare
-    ``AttributeError`` the moment ``tenant: Any`` stopped hiding it).
-    """
-    if tenant is not None:
-        return tenant
-    from src.core.config_loader import get_current_tenant
-
-    return get_current_tenant()
-
-
-def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
+def resolve_tenant_adapter_type(tenant: TenantLike) -> str:
     """Resolve the authoritative ad-server adapter type for a tenant.
 
     Single source of truth for adapter-TYPE resolution: ``AdapterConfig.adapter_type``
@@ -157,11 +123,11 @@ def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
     tenant-adapter-type resolution copies would only half-close INV-4).
 
     Args:
-        tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
+        tenant: Tenant context (dict or ORM model).
     """
     logger = logging.getLogger(__name__)
 
-    resolved_tenant = _resolved_tenant(tenant)
+    resolved_tenant = tenant
     tenant_id, selected_adapter = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
     logger.info(f"[ADAPTER_SELECT] Initial selected_adapter from tenant.ad_server: {selected_adapter}")
 
@@ -173,41 +139,6 @@ def resolve_tenant_adapter_type(tenant: TenantLike = None) -> str:
         logger.info(f"[ADAPTER_SELECT] Using AdapterConfig.adapter_type: {selected_adapter}")
 
     return selected_adapter or "mock"
-
-
-def _read_mock_test_behavior(tenant_id: str, adapter_type: str) -> MockTestBehavior:
-    """Read the per-tenant mock-adapter ``test_behavior`` fault-injection config.
-
-    Single seam (salesagent-689e Core Invariant) for reading
-    ``AdapterConfig.config_json["test_behavior"]`` outside an ``_impl`` file --
-    ``src/core/tools/capabilities.py`` and this module are both scanned by
-    ``test_architecture_repository_pattern.py``'s discovery glob, so the
-    session lives in ``read_adapter_config`` (the repository layer), never
-    here or in a caller (#1721 M2 -- this docstring previously
-    described a per-call ``get_db_session()`` here as the sanctioned seam;
-    that was itself the D2 loophole, not the fix for it). Gated on
-    ``adapter_type == "mock"`` so the fault-injection channel never leaks onto
-    real ad-server adapters. Returns an all-defaults ``MockTestBehavior`` when not
-    applicable/configured, so every consumer reads the same "nothing configured"
-    shape instead of branching on an empty mapping.
-    """
-    if adapter_type != "mock":
-        return MockTestBehavior()
-
-    from src.core.database.repositories.adapter_config import read_adapter_config
-
-    row = read_adapter_config(tenant_id)
-    if row and isinstance(row.config_json, dict):
-        behavior = row.config_json.get("test_behavior", {})
-        if isinstance(behavior, dict):
-            # Invalid values are ignored rather than raised: this is a
-            # fault-injection channel, and a malformed column must degrade to
-            # "not configured" instead of failing a real buyer's request.
-            try:
-                return MockTestBehavior.model_validate(behavior)
-            except ValidationError:
-                logger.warning("Ignoring malformed adapter test_behavior for tenant %s", tenant_id)
-    return MockTestBehavior()
 
 
 @dataclass(frozen=True)
@@ -226,21 +157,15 @@ class AdapterContext:
     tenant_id: str
 
 
-def resolve_adapter_context(tenant: TenantLike = None) -> AdapterContext:
+def resolve_adapter_context(tenant: TenantLike) -> AdapterContext:
     """The ONE resolve every adapter helper starts from (#1721 Lane B, step 4.1)."""
-    resolved_tenant = _resolved_tenant(tenant)
+    resolved_tenant = tenant
     adapter_type = resolve_tenant_adapter_type(resolved_tenant)
     tenant_id, _ = _resolve_tenant_id_and_fallback_adapter(resolved_tenant)
     return AdapterContext(tenant=resolved_tenant, adapter_type=adapter_type, tenant_id=tenant_id)
 
 
-def _test_behavior_for(tenant: TenantLike) -> MockTestBehavior:
-    """Resolve *tenant* -> its adapter type -> its fault-injection config."""
-    ctx = resolve_adapter_context(tenant)
-    return _read_mock_test_behavior(ctx.tenant_id, ctx.adapter_type)
-
-
-def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdapter]:
+def get_adapter_class_for_tenant(tenant: TenantLike) -> type[AdServerAdapter]:
     """Resolve the ad-server adapter CLASS for a tenant, without a Principal.
 
     For read-only capability/discovery paths (e.g. get_adcp_capabilities) that
@@ -258,56 +183,11 @@ def get_adapter_class_for_tenant(tenant: TenantLike = None) -> type[AdServerAdap
     there would leak the fault onto ``create_media_buy`` during an e2e run.
 
     Args:
-        tenant: Tenant context (dict or ORM model). Falls back to ContextVar if not provided.
+        tenant: Tenant context (dict or ORM model).
     """
     from src.adapters import get_adapter_class
 
-    ctx = resolve_adapter_context(tenant)
-    adapter_type = ctx.adapter_type
-
-    test_behavior = _read_mock_test_behavior(ctx.tenant_id, adapter_type)
-    if test_behavior.unavailable:
-        from src.core.exceptions import AdCPAdapterError
-
-        raise AdCPAdapterError()
-
-    return get_adapter_class(adapter_type)
-
-
-def get_targeting_capabilities_override(tenant: TenantLike = None) -> TargetingCapabilities | None:
-    """Return the per-tenant mock-adapter targeting-capability override, if any.
-
-    Reads the same ``test_behavior`` seam as ``get_adapter_class_for_tenant``
-    (salesagent-689e). Callers in ``_impl`` files (e.g. ``capabilities.py``)
-    must use this instead of opening their own DB session — it stays legal
-    under ``test_architecture_repository_pattern.py``'s empty
-    ``IMPL_SESSION_ALLOWLIST`` because the session lives in this file, not theirs.
-    """
-    override = _test_behavior_for(tenant).targeting_capabilities
-    if not override:
-        return None
-
-    from src.adapters.base import TargetingCapabilities as _TargetingCapabilities
-
-    return _TargetingCapabilities(**override)
-
-
-def get_adapter_channels_override(tenant: TenantLike = None) -> list[str] | None:
-    """Return the per-tenant mock-adapter channel override, if any.
-
-    Same ``test_behavior`` seam as :func:`get_targeting_capabilities_override`,
-    and it exists for the same reason: which channels a seller offers is a
-    per-tenant fact, but the adapter exposes it as a CLASS attribute
-    (``AdServerAdapter.default_channels``), so without an override the answer is
-    fixed per adapter type and cannot be configured for a tenant at all.
-
-    That gap is only visible over a real transport. In-process a test can patch
-    the adapter class; over HTTP the server resolves its own, so a scenario
-    configuring channels silently graded the adapter's defaults instead (#1871).
-
-    Returns None when nothing is configured, which means "use the class default".
-    """
-    return _test_behavior_for(tenant).default_channels or None
+    return get_adapter_class(resolve_adapter_context(tenant).adapter_type)
 
 
 #: Resolved adapter type -> the AdapterConfig column backing its manual-approval
@@ -319,7 +199,7 @@ _MANUAL_APPROVAL_COLUMNS: dict[str, str] = {
 }
 
 
-def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool:
+def resolve_manual_approval_signal(tenant: IdentityTenant) -> bool:
     """Whether this tenant's configuration genuinely requires manual approval
     on new media buys -- the same signal ``_create_media_buy_impl`` enforces
     (media_buy_create.py), read tenant/DB-side so it works without a live
@@ -338,7 +218,7 @@ def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool
     uses for enforcement, since that default is exactly the false-conformance
     risk this reader must avoid (salesagent-becl.72 refine).
     """
-    if tenant and tenant.get("human_review_required"):
+    if tenant.human_review_required:
         return True
 
     ctx = resolve_adapter_context(tenant)
@@ -354,20 +234,15 @@ def resolve_manual_approval_signal(tenant: IdentityTenant | None = None) -> bool
     return bool(row and getattr(row, column, None) is True)
 
 
-def get_adapter(
-    principal: Principal,
-    dry_run: bool = False,
-    testing_context: TestingContext | None = None,
-    tenant: TenantLike = None,
-) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
-    """Get the appropriate adapter instance for the selected adapter type.
+def get_adapter(identity: ResolvedIdentity) -> MockAdServerAdapter | GoogleAdManager | Kevel | TritonDigital:
+    """The ad-server adapter that acts for *identity*.
 
-    Args:
-        principal: The authenticated principal
-        dry_run: Whether to run in dry-run mode
-        testing_context: Optional test context for simulations
-        tenant: Tenant context (from identity.tenant). Falls back to ContextVar if not provided.
+    The tenant decides which ad server answers and with what configuration; the
+    principal is the buyer inside it. Both come off the one identity, resolved from a
+    request or from stored ids, so they cannot be handed over as a mismatched pair.
     """
+    principal = identity.principal
+    tenant = identity.tenant
     ctx = resolve_adapter_context(tenant)
     selected_adapter = ctx.adapter_type
     tenant_id = ctx.tenant_id
@@ -437,13 +312,10 @@ def get_adapter(
         if not adapter_config:
             adapter_config = {"enabled": True}
 
-    # Create the appropriate adapter instance with tenant_id and testing context
     logger.info(f"[ADAPTER_SELECT] FINAL selected_adapter: {selected_adapter}")
     if selected_adapter == "mock":
         logger.info("[ADAPTER_SELECT] Instantiating MockAdServerAdapter")
-        return MockAdServerAdapter(
-            adapter_config, principal, dry_run, tenant_id=tenant_id, strategy_context=testing_context
-        )
+        return MockAdServerAdapter(adapter_config, principal, tenant_id=tenant_id)
     elif selected_adapter == "google_ad_manager":
         # network_code is required for GoogleAdManager
         network_code = adapter_config.get("network_code")
@@ -457,7 +329,7 @@ def get_adapter(
 
         logger.info("[ADAPTER_SELECT] Instantiating GoogleAdManager")
         logger.info(
-            f"[ADAPTER_SELECT] GAM params: network_code={network_code}, advertiser_id={advertiser_id}, trafficker_id={trafficker_id}, dry_run={dry_run}"
+            f"[ADAPTER_SELECT] GAM params: network_code={network_code}, advertiser_id={advertiser_id}, trafficker_id={trafficker_id}"
         )
         return GoogleAdManager(
             adapter_config,
@@ -465,17 +337,14 @@ def get_adapter(
             network_code=network_code,
             advertiser_id=advertiser_id,
             trafficker_id=trafficker_id,
-            dry_run=dry_run,
             tenant_id=tenant_id,
             targeting_config=targeting_config,
             naming_templates=naming_templates,
         )
     elif selected_adapter == "kevel":
-        return Kevel(adapter_config, principal, dry_run, tenant_id=tenant_id)
+        return Kevel(adapter_config, principal, tenant_id=tenant_id)
     elif selected_adapter in ["triton", "triton_digital"]:
-        return TritonDigital(adapter_config, principal, dry_run, tenant_id=tenant_id)
+        return TritonDigital(adapter_config, principal, tenant_id=tenant_id)
     else:
         # Default to mock for unsupported adapters
-        return MockAdServerAdapter(
-            adapter_config, principal, dry_run, tenant_id=tenant_id, strategy_context=testing_context
-        )
+        return MockAdServerAdapter(adapter_config, principal, tenant_id=tenant_id)

@@ -65,7 +65,6 @@ def test_something():
 - Max 10 mocks per test file (pre-commit enforces)
 - AdCP compliance test for all client-facing models
 - Test YOUR code, not Python built-ins
-- Roundtrip test required for any operation using `apply_testing_hooks()`
 
 ## Test Integrity — ZERO TOLERANCE
 

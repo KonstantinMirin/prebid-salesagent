@@ -21,6 +21,7 @@ from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
 from src.admin.utils import is_admin_production, is_super_admin
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.domain_config import (
@@ -76,7 +77,7 @@ OIDC_PROVIDERS = {
 
 def get_oauth_provider_name():
     """Get the configured OAuth provider name."""
-    return os.environ.get("OAUTH_PROVIDER", "google").lower()
+    return get_settings().auth.oauth_provider.lower()
 
 
 def get_oauth_config():
@@ -91,10 +92,11 @@ def get_oauth_config():
     4. Legacy file: client_secret.json
     """
     # Option 1: Full generic OIDC configuration
-    discovery_url = os.environ.get("OAUTH_DISCOVERY_URL")
-    client_id = os.environ.get("OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("OAUTH_CLIENT_SECRET")
-    scopes = os.environ.get("OAUTH_SCOPES", "openid email profile")
+    auth_settings = get_settings().auth
+    discovery_url = auth_settings.oauth_discovery_url
+    client_id = auth_settings.oauth_client_id
+    client_secret = auth_settings.oauth_client_secret
+    scopes = auth_settings.oauth_scopes
 
     if discovery_url and client_id and client_secret:
         logger.info(f"Using generic OIDC provider with discovery URL: {discovery_url}")
@@ -111,8 +113,8 @@ def get_oauth_config():
             logger.warning(f"Provider '{provider}' requires OAUTH_DISCOVERY_URL to be set")
 
     # Option 3: Google-specific environment variables (backwards compatible)
-    google_client_id = os.environ.get("GOOGLE_CLIENT_ID")
-    google_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET")
+    google_client_id = auth_settings.google_client_id
+    google_client_secret = auth_settings.google_client_secret
 
     if google_client_id and google_client_secret:
         logger.info("Using Google OAuth (legacy GOOGLE_CLIENT_ID configuration)")
@@ -200,9 +202,9 @@ def login():
     client_id, client_secret, discovery_url, _ = get_oauth_config()
     oauth_configured = bool(client_id and client_secret and discovery_url)
 
-    # Determine test_mode from env var only
+    # Determine test_mode from the global setting only
     # tenant.auth_setup_mode is only used when NO global OAuth is configured
-    test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+    test_mode = get_settings().testing.adcp_auth_test_mode
 
     from src.core.config_loader import is_single_tenant_mode
 
@@ -328,7 +330,7 @@ def tenant_login(tenant_id):
         # - ADCP_AUTH_TEST_MODE env var enables test mode globally
         # - tenant.auth_setup_mode enables test mode for this tenant ONLY if no global OAuth
         #   (for multi-tenant with global OAuth, tenants use global OAuth, not setup mode)
-        test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+        test_mode = get_settings().testing.adcp_auth_test_mode
         if not test_mode and not oauth_configured:
             # No global OAuth - use tenant's auth_setup_mode (for single-tenant SSO setup)
             test_mode = tenant.auth_setup_mode if hasattr(tenant, "auth_setup_mode") else True
@@ -385,9 +387,10 @@ def google_auth():
         current_app.config.get("SESSION_COOKIE_SAMESITE"),
     )
 
-    redirect_uri = os.environ.get("GOOGLE_OAUTH_REDIRECT_URI")
+    settings = get_settings()
+    redirect_uri = settings.auth.google_oauth_redirect_uri
     if redirect_uri:
-        logger.info(f"Using GOOGLE_OAUTH_REDIRECT_URI from env: {redirect_uri}")
+        logger.info(f"Using configured GOOGLE_OAUTH_REDIRECT_URI: {redirect_uri}")
     else:
         # Build the URL
         base_url = url_for("auth.google_callback", _external=True)
@@ -395,8 +398,8 @@ def google_auth():
 
         # Only add /admin prefix in production mode with nginx (not in Docker standalone)
         # SKIP_NGINX=true indicates Docker standalone mode without nginx reverse proxy
-        skip_nginx = os.environ.get("SKIP_NGINX", "").lower() == "true"
-        production = os.environ.get("PRODUCTION", "").lower() == "true"
+        skip_nginx = settings.runtime.skip_nginx
+        production = settings.runtime.is_production
 
         if not skip_nginx and production and "/admin/" not in base_url:
             # Production with nginx: add /admin prefix for nginx routing
@@ -456,7 +459,7 @@ def tenant_google_auth(tenant_id):
     host = request.headers.get("Host", "")
 
     # Always use the registered OAuth redirect URI for Google (no modifications allowed)
-    if os.environ.get("PRODUCTION") == "true":
+    if get_settings().runtime.is_production:
         # For production, always use the exact registered redirect URI
         redirect_uri = get_oauth_redirect_uri()
     else:
@@ -640,14 +643,14 @@ def google_callback():
 
         if is_single_tenant_mode() and len(session["available_tenants"]) == 1:
             # Auto-select the only tenant
-            tenant = session["available_tenants"][0]
-            tenant_id = tenant["tenant_id"]
+            membership = session["available_tenants"][0]
+            tenant_id = membership["tenant_id"]
 
             # Ensure User record exists
             from src.admin.domain_access import ensure_user_in_tenant
 
             user_name = session.get("user_name", email.split("@")[0].title())
-            role = "admin" if tenant.get("is_admin") else "viewer"
+            role = "admin" if membership.get("is_admin") else "viewer"
 
             try:
                 ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -655,7 +658,7 @@ def google_callback():
                 logger.error(f"Failed to create User record for {email} in tenant {tenant_id}: {e}")
 
             session["tenant_id"] = tenant_id
-            session["is_tenant_admin"] = tenant.get("is_admin", True)
+            session["is_tenant_admin"] = membership.get("is_admin", True)
             session.pop("available_tenants", None)
             flash(f"Welcome {user.get('name', email)}!", "success")
             # Check for saved redirect URL
@@ -699,15 +702,15 @@ def select_tenant():
         tenant_id = request.form.get("tenant_id")
 
         # Verify user has access to selected tenant
-        for tenant in session["available_tenants"]:
-            if tenant["tenant_id"] == tenant_id:
+        for membership in session["available_tenants"]:
+            if membership["tenant_id"] == tenant_id:
                 # Ensure User record exists in the database
                 # This is critical for require_tenant_access decorator to work
                 from src.admin.domain_access import ensure_user_in_tenant
 
                 email = session["user"]
                 user_name = session.get("user_name", email.split("@")[0].title())
-                role = "admin" if tenant["is_admin"] else "viewer"
+                role = "admin" if membership["is_admin"] else "viewer"
 
                 try:
                     ensure_user_in_tenant(email, tenant_id, role=role, name=user_name)
@@ -718,9 +721,9 @@ def select_tenant():
                     return redirect(url_for("auth.select_tenant"))
 
                 session["tenant_id"] = tenant_id
-                session["is_tenant_admin"] = tenant["is_admin"]
+                session["is_tenant_admin"] = membership["is_admin"]
                 session.pop("available_tenants", None)  # Clean up
-                flash(f"Welcome to {tenant['name']}!", "success")
+                flash(f"Welcome to {membership['name']}!", "success")
                 # Check for saved redirect URL
                 next_url = _safe_redirect(
                     session.pop("login_next_url", None),
@@ -800,7 +803,8 @@ def test_auth():
         abort(404)
 
     # Check if test auth is allowed
-    env_test_mode = os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() == "true"
+    testing = get_settings().testing
+    env_test_mode = testing.adcp_auth_test_mode
     tenant_setup_mode = False
 
     if tenant_id:
@@ -823,20 +827,20 @@ def test_auth():
             )
         abort(404)
 
-    # Define test users — credentials are always read from env vars, never hardcoded
+    # Define test users — credentials come from the settings, never hardcoded
     test_users = {
-        os.environ.get("TEST_SUPER_ADMIN_EMAIL", "test_super_admin@example.com"): {
-            "password": os.environ.get("TEST_SUPER_ADMIN_PASSWORD", "test123"),
+        testing.test_super_admin_email: {
+            "password": testing.test_super_admin_password,
             "name": "Test Super Admin",
             "role": "super_admin",
         },
-        os.environ.get("TEST_TENANT_ADMIN_EMAIL", "test_tenant_admin@example.com"): {
-            "password": os.environ.get("TEST_TENANT_ADMIN_PASSWORD", "test123"),
+        testing.test_tenant_admin_email: {
+            "password": testing.test_tenant_admin_password,
             "name": "Test Tenant Admin",
             "role": "tenant_admin",
         },
-        os.environ.get("TEST_TENANT_USER_EMAIL", "test_tenant_user@example.com"): {
-            "password": os.environ.get("TEST_TENANT_USER_PASSWORD", "test123"),
+        testing.test_tenant_user_email: {
+            "password": testing.test_tenant_user_password,
             "name": "Test Tenant User",
             "role": "tenant_user",
         },
@@ -880,7 +884,7 @@ def test_login_form():
     Works when ADCP_AUTH_TEST_MODE=true as a global override.
     For per-tenant setup mode, use /tenant/<tenant_id>/login instead.
     """
-    if os.environ.get("ADCP_AUTH_TEST_MODE", "").lower() != "true":
+    if not get_settings().testing.adcp_auth_test_mode:
         abort(404)
 
     from src.core.config_loader import is_single_tenant_mode
@@ -907,11 +911,9 @@ def gam_authorize(tenant_id):
 
     try:
         # Get GAM OAuth configuration
-        from src.core.config import get_gam_oauth_config
-
         try:
-            gam_config = get_gam_oauth_config()
-            if not gam_config.client_id or not gam_config.client_secret:
+            gam_auth = get_settings().auth
+            if not gam_auth.gam_oauth_configured:
                 raise ValueError("GAM OAuth credentials not configured")
         except Exception as config_error:
             logger.error(f"GAM OAuth configuration error: {config_error}")
@@ -929,7 +931,7 @@ def gam_authorize(tenant_id):
             logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")
 
         # Determine callback URI
-        if os.environ.get("PRODUCTION") == "true":
+        if get_settings().runtime.is_production:
             callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
@@ -940,7 +942,7 @@ def gam_authorize(tenant_id):
         # Build authorization URL with GAM-specific scope
         auth_url = (
             "https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={gam_config.client_id}&"
+            f"client_id={gam_auth.gam_oauth_client_id}&"
             f"redirect_uri={callback_uri}&"
             "scope=https://www.googleapis.com/auth/dfp&"
             "response_type=code&"
@@ -991,12 +993,10 @@ def gam_callback():
             return redirect(url_for("auth.login"))
 
         # Get GAM OAuth configuration
-        from src.core.config import get_gam_oauth_config
-
-        gam_config = get_gam_oauth_config()
+        gam_auth = get_settings().auth
 
         # Determine callback URI (must match the one used in authorization)
-        if os.environ.get("PRODUCTION") == "true":
+        if get_settings().runtime.is_production:
             callback_uri = f"{get_sales_agent_url()}/admin/auth/gam/callback"
         else:
             callback_uri = url_for("auth.gam_callback", _external=True)
@@ -1004,13 +1004,13 @@ def gam_callback():
         # Exchange authorization code for tokens
 
         logger.info(f"Exchanging authorization code for tokens - tenant: {tenant_id}, callback_uri: {callback_uri}")
-        logger.debug(f"Token exchange request - client_id: {gam_config.client_id[:20]}...")
+        logger.debug(f"Token exchange request - client_id: {gam_auth.gam_oauth_client_id[:20]}...")
 
         try:
             token_response = exchange_authorization_code(
                 code,
-                client_id=gam_config.client_id,
-                client_secret=gam_config.client_secret,
+                client_id=gam_auth.gam_oauth_client_id,
+                client_secret=gam_auth.gam_oauth_client_secret,
                 redirect_uri=callback_uri,
             )
         except OutboundError as exc:
@@ -1081,9 +1081,10 @@ def gam_callback():
             logger.warning(f"Could not suggest auto-detect: {detect_error}")
 
         # Redirect back to tenant settings
-        if external_domain and os.environ.get("PRODUCTION") == "true":
+        is_production = get_settings().runtime.is_production
+        if external_domain and is_production:
             return redirect(f"https://{external_domain}/admin/tenant/{tenant_id}/settings")
-        elif originating_host and os.environ.get("PRODUCTION") == "true":
+        elif originating_host and is_production:
             return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
         else:
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))

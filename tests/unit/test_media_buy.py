@@ -22,8 +22,8 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
+from src.core.testing_hooks import AdCPTestContext
 
-from src.core.auth_context import AuthContext
 from src.core.errors.codes import CODE_TABLE
 from src.core.exceptions import (
     AdCPAuthenticationError,
@@ -42,7 +42,6 @@ from src.core.schemas import (
     AffectedPackage,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
-    CreateMediaBuyResult,
     CreateMediaBuySuccess,
     DeliveryTotals,
     GetMediaBuyDeliveryRequest,
@@ -58,8 +57,6 @@ from src.core.schemas import (
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
-from src.core.tools._boundary import invoke_tool
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories.media_buy import (
     default_request_packages,
@@ -70,8 +67,6 @@ from tests.factories.media_buy import (
 )
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
-from tests.helpers.boundary_identity import resolved_as
-from tests.helpers.envelope_assertions import raises_adcp
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -392,7 +387,6 @@ class TestCreateMediaBuyValidation:
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
-            auth_token="test-token",
             protocol="mcp",
             testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
@@ -417,16 +411,13 @@ class TestCreateMediaBuyValidation:
         mock_uow.media_buys = mock_media_buys
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_princ = MagicMock()
             mock_princ.principal_id = "principal_1"
             mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
 
             ctx_mgr = MagicMock()
             ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
@@ -467,7 +458,6 @@ class TestCreateMediaBuyValidation:
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
-            auth_token="test-token",
             protocol="mcp",
             testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
@@ -495,16 +485,13 @@ class TestCreateMediaBuyValidation:
         mock_uow.media_buys = mock_media_buys
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
             patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
         ):
             mock_princ = MagicMock()
             mock_princ.principal_id = "principal_1"
             mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
 
             ctx_mgr = MagicMock()
             ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
@@ -1187,20 +1174,6 @@ class TestCreateMediaBuyImplAuth:
     """UC-002 auth extension: identity and principal validation."""
 
     @pytest.mark.asyncio
-    async def test_missing_identity_raises_validation_error(self):
-        """UC-002-A01: None identity raises error.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        Covers: UC-002-EXT-I-01
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        req = _make_request()
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            await _create_media_buy_impl(req, identity=None)
-        # The identifier is STRUCTURED now: details/field, not prose.
-
-    @pytest.mark.asyncio
     async def test_missing_principal_raises_auth_error(self):
         """UC-002-A02: principal not found raises AdCPAuthenticationError.
 
@@ -1219,30 +1192,6 @@ class TestCreateMediaBuyImplAuth:
             with pytest.raises(AdCPAuthenticationError) as _ei:
                 await _create_media_buy_impl(req, identity=identity)
             # The identifier is STRUCTURED now: details/field, not prose.
-
-    @pytest.mark.asyncio
-    async def test_missing_tenant_raises_auth_error(self):
-        """UC-002-A03: identity without tenant raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        Priority: P0
-        Type: unit
-        Source: UC-002 ext-a
-        Covers: UC-002-PRECOND-03
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        req = _make_request()
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant=None,
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
-        )
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            await _create_media_buy_impl(req, identity=identity)
-        # The identifier is STRUCTURED now: details/field, not prose.
 
     @pytest.mark.asyncio
     async def test_setup_incomplete_raises_error(self):
@@ -1267,7 +1216,6 @@ class TestCreateMediaBuyImplAuth:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch(
                 "src.core.tools.media_buy_create.validate_setup_complete",
                 side_effect=SetupIncompleteError(
@@ -1313,7 +1261,6 @@ class TestCreateMediaBuyImplAuth:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch(
                 "src.core.tools.media_buy_create.validate_setup_complete",
                 side_effect=SetupIncompleteError(
@@ -1403,150 +1350,10 @@ class TestIdempotencyKeyRequired:
         assert req.idempotency_key == "test-idem-key-0001"
 
 
-class TestCreateMediaBuyIdempotency:
-    """UC-002 idempotency: a replayed key returns the original media buy.
-
-    Dispatched through ``invoke_tool`` -- the boundary owns the probe and the cache write, so
-    calling the implementation directly would bypass the behavior these tests grade.
-
-    Per adcp 3.12, retrying with the same idempotency_key must return the original
-    media_buy_id without creating a duplicate ad-server booking.
-    Covers: UC-002-MAIN-IDEMPOTENCY
-    """
-
-    @pytest.mark.asyncio
-    async def test_idempotency_replay_returns_existing(self):
-        """Retry with the same key replays the cached success verbatim, marked replayed.
-
-        Covers: UC-002-MAIN-IDEMPOTENCY
-        """
-        from src.core.idempotency_canonical import canonical_request_hash
-
-        idem_key = "550e8400-e29b-41d4-a716-446655440000"
-        req = _make_request(idempotency_key=idem_key)
-        identity = _make_identity()
-
-        # What the first call cached: {status: <protocol>, response: <domain dump>}.
-        original = _make_success(media_buy_id="mb_original_123")
-        cached_attempt = MagicMock()
-        cached_attempt.response_envelope = {"status": "completed", "response": original.model_dump(mode="json")}
-        # Matching hash → a true replay (a mismatch would be IDEMPOTENCY_CONFLICT).
-        cached_attempt.payload_hash = canonical_request_hash(req)
-
-        mock_attempts = MagicMock()
-        mock_attempts.find_by_key.return_value = cached_attempt
-
-        mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.idempotency_attempts = mock_attempts
-
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-            # Account resolution is the boundary's OTHER database read, and it is not what
-            # these two grade; a pass-through keeps the probe the only DB call in play.
-            patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
-            # The boundary RESOLVES the identity now; it is not handed one. Substituting the
-            # resolver is how a test names the caller it wants.
-            resolved_as(identity),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            result = await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
-
-        assert isinstance(result, CreateMediaBuyResult)
-        assert isinstance(result, CreateMediaBuySuccess)
-        assert result.media_buy_id == "mb_original_123"
-        assert result.status == "completed"
-        assert result.replayed is True  # spec replay marker, injected at replay time (never stored)
-        mock_attempts.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            account_id=identity.account_id,
-            idempotency_key=idem_key,
-        )
-
-    @pytest.mark.asyncio
-    async def test_idempotency_new_key_proceeds(self):
-        """Different idempotency_key creates a new media buy (no match found).
-
-        Covers: UC-002-MAIN-IDEMPOTENCY
-        """
-
-        req = _make_request(idempotency_key="new-key-never-seen")
-        identity = _make_identity()
-
-        # Mock repo returns None (no match for this key)
-        mock_idem_repo = MagicMock()
-        mock_idem_repo.find_by_idempotency_key.return_value = None
-
-        # β success cache returns None (no cached success) → probe misses, flow proceeds
-        mock_idem_attempts_repo = MagicMock()
-        mock_idem_attempts_repo.find_by_key.return_value = None
-        mock_idem_attempts_repo.count_inserts_since.return_value = (0, None)
-        mock_idem_attempts_repo.count_active.return_value = (0, None)
-
-        mock_idem_uow = MagicMock()
-        mock_idem_uow.__enter__ = MagicMock(return_value=mock_idem_uow)
-        mock_idem_uow.__exit__ = MagicMock(return_value=None)
-        mock_idem_uow.media_buys = mock_idem_repo
-        mock_idem_uow.idempotency_attempts = mock_idem_attempts_repo
-
-        # Validation UoW (for product lookup — will fail with no products)
-        session = MagicMock()
-        scalars_result = MagicMock()
-        scalars_result.all.return_value = []
-        scalars_result.first.return_value = None
-        session.scalars.return_value = scalars_result
-
-        mock_validation_uow = MagicMock()
-        mock_validation_uow.__enter__ = MagicMock(return_value=mock_validation_uow)
-        mock_validation_uow.__exit__ = MagicMock(return_value=None)
-        mock_validation_uow.session = session
-        mock_validation_uow.media_buys = MagicMock()
-        mock_validation_uow.media_buys.get_by_principal.return_value = []
-
-        # Two separate MediaBuyUoW calls: first for idempotency, second for validation
-        uow_instances = [mock_idem_uow, mock_validation_uow]
-
-        with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
-            patch("src.core.tools.media_buy_create.get_context_manager") as mock_ctx_mgr,
-            patch("src.core.database.repositories.MediaBuyUoW", side_effect=uow_instances),
-            patch("src.core.transport_helpers.enrich_identity_with_account", side_effect=lambda i, a=None: i),
-            resolved_as(identity),
-        ):
-            mock_princ = MagicMock()
-            mock_princ.principal_id = "test_principal"
-            mock_princ.name = "Test Buyer"
-            mock_principal.return_value = mock_princ
-
-            ctx_mgr = MagicMock()
-            ctx_mgr.create_context.return_value = MagicMock(context_id="ctx_1")
-            ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
-            mock_ctx_mgr.return_value = ctx_mgr
-
-            # Idempotency probe miss → flow continues into product validation,
-            # which fails with the typed AdCPProductNotFoundError. Capture it so
-            # we can still assert the idempotency probe ran.
-            with raises_adcp(AdCPProductNotFoundError):
-                await invoke_tool("create_media_buy", req, AuthContext(), "mcp")
-
-        # β idempotency probe ran (verbatim success cache), found nothing → proceeded
-        mock_idem_attempts_repo.find_by_key.assert_called_once_with(
-            principal_id="test_principal",
-            account_id=identity.account_id,
-            idempotency_key="new-key-never-seen",
-        )
+# UC-002-MAIN-IDEMPOTENCY (a replayed key returns the original media buy; a new key
+# proceeds) is the boundary's behaviour and is graded on the wire by BR-UC-002's
+# "v3.1 idempotency_key replay returns existing media buy without re-execution" and its
+# sibling in-flight / expired / missing-key scenarios; no ``invoke_tool`` test is kept here.
 
 
 class TestCreateMediaBuyAdapterInteraction:
@@ -1952,13 +1759,11 @@ class TestUpdateMediaBuyMainFlow:
         mock_uow.__exit__ = MagicMock(return_value=False)
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -1966,7 +1771,6 @@ class TestUpdateMediaBuyMainFlow:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2033,12 +1837,10 @@ class TestUpdateMediaBuyPauseResume:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2046,7 +1848,6 @@ class TestUpdateMediaBuyPauseResume:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2099,12 +1900,10 @@ class TestUpdateMediaBuyPauseResume:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2112,7 +1911,6 @@ class TestUpdateMediaBuyPauseResume:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2164,12 +1962,10 @@ class TestUpdateMediaBuyPauseResume:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2177,7 +1973,6 @@ class TestUpdateMediaBuyPauseResume:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2260,12 +2055,10 @@ class TestUpdateMediaBuyTiming:
         cl.min_package_budget = None
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2274,7 +2067,6 @@ class TestUpdateMediaBuyTiming:
             mock_ctx_mgr.return_value = ctx_mgr
 
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2338,13 +2130,11 @@ class TestUpdateMediaBuyTiming:
         cl.min_package_budget = None
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2352,7 +2142,6 @@ class TestUpdateMediaBuyTiming:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2437,13 +2226,11 @@ class TestUpdateMediaBuyCreativeIds:
         mock_product.placements = None
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2451,7 +2238,6 @@ class TestUpdateMediaBuyCreativeIds:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2520,13 +2306,11 @@ class TestUpdateMediaBuyCreativeIds:
         mock_buy.principal_id = "test_principal"
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2534,7 +2318,6 @@ class TestUpdateMediaBuyCreativeIds:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2606,13 +2389,11 @@ class TestUpdateMediaBuyCreativeIds:
         mock_product.placements = None
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2620,7 +2401,6 @@ class TestUpdateMediaBuyCreativeIds:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2695,13 +2475,11 @@ class TestUpdateMediaBuyCreativeIds:
         mock_product.placements = None
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2709,7 +2487,6 @@ class TestUpdateMediaBuyCreativeIds:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2799,13 +2576,11 @@ class TestUpdateMediaBuyCreativeIds:
         mock_product.placements = None
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -2813,7 +2588,6 @@ class TestUpdateMediaBuyCreativeIds:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -2920,7 +2694,6 @@ class TestUpdateMediaBuyIdentification:
         identity = _make_identity()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
         ):
@@ -2987,7 +2760,6 @@ class TestUpdateMediaBuyOwnership:
         identity = _make_identity(principal_id="different_principal")
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
@@ -3043,12 +2815,10 @@ class TestUpdateMediaBuyManualApproval:
         identity = _make_identity()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3056,7 +2826,6 @@ class TestUpdateMediaBuyManualApproval:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             # Adapter requires manual approval for update_media_buy
             adapter = MagicMock()
@@ -3117,12 +2886,10 @@ class TestUpdateMediaBuyManualApproval:
         identity = _make_identity()
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3130,7 +2897,6 @@ class TestUpdateMediaBuyManualApproval:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = True
@@ -3190,12 +2956,10 @@ class TestUpdateMediaBuyAdapterFailure:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3203,7 +2967,6 @@ class TestUpdateMediaBuyAdapterFailure:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -3273,13 +3036,11 @@ class TestUpdateMediaBuyAdapterFailure:
         )
 
         with (
-            patch("src.core.helpers.context_helpers.ensure_tenant_context"),
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
             patch("src.core.tools.media_buy_update.MediaBuyUoW") as mock_uow_cls,
             patch("src.core.database.database_session.get_db_session") as mock_db_inner,
             patch("src.core.tools.media_buy_update.get_audit_logger") as mock_audit,
             patch("src.core.tools.media_buy_update._verify_principal"),
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_update.get_adapter") as mock_adapter,
         ):
             ctx_mgr = MagicMock()
@@ -3287,7 +3048,6 @@ class TestUpdateMediaBuyAdapterFailure:
             ctx_mgr.create_workflow_step.return_value = MagicMock(step_id="step_1")
             mock_ctx_mgr.return_value = ctx_mgr
             mock_audit.return_value = MagicMock()
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
 
             adapter = MagicMock()
             adapter.manual_approval_required = False
@@ -3351,7 +3111,6 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(
@@ -3359,7 +3118,6 @@ class TestDeliveryImplSingleBuy:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             # Mock UoW context manager
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
@@ -3405,7 +3163,6 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(
@@ -3413,7 +3170,6 @@ class TestDeliveryImplSingleBuy:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3466,7 +3222,6 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
@@ -3477,7 +3232,6 @@ class TestDeliveryImplSingleBuy:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3532,7 +3286,6 @@ class TestDeliveryImplSingleBuy:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(
                 f"{_PATCH}._get_target_media_buys",
@@ -3543,7 +3296,6 @@ class TestDeliveryImplSingleBuy:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3576,7 +3328,6 @@ class TestDeliveryImplStatusFilter:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]) as mock_get_buys,
             patch(
@@ -3584,7 +3335,6 @@ class TestDeliveryImplStatusFilter:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3619,7 +3369,6 @@ class TestDeliveryImplStatusFilter:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             # No buys match the status filter — returns empty, not error
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
@@ -3628,7 +3377,6 @@ class TestDeliveryImplStatusFilter:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3663,7 +3411,6 @@ class TestDeliveryImplDateRange:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(
@@ -3671,7 +3418,6 @@ class TestDeliveryImplDateRange:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3708,7 +3454,6 @@ class TestDeliveryImplDateRange:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(
@@ -3716,7 +3461,6 @@ class TestDeliveryImplDateRange:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3745,10 +3489,8 @@ class TestDeliveryImplDateRange:
         identity = _make_identity()
 
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_delivery.get_adapter") as mock_adapter,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_adapter.return_value = MagicMock()
 
             req = GetMediaBuyDeliveryRequest(
@@ -3762,26 +3504,6 @@ class TestDeliveryImplDateRange:
 
 class TestDeliveryImplErrors:
     """UC-004 extensions: auth, principal, adapter errors."""
-
-    def test_missing_identity_raises_error(self):
-        """UC-004-E01: None identity raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity=None)
-
-    def test_missing_identity_recovery_is_correctable(self):
-        """Missing identity is correctable — buyer can fix by including auth headers.
-
-        Covers: (PR #1083 review)
-        """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            _get_media_buy_delivery_impl(req, identity=None)
-        # AdCPAuthenticationError inherits recovery from AdCPSalesAgentError (default "fatal")
-        # but the actual behavior is that the error is raised, which is correct
 
     def test_principal_not_found_returns_error_response(self):
         """UC-004-E02: principal not in DB raises AdCPAuthenticationError.
@@ -3813,7 +3535,6 @@ class TestDeliveryImplErrors:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(
@@ -3821,7 +3542,6 @@ class TestDeliveryImplErrors:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3851,7 +3571,6 @@ class TestDeliveryImplErrors:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(
@@ -3859,7 +3578,6 @@ class TestDeliveryImplErrors:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="different_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -3931,13 +3649,11 @@ class TestDeliveryImplPricingLookup:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value=pricing_options_named(rate="5.00")),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
@@ -4241,21 +3957,6 @@ class TestGetMediaBuysResponseShape:
 class TestGetMediaBuysImplAuth:
     """get_media_buys: authentication and principal checks."""
 
-    def test_missing_identity_raises_error(self):
-        """GMB-A01: None identity raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication boundary)
-        Priority: P0
-        Type: unit
-        Source: get_media_buys
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-
-        req = GetMediaBuysRequest()
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buys_impl(req, identity=None)
-
     def test_missing_principal_raises_auth_missing(self):
         """GMB-A02: no principal_id is a FATAL auth failure, so it raises.
 
@@ -4412,7 +4113,6 @@ class TestBRRule043ContextEcho:
 
         _PATCH = "src.core.tools.media_buy_delivery"
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
             patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
             patch(
@@ -4420,7 +4120,6 @@ class TestBRRule043ContextEcho:
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
         ):
-            mock_principal.return_value = MagicMock(principal_id="test_principal")
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)

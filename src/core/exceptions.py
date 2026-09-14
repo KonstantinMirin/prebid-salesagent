@@ -40,8 +40,6 @@ from src.core.errors.issues import ErrorIssue, issues_from_validation_error, poi
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
-    from adcp.types import ContextObject
-
     from src.core.schemas._base import AdcpErrorResponse
 
 logger = logging.getLogger(__name__)
@@ -195,15 +193,12 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         field: Optional field name that caused the error.
         suggestion: Correction hint for buyer agents (read-only, from
             CODE_TABLE).
-        context: Optional AdCP ContextObject (or dict) echoed in the
-            envelope so buyer agents can correlate failures to the
-            request that produced them (spec 3.0.0 normative).
-        internal_detail: Optional NON-WIRE diagnostic payload — the raw
-            third-party exception (or free text) that caused this error.
-            NEVER serialized: ``AdcpErrorResponse.of`` ignores it. It
-            exists so a raise site has a sanctioned destination for text whose
-            provenance we do not control, instead of interpolating it into
-            ``message``.
+        internal_detail: Optional NON-WIRE cause — the caught exception that
+            produced this error (ADR-010 point 5). NEVER serialized:
+            ``AdcpErrorResponse.of`` ignores it; the boundary logs it with its
+            traceback. An authored sentence here says nothing the code, the class
+            and the typed details do not already say; every raise site passes the
+            exception it caught, or nothing.
             See the class note below.
 
     Message provenance (AdCP 3.1.1 ``transport-errors.mdx`` § Security
@@ -249,7 +244,7 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
     # here: they are read-only properties over ``_error_code``, so none of
     # those slots can be written after construction.
     _error_code: ErrorCodeT
-    internal_detail: BaseException | str | None
+    internal_detail: BaseException | None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         """Refuse, at class creation, a subclass whose code the table does not classify.
@@ -301,13 +296,13 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
         issues: list[ErrorIssue] | None = None,
         field: str | None = None,
         retry_after: int | None = None,
-        context: ContextObject | dict[str, Any] | None = None,
-        internal_detail: BaseException | str | None = None,
+        internal_detail: BaseException | None = None,
     ) -> None:
         # There is no ``message`` parameter. Buyer-facing text comes from CODE_TABLE
         # via the read-only ``message`` property, so no raise site can author it and
-        # no caught exception's text can reach the wire. Provenance-bearing text goes
-        # to ``internal_detail`` (server log only); values go to ``field``/``details``.
+        # no caught exception's text can reach the wire. The raw CAUSE goes to
+        # ``internal_detail`` (an exception, server log only); values go to
+        # ``field``/``details``.
         #
         # Assigned FIRST: every derived property keys on it.
         self._error_code = error_code if error_code is not None else type(self)._code
@@ -332,7 +327,9 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             field = pointer_to_field(issues[0].pointer)
         self.field = field
         self.retry_after = retry_after
-        self.context = context
+        # No ``context``. The buyer's context object is echoed by the boundary
+        # (``_boundary._served``) onto every outcome, a failure included; an error carries
+        # nothing about the request it answers, so nothing outside the boundary can write it.
         # NON-WIRE. Deliberately absent from ``AdcpErrorResponse.of``; emitted only
         # to the server-side log by adcp_error_for(). Never add it to a serializer.
         self.internal_detail = internal_detail
@@ -1197,10 +1194,10 @@ def _log_internal_detail(exc: AdCPSalesAgentError) -> None:
     if detail is None:
         return
     logger.error(
-        "AdCPSalesAgentError %s internal detail (not emitted to the buyer): %s",
+        "AdCPSalesAgentError %s caused by %s (not emitted to the buyer)",
         type(exc).__name__,
-        detail,
-        exc_info=detail if isinstance(detail, BaseException) else None,
+        type(detail).__name__,
+        exc_info=detail,
     )
 
 

@@ -39,7 +39,8 @@ what to enforce based on the name and #1050/#1066 principles.
 These already exist (don't recreate):
 - `ruff-boundary.toml` (TID251) — No ToolError import anywhere under src/ but the two edge modules
 - `test_transport_agnostic_impl.py` — No transport imports in _impl
-- `test_impl_resolved_identity.py` — _impl accepts ResolvedIdentity
+- `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` — _impl is exactly `(req, identity: ResolvedIdentity)`
+- `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` — ResolvedIdentity constructed only by the resolver and the factory
 
 ## Protocol
 

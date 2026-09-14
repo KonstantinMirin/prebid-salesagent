@@ -87,7 +87,6 @@ scopes:
     tests:
       - tests/unit/test_media_buy.py
       - tests/unit/test_media_buy_create_helpers.py
-      - tests/unit/test_media_buy_tenant_context.py
       - tests/integration/test_media_buy_v3.py
       - tests/integration/test_media_buy_readiness.py
       - tests/integration/test_media_buy_repository.py

@@ -1,8 +1,6 @@
 """Tenant Management API for managing tenants - Using direct SQL queries."""
 
 import logging
-import os
-import secrets
 import uuid
 from datetime import UTC, datetime
 
@@ -12,18 +10,19 @@ from sqlalchemy import delete, func, select
 from src.admin.auth_helpers import require_api_key_auth
 from src.admin.utils.operator_errors import safe_error_message
 from src.admin.utils.url_policy import json_error_if_url_blocked
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import (
     AdapterConfig,
     AuditLog,
     MediaBuy,
-    Principal,
     Product,
     Tenant,
     User,
 )
 from src.core.database.repositories import TenantLookupRepository
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,7 @@ tenant_management_api = Blueprint("tenant_management_api", __name__, url_prefix=
 
 
 require_tenant_management_api_key = require_api_key_auth(
-    env_var="TENANT_MANAGEMENT_API_KEY",
+    setting="tenant_management_api_key",
     config_key="tenant_management_api_key",
     header="X-Tenant-Management-API-Key",
 )
@@ -139,7 +138,6 @@ def create_tenant():
 
             # Generate tenant ID
             tenant_id = f"tenant_{uuid.uuid4().hex[:8]}"
-            admin_token = secrets.token_urlsafe(32)
 
             # Handle authorized emails - automatically add creator's email
             email_list = data.get("authorized_emails", [])
@@ -188,7 +186,6 @@ def create_tenant():
                 slack_webhook_url=data.get("slack_webhook_url"),
                 slack_audit_webhook_url=data.get("slack_audit_webhook_url"),
                 hitl_webhook_url=data.get("hitl_webhook_url"),
-                admin_token=admin_token,
                 auto_approve_format_ids=data.get("auto_approve_format_ids", ["display_300x250"]),
                 human_review_required=data.get("human_review_required", True),
                 policy_settings=data.get("policy_settings", {}),
@@ -270,7 +267,6 @@ def create_tenant():
             principal_token = None
             if data.get("create_default_principal", True):
                 principal_id = f"principal_{uuid.uuid4().hex[:8]}"
-                principal_token = secrets.token_urlsafe(32)
 
                 # Add a default platform mapping based on the adapter type
                 default_mappings = {}
@@ -285,15 +281,13 @@ def create_tenant():
                     # For mock and others
                     default_mappings = {"mock": {"advertiser_id": "default"}}
 
-                new_principal = Principal(
-                    tenant_id=tenant_id,
+                # The token is returned once, in the result; the row keeps its hash.
+                new_principal, principal_token = PrincipalRepository(db_session, tenant_id).issue(
                     principal_id=principal_id,
                     name=f"{data['name']} Default Principal",
                     platform_mappings=default_mappings,
-                    access_token=principal_token,
                     created_at=datetime.now(UTC),
                 )
-                db_session.add(new_principal)
 
             db_session.commit()
 
@@ -301,9 +295,8 @@ def create_tenant():
                 "tenant_id": tenant_id,
                 "name": data["name"],
                 "subdomain": data["subdomain"],
-                "admin_token": admin_token,
                 "admin_ui_url": (
-                    f"http://{data['subdomain']}.localhost:{os.environ.get('ADCP_SALES_PORT', '8080')}"
+                    f"http://{data['subdomain']}.localhost:{get_settings().runtime.adcp_sales_port}"
                     f"/admin/tenant/{tenant_id}"
                 ),
             }
@@ -393,9 +386,7 @@ def get_tenant(tenant_id):
                 result["adapter_config"] = adapter_data
 
             # Get principals count
-            stmt = select(func.count()).select_from(Principal).filter_by(tenant_id=tenant_id)
-            principals_count = db_session.scalar(stmt)
-            result["principals_count"] = principals_count
+            result["principals_count"] = PrincipalRepository(db_session, tenant_id).count()
 
             return jsonify(result)
 
@@ -534,7 +525,7 @@ def delete_tenant(tenant_id):
             if hard_delete:
                 # Delete related records first due to foreign key constraints
                 db_session.execute(delete(AdapterConfig).where(AdapterConfig.tenant_id == tenant_id))
-                db_session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
+                PrincipalRepository(db_session, tenant_id).delete_all()
                 db_session.execute(delete(Product).where(Product.tenant_id == tenant_id))
                 db_session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
                 db_session.execute(delete(AuditLog).where(AuditLog.tenant_id == tenant_id))

@@ -192,8 +192,7 @@ def _seed_auto_approval(ctx: dict, *, sync_adapter: bool = True) -> None:
     env = ctx["env"]
     tenant.human_review_required = False
     env._commit_factory_data()
-    # Also update identity's tenant dict (pre-built, not re-read from DB)
-    env._identity_cache.clear()
+    # Also update the tenant overrides the call_impl identity is built from.
     env._tenant_overrides["human_review_required"] = False
     if sync_adapter:
         _sync_adapter_approval_to_db(ctx, manual_approval_required=False)
@@ -278,7 +277,6 @@ def given_tenant_manual_approval(ctx: dict) -> None:
     tenant.human_review_required = True
     env = ctx["env"]
     env._commit_factory_data()
-    env._identity_cache.clear()
     env._tenant_overrides["human_review_required"] = True
     # Production code checks: manual_approval_required AND
     # "<op>" in adapter.manual_approval_operations. The mock adapter defaults to

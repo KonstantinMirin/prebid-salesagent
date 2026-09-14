@@ -8,7 +8,6 @@ ran as separate processes behind nginx.
 import asyncio
 import json
 import logging
-import os
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -32,13 +31,10 @@ from src.a2a_server.adcp_a2a_server import (
     create_agent_card,
     restore_a2a_integer_types,
 )
-from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
-from src.core.auth_middleware import (
-    AuthChallengeResponder,
-    UnifiedAuthMiddleware,
-)
+from src.core.auth_middleware import AuthChallengeResponder
+from src.core.config import get_settings
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
@@ -352,10 +348,11 @@ _request_handler = AdCPRequestHandler()
 # and an unauthenticated call got 200 instead of 401. On the native path the same refusal
 # arrives intact: JSON-RPC -32600, `data.adcp_error.code == AUTH_MISSING`, lifted to 401
 # with `WWW-Authenticate`.
+# The SDK's default context builder places ``dict(request.headers)`` on the call context's
+# ``state["headers"]``, which is all the handler reads.
 _a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
-    context_builder=AdCPCallContextBuilder(),
 )
 # Rebuild each route with an integer-restoring wrapper around its endpoint --
 # mutating route.endpoint in place would not change dispatch, since Starlette
@@ -600,22 +597,23 @@ def _openapi_with_rest_components() -> dict[str, Any]:
 
 
 app.include_router(health_router)
-app.include_router(health_debug_router)
+# The debug and reset routes EXIST only where the deployment allows them. Selected here,
+# at composition, rather than answering 404 per request from inside the route.
+if get_settings().debug_routes_enabled:
+    app.include_router(health_debug_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):
 #   1. AuthChallengeResponder (outermost — renders EVERY transport's 401)
 #   2. CORSMiddleware (adds CORS headers to all responses)
-#   3. UnifiedAuthMiddleware (extracts auth token, sets scope["state"]["auth_context"])
+#
+# No auth middleware. Each transport hands the request headers to the boundary, and the
+# resolver behind it is the one reader of a credential.
 # ---------------------------------------------------------------------------
-
-app.add_middleware(UnifiedAuthMiddleware)
-
-_cors_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in _cors_origins],
+    allow_origins=get_settings().runtime.allowed_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

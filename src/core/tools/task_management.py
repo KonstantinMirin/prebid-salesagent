@@ -17,7 +17,6 @@ from adcp.types.generated_poc.protocol.get_task_status_response import HistoryIt
 from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import WorkflowUoW
 from src.core.errors.details import ConflictDetails, ValidationDetails
 from src.core.exceptions import (
@@ -143,13 +142,9 @@ def _spec_task_type(step: Any) -> str:
         raise AdCPValidationError(
             details=ValidationDetails(
                 field="task_type",
+                step_id=getattr(step, "step_id", None),
                 rejected_value=repr(tool_name),
                 accepted_values=sorted(_TASK_TYPE_BY_TOOL),
-            ),
-            internal_detail=(
-                f"workflow step {getattr(step, 'step_id', '?')!r} has tool_name {tool_name!r}, which is "
-                f"not an AdCP task this seller can name. enums/task-type.json requires one, and "
-                f"neither fabricating nor omitting it is honest -- see _spec_task_type."
             ),
         )
     return task_type
@@ -216,7 +211,7 @@ def _list_tasks_response(tasks: list[TaskSummary], *, total: int | None, limit: 
 
 async def _list_tasks_impl(
     req: ListTasksRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> ListTasksResponse:
     """The transport-agnostic implementation of ``list_tasks``.
 
@@ -246,13 +241,10 @@ async def _list_tasks_impl(
     limit = req.pagination.max_results if req.pagination and req.pagination.max_results else 20
     offset = 0
 
-    # context is forwarded so a refusal ECHOES the buyer's context object, as it does on
-    # every other tool -- available here now that this tool builds a request.
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    principal_id = require_principal_id(identity, context=req.context)  # F-03: authenticated principal required
+    tenant = identity.tenant
+    principal_id = identity.principal.principal_id  # F-03: the boundary refused an anonymous caller
 
-    with WorkflowUoW(tenant["tenant_id"]) as uow:
+    with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
 
         # SCOPED TO THE CALLER'S PRINCIPAL. This listed the whole TENANT, so every buyer
@@ -315,7 +307,7 @@ async def _list_tasks_impl(
 
 async def _get_task_status_impl(
     req: GetTaskStatusRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> GetTaskStatusResponse:
     """The transport-agnostic implementation of ``get_task_status``.
 
@@ -325,12 +317,11 @@ async def _get_task_status_impl(
     """
     task_id = req.task_id
 
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    # F-03: an authenticated (non-anonymous) principal is required
-    principal_id = require_principal_id(identity, context=req.context)
+    tenant = identity.tenant
+    # F-03: an authenticated principal is required; the ResolvedIdentity carries one by type
+    principal_id = identity.principal.principal_id
 
-    with WorkflowUoW(tenant["tenant_id"]) as uow:
+    with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
 
         # SCOPED TO THE CALLER'S PRINCIPAL, which is what req.account's obligation amounts
@@ -432,7 +423,7 @@ def _task_history(task: Any) -> list[dict[str, Any]]:
 
 async def _complete_task_impl(
     req: CompleteTaskRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> CompleteTaskResponse:
     """The transport-agnostic implementation of ``complete_task``.
 
@@ -445,11 +436,10 @@ async def _complete_task_impl(
     response_data = req.response_data
     error_message = req.error_message
 
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    principal_id = require_principal_id(identity, context=req.context)  # F-03: an authenticated principal is required
+    tenant = identity.tenant
+    principal_id = identity.principal.principal_id  # F-03: the boundary refused an anonymous caller
 
-    with WorkflowUoW(tenant["tenant_id"]) as uow:
+    with WorkflowUoW(tenant.tenant_id) as uow:
         assert uow.workflows is not None
 
         # SCOPED, like the read. The same unscoped lookup made this a cross-principal
@@ -480,7 +470,7 @@ async def _complete_task_impl(
                 response_data=response_data,
             )
 
-        audit_logger = get_audit_logger("task_management", tenant["tenant_id"])
+        audit_logger = get_audit_logger("task_management", tenant.tenant_id)
         audit_logger.log_operation(
             operation="complete_task",
             principal_name="Manual Completion",

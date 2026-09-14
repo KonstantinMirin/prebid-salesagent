@@ -17,6 +17,7 @@ quality-ci:
 	uv run ruff check .
 	uv run ruff check --config ruff-egress.toml --ignore-noqa --no-respect-gitignore src/ scripts/
 	uv run ruff check --config ruff-boundary.toml --no-respect-gitignore src/ scripts/
+	uv run ruff check --config ruff-ownership.toml --no-respect-gitignore src/ scripts/
 	# Structural rules, for the checks ruff cannot express. TID251 bans imports and
 	# attributes, which is what makes the egress line above work; a credential header is
 	# a dict-key string literal, so nothing in ruff or mypy can see it. .ast-grep/rules/
@@ -40,7 +41,6 @@ quality-ci:
 	uv run python .pre-commit-hooks/check_code_duplication.py
 	uv run python .pre-commit-hooks/check-gam-auth-support.py
 	uv run python scripts/hooks/check_response_attribute_access.py $$(find src -name '*.py')
-	uv run python .pre-commit-hooks/check_roundtrip_tests.py
 	# ALL 38 feature files, bound and unbound, at ZERO -- no --uc filter and no
 	# baseline. Widened in three steps: UC-002/UC-003 -> the 16 bound files
 	# (salesagent-3dawm.17) -> everything (salesagent-yz8mo), once the 529

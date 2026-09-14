@@ -3,23 +3,17 @@
 import logging
 import time
 
-from fastmcp.server.context import Context
-
-from src.core.config_loader import set_current_tenant
-from src.core.database.repositories.principal_lookup import read_principal_name
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.tenant_context import LazyTenantContext
-from src.core.tool_context import ToolContext
+from src.core.resolved_identity import PublicIdentity
 from src.services.activity_feed import activity_feed
 
 logger = logging.getLogger(__name__)
 
 
-def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_name: str, start_time: float = None):
+def log_tool_activity(identity: PublicIdentity, tool_name: str, start_time: float | None = None):
     """Log tool activity to the activity feed.
 
     Args:
-        context: FastMCP Context, ToolContext, or ResolvedIdentity with principal/tenant info
+        identity: the resolved caller, carrying principal and tenant
         tool_name: Name of the tool being executed
         start_time: Optional start time for calculating response time
 
@@ -28,34 +22,14 @@ def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_na
     - Audit logs (for persistent dashboard activity feed)
     """
     try:
-        # Handle ResolvedIdentity (transport-agnostic)
-        if isinstance(context, ResolvedIdentity):
-            principal_id: str | None = context.principal_id
-            tenant: LazyTenantContext | None = context.tenant
-        # Handle ToolContext directly
-        elif isinstance(context, ToolContext):
-            principal_id = context.principal_id
-            tenant = LazyTenantContext(context.tenant_id)
-        else:
-            # Get principal and tenant context from FastMCP Context via unified path
-            # (Deleted) A resolve-from-Context fallback stood here. All four production
-            # callers of log_tool_activity pass a ResolvedIdentity, so the branch was dead
-            # AND it forced the lazy tenant to hydrate via `isinstance(identity.tenant, dict)`.
-            principal_id = None
-            tenant = None
-
-        # Set tenant context if returned
-        if tenant:
-            set_current_tenant(tenant)
-        else:
-            tenant = None  # the ambient channel is not a tenant context
+        principal_id = identity.principal_id
+        tenant = identity.tenant
 
         if not tenant:
             return
-        principal_name = "Unknown"
-
-        if principal_id:
-            principal_name = read_principal_name(tenant["tenant_id"], principal_id) or principal_name
+        # The identity carries the principal the resolver loaded, name included; nothing
+        # here loads a row.
+        principal_name = identity.principal.name if identity.principal is not None else "Unknown"
 
         # Calculate response time if start_time provided
         response_time_ms: int | None = None
@@ -64,7 +38,7 @@ def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_na
 
         # Log to activity feed (for WebSocket real-time updates)
         activity_feed.log_api_call(
-            tenant_id=tenant["tenant_id"],
+            tenant_id=tenant.tenant_id,
             principal_name=principal_name,
             method=tool_name,
             status_code=200,
@@ -76,7 +50,7 @@ def log_tool_activity(context: Context | ToolContext | ResolvedIdentity, tool_na
 
         from src.core.audit_logger import get_audit_logger
 
-        audit_logger = get_audit_logger("MCP", tenant["tenant_id"])
+        audit_logger = get_audit_logger("MCP", tenant.tenant_id)
         details: dict[str, Any] = {"tool": tool_name, "status": "success"}
         if response_time_ms:
             details["response_time_ms"] = response_time_ms

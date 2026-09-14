@@ -9,7 +9,6 @@ Handles media buy updates including:
 """
 
 import logging
-import os
 import uuid
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -19,6 +18,7 @@ from adcp.server.helpers import MEDIA_BUY_STATE_MACHINE, is_terminal_status, val
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 from adcp.types import MediaBuyStatus
 
+from src.core.config import get_settings
 from src.core.tools.media_buy_list import _compute_status
 
 if TYPE_CHECKING:
@@ -28,11 +28,9 @@ if TYPE_CHECKING:
 # Financial policy constants (F-05)
 # ---------------------------------------------------------------------------
 
-#: Absolute upper bound for any campaign-level budget update.
-#: Configurable via MAX_CAMPAIGN_BUDGET_USD env var; default 10,000,000.
-MAX_CAMPAIGN_BUDGET: Decimal = Decimal(os.environ.get("MAX_CAMPAIGN_BUDGET_USD", "10000000"))
+#: Absolute upper bound for any campaign-level budget update (MAX_CAMPAIGN_BUDGET_USD).
+MAX_CAMPAIGN_BUDGET: Decimal = get_settings().limits.max_campaign_budget_usd
 
-from adcp.types import ContextObject
 from sqlalchemy import select
 
 from src.core.exceptions import (
@@ -56,12 +54,6 @@ logger = logging.getLogger(__name__)
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 
 from src.core.audit_logger import get_audit_logger
-from src.core.auth import (
-    require_identity,
-    require_principal_id,
-    require_tenant,
-    resolve_principal_or_raise,
-)
 from src.core.context_manager import get_context_manager
 from src.core.database.models import (
     CreativeAssignment as DBAssignment,
@@ -85,17 +77,15 @@ from src.core.errors.details import (
     ValidationDetails,
 )
 from src.core.helpers.adapter_helpers import get_adapter
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
     SyncCreativesRequest,
-    UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.creatives import sync_creatives
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
@@ -176,7 +166,6 @@ def _validate_creatives_for_assignment(
     product: "DBProduct | None",
     field: str,
     product_name: str | None = None,
-    context: ContextObject | None = None,
 ) -> None:
     """Validate a set of creatives is assignable to a package.
 
@@ -217,7 +206,6 @@ def _validate_creatives_for_assignment(
             to name the array itself when the failure is about the collection.
         product_name: Display name for error messages (falls back to the
             product's name, then the product_id).
-        context: AdCP context object, flowed into the error envelope.
 
     Raises:
         AdCPCreativeNotFoundError: If any creative_id is not owned by this principal.
@@ -246,7 +234,6 @@ def _validate_creatives_for_assignment(
         raise AdCPCreativeNotFoundError(
             details=CreativeRefDetails(missing_creative_ids=sorted(missing_ids)),
             field=field,
-            context=context,
         )
 
     # (b) Status — terminal-state creatives are not assignable.
@@ -266,7 +253,6 @@ def _validate_creatives_for_assignment(
                     for c in bad_state
                 ]
             ),
-            context=context,
         )
 
     # (c) Format compatibility against the package's product.
@@ -305,7 +291,6 @@ def _validate_creatives_for_assignment(
             # FIXME(#2099): the product's DISPLAY NAME is prose, and product_id already
             # identifies it. Preserved for now because removing it changes the wire.
             details=ValidationDetails(accepted_values=[supported_display], product_id=display_name),
-            context=context,
         )
 
 
@@ -313,8 +298,6 @@ def _verify_principal(
     media_buy_id: str,
     identity: "ResolvedIdentity",
     repo: MediaBuyRepository,
-    *,
-    context: ContextObject | None = None,
 ) -> None:
     """Verify that the principal from identity owns the media buy.
 
@@ -330,17 +313,15 @@ def _verify_principal(
         AdCPMediaBuyNotFoundError: Media buy not found
         AdCPAuthorizationError: Principal doesn't own media buy
     """
-    principal_id = require_principal_id(identity, context=context)
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity, context=context)
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
 
     # Fetch the media buy (raises AdCPMediaBuyNotFoundError if absent)
-    media_buy = repo.get_by_id_or_raise(media_buy_id, context=context)
+    media_buy = repo.get_by_id_or_raise(media_buy_id)
 
     if media_buy.principal_id != principal_id:
         # Log security violation
-        security_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+        security_logger = get_audit_logger("AdCP", tenant.tenant_id)
         security_logger.log_security_violation(
             operation="access_media_buy",
             principal_id=principal_id,
@@ -354,7 +335,7 @@ def _verify_principal(
 
 def _update_media_buy_impl(
     req: UpdateMediaBuyRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: AccountIdentity,
 ) -> UpdateMediaBuyResult:
     """Shared implementation for update_media_buy (used by both MCP and A2A).
 
@@ -373,12 +354,8 @@ def _update_media_buy_impl(
     # Initialize tracking for affected packages (internal tracking, not part of schema)
     affected_packages_list: list[AffectedPackage] = []
 
-    identity = require_identity(identity, context=req.context)
-
-    principal_id = require_principal_id(identity, context=req.context)
-
-    # Tenant is resolved at the transport boundary (resolve_identity_from_context)
-    tenant = require_tenant(identity, context=req.context)
+    principal_id = identity.principal.principal_id
+    tenant = identity.tenant
 
     # SSRF gate at registration — after auth so unauthenticated callers get AUTH
     # first, and ABOVE the UoW so no DB transaction is held and a refused URL is
@@ -398,7 +375,6 @@ def _update_media_buy_impl(
         registration = accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
         pnc_url = registration.url
         if pnc_url is not None and str(pnc_url).strip():
@@ -412,7 +388,6 @@ def _update_media_buy_impl(
         reject_unsafe_webhook_registration_url(
             str(rw_url) if rw_url is not None else None,
             field="reporting_webhook.url",
-            context=req.context,
         )
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
@@ -430,7 +405,7 @@ def _update_media_buy_impl(
 
     with ctx_manager.audit_workflow_step_failure_ctx(lambda: step):
         # Single UoW for entire update operation — one session, one transaction
-        with MediaBuyUoW(tenant["tenant_id"]) as uow:
+        with MediaBuyUoW(tenant.tenant_id) as uow:
             assert uow.media_buys is not None
             # FIXME(#2128): raw session usages below should migrate to repository methods
             assert uow.session is not None
@@ -443,7 +418,7 @@ def _update_media_buy_impl(
                 raise AdCPValidationError()
 
             # Verify principal owns this media buy
-            _verify_principal(media_buy_id_to_use, identity, uow.media_buys, context=req.context)
+            _verify_principal(media_buy_id_to_use, identity, uow.media_buys)
 
             # State-machine precondition: terminal states reject all mutations,
             # and non-terminal states only accept actions in their valid set.
@@ -471,44 +446,38 @@ def _update_media_buy_impl(
                         field="media_buy_id",
                     )
 
-            # Extract testing context early (needed for dry_run check)
-            testing_ctx = identity.testing_context if identity.testing_context else AdCPTestContext()
-
             # Create or get persistent context and workflow step
             # (ctx_manager + step were hoisted before the try block so the
             # AdCPSalesAgentError / Exception handlers can mark the step as failed)
             ctx_id = None
             persistent_ctx = None
 
-            if not testing_ctx.dry_run:
-                persistent_ctx = ctx_manager.get_or_create_context(
-                    tenant_id=tenant["tenant_id"],
-                    principal_id=principal_id,  # Now guaranteed to be str
-                    context_id=ctx_id,
-                    is_async=True,
-                )
+            persistent_ctx = ctx_manager.get_or_create_context(
+                tenant_id=tenant.tenant_id,
+                principal_id=principal_id,  # Now guaranteed to be str
+                context_id=ctx_id,
+                is_async=True,
+            )
 
-                # Verify persistent_ctx is not None. In the async path this is
-                # only None when a buyer-supplied context_id does not resolve —
-                # a not-found condition, not a transient adapter outage.
-                if persistent_ctx is None:
-                    raise AdCPContextNotFoundError(
-                        details=EntityRefDetails(context_id=ctx_id), field="context_id", context=req.context
-                    )
+            # Verify persistent_ctx is not None. In the async path this is
+            # only None when a buyer-supplied context_id does not resolve —
+            # a not-found condition, not a transient adapter outage.
+            if persistent_ctx is None:
+                raise AdCPContextNotFoundError(details=EntityRefDetails(context_id=ctx_id), field="context_id")
 
-                # Create workflow step for this tool call
-                step = ctx_manager.create_workflow_step(
-                    context_id=persistent_ctx.context_id,  # Now safe to access
-                    step_type="tool_call",
-                    owner="principal",
-                    status="in_progress",
-                    tool_name="update_media_buy",
-                    request_data=req,
-                )
+            # Create workflow step for this tool call
+            step = ctx_manager.create_workflow_step(
+                context_id=persistent_ctx.context_id,  # Now safe to access
+                step_type="tool_call",
+                owner="principal",
+                status="in_progress",
+                tool_name="update_media_buy",
+                request_data=req,
+            )
 
-            principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
+            principal = identity.principal
 
-            adapter = get_adapter(principal, dry_run=testing_ctx.dry_run, testing_context=testing_ctx, tenant=tenant)
+            adapter = get_adapter(identity)
             today = date.today()
 
             # AdCP 3.0.0 spec (core/product.json `property_targeting_allowed`): reject property_list targeting
@@ -557,59 +526,8 @@ def _update_media_buy_impl(
                         property_targeting_violations.append(violation)
                 raise_if_property_targeting_violations(property_targeting_violations)
 
-            # Dry-run mode: Return simulated response without any database writes
-            # Validation has passed (principal verified, media buy exists), so we return what WOULD be updated
-            if testing_ctx.dry_run:
-                logger.info(f"[DRY_RUN] Returning simulated update response for media_buy_id={req.media_buy_id}")
-
-                # Build simulated affected packages from request
-                simulated_affected: list[AffectedPackage] = []
-                if req.packages:
-                    for pkg_update in req.packages:
-                        simulated_affected.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id or "",
-                                paused=pkg_update.paused if pkg_update.paused is not None else False,
-                                buyer_package_ref=pkg_update.package_id,
-                                changes_applied={"dry_run": True, "would_update": pkg_update},
-                            )
-                        )
-
-                # Look up current status for valid_actions (date-refined for
-                # parity with get_media_buys — see _adcp_status_and_actions).
-                _dry_run_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "", context=req.context)
-
-                # Build simulated response.
-                # The wire status="completed" is KEPT for dry_run and is
-                # spec-correct (PR #1567): spec 3.1.1
-                # update-media-buy-response.json has exactly three variants
-                # (Success/Error/Submitted) and NO simulation envelope; dry_run is a
-                # (deprecated) testing hook (X-Dry-Run header), not a wire field, and the
-                # spec is SILENT on a dry_run response status -> production authoritative.
-                # Unlike pending-approval (-> UpdateMediaBuySubmitted) and reject
-                # (-> Error), a dry_run buyer asked to SIMULATE the would-be
-                # outcome, which IS completion -> "completed" is a truthful preview, not a
-                # lie. Guarded by tests/integration/test_media_buy_dry_run_status.py.
-                _dry_run_revision = _dry_run_mb.revision
-                _dry_run_mbs, _dry_run_actions = _adcp_status_and_actions(_dry_run_mb)
-                dry_run_response = UpdateMediaBuySuccess(
-                    media_buy_id=req.media_buy_id or "",
-                    message=f"Media buy {req.media_buy_id or ''} updated successfully.",
-                    # A dry run applies nothing, so it reports the CURRENT token, not a bump.
-                    revision=_dry_run_revision,
-                    media_buy_status=_dry_run_mbs,  # AdCP 3.1: mirrors `status`
-                    affected_packages=simulated_affected,
-                    valid_actions=_dry_run_actions,
-                    context=req.context,
-                    errors=property_list_unsupported_advisories(req.packages, adapter),
-                )
-
-                dry_run_response.status = AdcpTaskStatus.completed
-                return dry_run_response
-
-            # Type narrowing: after dry_run early return, step and persistent_ctx are guaranteed to exist
-            assert step is not None, "step should be created when not in dry_run mode"
-            assert persistent_ctx is not None, "persistent_ctx should be created when not in dry_run mode"
+            assert step is not None
+            assert persistent_ctx is not None
 
             # Check if manual approval is required
             manual_approval_required = adapter.manual_approval_required
@@ -627,7 +545,6 @@ def _update_media_buy_impl(
                 approval_response = UpdateMediaBuySubmitted(
                     task_id=step.step_id,
                     message=f"Media buy update submitted for approval (task {step.step_id}).",
-                    context=req.context,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
                 )
                 ctx_manager.audit_workflow_step_result(
@@ -670,7 +587,6 @@ def _update_media_buy_impl(
                     if not currency_limit:
                         raise AdCPCapabilityNotSupportedError(
                             details=CapabilityRefusalDetails(capability="currency", rejected_value=request_currency),
-                            context=req.context,
                         )
 
                     start = req.start_time if req.start_time else media_buy.start_time
@@ -720,7 +636,6 @@ def _update_media_buy_impl(
                                 raise_if_validation_failed(
                                     package_daily_spend_error,
                                     exc_type=AdCPBudgetExceededError,
-                                    context=req.context,
                                 )
 
             # Handle campaign-level updates
@@ -734,75 +649,56 @@ def _update_media_buy_impl(
                     budget=None,
                     today=utc_flight_start(today),
                 )
-                # Manual approval case - convert adapter result to appropriate Success/Error
-                # adcp v1.2.1 oneOf pattern: Check if result is Error variant (has errors field)
-                if isinstance(result, UpdateMediaBuyError) and result.errors:
-                    error_response = UpdateMediaBuyError(
-                        errors=result.errors,
-                        status=AdcpTaskStatus.failed,
-                        message=f"Media buy update encountered {len(result.errors)} error(s)."
-                        if result.errors
-                        else "Media buy update failed.",
-                    )
-                    ctx_manager.audit_workflow_step_result(
-                        step.step_id,
-                        error_response,
-                        status="failed",
-                        error_message=result.errors[0].message if result.errors else "Pause/resume failed",
-                    )
-                    return error_response
-                else:
-                    # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields
-                    # Use getattr to safely access discriminated union fields
-                    media_buy_id = getattr(result, "media_buy_id", req.media_buy_id or "")
-                    affected_pkgs = getattr(result, "affected_packages", [])
+                # An adapter reports failure by raising; a returned result is the success.
+                media_buy_id = result.media_buy_id
+                affected_pkgs = result.affected_packages
 
-                    # Derive post-action status from the DB (date-refined for parity
-                    # with get_media_buys — see _adcp_status_and_actions) so
-                    # valid_actions reflects what the buyer can actually do next.
-                    # Fall back to the current state-machine target only if the DB
-                    # row is missing (e.g., adapter deleted it under us) — no row
-                    # means no dates to refine.
-                    # Persist the pause/resume OURSELVES. The adapter call above changes the
-                    # ad server, not our row -- and this branch wrote nothing, so two things
-                    # were silently lost. ``is_paused`` is read by _adcp_status_and_actions
-                    # to derive the status we report, so a paused buy kept reporting as
-                    # un-paused; and ``revision`` is the buyer's optimistic-concurrency
-                    # token, which update-media-buy-response.json defines as "Revision
-                    # number after this update", so the response returned the value from
-                    # BEFORE the write. update_fields sets the column, bumps the revision and
-                    # flushes, so the read below sees both.
-                    uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
+                # Derive post-action status from the DB (date-refined for parity
+                # with get_media_buys — see _adcp_status_and_actions) so
+                # valid_actions reflects what the buyer can actually do next.
+                # Fall back to the current state-machine target only if the DB
+                # row is missing (e.g., adapter deleted it under us) — no row
+                # means no dates to refine.
+                # Persist the pause/resume OURSELVES. The adapter call above changes the
+                # ad server, not our row -- and this branch wrote nothing, so two things
+                # were silently lost. ``is_paused`` is read by _adcp_status_and_actions
+                # to derive the status we report, so a paused buy kept reporting as
+                # un-paused; and ``revision`` is the buyer's optimistic-concurrency
+                # token, which update-media-buy-response.json defines as "Revision
+                # number after this update", so the response returned the value from
+                # BEFORE the write. update_fields sets the column, bumps the revision and
+                # flushes, so the read below sees both.
+                uow.media_buys.update_fields(media_buy_id, is_paused=bool(req.paused))
 
-                    _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id, context=req.context)
-                    _post_action_revision = _post_action_mb.revision
-                    _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
-                    success_response = UpdateMediaBuySuccess(
-                        media_buy_id=media_buy_id,
-                        message=f"Media buy {media_buy_id} updated successfully.",
-                        revision=_post_action_revision,
-                        media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
-                        affected_packages=affected_pkgs,
-                        valid_actions=_post_action_actions,
-                        errors=property_list_unsupported_advisories(req.packages, adapter),
-                    )
-                    # Log successful update_media_buy (pause/resume)
-                    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
-                    audit_logger.log_operation(
-                        operation="update_media_buy",
-                        principal_name=principal_id or "anonymous",
-                        principal_id=principal_id or "anonymous",
-                        adapter_id="mcp_server",
-                        success=True,
-                        details={
-                            "media_buy_id": req.media_buy_id,
-                            "action": action,
-                            "affected_packages_count": len(affected_pkgs),
-                        },
-                    )
-                    ctx_manager.audit_workflow_step_result(step.step_id, success_response)
-                    success_response.status = AdcpTaskStatus.completed
-                    return success_response
+                _post_action_mb = uow.media_buys.get_by_id_or_raise(media_buy_id)
+                _post_action_revision = _post_action_mb.revision
+                _post_action_mbs, _post_action_actions = _adcp_status_and_actions(_post_action_mb)
+                success_response = UpdateMediaBuySuccess(
+                    media_buy_id=media_buy_id,
+                    message=f"Media buy {media_buy_id} updated successfully.",
+                    revision=_post_action_revision,
+                    media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
+                    affected_packages=affected_pkgs,
+                    valid_actions=_post_action_actions,
+                    errors=property_list_unsupported_advisories(req.packages, adapter),
+                )
+                # Log successful update_media_buy (pause/resume)
+                audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
+                audit_logger.log_operation(
+                    operation="update_media_buy",
+                    principal_name=principal_id or "anonymous",
+                    principal_id=principal_id or "anonymous",
+                    adapter_id="mcp_server",
+                    success=True,
+                    details={
+                        "media_buy_id": req.media_buy_id,
+                        "action": action,
+                        "affected_packages_count": len(affected_pkgs),
+                    },
+                )
+                ctx_manager.audit_workflow_step_result(step.step_id, success_response)
+                success_response.status = AdcpTaskStatus.completed
+                return success_response
 
             # Handle package-level updates
             if req.packages:
@@ -814,43 +710,20 @@ def _update_media_buy_impl(
                     if pkg_update.paused is not None:
                         # adcp 2.12.0+: paused=True means pause, paused=False means resume
                         action = "pause_package" if pkg_update.paused else "resume_package"
-                        result = adapter.update_media_buy(
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
                             action=action,
                             package_id=pkg_update.package_id,
                             budget=None,
                             today=utc_flight_start(today),
                         )
-                        # adcp v1.2.1 oneOf pattern: Check if result is Error variant
-                        if isinstance(result, UpdateMediaBuyError) and result.errors:
-                            error_message = (
-                                result.errors[0].message
-                                if (result.errors and len(result.errors) > 0)
-                                else "Update failed"
-                            )
-                            response_data = UpdateMediaBuyError(
-                                errors=result.errors,
-                                status=AdcpTaskStatus.failed,
-                                message=f"Media buy update encountered {len(result.errors)} error(s)."
-                                if result.errors
-                                else "Media buy update failed.",
-                            )
-                            ctx_manager.audit_workflow_step_result(
-                                step.step_id,
-                                response_data,
-                                status="failed",
-                                error_message=error_message,
-                            )
-                            return response_data
 
                     # Handle budget updates
                     if pkg_update.budget is not None:
                         # Validate package_id is provided (required for budget updates)
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
                         # Extract budget amount - handle both float and Budget object
                         budget_amount: float
                         currency: str
@@ -873,10 +746,7 @@ def _update_media_buy_impl(
                             Decimal(str(budget_amount)), field=package_field_path("budget", pkg_index)
                         )
                         if budget_positive_err:
-                            raise AdCPBudgetTooLowError(
-                                field=package_field_path("budget", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPBudgetTooLowError(field=package_field_path("budget", pkg_index))
 
                         assert uow.currency_limits is not None
                         _cl = uow.currency_limits.get_for_currency(currency)
@@ -895,7 +765,6 @@ def _update_media_buy_impl(
                             raise_if_validation_failed(
                                 package_min_budget_error,
                                 exc_type=AdCPBudgetTooLowError,
-                                context=req.context,
                             )
 
                         # The package must exist in the media buy before we hand the
@@ -903,38 +772,16 @@ def _update_media_buy_impl(
                         # no-ops (quiet failure). Checked after the budget-value
                         # validation so a malformed budget still surfaces BUDGET_TOO_LOW.
                         # Raise PACKAGE_NOT_FOUND (BR-UC-003 ext-l).
-                        uow.media_buys.get_package_or_raise(
-                            req.media_buy_id, pkg_update.package_id, context=req.context
-                        )
+                        uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
 
-                        result = adapter.update_media_buy(
+                        # Failure is raised by the adapter, never returned.
+                        adapter.update_media_buy(
                             media_buy_id=req.media_buy_id,
                             action="update_package_budget",
                             package_id=pkg_update.package_id,
                             budget=int(budget_amount),
                             today=utc_flight_start(today),
                         )
-                        # adcp v1.2.1 oneOf pattern: Check if result is Error variant
-                        if isinstance(result, UpdateMediaBuyError) and result.errors:
-                            error_message = (
-                                result.errors[0].message
-                                if (result.errors and len(result.errors) > 0)
-                                else "Update failed"
-                            )
-                            response_data = UpdateMediaBuyError(
-                                errors=result.errors,
-                                status=AdcpTaskStatus.failed,
-                                message=f"Media buy update encountered {len(result.errors)} error(s)."
-                                if result.errors
-                                else "Media buy update failed.",
-                            )
-                            ctx_manager.audit_workflow_step_result(
-                                step.step_id,
-                                response_data,
-                                status="failed",
-                                error_message=error_message,
-                            )
-                            return response_data
 
                         # Track budget update in affected_packages
                         # At this point, pkg_update.package_id is guaranteed to be str (checked above)
@@ -953,13 +800,10 @@ def _update_media_buy_impl(
                     if pkg_update.creative_ids is not None:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         # Resolve media_buy_id
-                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
+                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
 
                         # Use the actual internal media_buy_id
                         actual_media_buy_id = media_buy_obj.media_buy_id
@@ -980,12 +824,11 @@ def _update_media_buy_impl(
                             principal_id=principal_id,
                             product=product,
                             field=package_field_path("creative_ids", pkg_index),
-                            context=req.context,
                         )
 
                         # Get existing assignments for this package
                         assignment_stmt = select(DBAssignment).where(
-                            DBAssignment.tenant_id == tenant["tenant_id"],
+                            DBAssignment.tenant_id == tenant.tenant_id,
                             DBAssignment.media_buy_id == actual_media_buy_id,
                             DBAssignment.package_id == pkg_update.package_id,
                         )
@@ -1007,7 +850,7 @@ def _update_media_buy_impl(
                             assignment_id = f"assign_{uuid.uuid4().hex[:12]}"
                             assignment = DBAssignment(
                                 assignment_id=assignment_id,
-                                tenant_id=tenant["tenant_id"],
+                                tenant_id=tenant.tenant_id,
                                 principal_id=principal_id,
                                 media_buy_id=actual_media_buy_id,
                                 package_id=pkg_update.package_id,
@@ -1052,10 +895,7 @@ def _update_media_buy_impl(
                     if pkg_update.creatives:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         # Sync creatives (upload/update)
                         # Built through the SAME builder the three transports use, rather
@@ -1076,7 +916,6 @@ def _update_media_buy_impl(
                             # ITS OWN key: required by the schema, never read by the service,
                             # and never the outer request's -- see creative_helpers.
                             idempotency_key=f"internal-creative-upload-{uuid.uuid4().hex}",
-                            context=req.context,
                             # The typed Assignment the request model declares, not the
                             # {creative_id: [package_id]} map this used to build. That
                             # map was a second, internal-only spelling of the same
@@ -1097,7 +936,6 @@ def _update_media_buy_impl(
                         failed_creatives = [r for r in sync_response.creatives if r.action == "failed"]
                         if failed_creatives:
                             raise AdCPAdapterError(
-                                context=req.context,
                                 # ``e.code`` rather than ``e.message``: the message is a
                                 # function of the code through CODE_TABLE, so the code is
                                 # the fact and the sentence is derivable from it. Sending
@@ -1133,13 +971,10 @@ def _update_media_buy_impl(
                     if pkg_update.creative_assignments:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         # Resolve media_buy_id
-                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
+                        media_buy_obj = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
 
                         actual_media_buy_id = media_buy_obj.media_buy_id
 
@@ -1161,7 +996,6 @@ def _update_media_buy_impl(
                             principal_id=principal_id,
                             product=ca_product,
                             field=package_field_path("creative_assignments", pkg_index),
-                            context=req.context,
                         )
 
                         # Validate placement_ids against product's available placements (adcp#208)
@@ -1173,9 +1007,7 @@ def _update_media_buy_impl(
 
                         if all_requested_placement_ids:
                             # Get package to find product_id
-                            pkg_record = uow.media_buys.get_package_or_raise(
-                                actual_media_buy_id, pkg_update.package_id, context=req.context
-                            )
+                            pkg_record = uow.media_buys.get_package_or_raise(actual_media_buy_id, pkg_update.package_id)
 
                             product_id = (
                                 pkg_record.package_config.get("product_id") if pkg_record.package_config else None
@@ -1184,7 +1016,7 @@ def _update_media_buy_impl(
                             if product_id:
                                 # Get product's placements
                                 prod_stmt = select(DBProduct).where(
-                                    DBProduct.tenant_id == tenant["tenant_id"],
+                                    DBProduct.tenant_id == tenant.tenant_id,
                                     DBProduct.product_id == product_id,
                                 )
                                 product_obj = session.scalars(prod_stmt).first()
@@ -1197,15 +1029,11 @@ def _update_media_buy_impl(
                                     }
                                     invalid_ids = all_requested_placement_ids - available_placement_ids
                                     if invalid_ids:
-                                        raise AdCPValidationError(
-                                            field="creative_assignments[].placement_ids",
-                                            context=req.context,
-                                        )
+                                        raise AdCPValidationError(field="creative_assignments[].placement_ids")
                                 elif product_obj and not product_obj.placements:
                                     # Product doesn't define placements, so placement targeting not supported
                                     raise AdCPCapabilityNotSupportedError(
                                         details=CapabilityRefusalDetails(product_id=product_id),
-                                        context=req.context,
                                     )
 
                         updated_assignments = []
@@ -1216,7 +1044,7 @@ def _update_media_buy_impl(
                         # in the new list, matching the creative_ids handler pattern.
                         requested_creative_ids = {ca.creative_id for ca in pkg_update.creative_assignments}
                         existing_stmt = select(DBAssignment).where(
-                            DBAssignment.tenant_id == tenant["tenant_id"],
+                            DBAssignment.tenant_id == tenant.tenant_id,
                             DBAssignment.media_buy_id == actual_media_buy_id,
                             DBAssignment.package_id == pkg_update.package_id,
                         )
@@ -1236,7 +1064,7 @@ def _update_media_buy_impl(
                             # principals (composite creatives PK), and the create branch
                             # below inserts under the requester's principal.
                             assign_stmt = select(DBAssignment).where(
-                                DBAssignment.tenant_id == tenant["tenant_id"],
+                                DBAssignment.tenant_id == tenant.tenant_id,
                                 DBAssignment.principal_id == principal_id,
                                 DBAssignment.media_buy_id == actual_media_buy_id,
                                 DBAssignment.package_id == pkg_update.package_id,
@@ -1259,7 +1087,7 @@ def _update_media_buy_impl(
                                 assignment_id = f"assign_{uuid_module.uuid4().hex[:12]}"
                                 new_assignment = DBAssignment(
                                     assignment_id=assignment_id,
-                                    tenant_id=tenant["tenant_id"],
+                                    tenant_id=tenant.tenant_id,
                                     principal_id=principal_id,
                                     media_buy_id=actual_media_buy_id,
                                     package_id=pkg_update.package_id,
@@ -1303,17 +1131,12 @@ def _update_media_buy_impl(
                     if pkg_update.targeting_overlay is not None:
                         # Validate package_id is provided
                         if not pkg_update.package_id:
-                            raise AdCPValidationError(
-                                field=package_field_path("package_id", pkg_index),
-                                context=req.context,
-                            )
+                            raise AdCPValidationError(field=package_field_path("package_id", pkg_index))
 
                         from sqlalchemy.orm import attributes
 
                         # Get the package via repository
-                        media_package = uow.media_buys.get_package_or_raise(
-                            req.media_buy_id, pkg_update.package_id, context=req.context
-                        )
+                        media_package = uow.media_buys.get_package_or_raise(req.media_buy_id, pkg_update.package_id)
 
                         # property_targeting_allowed validation runs earlier (before dry_run gate);
                         # by this point the request is known-valid against that rule.
@@ -1369,7 +1192,7 @@ def _update_media_buy_impl(
 
                 if update_values:
                     # Get existing media buy to check date range consistency
-                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id, context=req.context)
+                    existing_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id)
 
                     # Validate date range: end_time must be after start_time
                     # Type guard: Ensure we're working with datetime objects (not SQLAlchemy DateTime)
@@ -1390,10 +1213,7 @@ def _update_media_buy_impl(
                         )
 
                     if final_start_time and final_end_time and final_end_time <= final_start_time:
-                        raise AdCPValidationError(
-                            field="end_time",
-                            context=req.context,
-                        )
+                        raise AdCPValidationError(field="end_time")
 
                     uow.media_buys.update_fields(req.media_buy_id, **update_values)
                     logger.warning(
@@ -1415,12 +1235,11 @@ def _update_media_buy_impl(
             # Build final response first
             logger.info(f"[update_media_buy] Final affected_packages before return: {affected_packages_list}")
 
-            # UpdateMediaBuySuccess extends adcp v1.2.1 with internal fields (workflow_step_id, affected_packages)
             # affected_packages_list contains AffectedPackage objects with both:
             # - AdCP-required fields (package_id) for spec compliance
             # - Internal tracking fields (buyer_package_ref, changes_applied) excluded via exclude=True
 
-            _final_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "", context=req.context)
+            _final_mb = uow.media_buys.get_by_id_or_raise(req.media_buy_id or "")
             _final_revision = _final_mb.revision
             _final_mbs, _final_actions = _adcp_status_and_actions(_final_mb)
             final_response = UpdateMediaBuySuccess(
@@ -1430,12 +1249,11 @@ def _update_media_buy_impl(
                 media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
-                context=req.context,
                 errors=property_list_unsupported_advisories(req.packages, adapter),
             )
 
             # Log successful update_media_buy call
-            audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+            audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
             audit_logger.log_operation(
                 operation="update_media_buy",
                 principal_name=principal_id or "anonymous",

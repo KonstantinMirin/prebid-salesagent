@@ -7,7 +7,6 @@ This runs as a background task and sends reports when GAM data is fresh (after 4
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -17,6 +16,7 @@ from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
 from sqlalchemy import func, select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
@@ -32,8 +32,8 @@ from src.services.protocol_webhook_service import get_protocol_webhook_service
 logger = logging.getLogger(__name__)
 
 # 1 hour because AdCP protocol has frequency options hourly, daily and monthly
-# Configurable via env var for testing
-SLEEP_INTERVAL_SECONDS = int(os.getenv("DELIVERY_WEBHOOK_INTERVAL") or "3600")
+# Configurable via DELIVERY_WEBHOOK_INTERVAL for testing
+SLEEP_INTERVAL_SECONDS = get_settings().limits.delivery_webhook_interval
 
 
 class DeliveryWebhookScheduler:
@@ -217,13 +217,13 @@ class DeliveryWebhookScheduler:
 
             if not isinstance(delivery_response, GetMediaBuyDeliveryResponse):
                 logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response.model_dump()}"
+                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. Result is {delivery_response!r}"
                 )
                 return
 
             if delivery_response.errors is not None:
                 logger.warning(
-                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have recieved error in the result. Result is {delivery_response.model_dump()}"
+                    f"`Couldn't get media_delivery` for {media_buy.media_buy_id}. We have received an error in the result. Result is {delivery_response!r}"
                 )
                 return
 

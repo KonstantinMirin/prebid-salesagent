@@ -92,8 +92,7 @@ def adcp_error_for_status(
     finding documented, where an inline ``400 <= status < 500`` was only correct
     because 429 happened to be checked first, in TWO places that could drift
     independently); ``status is None`` (a transport failure, never reached the
-    wire) -> ``SERVICE_UNAVAILABLE`` worded "unreachable"; any other status (a
-    5xx) -> ``SERVICE_UNAVAILABLE`` worded "unavailable".
+    wire) and any other status (a 5xx) -> ``SERVICE_UNAVAILABLE``.
 
     Requires an :class:`OperatorEndpoint`. Structurally unreachable with a
     :class:`CounterpartyUrl` today: ``raise_mapped_outbound_error`` re-raises
@@ -116,26 +115,17 @@ def adcp_error_for_status(
     """
     if not isinstance(provenance, OperatorEndpoint):
         raise AssertionError(f"adcp_error_for_status classifies operator-endpoint failures only; got {provenance!r}")
-    label = provenance.name
 
-    # The label names an operator-configured endpoint, which is on the AdCP 3.1.1
+    # The endpoint's name stays out of the error: it is on the AdCP 3.1.1
     # transport-errors.mdx Security Considerations MUST-NOT list for buyer-facing
-    # text ("internal service names, hostnames, or IP addresses"). It therefore
-    # rides ``internal_detail`` -- server log only, emitted by ``adcp_error_for()``
-    # -- instead of a ``message``, which the constructor no longer accepts at all:
-    # buyer-facing text is a function of the code, resolved from CODE_TABLE
-    # (ADR-010). The classification each branch makes is unchanged; only where the
-    # sentence goes is.
+    # text ("internal service names, hostnames, or IP addresses"), and buyer-facing
+    # text is a function of the code, resolved from CODE_TABLE (ADR-010). The
+    # caller logs the name at the call site, where the original exception is.
     if status == 429:
-        return AdCPRateLimitError(
-            internal_detail=f"{label} is rate-limited.",
-            retry_after=clamp_retry_after(retry_after) if retry_after is not None else None,
-        )
+        return AdCPRateLimitError(retry_after=clamp_retry_after(retry_after) if retry_after is not None else None)
     if status is not None and 400 <= status < 500:
-        return AdCPConfigurationError(internal_detail=f"{label} rejected the request.")
-    if status is None:
-        return AdCPServiceUnavailableError(internal_detail=f"{label} is unreachable.")
-    return AdCPServiceUnavailableError(internal_detail=f"{label} is unavailable.")
+        return AdCPConfigurationError()
+    return AdCPServiceUnavailableError()
 
 
 def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance, logger: logging.Logger) -> NoReturn:
@@ -172,12 +162,7 @@ def raise_mapped_outbound_error(exc: OutboundError, *, provenance: UrlProvenance
 
     if isinstance(exc, OutboundRequestBlocked):
         logger.error("Egress policy refused the configured endpoint for %s", provenance.name)
-        raise AdCPConfigurationError(
-            # Names the endpoint, so server log only -- see adcp_error_for_status.
-            internal_detail=(
-                f"The configured endpoint for {provenance.name} is not reachable under this deployment's egress policy."
-            )
-        ) from exc
+        raise AdCPConfigurationError(internal_detail=exc) from exc
 
     # OutboundError has exactly two concrete subclasses; OutboundRequestBlocked
     # was excluded above, so this is OutboundDeliveryFailed -- a type narrowing,

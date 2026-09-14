@@ -30,7 +30,7 @@ import re
 import pytest
 
 from src.core.schemas import GetAdcpCapabilitiesRequest
-from tests.helpers.envelope_assertions import raises_adcp
+from tests.factories.principal import PrincipalFactory
 
 
 class TestSupportedAdcpVersionsDerivation:
@@ -158,26 +158,10 @@ class TestNegotiateAdcpVersion:
 class TestBoundaryNegotiatesForEveryTool:
     """Plan step 3: negotiation is the boundary's, so no tool can skip it.
 
-    ``_get_adcp_capabilities_impl`` no longer negotiates. Asserting the raise against
-    that function would now grade nothing -- these drive ``invoke_tool``, the single path
-    every transport takes.
+    ``_get_adcp_capabilities_impl`` no longer negotiates. That the boundary refuses a bad
+    pin is graded on the wire by BR-PROTOCOL-001 and BR-UC-010's adcp_version scenarios;
+    this class keeps only the implementation-level half.
     """
-
-    async def test_bad_version_pin_raises_even_without_tenant(self):
-        from src.core.auth_context import AuthContext
-        from src.core.config_loader import current_tenant
-        from src.core.exceptions import AdCPVersionUnsupportedError
-        from src.core.tools._boundary import invoke_tool
-
-        current_tenant.set(None)
-        req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
-
-        # A bare AuthContext -- no credential at all -- because the claim is that the pin is
-        # refused BEFORE anything about the caller matters. invoke_tool takes the credential
-        # and the protocol now, not a pre-resolved identity: the boundary resolves its own,
-        # and negotiation runs ahead of that.
-        with raises_adcp(AdCPVersionUnsupportedError):
-            await invoke_tool("get_adcp_capabilities", req, AuthContext(), "mcp")
 
     async def test_capabilities_impl_no_longer_negotiates_on_its_own(self):
         """The call site MOVED; it was not duplicated.
@@ -191,7 +175,7 @@ class TestBoundaryNegotiatesForEveryTool:
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
         # Reached directly, past the boundary, the implementation just answers.
-        response = _get_adcp_capabilities_impl(req, None)
+        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_identity(principal_id=None, tenant=None))
         assert response.adcp.supported_versions is not None
 
 
@@ -207,7 +191,7 @@ class TestBuildAdcpBlockDry:
         from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
 
         current_tenant.set(None)
-        response = _get_adcp_capabilities_impl(None, None)
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
 
         assert response.adcp.supported_versions is not None
         assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS

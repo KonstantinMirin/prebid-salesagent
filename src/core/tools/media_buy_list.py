@@ -119,12 +119,6 @@ class _PackageData:
 from adcp.server.helpers import valid_actions_for_status
 from adcp.types import MediaBuyStatus
 
-from src.core.auth import (
-    require_identity,
-    require_principal_id,
-    require_tenant,
-    resolve_principal_or_raise,
-)
 from src.core.database.models import CreativeAssignment, MediaBuy
 from src.core.database.repositories import MediaBuyUoW
 from src.core.database.repositories.creative import CreativeRepository
@@ -150,7 +144,7 @@ from src.core.schemas._pinned_fields import revision_minimum
 
 def _get_media_buys_impl(
     req: GetMediaBuysRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: ResolvedIdentity,
 ) -> GetMediaBuysResponse:
     """Get media buys with status, creative approval state, and optional delivery snapshots.
 
@@ -162,17 +156,13 @@ def _get_media_buys_impl(
     Returns:
         GetMediaBuysResponse with matching media buys
     """
-    identity = require_identity(identity, context=req.context)
-
     # get-media-buys-request.json, `account`: "Account to retrieve media buys for. When
     # omitted, returns data across all accessible accounts."
     #
-    # Keyed on the REQUEST, not the identity: identity.account_id can hold a default the buyer
-    # never sent, and filtering on that would narrow a listing the spec says spans all
-    # accessible accounts.
-    account_filter = identity.account_id if req.account is not None else None
+    # The resolver puts an account on the identity iff the REQUEST named one, so a None here
+    # is exactly "omitted": a listing that spans all accessible accounts, as the spec says.
+    account_filter = identity.account.account_id if identity.account is not None else None
 
-    testing_ctx = identity.testing_context
     # Both guards RAISE rather than degrading to an empty list plus a payload
     # advisory, and both now use the shared helpers every other media-buy tool
     # already uses -- get_media_buys was the one tool open-coding them, precisely
@@ -190,14 +180,11 @@ def _get_media_buys_impl(
     # unauthenticated request at the boundary and already return the two-layer
     # envelope -- which is why get_media_buys was the ONE tool of 16 answering a
     # fatal auth failure with HTTP 200 and isError:false (#1651).
-    principal_id = require_principal_id(identity, context=req.context)
-    principal = resolve_principal_or_raise(principal_id, tenant_id=identity.tenant_id, context=req.context)
-
-    # require_tenant raises the canonical auth envelope instead of a raw TypeError
-    # if no tenant resolved (the principal guards above take precedence).
-    tenant = require_tenant(identity, context=req.context)
+    principal = identity.principal
+    principal_id = principal.principal_id
+    tenant = identity.tenant
     today = datetime.now(UTC).date()
-    tenant_id: str = tenant["tenant_id"]
+    tenant_id: str = tenant.tenant_id
 
     # Every non-fatal per-row advisory lands here — a degraded optional field and an
     # omitted unrenderable row alike. Surfaced on the response so the buyer can
@@ -229,12 +216,7 @@ def _get_media_buys_impl(
     unavailable_reason: SnapshotUnavailableReason | None = None
 
     if req.include_snapshot:
-        adapter = get_adapter(
-            principal,
-            dry_run=testing_ctx.dry_run if testing_ctx else False,
-            testing_context=testing_ctx,
-            tenant=tenant,
-        )
+        adapter = get_adapter(identity)
         if adapter.capabilities.supports_realtime_reporting:
             # Build list of (media_buy_id, package_id, platform_line_item_id) for the adapter
             package_refs = []
@@ -406,7 +388,6 @@ def _get_media_buys_impl(
 
     return GetMediaBuysResponse(
         media_buys=response_media_buys,
-        context=req.context,
         errors=row_advisories or None,
         message=f"Found {len(response_media_buys)} media buy{'s' if len(response_media_buys) != 1 else ''}."
         if response_media_buys
@@ -656,22 +637,18 @@ def _persisted_revision(buy) -> int:
     minimum = revision_minimum()
     revision = buy.revision
     if revision is None or revision < minimum:
-        # The buy and the refused value travel as typed details, and the bound as
-        # server-log-only provenance: buyer-facing text is a function of the code
-        # (``AdCPSalesAgentError.message``), so this raise site names the subject
-        # instead of writing the sentence — the same shape the sibling status door
-        # uses (``PersistedMediaBuyStatus.parse``). ``accepted_values`` stays unset:
-        # the pin states a MINIMUM here, not an enumerable member set.
+        # The buy and the refused value travel as typed details: buyer-facing text
+        # is a function of the code (``AdCPSalesAgentError.message``), so this raise
+        # site names the subject instead of writing the sentence — the same shape
+        # the sibling status door uses (``PersistedMediaBuyStatus.parse``).
+        # ``accepted_values`` stays unset: the pin states a MINIMUM here, not an
+        # enumerable member set.
         raise AdCPPersistedStateError(
             details=ConfigurationDetails(
                 media_buy_id=buy.media_buy_id,
                 rejected_value=repr(revision),
             ),
             field="revision",
-            internal_detail=(
-                f"media buy {buy.media_buy_id!r} carries persisted revision {revision!r}, below the "
-                f"pinned minimum of {minimum}; the optimistic-concurrency token cannot be published"
-            ),
         )
     return revision
 

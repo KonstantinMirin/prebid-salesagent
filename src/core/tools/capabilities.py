@@ -44,7 +44,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 )
 
 from src.adapters.base import TargetingCapabilities
-from src.core.auth import require_identity
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.errors.codes import ErrorCode
@@ -53,18 +52,16 @@ from src.core.exceptions import AdCPConfigurationError
 from src.core.helpers import enum_value
 from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import (
-    get_adapter_channels_override,
     get_adapter_class_for_tenant,
-    get_targeting_capabilities_override,
 )
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from src.core.schemas.capability_declarations import (
     DEFAULT_SPECIALISMS,
     DEFAULT_SUPPORTED_PROTOCOLS,
     CapabilityDeclarations,
 )
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -157,7 +154,7 @@ def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable
         return default
 
 
-def _build_adcp_block(tenant: LazyTenantContext | None) -> Adcp:
+def _build_adcp_block(tenant: TenantContext | None) -> Adcp:
     """Build the top-level adcp.* envelope -- single source for both the
     no-tenant minimal response and the tenant-resolved full response
     (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
@@ -182,7 +179,7 @@ def _build_adcp_block(tenant: LazyTenantContext | None) -> Adcp:
     )
 
 
-def _build_account_block(tenant: LazyTenantContext) -> AccountCapabilities | None:
+def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
     """Build the account block from real tenant config -- never fabricated.
 
     Returns None when the seller supports NO billing model. The block is
@@ -300,7 +297,7 @@ def _build_geo_postal_areas(targeting_caps: TargetingCapabilities | None) -> Pos
 
 
 def _get_adcp_capabilities_impl(
-    req: GetAdcpCapabilitiesRequest | None = None, identity: ResolvedIdentity | None = None
+    req: GetAdcpCapabilitiesRequest | None, identity: PublicIdentity
 ) -> GetAdcpCapabilitiesResponse:
     """Shared implementation for get_adcp_capabilities.
 
@@ -318,8 +315,7 @@ def _get_adcp_capabilities_impl(
     # can forget to ask. It stays un-tenant-gated by construction: the boundary rejects before
     # an identity is enriched, let alone a tenant read.
 
-    # Extract tenant from resolved identity
-    tenant = identity.tenant if identity else None
+    tenant = identity.tenant
 
     if not tenant:
         # Return minimal capabilities if no tenant context
@@ -329,14 +325,10 @@ def _get_adcp_capabilities_impl(
             specialisms=list(_DEFAULT_SPECIALISMS),
             webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
             request_signing=_REQUEST_SIGNING_UNSUPPORTED,
-            context=req.context if req else None,
         )
 
-    # If we got here, tenant is truthy, which means identity was not None on line 84
-    identity = require_identity(identity, context=req.context if req else None)
-
-    tenant_id = tenant["tenant_id"]
-    tenant_name = tenant.get("name", "Unknown")
+    tenant_id = tenant.tenant_id
+    tenant_name = tenant.name
 
     # Log activity
     log_tool_activity(identity, "get_adcp_capabilities")
@@ -364,12 +356,7 @@ def _get_adcp_capabilities_impl(
     )
 
     def _map_adapter_channels() -> None:
-        # A per-tenant override wins over the adapter class's default, so a
-        # seller's configured channel set is honoured over a real transport and
-        # not just where the adapter object can be patched (#1871).
-        declared = get_adapter_channels_override(tenant)
-        if declared is None and adapter and hasattr(adapter, "default_channels"):
-            declared = adapter.default_channels
+        declared = adapter.default_channels if adapter and hasattr(adapter, "default_channels") else None
         for channel_name in declared or []:
             if channel_name.lower() in CHANNEL_MAPPING:
                 primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
@@ -419,12 +406,12 @@ def _get_adcp_capabilities_impl(
     # If no domains found, use a placeholder
     if not publisher_domains:
         # Use tenant name as placeholder domain
-        publisher_domains = [PublisherDomain(root=f"{tenant.get('subdomain', 'unknown')}.example.com")]
+        publisher_domains = [PublisherDomain(root=f"{tenant.subdomain}.example.com")]
 
     # Get advertising policies from tenant config
     advertising_policies: str | None = None
-    if tenant.get("advertising_policy"):
-        policy = tenant["advertising_policy"]
+    policy = tenant.advertising_policy
+    if policy:
         if isinstance(policy, dict) and policy.get("description"):
             advertising_policies = policy["description"]
 
@@ -468,15 +455,11 @@ def _get_adcp_capabilities_impl(
     # Same degrade-on-exception posture as the adapter-channels block above —
     # the override read is a DB call, not a hard requirement.
     def _resolve_targeting_caps() -> TargetingCapabilities | None:
-        resolved = get_targeting_capabilities_override(tenant)
-        # INSIDE the degradation boundary the comment above already claims to
-        # cover. The adapter call used to sit outside it, so an adapter raising
-        # here was an uncaught 500 instead of the advisory this block exists to
-        # record -- for the one call in the pair that talks to a third-party ad
-        # server and is therefore the likelier of the two to fail.
-        if resolved is None and adapter and hasattr(adapter, "get_targeting_capabilities"):
-            resolved = adapter.get_targeting_capabilities()
-        return resolved
+        # INSIDE the degradation boundary: an adapter raising here is recorded as an
+        # advisory, not surfaced as a 500.
+        if adapter and hasattr(adapter, "get_targeting_capabilities"):
+            return adapter.get_targeting_capabilities()
+        return None
 
     targeting_caps = _resolve_or_degrade(advisories, "targeting capabilities", _resolve_targeting_caps, default=None)
 
@@ -514,7 +497,7 @@ def _get_adcp_capabilities_impl(
     # get_adcp_capabilities response, so an invalid declaration must surface as a
     # terminal CONFIGURATION_ERROR here rather than being discovered only at some
     # future write surface. `None` (nothing declared) reproduces the pre-#1592 wire.
-    declarations = CapabilityDeclarations.from_tenant(tenant.get("capability_declarations"))
+    declarations = CapabilityDeclarations.from_tenant(tenant.capability_declarations)
 
     # Build execution capabilities. Declared blocks merge in; undeclared stay absent
     # (honest omission, never an empty object).
@@ -572,7 +555,6 @@ def _get_adcp_capabilities_impl(
         request_signing=_REQUEST_SIGNING_UNSUPPORTED,
         errors=advisories or None,
         last_updated=datetime.now(UTC),
-        context=req.context if req else None,
     )
 
     # Filter protocol-domain sections to the requested protocols. adcp/

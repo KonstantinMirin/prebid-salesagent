@@ -1294,10 +1294,9 @@ class TestSlackNotificationOnSync:
         _send_creative_notifications is called with the creative info."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            # Set tenant fields on the REST-specific identity
-            identity = env.identity_for(Transport.REST)
-            identity.tenant["approval_mode"] = "require-human"
-            identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
+            # The wire leg's resolver reads the tenant row, so the fields go on the row.
+            env.configure_tenant_field("approval_mode", "require-human")
+            env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.com/test")
 
             result = env.call_via(
                 Transport.REST,
@@ -1319,7 +1318,7 @@ class TestSlackNotificationOnSync:
         with CreativeSyncEnv() as env:
             env.setup_default_data()
             # require-human mode but NO slack_webhook_url
-            env.identity.tenant["approval_mode"] = "require-human"
+            env.configure_tenant_field("approval_mode", "require-human")
 
             response = env.call_impl(
                 creatives=[_creative(creative_id="c_no_webhook")],
@@ -1351,10 +1350,9 @@ class TestAIReviewTrigger:
         mock_executor.submit.return_value = MockMaker()  # mock future
 
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # Update DB tenant so real auth chain sees ai-powered mode.
-            tenant.approval_mode = "ai-powered"
-            env.identity_for(transport).tenant["approval_mode"] = "ai-powered"
+            env.setup_default_data()
+            # The wire leg's resolver reads the tenant row, so the field goes on the row.
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
@@ -1397,13 +1395,10 @@ class TestAIPoweredApprovalDeferredNotification:
         mock_executor.submit.return_value = MockMaker()
 
         with CreativeSyncEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # Update DB tenant so real auth chain sees ai-powered mode.
-            tenant.approval_mode = "ai-powered"
-            tenant.slack_webhook_url = "https://hooks.slack.com/test"
-            identity = env.identity_for(transport)
-            identity.tenant["approval_mode"] = "ai-powered"
-            identity.tenant["slack_webhook_url"] = "https://hooks.slack.com/test"
+            env.setup_default_data()
+            # The wire leg's resolver reads the tenant row, so the fields go on the row.
+            env.configure_tenant_field("approval_mode", "ai-powered")
+            env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.com/test")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),

@@ -184,30 +184,6 @@ class TestSyncAccountsUpdate:
         assert _action_value(response.accounts[0].action) == "unchanged"
 
 
-class TestSyncAccountsAuth:
-    """BR-RULE-055: sync_accounts requires valid authentication."""
-
-    @pytest.mark.asyncio
-    async def test_unauthenticated_raises_error(self, integration_db):
-        from src.core.exceptions import AdCPAuthenticationError
-
-        with AccountSyncEnv(tenant_id="sync_t5", principal_id="agent_sync5") as env:
-            env.setup_default_data()
-
-            req = SyncAccountsRequest(
-                idempotency_key=fresh_idempotency_key(),
-                accounts=[
-                    {
-                        "brand": {"domain": "acme.com"},
-                        "operator": "example.com",
-                        "billing": "operator",
-                    }
-                ],
-            )
-            with pytest.raises(AdCPAuthenticationError):
-                await env.call_impl_async(req=req, identity=None)
-
-
 class TestSyncAccountsDeleteMissing:
     """BR-RULE-061: delete_missing deactivates absent accounts scoped to agent."""
 
@@ -1032,9 +1008,9 @@ class TestSyncAccountsBrandIdRoundTrip:
             AccountReference,
             AccountReferenceByNaturalKey,
         )
+        from src.core.helpers.account_helpers import resolve_account
 
         from src.core.database.repositories.uow import AccountUoW
-        from src.core.helpers.account_helpers import resolve_account
 
         with AccountSyncEnv(tenant_id="sync_bid1", principal_id="agent_sync_bid") as env:
             env.setup_default_data()

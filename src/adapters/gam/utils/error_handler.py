@@ -314,18 +314,9 @@ def validate_gam_response(response: Any, expected_fields: list[str]) -> None:
     if not response:
         # The ad server returned nothing where a payload was required. That is an
         # upstream fault, not a buyer input problem, so it is not VALIDATION_ERROR.
-        raise AdCPAdapterError(internal_detail="empty response from GAM API")
+        raise AdCPAdapterError()
 
-    missing_fields = []
-    for field in expected_fields:
-        if field not in response:
-            missing_fields.append(field)
-
-    if missing_fields:
-        # The response body is a third party's and never reaches the buyer; it goes
-        # to internal_detail, which the boundary logs server-side.
-        raise AdCPAdapterError(
-            internal_detail=(
-                f"GAM response missing required fields: {', '.join(missing_fields)}; response={str(response)[:500]}"
-            )
-        )
+    if any(field not in response for field in expected_fields):
+        # The response body is a third party's and never reaches the buyer, and
+        # which of its fields are absent is not a cause: the class is the diagnosis.
+        raise AdCPAdapterError()

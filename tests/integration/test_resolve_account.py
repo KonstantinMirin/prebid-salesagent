@@ -30,9 +30,10 @@ class TestResolveAccountById:
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
             env._commit_factory_data()
 
+            from src.core.helpers.account_helpers import resolve_account
+
             from src.core.database.database_session import get_db_session
             from src.core.database.repositories.account import AccountRepository
-            from src.core.helpers.account_helpers import resolve_account
 
             ref = AccountReference(AccountReferenceById(account_id="acc_001"))
             with get_db_session() as session:
@@ -47,9 +48,10 @@ class TestResolveAccountById:
             env.setup_default_data()
             env._commit_factory_data()
 
+            from src.core.helpers.account_helpers import resolve_account
+
             from src.core.database.database_session import get_db_session
             from src.core.database.repositories.account import AccountRepository
-            from src.core.helpers.account_helpers import resolve_account
 
             ref = AccountReference(AccountReferenceById(account_id="nonexistent"))
             with get_db_session() as session:
@@ -65,9 +67,10 @@ class TestResolveAccountById:
             AccountFactory(tenant=tenant, account_id="acc_noaccess")
             env._commit_factory_data()
 
+            from src.core.helpers.account_helpers import resolve_account
+
             from src.core.database.database_session import get_db_session
             from src.core.database.repositories.account import AccountRepository
-            from src.core.helpers.account_helpers import resolve_account
 
             ref = AccountReference(AccountReferenceById(account_id="acc_noaccess"))
             with get_db_session() as session:
@@ -92,9 +95,10 @@ class TestResolveAccountByNaturalKey:
             AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
             env._commit_factory_data()
 
+            from src.core.helpers.account_helpers import resolve_account
+
             from src.core.database.database_session import get_db_session
             from src.core.database.repositories.account import AccountRepository
-            from src.core.helpers.account_helpers import resolve_account
 
             ref = AccountReference(AccountReferenceByNaturalKey(brand={"domain": "acme.com"}, operator="acme.com"))
             with get_db_session() as session:
@@ -123,8 +127,9 @@ class TestResolveAccountByNaturalKey:
             )
             env._commit_factory_data()
 
-            from src.core.database.repositories.uow import AccountUoW
             from src.core.helpers.account_helpers import resolve_account
+
+            from src.core.database.repositories.uow import AccountUoW
 
             ref = AccountReference(AccountReferenceByNaturalKey(brand={"domain": "hidden.com"}, operator="hidden.com"))
             with AccountUoW(tenant.tenant_id) as uow:
@@ -137,9 +142,10 @@ class TestResolveAccountByNaturalKey:
             env.setup_default_data()
             env._commit_factory_data()
 
+            from src.core.helpers.account_helpers import resolve_account
+
             from src.core.database.database_session import get_db_session
             from src.core.database.repositories.account import AccountRepository
-            from src.core.helpers.account_helpers import resolve_account
 
             ref = AccountReference(
                 AccountReferenceByNaturalKey(brand={"domain": "unknown.com"}, operator="unknown.com")

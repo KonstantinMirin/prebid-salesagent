@@ -12,11 +12,11 @@ before their start date.
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, PersistedMediaBuyStatus
 from src.core.database.repositories import MediaBuyRepository
@@ -24,8 +24,8 @@ from src.core.tools._media_buy_transitions import resolve_flight_window_status
 
 logger = logging.getLogger(__name__)
 
-# Configurable via env var - default 60 seconds
-STATUS_CHECK_INTERVAL_SECONDS = int(os.getenv("MEDIA_BUY_STATUS_CHECK_INTERVAL") or "60")
+# Configurable via MEDIA_BUY_STATUS_CHECK_INTERVAL - default 60 seconds
+STATUS_CHECK_INTERVAL_SECONDS = get_settings().limits.media_buy_status_check_interval
 
 
 _ACTIVATABLE_STATUSES = frozenset(

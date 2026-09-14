@@ -41,7 +41,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from adcp.types import ContextObject, PushNotificationConfig
+from adcp.types import PushNotificationConfig
 from adcp.types.generated_poc.core.push_notification_config import Authentication
 from adcp.types.generated_poc.core.push_notification_config import (
     Authentication as LibraryAuthentication,
@@ -220,7 +220,6 @@ class ValidatedWebhookRegistration:
         stashed: object,
         *,
         field_prefix: str = "push_notification_config",
-        context: ContextObject | dict[str, Any] | None = None,
     ) -> ValidatedWebhookRegistration:
         """Rehydrate a STORED registration — deliberately NOT a fresh ingest.
 
@@ -253,31 +252,18 @@ class ValidatedWebhookRegistration:
         """
         document = stashed
         if not isinstance(document, dict):
-            # Buyer-facing text is a function of the code (ADR-010), so the
-            # authored sentence and its correction hint go to `internal_detail`
-            # (server log only) and the one structured fact — what the stash
-            # actually held -- goes to the typed details. `field` still names the
-            # buyer-correctable target, which is what the refusal is graded on.
+            # Buyer-facing text is a function of the code (ADR-010): the one
+            # structured fact — what the stash actually held -- goes to the typed
+            # details. `field` still names the buyer-correctable target, which is
+            # what the refusal is graded on.
             raise AdCPValidationError(
                 field=field_prefix,
                 details=ValidationDetails(received_type=type(stashed).__name__),
-                internal_detail=(
-                    f"Invalid {field_prefix}: stored registration is not an object "
-                    f"(got {type(stashed).__name__}). Re-register the webhook; the stored "
-                    "configuration is unreadable."
-                ),
-                context=context,
             )
 
         url = str(document.get("url") or "").strip()
         if not url:
-            raise AdCPValidationError(
-                field=f"{field_prefix}.url",
-                internal_detail=(
-                    f"Invalid {field_prefix}.url: stored registration has no URL. Re-register the webhook with a URL."
-                ),
-                context=context,
-            )
+            raise AdCPValidationError(field=f"{field_prefix}.url")
 
         # The authentication block IS validated here, through the SAME type the
         # seam constructs, even though the rest of the stored document is not.
@@ -311,21 +297,14 @@ class ValidatedWebhookRegistration:
                 # The name no longer rides the buyer-facing message, which is now the
                 # code's own table sentence: the scheme is a value the buyer supplied
                 # and had refused, so it goes to the pin's canonical rejection key
-                # (`details.rejected_value`), and the authored diagnostic plus its
-                # correction hint go to `internal_detail`, which is logged and never
-                # serialized.
+                # (`details.rejected_value`), and pydantic's own error is the cause,
+                # logged with its traceback and never serialized.
                 stored_schemes = auth_block.get("schemes") if isinstance(auth_block, dict) else None
                 named_schemes = [str(entry) for entry in stored_schemes] if stored_schemes else []
-                named = ", ".join(repr(entry) for entry in named_schemes) if named_schemes else "no scheme"
                 raise AdCPValidationError(
                     field=field,
                     details=ValidationDetails(rejected_value=named_schemes or None),
-                    internal_detail=(
-                        f"Invalid {field}: the stored registration ({named}) cannot be delivered "
-                        "as written. Its owner must re-register with a supported scheme and a "
-                        "conforming credential."
-                    ),
-                    context=context,
+                    internal_detail=exc,
                 ) from exc
             document = {**document, "authentication": validated.model_dump(mode="json")}
 
@@ -388,7 +367,6 @@ def _accept(
     *,
     config: PushNotificationConfig,
     field_prefix: str,
-    context: ContextObject | dict[str, Any] | None,
 ) -> ValidatedWebhookRegistration:
     """Run both preconditions, then build the value. The ONE gate body.
 
@@ -399,7 +377,7 @@ def _accept(
     and that a credential refusal is not mislabelled as a URL refusal.
     """
     url = str(config.url) if config.url is not None else None
-    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
 
     # No credential check here any more, and its absence is the DELETION of dead
     # code rather than of a safeguard. The config reaching this function has
@@ -422,7 +400,6 @@ def accept_push_notification_primitives(
     *,
     token: str | None = None,
     field_prefix: str = "push_notification_config",
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> ValidatedWebhookRegistration:
     """Accept a registration already destructured into primitives.
 
@@ -443,7 +420,7 @@ def accept_push_notification_primitives(
     routes; this path refuses to create more of them, and the seam refuses to
     deliver the ones that exist.
     """
-    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url", context=context)
+    reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
 
     authentication: dict[str, Any] | None = None
     if scheme is not None or credentials is not None:
@@ -459,7 +436,6 @@ def accept_push_notification_primitives(
             field_prefix=field_prefix,
         ),
         field_prefix=field_prefix,
-        context=context,
     )
 
 
@@ -495,7 +471,6 @@ def accept_push_notification_config(
     config: dict[str, Any] | PushNotificationConfig | None,
     *,
     field_prefix: str = "push_notification_config",
-    context: ContextObject | dict[str, Any] | None = None,
 ) -> ValidatedWebhookRegistration:
     """Accept a config-shaped registration, normalizing model-or-dict ONCE.
 
@@ -521,11 +496,5 @@ def accept_push_notification_config(
         raise AdCPValidationError(
             field=field_prefix,
             details=ValidationDetails(received_type=type(config).__name__),
-            internal_detail=(
-                f"Invalid {field_prefix}: expected a push notification config object "
-                f"(got {type(config).__name__}). Supply a push_notification_config object "
-                "with a url."
-            ),
-            context=context,
         )
-    return _accept(config=coerced, field_prefix=field_prefix, context=context)
+    return _accept(config=coerced, field_prefix=field_prefix)

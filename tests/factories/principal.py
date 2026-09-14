@@ -2,17 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
+from src.core.credentials import hash_token, token_prefix
 from src.core.database.models import Principal
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.testing_hooks import AdCPTestContext
+from src.core.resolved_identity import AccountIdentity, PublicIdentity, ResolvedIdentity
+from src.core.schemas import Principal as SchemaPrincipal
+from src.core.schemas.account import Account
+from src.core.tenant_context import TenantContext
 from tests.factories.core import TenantFactory
 
 _UNSET = object()
+
+
+def plaintext_token_for(principal_id: str) -> str:
+    """The token a test presents for the factory principal *principal_id*.
+
+    Production stores ``sha256(token)`` and never the token, so a test cannot read a
+    credential back out of the row it created. The factory derives the plaintext from the
+    principal id instead, and the harness derives the same one when it builds the
+    ``Authorization`` header, which is what lets the real resolver run in every test.
+    """
+    return f"tok_test_{principal_id}"
 
 
 class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -25,76 +37,104 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     tenant_id = LazyAttribute(lambda o: o.tenant.tenant_id)
     principal_id = Sequence(lambda n: f"principal_{n:04d}")
     name = LazyAttribute(lambda o: f"Test Advertiser {o.principal_id}")
-    access_token = Sequence(lambda n: f"token_{n:08d}")
+    # The row stores only the hash. The plaintext a test PRESENTS is derived from the
+    # principal id by ``plaintext_token_for`` -- the harness computes the same value, so a
+    # credential never has to be read back out of a table that no longer holds it.
+    token_hash = LazyAttribute(lambda o: hash_token(plaintext_token_for(o.principal_id)))
+    token_prefix = LazyAttribute(lambda o: token_prefix(plaintext_token_for(o.principal_id)))
     platform_mappings = factory.LazyFunction(lambda: {"mock": {"advertiser_id": "test_adv"}})
+
+    @staticmethod
+    def _tenant_for(tenant: object, tenant_id: str, tenant_overrides: dict[str, object]) -> object:
+        """The TenantContext an identity carries: the one given, or the factory's own.
+
+        Swallows nothing. Every override is checked against ``TenantContext.model_fields``
+        and an unknown keyword is a ``TypeError`` naming it, never a key dropped on the
+        floor: ``principal={...}``, ``account_id=...`` or a misspelled field fails here
+        instead of building an identity that silently lacks it. An account is not an
+        override: the resolver resolves the one a request names (``AccountRepository.find``)
+        and builds the identity with it inside; a test that needs one calls
+        ``make_account_identity``.
+        """
+        unknown = sorted(set(tenant_overrides) - set(TenantContext.model_fields))
+        if unknown:
+            raise TypeError(
+                f"make_identity() got unknown keyword(s) {', '.join(unknown)}: "
+                "only TenantContext fields are accepted as overrides"
+            )
+        if tenant is not _UNSET and tenant_overrides:
+            raise TypeError(
+                f"make_identity() got tenant overrides {', '.join(sorted(tenant_overrides))} "
+                "alongside an explicit tenant; set the fields on the TenantContext instead"
+            )
+        return TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
+
+    @staticmethod
+    def _principal_for(principal_id: str) -> SchemaPrincipal:
+        """The principal the resolver would have loaded for this caller.
+
+        The factory's own shape (name and the mock platform mapping), so what a tool reads
+        off ``identity.principal`` is what a row would have given it.
+        """
+        return SchemaPrincipal(
+            principal_id=principal_id,
+            name=f"Test Advertiser {principal_id}",
+            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
+        )
 
     @classmethod
     def make_identity(
         cls,
-        principal_id: str | None = "test_principal",
+        principal_id: str = "test_principal",
         tenant_id: str = "test_tenant",
-        protocol: str = "mcp",
-        dry_run: bool = False,
-        auth_token: str | None = None,
-        tenant: Any = _UNSET,
-        testing_context: AdCPTestContext | None | Any = _UNSET,
-        account_id: str | None = None,
+        tenant: TenantContext = _UNSET,  # type: ignore[assignment]
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
-        """Build a ResolvedIdentity without DB persistence.
+        """The AUTHENTICATED caller a protected tool takes, without DB persistence.
 
-        Auto-derives tenant dict via TenantFactory.make_tenant().
-        Pass explicit tenant=None for auth-error tests.
-        Pass **tenant_overrides for domain fields (approval_mode, etc).
+        A ``ResolvedIdentity`` always carries a principal and a tenant, so both parameters
+        are non-optional here: the anonymous caller is ``make_public_identity``. When
+        ``tenant`` is not given, ``TenantFactory.make_tenant()`` builds the TenantContext;
+        pass **tenant_overrides for domain fields (approval_mode, etc).
 
-        ``account_id`` is DECLARED, not left to **tenant_overrides. It is a
-        ``ResolvedIdentity`` field, not a tenant one, so the catch-all swallowed it into the
-        tenant dict and the identity came back with account_id=None -- silently, which cost
-        an afternoon: the idempotency cache is scoped by (principal, account, key), so a
-        test that thought it had set the account was probing a different scope. It is what
-        ``enrich_identity_with_account`` resolves onto the identity in production.
-        Pass testing_context to override the default (e.g. set
-        test_session_id for harness routing).
-
-        ``tenant`` accepts whatever a test has to hand -- a dict, a ``TenantContext``, a
-        ``LazyTenantContext``, or None -- and normalizes it. THIS IS THE ONE NORMALIZER.
-        ``ResolvedIdentity.tenant`` is typed ``LazyTenantContext | None``, a single type
-        rather than a union, so a dict and a hydrated ``TenantContext`` both fail
-        validation at construction. Tests are not asked to know that: they pass data and
-        this converts it, which is why inline ``ResolvedIdentity(...)`` in a test is capped
-        by ``tests/unit/test_architecture_resolved_identity_inline_cap.py``. An inline site
-        carries its own copy of the conversion below, and 98 copies is how the previous
-        shape broke -- the union widened to fit them instead of them narrowing to fit it.
+        ``tenant`` is passed through as given. The factory normalizes nothing, and the
+        identity refuses a dict at construction (``InstanceOf`` on the field), so a test
+        that has a dict builds a TenantContext first. Inline ``ResolvedIdentity(...)``
+        outside this factory fails
+        ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``, so the
+        factory's defaults are the one source of identity defaults in tests.
         """
-        resolved_tenant = (
-            TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
-        )
-        if resolved_tenant is not None:
-            from src.core.tenant_context import LazyTenantContext, TenantContext
-
-            if isinstance(resolved_tenant, dict):
-                resolved_tenant = TenantContext.from_dict(resolved_tenant)
-            if isinstance(resolved_tenant, TenantContext):
-                # ``already`` wraps a row the caller already holds, so nothing queries.
-                resolved_tenant = LazyTenantContext.already(resolved_tenant)
-        # An explicit ``testing_context=None`` MEANS none, and is not the same as omitting
-        # the argument. The sentinel keeps them apart: without it, a caller converted from
-        # an inline ``ResolvedIdentity(..., testing_context=None)`` silently acquired the
-        # default context below, and a test reading ``if identity.testing_context`` would
-        # take the other branch.
-        if testing_context is _UNSET:
-            testing_context = AdCPTestContext(
-                dry_run=dry_run,
-                mock_time=None,
-                jump_to_event=None,
-                test_session_id=None,
-            )
         return ResolvedIdentity(
-            principal_id=principal_id,
-            tenant_id=tenant_id,
-            tenant=resolved_tenant,
-            auth_token=auth_token,
-            protocol=protocol,
-            testing_context=testing_context,
-            account_id=account_id,
+            principal=cls._principal_for(principal_id),
+            tenant=cls._tenant_for(tenant, tenant_id, tenant_overrides),  # type: ignore[arg-type]
+        )
+
+    @classmethod
+    def make_account_identity(cls, identity: ResolvedIdentity, account: Account) -> AccountIdentity:
+        """*identity* with *account* resolved onto it: the type a tool whose DTO requires an account takes.
+
+        The account is per request and is passed as the schema ``Account`` it resolved to
+        (in production, ``AccountRepository.find`` through ``account_from_row``); the
+        factory builds the identity once with it inside, as the resolver does, and copies
+        nothing.
+        """
+        return AccountIdentity(principal=identity.principal, tenant=identity.tenant, account=account)
+
+    @classmethod
+    def make_public_identity(
+        cls,
+        principal_id: str | None = None,
+        tenant_id: str = "test_tenant",
+        tenant: TenantContext | None = _UNSET,  # type: ignore[assignment]
+        **tenant_overrides: object,
+    ) -> PublicIdentity:
+        """The caller of a PUBLIC tool, anonymous by default, without DB persistence.
+
+        ``principal_id=None`` (the default) is the anonymous caller; a string is a caller
+        whose credential resolved on a public tool. ``tenant=None`` is a request that named
+        no seller. The same override rules as ``make_identity`` apply.
+        """
+        return PublicIdentity(
+            principal=cls._principal_for(principal_id) if principal_id else None,
+            tenant=cls._tenant_for(tenant, tenant_id, tenant_overrides),  # type: ignore[arg-type]
         )

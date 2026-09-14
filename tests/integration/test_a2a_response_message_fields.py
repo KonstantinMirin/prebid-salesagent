@@ -33,18 +33,8 @@ Regression prevention: https://github.com/prebid/salesagent/pull/337
 import pytest
 
 from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-from src.core.auth_context import AuthContext
-from tests.factories.principal import PrincipalFactory
-from tests.helpers.boundary_identity import resolved_as
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
-
-_MOCK_IDENTITY = PrincipalFactory.make_identity(
-    principal_id="test_principal",
-    tenant_id="test_tenant",
-    tenant={"tenant_id": "test_tenant"},
-    protocol="a2a",
-)
 
 
 @pytest.mark.integration
@@ -218,35 +208,6 @@ class TestA2AResponseDictConstruction:
         )
 
 
-@pytest.mark.integration
-class TestA2AErrorHandling:
-    """Test that A2A handlers properly handle errors without AttributeErrors."""
-
-    @pytest.fixture
-    def handler(self):
-        return AdCPRequestHandler()
-
-    @pytest.mark.asyncio
-    async def test_skill_error_has_message_field(self, handler, sample_principal):
-        """Test that skill errors return proper message fields."""
-        with resolved_as(_MOCK_IDENTITY):
-            # Force an error by passing invalid parameters
-            params = {
-                # Missing required fields - should cause validation error
-            }
-
-            try:
-                # _dispatch_skill IS A2A's whole request path: validate the parameter bag into
-                # the registry row's DTO via serve, then to_wire. It returns the
-                # serialized dict, so there is nothing left to serialize here.
-                result = await handler._dispatch_skill("create_media_buy", params, _MOCK_IDENTITY, AuthContext())
-                # If it doesn't raise, the failure has to be readable from the body itself.
-                # `success` is gone, so `errors` IS the signal a buyer reads — the same
-                # field A2A used to derive `success` from before writing it in.
-                if result.get("errors"):
-                    assert result.get("message") or result.get("adcp_error"), (
-                        "an errored body must say what went wrong, on `message` or `adcp_error`"
-                    )
-            except Exception as e:
-                pass  # the operation must raise; its message is not asserted
-                # Errors are expected for invalid params
+# The A2A error path (a failed Task whose envelope says what went wrong) is graded on the
+# wire by every error-path BDD scenario parametrized over a2a, through
+# ``assert_wire_error``; no direct ``_dispatch_skill`` test of it is kept here.

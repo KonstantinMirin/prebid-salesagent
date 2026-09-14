@@ -24,7 +24,13 @@ if TYPE_CHECKING:
 
 from flask import Flask
 
-from src.adapters.base import AdapterCapabilities, AdServerAdapter, TargetingCapabilities
+from src.adapters.base import (
+    AdapterCapabilities,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    TargetingCapabilities,
+)
 
 # Import modular components
 from src.adapters.gam.client import GAMClientManager
@@ -77,11 +83,8 @@ from src.core.schemas import (
     AssetStatus,
     CheckMediaBuyStatusResponse,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     MediaPackage,
     ReportingPeriod,
-    UpdateMediaBuyResponse,
-    UpdateMediaBuySuccess,
 )
 
 # Set up logger
@@ -115,7 +118,6 @@ class GoogleAdManager(AdServerAdapter):
         network_code: str,
         advertiser_id: str | None = None,
         trafficker_id: str | None = None,
-        dry_run: bool = False,
         audit_logger: AuditLogger | None = None,
         tenant_id: str | None = None,
         targeting_config: dict[str, Any] | None = None,
@@ -129,7 +131,6 @@ class GoogleAdManager(AdServerAdapter):
             network_code: GAM network code
             advertiser_id: GAM advertiser ID (optional, required only for order/campaign operations)
             trafficker_id: GAM trafficker ID (optional, required only for order/campaign operations)
-            dry_run: Whether to run in dry-run mode
             audit_logger: Audit logging instance
             tenant_id: Tenant identifier
             targeting_config: Pre-loaded targeting config from AdapterConfigRepository.
@@ -137,7 +138,7 @@ class GoogleAdManager(AdServerAdapter):
             naming_templates: Pre-loaded (order_template, line_item_template) tuple.
                 If None, uses (None, None) defaults.
         """
-        super().__init__(config, principal, dry_run, None, tenant_id)
+        super().__init__(config, principal, None, tenant_id)
         assert self.tenant_id is not None  # Guaranteed by base class validation
 
         self.network_code = network_code
@@ -149,11 +150,7 @@ class GoogleAdManager(AdServerAdapter):
         self.principal = principal
 
         # Validate configuration
-        self.network_code = self._require_config(
-            self.network_code,
-            field="network_code",
-            operator_detail="GAM config is missing 'network_code'",
-        )
+        self.network_code = self._require_config(self.network_code, field="network_code")
 
         # Validate advertiser_id is numeric if provided (GAM expects integer company IDs)
         if advertiser_id is not None and advertiser_id != "":
@@ -175,94 +172,51 @@ class GoogleAdManager(AdServerAdapter):
         self._line_item_name_template: str | None = naming_templates[1] if naming_templates else None
         self._placement_targeting_map: dict[str, str] = {}
 
-        # Skip auth validation in dry_run mode (for testing)
-        if not self.dry_run:
-            if not self.key_file and not self.service_account_json and not self.refresh_token:
-                raise AdCPConfigurationError(
-                    field="authentication",
-                )
+        if not self.key_file and not self.service_account_json and not self.refresh_token:
+            raise AdCPConfigurationError(
+                field="authentication",
+            )
 
         # Initialize modular components
-        if not self.dry_run:
-            self.client_manager = GAMClientManager(self.config, self.network_code)
-            # Legacy client property for backward compatibility
-            self.client = self.client_manager.get_client()
+        self.client_manager = GAMClientManager(self.config, self.network_code)
+        # Legacy client property for backward compatibility
+        self.client = self.client_manager.get_client()
 
-            # Auto-detect trafficker_id if not provided
-            if not self.trafficker_id:
-                try:
-                    user_service = self.client.GetService("UserService")
-                    current_user = user_service.getCurrentUser()
-                    self.trafficker_id = str(current_user["id"])
-                    logger.info(
-                        f"Auto-detected trafficker_id: {self.trafficker_id} ({current_user.get('name', 'Unknown')})"
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not auto-detect trafficker_id: {e}")
-
-            # Initialize manager components with pre-loaded config
-            self.targeting_manager = GAMTargetingManager(
-                self.tenant_id, gam_client=self.client, targeting_config=self._targeting_config
-            )
-
-            # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
-            self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id, dry_run)
-
-            # Only initialize creative manager if we have advertiser_id (required for creative operations)
-            # Note: trafficker_id is NOT required for creative operations - only for order creation
-            if self.advertiser_id:
-                self.creatives_manager = GAMCreativesManager(
-                    self.client_manager, self.advertiser_id, dry_run, self.log, self
+        # Auto-detect trafficker_id if not provided
+        if not self.trafficker_id:
+            try:
+                user_service = self.client.GetService("UserService")
+                current_user = user_service.getCurrentUser()
+                self.trafficker_id = str(current_user["id"])
+                logger.info(
+                    f"Auto-detected trafficker_id: {self.trafficker_id} ({current_user.get('name', 'Unknown')})"
                 )
-            else:
-                self.creatives_manager = None  # type: ignore[assignment]
+            except Exception as e:
+                logger.warning(f"Could not auto-detect trafficker_id: {e}")
 
-            # Inventory manager doesn't need advertiser_id
-            self.inventory_manager = GAMInventoryManager(self.client_manager, self.tenant_id, dry_run)
+        # Initialize manager components with pre-loaded config
+        self.targeting_manager = GAMTargetingManager(
+            self.tenant_id, gam_client=self.client, targeting_config=self._targeting_config
+        )
 
-            # Sync manager only needs inventory manager for inventory sync
-            self.sync_manager = GAMSyncManager(
-                self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id, dry_run
-            )
-            self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
+        # Initialize orders manager (advertiser_id/trafficker_id optional for query operations)
+        self.orders_manager = GAMOrdersManager(self.client_manager, self.advertiser_id, self.trafficker_id)
+
+        # Only initialize creative manager if we have advertiser_id (required for creative operations)
+        # Note: trafficker_id is NOT required for creative operations - only for order creation
+        if self.advertiser_id:
+            self.creatives_manager = GAMCreativesManager(self.client_manager, self.advertiser_id, self.log, self)
         else:
-            self.client_manager = None  # type: ignore[assignment]
-            self.client = None
-            self.log("[yellow]Running in dry-run mode - GAM client not initialized[/yellow]")
+            self.creatives_manager = None  # type: ignore[assignment]
 
-            # Initialize managers for dry-run mode (they can work without real client)
-            self.targeting_manager = GAMTargetingManager(self.tenant_id, targeting_config=self._targeting_config)
+        # Inventory manager doesn't need advertiser_id
+        self.inventory_manager = GAMInventoryManager(self.client_manager, self.tenant_id)
 
-            # Initialize orders manager in dry-run mode
-            self.orders_manager = GAMOrdersManager(None, self.advertiser_id, self.trafficker_id, dry_run=True)
-
-            # Only initialize creative manager if we have advertiser_id (required for creative operations)
-            # Note: trafficker_id is NOT required for creative operations - only for order creation
-            if self.advertiser_id:
-                self.creatives_manager = GAMCreativesManager(
-                    None,
-                    self.advertiser_id,
-                    dry_run=True,
-                    log_func=self.log,
-                    adapter=self,
-                )
-            else:
-                self.creatives_manager = None  # type: ignore[assignment]
-
-            # Initialize inventory manager in dry-run mode
-            self.inventory_manager = GAMInventoryManager(None, self.tenant_id, dry_run=True)  # type: ignore[arg-type]
-
-            # Initialize sync manager in dry-run mode
-            self.sync_manager = GAMSyncManager(
-                None,  # type: ignore[arg-type]
-                self.inventory_manager,
-                self.orders_manager,
-                self.tenant_id,
-                dry_run=True,
-            )
-
-            # Initialize workflow manager (doesn't need client)
-            self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
+        # Sync manager only needs inventory manager for inventory sync
+        self.sync_manager = GAMSyncManager(
+            self.client_manager, self.inventory_manager, self.orders_manager, self.tenant_id
+        )
+        self.workflow_manager = GAMWorkflowManager(self.tenant_id, principal, audit_logger, self.log)
 
         # Initialize legacy validator for backward compatibility
         from .gam.utils.validation import GAMValidator
@@ -404,7 +358,7 @@ class GoogleAdManager(AdServerAdapter):
         start_time: datetime,
         end_time: datetime,
         package_pricing_info: dict[str, dict] | None = None,
-    ) -> CreateMediaBuyResponse:
+    ) -> AdapterCreateResult:
         """Create a new media buy (order) in GAM - main orchestration method.
 
         Args:
@@ -416,7 +370,7 @@ class GoogleAdManager(AdServerAdapter):
                 Maps package_id → {pricing_model, rate, currency, is_fixed, bid_price}
 
         Returns:
-            CreateMediaBuyResponse with GAM order details
+            AdapterCreateResult with GAM order details
         """
         self.log("[bold]GoogleAdManager.create_media_buy[/bold] - Creating GAM order")
 
@@ -615,7 +569,6 @@ class GoogleAdManager(AdServerAdapter):
                     media_buy_id,
                     packages,
                     creative_deadline_days=None,
-                    workflow_step_id=step_id,
                 )
             else:
                 raise AdCPWorkflowError()
@@ -728,7 +681,7 @@ class GoogleAdManager(AdServerAdapter):
             self.log(f"✓ Created {len(line_item_ids)} line items")
 
             # NOTE: platform_line_item_id persistence is handled by media_buy_create.py
-            # after response object is returned. See CreateMediaBuySuccess._platform_line_item_ids mapping.
+            # from AdapterCreateResult.platform_line_item_ids.
 
             # Approve the order now that it has line items
             # GAM requires line items to exist before an order can be APPROVED
@@ -791,62 +744,35 @@ class GoogleAdManager(AdServerAdapter):
             raise AdCPLineItemError()
 
         # Check if activation approval is needed (guaranteed line items require human approval)
+        # package_id -> line item id, from the parallel packages / line_item_ids arrays
+        platform_line_item_ids = {
+            package.package_id: line_item_id for package, line_item_id in zip(packages, line_item_ids, strict=False)
+        }
+        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
+
         has_guaranteed, item_types = self._check_order_has_guaranteed_items(order_id)
         if has_guaranteed:
             self.log("[yellow]Order contains guaranteed line items - creating activation workflow step[/yellow]")
 
             step_id = self.workflow_manager.create_activation_workflow_step(order_id, packages)
 
-            # Create response and attach platform_line_item_id mapping for database persistence
-            # This mapping is used by media_buy_create.py to update MediaPackage records
-            response = self._build_create_success(
+            # media_buy_create.py persists platform_line_item_ids onto the MediaPackage rows
+            return self._build_create_success(
                 request,
                 order_id,
                 packages,
                 creative_deadline_days=None,
-                workflow_step_id=step_id,
+                platform_line_item_ids=platform_line_item_ids,
             )
 
-            # Store platform_line_item_id mapping as a non-standard attribute
-            # This survives Pydantic validation since it's set after construction
-            # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-            platform_line_item_ids = {}
-            for package, line_item_id in zip(packages, line_item_ids, strict=False):
-                platform_line_item_ids[package.package_id] = line_item_id
-
-            self.log(f"[DEBUG] Guaranteed path: Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-            # Attach to response object (bypass Pydantic validation)
-            object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-            self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-            self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
-            return response
-
-        # Create response and store platform_line_item_id mapping for database persistence
-        # This mapping is used by media_buy_create.py to update MediaPackage records
-        response = self._build_create_success(
+        # media_buy_create.py persists platform_line_item_ids onto the MediaPackage rows
+        return self._build_create_success(
             request,
             order_id,
             packages,
             creative_deadline_days=None,
+            platform_line_item_ids=platform_line_item_ids,
         )
-
-        # Store platform_line_item_id mapping as a non-standard attribute
-        # This survives Pydantic validation since it's set after construction
-        # Build mapping from parallel arrays: packages (with package_id) and line_item_ids
-        platform_line_item_ids = {}
-        for package, line_item_id in zip(packages, line_item_ids, strict=False):
-            platform_line_item_ids[package.package_id] = line_item_id
-
-        self.log(f"[DEBUG] Created platform_line_item_ids mapping: {platform_line_item_ids}")
-
-        # Attach to response object (bypass Pydantic validation)
-        object.__setattr__(response, "_platform_line_item_ids", platform_line_item_ids)
-        self.log("[DEBUG] Attached _platform_line_item_ids to response object")
-        self.log(f"[DEBUG] Verify attribute exists: {hasattr(response, '_platform_line_item_ids')}")
-
-        return response
 
     def archive_order(self, order_id: str) -> bool:
         """Archive a GAM order for cleanup purposes (delegated to orders manager)."""
@@ -915,7 +841,6 @@ class GoogleAdManager(AdServerAdapter):
                             status="submitted",
                             message=f"Creative asset submitted for approval. Workflow step: {step_id}",
                             creative_id=None,
-                            workflow_step_id=step_id,
                         )
                     )
                 return asset_statuses
@@ -968,41 +893,32 @@ class GoogleAdManager(AdServerAdapter):
 
         results = []
 
-        if not self.dry_run and self.client_manager:
-            lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
+        lica_service = self.client_manager.get_service("LineItemCreativeAssociationService")
 
         for line_item_id in line_item_ids:
             for creative_id in platform_creative_ids:
-                if self.dry_run:
+                association = {
+                    "creativeId": int(creative_id),
+                    "lineItemId": int(line_item_id),
+                }
+
+                try:
+                    lica_service.createLineItemCreativeAssociations([association])
+                    self.log(f"[green]✓ Associated creative {creative_id} with line item {line_item_id}[/green]")
+                    results.append({"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"})
+                except Exception as e:
+                    error_msg = str(e)
                     self.log(
-                        f"[cyan][DRY RUN] Would associate creative {creative_id} with line item {line_item_id}[/cyan]"
+                        f"[red]✗ Failed to associate creative {creative_id} with line item {line_item_id}: {error_msg}[/red]"
                     )
                     results.append(
-                        {"line_item_id": line_item_id, "creative_id": creative_id, "status": "success (dry-run)"}
+                        {
+                            "line_item_id": line_item_id,
+                            "creative_id": creative_id,
+                            "status": "failed",
+                            "error": error_msg,
+                        }
                     )
-                else:
-                    association = {
-                        "creativeId": int(creative_id),
-                        "lineItemId": int(line_item_id),
-                    }
-
-                    try:
-                        lica_service.createLineItemCreativeAssociations([association])
-                        self.log(f"[green]✓ Associated creative {creative_id} with line item {line_item_id}[/green]")
-                        results.append({"line_item_id": line_item_id, "creative_id": creative_id, "status": "success"})
-                    except Exception as e:
-                        error_msg = str(e)
-                        self.log(
-                            f"[red]✗ Failed to associate creative {creative_id} with line item {line_item_id}: {error_msg}[/red]"
-                        )
-                        results.append(
-                            {
-                                "line_item_id": line_item_id,
-                                "creative_id": creative_id,
-                                "status": "failed",
-                                "error": error_msg,
-                            }
-                        )
 
         return results
 
@@ -1093,27 +1009,6 @@ class GoogleAdManager(AdServerAdapter):
             packages_data = raw_request.get("packages", [])
 
         # Initialize GAM reporting service
-        if self.dry_run or not self.client:
-            # Dry run mode - return simulated metrics
-            logger.info(f"Dry-run mode: returning simulated metrics for media buy {media_buy_id}")
-            total_budget = float(media_buy.budget) if media_buy.budget else 0.0
-            progress = 0.5  # Simulate 50% delivery
-
-            return AdapterGetMediaBuyDeliveryResponse(
-                media_buy_id=media_buy_id,
-                reporting_period=date_range,
-                by_package=[],
-                totals=DeliveryTotals(
-                    impressions=int(total_budget * 1000 * progress),  # Assume $1 CPM
-                    spend=total_budget * progress,
-                    clicks=int(total_budget * 1000 * progress * 0.01),  # 1% CTR
-                    ctr=1.0,
-                    completed_views=None,
-                    completion_rate=None,
-                ),
-                currency=str(media_buy.currency or "USD"),
-            )
-
         reporting_service = GAMReportingService(self.client)
 
         # date_range.start/.end are AwareDatetime objects
@@ -1329,7 +1224,7 @@ class GoogleAdManager(AdServerAdapter):
         package_id: str | None,
         budget: int | None,
         today: datetime,
-    ) -> UpdateMediaBuyResponse:
+    ) -> AdapterUpdateResult:
         """Update a media buy in GAM."""
         # Admin-only actions
         admin_only_actions = ["approve_order"]
@@ -1347,10 +1242,9 @@ class GoogleAdManager(AdServerAdapter):
 
             if step_id:
                 # Manual approval success - no errors
-                return UpdateMediaBuySuccess.carrier(
+                return AdapterUpdateResult(
                     media_buy_id=media_buy_id,
                     affected_packages=[],  # List of package_ids affected by update
-                    implementation_date=today,
                 )
             else:
                 raise AdCPWorkflowError()
@@ -1367,11 +1261,9 @@ class GoogleAdManager(AdServerAdapter):
 
                 if step_id:
                     # Activation workflow created - success (no errors)
-                    return UpdateMediaBuySuccess.carrier(
+                    return AdapterUpdateResult(
                         media_buy_id=media_buy_id,
                         affected_packages=[],
-                        implementation_date=today,
-                        workflow_step_id=step_id,
                     )
                 else:
                     raise AdCPActivationWorkflowError()
@@ -1459,10 +1351,9 @@ class GoogleAdManager(AdServerAdapter):
                 session.commit()
                 self.log(f"✓ Updated package {package_id} budget to ${budget} in both GAM and database")
 
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],  # Required by AdCP spec
-                implementation_date=today,
             )
 
         # Handle pause/resume actions
@@ -1521,10 +1412,9 @@ class GoogleAdManager(AdServerAdapter):
                         buyer_package_ref=None,
                     )
 
-                    return UpdateMediaBuySuccess.carrier(
+                    return AdapterUpdateResult(
                         media_buy_id=media_buy_id,
                         affected_packages=[affected_package],
-                        implementation_date=today,
                     )
 
             # Media buy-level actions (pause/resume all packages)
@@ -1590,17 +1480,15 @@ class GoogleAdManager(AdServerAdapter):
                         for pkg in packages
                     ]
 
-                    return UpdateMediaBuySuccess.carrier(
+                    return AdapterUpdateResult(
                         media_buy_id=media_buy_id,
                         affected_packages=affected_packages_list,
-                        implementation_date=today,
                     )
 
             # Should not reach here - both pause/resume branches return above
-            return UpdateMediaBuySuccess.carrier(
+            return AdapterUpdateResult(
                 media_buy_id=media_buy_id,
                 affected_packages=[],
-                implementation_date=today,
             )
 
         # Explicit failure for unsupported actions (no silent success)

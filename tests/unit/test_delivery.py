@@ -30,6 +30,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import MediaBuyStatus
+from src.core.testing_hooks import AdCPTestContext
 
 from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
 from src.core.helpers import enum_value
@@ -44,7 +45,6 @@ from src.core.schemas import (
     PricingModel,
     ReportingPeriod,
 )
-from src.core.testing_hooks import AdCPTestContext
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.factories.media_buy import (
@@ -176,17 +176,9 @@ def _standard_patches(
     mock_uow.media_buys = MagicMock()
 
     return {
-        "principal_obj": patch(
-            "src.core.auth.get_principal_object",
-            return_value=principal_obj,
-        ),
         "adapter": patch(
             f"{_PATCH_PREFIX}.get_adapter",
             return_value=adapter,
-        ),
-        "tenant": patch(
-            "src.core.helpers.context_helpers.ensure_tenant_context",
-            return_value={"tenant_id": "test_tenant", "name": "Test"},
         ),
         "target_buys": patch(
             f"{_PATCH_PREFIX}._get_target_media_buys",
@@ -235,9 +227,7 @@ def _run_impl_with_patches(
     mock_inner_session.scalars.return_value.all.return_value = []
 
     with (
-        patches["principal_obj"],
         patches["adapter"],
-        patches["tenant"],
         patches["target_buys"],
         patches["pricing_options"],
         patches["uow"],

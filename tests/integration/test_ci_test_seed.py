@@ -23,8 +23,8 @@ def test_the_seeded_token_resolves_to_the_seeded_tenant(ci_test_principal):
     from tests.helpers.credentials import credential_headers
 
     identity = _resolve_identity(
-        headers=credential_headers(token=ci_test_principal.access_token),
-        protocol="a2a",
+        credential_headers(token=ci_test_principal.access_token),
+        require_valid_token=True,
     )
 
     assert identity.principal_id == ci_test_principal.principal_id
@@ -38,9 +38,10 @@ def test_the_tenant_carries_the_deps_a_product_needs(ci_test_principal, factory_
     validation) -> PropertyTag (``all_inventory``, required by ``property_tags``
     references). A seed missing either fails later in ways that read as a product bug.
 
-    Read through the tenant's own ORM relationships on the session the seed committed
-    to: the subject here is the seed, and a raw ``get_db_session()`` query in a test
-    body is what the repository-pattern guard refuses.
+    Read through the tenant's own ORM relationships on the session the factories are
+    bound to: it is the one database this test has, so no second session is opened
+    here, and a raw ``get_db_session()`` query in a test body is what the
+    repository-pattern guard refuses.
     """
     from src.core.database.models import Tenant
 

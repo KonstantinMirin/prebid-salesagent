@@ -12,7 +12,7 @@ helper) that the media-buy behavioral migration removed.
 
 This guard pins each behavioral file at its current count of mock constructions
 via a per-file cap dict that can only shrink (same ratcheting convention as
-``test_architecture_resolved_identity_inline_cap`` and ``.duplication-baseline``).
+``test_architecture_no_value_error_in_impl`` and ``.duplication-baseline``).
 New behavioral files with mock constructions fail immediately; existing files
 that drop below their cap force it down (no silent regression). The intent is to
 keep the harness migration's gains and steer remaining mocks toward env fluent
@@ -39,7 +39,7 @@ BEHAVIORAL_MOCK_CONSTRUCTION_CAP: dict[str, int] = {
     "tests/integration/test_delivery_webhook_behavioral.py": 0,
     "tests/integration/test_get_products_behavioral.py": 44,
     "tests/unit/test_creative_formats_behavioral.py": 17,
-    "tests/unit/test_delivery_poll_behavioral.py": 7,
+    "tests/unit/test_delivery_poll_behavioral.py": 3,
     "tests/unit/test_delivery_service_behavioral.py": 2,
     "tests/unit/test_sync_creatives_behavioral.py": 28,
     "tests/unit/test_update_media_buy_behavioral.py": 103,

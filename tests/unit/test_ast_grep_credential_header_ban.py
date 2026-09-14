@@ -122,8 +122,6 @@ _RECORDED_EXEMPTIONS: frozenset[str] = frozenset(
         "tests/helpers/credentials.py",
         "tests/integration/test_delivery_webhook_behavioral.py",
         "tests/integration/test_vendor_egress.py",
-        "tests/unit/test_a2a_testing_context_extraction.py",
-        "tests/unit/test_auth_context.py",
         "tests/unit/test_delivery_service_behavioral.py",
         "tests/unit/test_property_list_resolver.py",
     )

@@ -5,18 +5,17 @@ to help new users understand what they need to do before taking their first orde
 """
 
 import logging
-import os
 import time
 from typing import Any
 
 from sqlalchemy import func, select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
-    Principal,
     Product,
     PublisherPartner,
     Tenant,
@@ -35,7 +34,7 @@ def _is_multi_tenant_mode() -> bool:
     In single-tenant mode, SSO is critical because each deployment needs
     its own authentication configuration.
     """
-    return os.environ.get("ADCP_MULTI_TENANT", "").lower() == "true"
+    return not get_settings().runtime.is_single_tenant
 
 
 # Simple time-based cache for setup status (5 minute TTL)
@@ -176,14 +175,9 @@ class SetupChecklistService:
             }
 
             # Principals per tenant
-            principal_stmt = (
-                select(Principal.tenant_id, func.count())
-                .where(Principal.tenant_id.in_(uncached_ids))
-                .group_by(Principal.tenant_id)
-            )
-            principal_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(principal_stmt).all()
-            }
+            from src.core.database.repositories.principal_lookup import count_principals_by_tenant
+
+            principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
 
             # Verified publisher partners per tenant
             verified_publisher_stmt = (
@@ -354,10 +348,8 @@ class SetupChecklistService:
                     config_details = "GAM selected but not authenticated - Complete OAuth flow and test connection"
             elif tenant.ad_server == "mock":
                 # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
+                # But allow it in testing environments
+                if get_settings().mock_adapter_counts_as_configured:
                     ad_server_fully_configured = True
                     config_details = "Mock adapter configured (test mode)"
                 else:
@@ -524,8 +516,9 @@ class SetupChecklistService:
             )
 
         # 6. Principals Created
-        stmt = select(func.count()).select_from(Principal).where(Principal.tenant_id == self.tenant_id)
-        principal_count = session.scalar(stmt) or 0
+        from src.core.database.repositories.principal import PrincipalRepository
+
+        principal_count = PrincipalRepository(session, self.tenant_id).count()
         tasks.append(
             SetupTask(
                 key="principals_created",
@@ -784,10 +777,8 @@ class SetupChecklistService:
                 config_details = "GAM configured - Test connection to verify"
             elif tenant.ad_server == "mock":
                 # Mock adapter is for testing only - not production ready
-                # But allow it in testing environments (ADCP_TESTING=true)
-                import os
-
-                if os.environ.get("ADCP_TESTING") == "true":
+                # But allow it in testing environments
+                if get_settings().mock_adapter_counts_as_configured:
                     ad_server_fully_configured = True
                     config_details = "Mock adapter configured (test mode)"
                 else:
@@ -1201,10 +1192,7 @@ class SetupIncompleteError(AdCPConfigurationError):
         # `message` is accepted and DISCARDED: the sentence is a function of the code
         # through CODE_TABLE. The parameter stays so the one raise site is unchanged.
         self.missing_tasks = missing_tasks
-        super().__init__(
-            details=ConfigurationDetails(missing_tasks=[t["name"] for t in missing_tasks]),
-            internal_detail=message,
-        )
+        super().__init__(details=ConfigurationDetails(missing_tasks=[t["name"] for t in missing_tasks]))
 
 
 def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:

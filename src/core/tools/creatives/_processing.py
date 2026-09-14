@@ -17,7 +17,6 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
 from adcp.types import CreativeAsset
-from pydantic import BaseModel
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
 from src.core.exceptions import (
@@ -32,10 +31,10 @@ from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
 from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
 from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import run_async_in_sync_context
 
-from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets
+from ._assets import _build_creative_data, _extract_message_from_assets, _extract_url_from_assets, _generative_assets
 
 if TYPE_CHECKING:
     from src.core.database.repositories.creative import CreativeRepository
@@ -177,7 +176,7 @@ def _defer_ai_review(
     creative_repo: CreativeRepository,
     *,
     creative_id: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     webhook_url: str | None,
     principal_id: str,
 ) -> None:
@@ -207,9 +206,9 @@ def _defer_ai_review(
         future = _ai_review_executor.submit(
             _ai_review_creative,
             creative_id=creative_id,
-            tenant_id=tenant["tenant_id"],
+            tenant_id=tenant.tenant_id,
             webhook_url=webhook_url,
-            slack_webhook_url=tenant.get("slack_webhook_url"),
+            slack_webhook_url=tenant.slack_webhook_url,
             principal_name=principal_id,
         )
         with _ai_review_lock:
@@ -229,9 +228,8 @@ def _update_existing_creative(
     creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     webhook_url: str | None,
-    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -250,7 +248,6 @@ def _update_existing_creative(
         approval_mode: Tenant approval mode (auto-approve, ai-powered, require-human).
         tenant: Tenant dict with tenant_id, slack_webhook_url, etc.
         webhook_url: Push notification webhook URL for AI review callbacks.
-        context: Application-level context per AdCP spec.
         all_formats: Pre-fetched creative formats from registry.
         registry: CreativeAgentRegistry instance.
         principal_id: Authenticated principal ID for AI review callbacks.
@@ -323,7 +320,7 @@ def _update_existing_creative(
     # Store creative properties in data field
     # AdCP 2.5: Full upsert semantics (replace all data, not merge)
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url)
 
     # ALWAYS validate updates with creative agent
     if creative_format:
@@ -346,10 +343,9 @@ def _update_existing_creative(
                     )
 
                     # Get Gemini API key from config
-                    from src.core.config import get_config
+                    from src.core.config import get_settings
 
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
+                    gemini_api_key = get_settings().integrations.gemini_api_key
 
                     if not gemini_api_key:
                         error_msg = (
@@ -419,7 +415,7 @@ def _update_existing_creative(
                                 # Only use generative assets if user didn't provide their own
                                 user_provided_assets = creative.assets
                                 if creative_output.get("assets") and not user_provided_assets:
-                                    data["assets"] = creative_output["assets"]
+                                    data["assets"] = _generative_assets(creative_output["assets"])
                                     changes.append("assets")
                                     logger.info("[sync_creatives] Using assets from generative output (update)")
                                 elif user_provided_assets:
@@ -678,9 +674,8 @@ def _create_new_creative(
     creative_repo: CreativeRepository,
     format_value: Any,
     approval_mode: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     webhook_url: str | None,
-    context: dict[str, Any] | BaseModel | None,
     all_formats: list[Any],
     registry: Any,
     principal_id: str,
@@ -702,7 +697,7 @@ def _create_new_creative(
 
     # Prepare data field with all creative properties
     url = _extract_url_from_assets(creative)
-    data = _build_creative_data(creative, url, context)
+    data = _build_creative_data(creative, url)
 
     # Store user-provided assets for preservation check
     user_provided_assets = creative.assets
@@ -728,10 +723,9 @@ def _create_new_creative(
                     )
 
                     # Get Gemini API key from config
-                    from src.core.config import get_config
+                    from src.core.config import get_settings
 
-                    config = get_config()
-                    gemini_api_key = config.gemini_api_key
+                    gemini_api_key = get_settings().integrations.gemini_api_key
 
                     if not gemini_api_key:
                         error_msg = f"Cannot build generative creative {creative_format}: GEMINI_API_KEY not configured"
@@ -794,7 +788,7 @@ def _create_new_creative(
 
                             # Only use generative assets if user didn't provide their own
                             if creative_output.get("assets") and not user_provided_assets:
-                                data["assets"] = creative_output["assets"]
+                                data["assets"] = _generative_assets(creative_output["assets"])
                                 logger.info("[sync_creatives] Using assets from generative output")
                             elif user_provided_assets:
                                 logger.info(

@@ -43,15 +43,20 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 ### Structural guards (automated architecture enforcement)
 AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
 
-**The following table is a representative subset, not the full set.** There are over 140 guard tests (149 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py` and `test_impl_resolved_identity.py`); for the complete list, run `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
+**The following table is a representative subset, not the full set.** There are over 140 guard tests (149 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py`); for the complete list, run `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
 | Guard | Enforces | Test file |
 |-------|----------|-----------|
 | Schema inheritance | Redeclarations are inherited unless reshaped or weakened | `test_architecture_schema_inheritance.py` |
 | No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
-| ResolvedIdentity in _impl | `_impl` accepts ResolvedIdentity, not Context | `test_impl_resolved_identity.py` |
-| Boundary completeness | MCP/A2A wrappers pass all _impl parameters | `test_architecture_boundary_completeness.py` |
+| `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)` for a protected tool, `identity: AccountIdentity` when the DTO requires `account`, or `identity: PublicIdentity` for a public one; the DTO matches the registry row, and the identity annotation IS the row's credential policy (`ToolSpec.requires_credential` derives it; the registry refuses `AccountIdentity` on a DTO whose `account` is optional) | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
+| One identity constructor | `ResolvedIdentity(...)` / `AccountIdentity(...)` / `PublicIdentity(...)` only in the resolver and `PrincipalFactory`; the resolver builds the identity once, account inside, and nothing `model_copy`s one | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
+| Principal rows are repository-private | `src.core.database.models.Principal` is importable only by the four repository modules that query it; a tool reads `identity.principal`, an admin view uses `PrincipalRepository` | `ruff-boundary.toml` (TID251) |
+| Principal and account obtained from the identity alone | `repositories.principal`, `repositories.principal_lookup`, `auth_utils`, `repositories.account` and `uow.AccountUoW` are importable only by the resolver, the repositories, the admin UI, the setup scripts and the two account-management tools; a tool reads `identity.principal` / `identity.account` | `ruff-ownership.toml` (TID251) |
+| Auth refusals minted by the resolver alone | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver; a protected tool's `ResolvedIdentity` carries principal and tenant by type, so nothing downstream re-checks (a seller's `require_auth` brand policy is asked by the resolver through `requires_credential(tenant)`) | `ruff-boundary.toml` (TID251) |
+| Account resolved by the resolver alone | `src.core.database.repositories.account_lookup` is importable only by the resolver, which builds the identity with the request's account inside; tools read `identity.account` | `ruff-boundary.toml` (TID251) |
+| Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | No model_dump in _impl | `_impl` returns model objects, never calls `.model_dump()` | `test_architecture_no_model_dump_in_impl.py` |
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
@@ -118,7 +123,7 @@ class Product(LibraryProduct):
 **Rules:**
 - Import library types with `Library*` alias: `from adcp.types import X as LibraryX`
 - Extend with inheritance — don't copy fields from the parent class
-- Only redeclare parent fields when needed for nested serialization (Pattern #4)
+- Only redeclare a parent field to narrow it to a local subclass (Pattern #4 re-serializes the instance)
 - Mark internal-only fields with `exclude=True`
 - Run `pytest tests/unit/test_adcp_contract.py` before commit
 - **Enforced by:** `tests/unit/test_architecture_schema_inheritance.py`, which grades
@@ -180,21 +185,44 @@ need, add one; do not reach past it to the raw session.
 
 See [patterns-reference.md](docs/development/patterns-reference.md) §§1–2 for both patterns in full — canonical repository files, worked correct/wrong examples, and how to add a repository.
 
-### 4. Pydantic: explicit nested serialization
-Parent models must override `model_dump()` to serialize nested children:
+### 4. Pydantic: one serializer per model, and serialization only at the edges
+A model is serialized in three ways — `model_dump()`, `model_dump_json()`, and
+`pydantic_core.to_json` (which the JSON column type and every nested parent use) — and
+only a `@model_serializer` runs on all three. A `def model_dump(self, **kwargs)` override
+runs on one, so a shape written there exists on one path and not the others. **Never
+override `model_dump`.** And a wire model does not shape its own output at all: it
+conforms BY INHERITANCE. The library parent is the pinned schema, so a model that inherits
+its fields and declares its internal ones `Field(exclude=True)` serializes to the spec shape
+on every path with no per-class hook:
 
 ```python
-class GetCreativesResponse(AdCPBaseModel):
-    creatives: list[Creative]
+class Product(LibraryProduct):
+    implementation_config: dict[str, Any] | None = Field(default=None, exclude=True)  # never on the wire
 
-    def model_dump(self, **kwargs):
-        result = super().model_dump(**kwargs)
-        if "creatives" in result and self.creatives:
-            result["creatives"] = [c.model_dump(**kwargs) for c in self.creatives]
-        return result
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
+    creatives: list[SyncCreativeResult]   # a local subclass: re-dumped through its own serializer
 ```
 
-**Why**: Pydantic doesn't auto-call custom `model_dump()` on nested models.
+There is one serializer seat, `WireSerializerMixin` (`src/core/schemas/_base.py`), and it
+carries exactly two concerns: `NestedModelSerializerMixin` re-serializes children by their
+INSTANCE rather than the declared (library) type, which is what keeps a local subclass's
+extra fields on the wire; and required-nullable retention keeps a required field whose
+value is `None` on the wire under `exclude_none`. A per-class "last word" hook
+(`_finish_wire`) and a per-class strip set (`_INTERNAL_ONLY_FIELDS`) used to be the third
+and fourth. Both are gone: every use was either a redeclaration weakening the library type
+and then patching the output back (the fix is to not redeclare), or a strip of a field that
+belongs on the wire (`Product.expires_at` is pinned), or bookkeeping that belongs off the
+model entirely (an adapter's carrier type, not a wire field). A field that must exist on the
+model and not on the wire is `Field(exclude=True)` at its declaration, nowhere else.
+
+**And business logic never calls `model_dump()` at all.** A model is the value; a dict built
+from it mid-flow is a second representation that drifts. Serialization happens at three
+edges, each with one owner: the wire (`src/core/tools/_wire.py`), outbound HTTP to another
+agent or a webhook target (the registries and webhook services), and the idempotency
+payload hash. Persistence is not an edge that needs a call: hand the model to the
+`JSONType` column and the engine serializes it through the same serializer. Repositories and
+the context manager may normalize a stored DOCUMENT they compose; a tool, helper or
+validator may not.
 
 ### 5. Transport boundary: one path to every implementation
 All tools have two layers: a **transport** (MCP, A2A, REST) that parses a request and writes
@@ -205,39 +233,46 @@ a response, and **business logic** (`_impl` functions). Between them sits ONE se
 ```python
 async def _create_media_buy_impl(
     req: CreateMediaBuyRequest,
-    identity: ResolvedIdentity | None = None,    # NOT Context/ToolContext
-    context_id: str | None = None,
+    identity: ResolvedIdentity,    # never Context, headers or a token
 ) -> CreateMediaBuyResult:
     # Business logic only — no transport awareness, no account resolution, no idempotency
     ...
 ```
 
-**Transports** name a tool and hand over the request they validated:
+**Transports** name a tool and hand over the raw payload and the request headers:
 ```python
-# Every transport, one call. The registry says which function runs.
-response = await invoke_tool("create_media_buy", req, identity)
+# Every transport, one call. The registry says which function runs and whether the
+# credential must verify; the boundary validates the payload and resolves the caller.
+response = await serve("create_media_buy", payload, request.headers, TransportProtocol.REST)
 ```
 
-`invoke_tool` resolves the account the request names, honours its `idempotency_key`, and
-calls the implementation as `impl(req=..., identity=..., **extra)`. Both of those are
+`serve` validates the payload into the registry row's DTO, resolves the identity once
+(`_resolve_identity`, private to the boundary), resolves the account the request names,
+honours its `idempotency_key`, stamps the buyer's `context` and the served version onto the
+response, and calls the implementation as `impl(req=..., identity=...)`. All of those are
 properties of the REQUEST, not steps in the work, and doing them once is what keeps the
 transports from disagreeing — the fifteen `*_raw` wrappers this replaced disagreed about
-exactly those two.
+exactly those.
 
 **Controller and service.** An `_impl` is a CONTROLLER: it establishes who is calling and
 then delegates. The work itself belongs in a service function that takes an already-resolved
 caller and asks nothing about transports, auth or idempotency:
 
 ```python
-def _sync_creatives_impl(req, identity=None):          # controller
-    principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
+def _sync_creatives_impl(req, identity: ResolvedIdentity):   # controller
+    # The type carries the boundary's decision: principal and tenant are not optional.
+    return sync_creatives(req, identity=identity, principal_id=identity.principal.principal_id, tenant=identity.tenant)
 
 def sync_creatives(req, *, identity, principal_id, tenant):   # service
     ...
 ```
+
+A tool never re-checks what the boundary decided. A protected tool declares
+`identity: ResolvedIdentity` and the resolver refuses an anonymous caller before it runs;
+a public tool (`get_products`, `list_creative_formats`, `get_adcp_capabilities`) declares
+`identity: PublicIdentity` and branches on `identity.principal is None` itself. The registry
+derives `requires_credential()` from that annotation, so there is no `auth=` literal on the
+row and no `require_principal` helper to call.
 
 **A controller never calls another controller.** When one tool needs another tool's work --
 `create_media_buy` and `update_media_buy` upload a package's inline creatives -- it calls the
@@ -247,21 +282,21 @@ outer request's `idempotency_key` into a function with no business seeing it. To
 not before.
 
 **Rules for `_impl` functions:**
-- Accept `ResolvedIdentity`, never `Context`, `ToolContext`, or raw headers
+- Accept `ResolvedIdentity` (protected) or `PublicIdentity` (public), never `Context`, raw headers or a token
 - Raise `AdCPSalesAgentError` subclasses, never `ToolError` (that's transport-specific)
 - Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
-- No auth extraction, tenant resolution, account resolution, or idempotency — the boundary's job
-- Declare only `req`, `identity` and `context_id`: nothing else can be supplied
+- No auth extraction, tenant resolution, account resolution, idempotency or context echo — the boundary's job
+- Declare exactly `(req: <DTO>, identity: ResolvedIdentity)` or `(req: <DTO>, identity: PublicIdentity)`: nothing else can be supplied, and the annotation is the credential policy
 
 **Rules for transports:**
-- Resolve identity, then call `invoke_tool(tool_name, req, identity)` — never an implementation directly
-- Catch `AdCPSalesAgentError` and translate to transport-appropriate error format
+- Hand the raw payload and the request headers to `serve(tool_name, payload, headers, protocol)` — never resolve an identity, never call an implementation directly
+- Catch `AdcpFailure`, serialize its response with `to_wire`, and add only the transport's own failure marker (an HTTP status, an MCP tool error, an A2A task state)
 
 **Substituting an implementation in a test** patches the registry ROW, not a module
 attribute: `TOOLS` holds the function object, so `patch("...._x_impl")` renames something
 nothing consults. Use `tests/helpers/capture_wrapper_req.py` (`stub_impl`, `registry_impl`).
 
-**Enforced by:** `test_transport_agnostic_impl.py`, `test_impl_resolved_identity.py`, `ruff-boundary.toml`'s TID251 ban on `fastmcp.exceptions.ToolError`, `test_architecture_boundary_completeness.py`
+**Enforced by:** `test_transport_agnostic_impl.py`, the `ToolImpl` protocol typing `ToolSpec.impl` in `src/core/tools/registry.py` (mypy) plus `.ast-grep/rules/impl-signature-is-request-and-identity.yml`, and `ruff-boundary.toml`'s TID251 bans on `fastmcp.exceptions.ToolError` and on the two auth errors outside the resolver and `require_*`
 
 Worked transport-boundary and `_impl` examples: `.claude/rules/patterns/mcp-patterns.md` and [patterns-reference.md §6](docs/development/patterns-reference.md).
 
@@ -408,7 +443,7 @@ Tenant → CurrencyLimit (USD required for budget validation)
 ## Testing guidelines
 
 Test organization (unit/integration/e2e/admin/bdd/ui suites and what each needs), database fixtures,
-quality rules (max 10 mocks per file, roundtrip test for `apply_testing_hooks()`), entity markers, and the
+quality rules (max 10 mocks per file), entity markers, and the
 infrastructure decision tree are in `.claude/rules/patterns/testing-patterns.md` — read it before writing
 or running tests. Test authoring with the harness (environments, factories, wire assertions): `tests/CLAUDE.md`.
 

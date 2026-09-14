@@ -97,22 +97,14 @@ class VendorHttpClient:
         report a defect in our own code as the vendor being down.
 
         The clashing keys are the structured fact, so they go in
-        ``ConfigurationDetails.rejected_value``; the sentence explaining the
-        defect is a server-side diagnostic and goes to ``internal_detail``.
-        Buyer-facing text is a function of the code (ADR-010) and is not
-        authored here.
+        ``ConfigurationDetails.rejected_value``. Buyer-facing text is a function
+        of the code (ADR-010) and is not authored here.
         """
         if not per_call:
             return dict(self.params)
         clash = sorted(self.params.keys() & per_call.keys())
         if clash:
-            raise AdCPConfigurationError(
-                details=ConfigurationDetails(rejected_value=clash),
-                internal_detail=(
-                    f"query parameter(s) {clash} are set on this VendorHttpClient and passed again "
-                    "per call; the client-level value is a dial coordinate and must not be shadowed."
-                ),
-            )
+            raise AdCPConfigurationError(details=ConfigurationDetails(rejected_value=clash))
         return {**self.params, **per_call}
 
 
@@ -126,15 +118,11 @@ def require_vendor(client: VendorHttpClient | None, *, vendor: str) -> VendorHtt
 
     The vendor name is the structured fact and goes in
     ``ConfigurationDetails.provider``, the same slot every other named-provider
-    misconfiguration uses. The authored sentence is a server-side diagnostic
-    and goes to ``internal_detail``: naming a third-party vendor in
-    buyer-facing text is exactly what AdCP 3.1.1 ``transport-errors.mdx``
-    § Security Considerations forbids, and buyer-facing text is a function of
-    the code anyway (ADR-010), so there is nothing to author.
+    misconfiguration uses. Naming a third-party vendor in buyer-facing text is
+    exactly what AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations
+    forbids, and buyer-facing text is a function of the code anyway (ADR-010),
+    so there is nothing to author.
     """
     if client is None:
-        raise AdCPConfigurationError(
-            details=ConfigurationDetails(provider=vendor),
-            internal_detail=f"{vendor} credentials are not configured; cannot dial the vendor API.",
-        )
+        raise AdCPConfigurationError(details=ConfigurationDetails(provider=vendor))
     return client

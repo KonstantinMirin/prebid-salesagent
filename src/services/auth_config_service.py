@@ -4,11 +4,11 @@ Manages per-tenant OIDC configuration stored in the database.
 """
 
 import logging
-import os
 from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
@@ -253,13 +253,12 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
     elif main_url := get_sales_agent_url():
         # Explicit SALES_AGENT_DOMAIN URL
         base = main_url
-    elif fly_app := os.environ.get("FLY_APP_NAME"):
+    elif fly_app := get_settings().runtime.fly_app_name:
         # Single-tenant mode on Fly.io - use the app's URL
         base = f"https://{fly_app}.fly.dev"
     else:
         # Local development fallback
-        port = os.environ.get("ADCP_SALES_PORT", "8080")
-        base = f"http://localhost:{port}"
+        base = get_settings().runtime.local_base_url
 
     return f"{base}/admin/auth/oidc/callback"
 

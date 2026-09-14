@@ -53,22 +53,20 @@ class TestBaseClassContract:
 
         assert env.mock == {}
 
-    def test_integration_env_identity_is_lazy(self):
-        """Identity is built on first access, not in __init__."""
+    def test_integration_env_identity_names_the_env_principal(self):
+        """The call_impl identity carries the env's principal and tenant."""
         from tests.harness._base import IntegrationEnv
 
         env = IntegrationEnv(principal_id="p1", tenant_id="t1")
-        assert env._identity_cache == {}
         identity = env.identity
         assert identity.principal_id == "p1"
         assert identity.tenant_id == "t1"
 
-    def test_unit_env_identity_is_lazy(self):
-        """Identity is built on first access, not in __init__."""
+    def test_unit_env_identity_names_the_env_principal(self):
+        """The call_impl identity carries the env's principal and tenant."""
         from tests.harness._base import BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
-        assert env._identity_cache == {}
         identity = env.identity
         assert identity.principal_id == "p1"
         assert identity.tenant_id == "t1"
@@ -113,8 +111,12 @@ class TestBaseClassContract:
 
         env = _TestEnv()
         with env:
-            # A unit env binds no database, so the registry is the patches alone.
-            assert [label for label, _ in env._enter_cleanups] == ["patch:a", "patch:b"]
+            # A unit env binds no database; grade the PATCH entries by label, the
+            # property this test always meant.
+            assert [label for label, _ in env._enter_cleanups if label.startswith("patch:")] == [
+                "patch:a",
+                "patch:b",
+            ]
         assert env._enter_cleanups == []
 
     def test_identity_respects_dry_run(self):
@@ -226,36 +228,58 @@ class TestBaseClassContract:
         assert env.mock == {}
         assert env._enter_cleanups == []
 
-    def test_identity_for_returns_correct_protocol(self):
-        """identity_for(transport) sets the correct protocol on identity."""
+    def test_unit_credential_carries_the_built_principals_token_and_the_tenant_id(self):
+        """credential(): Bearer token of the principal the factory built, tenant id in x-adcp-tenant."""
         from tests.harness._base import BaseTestEnv
-        from tests.harness.transport import Transport
 
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
+        credential = env.credential()
 
-        mcp_id = env.identity_for(Transport.MCP)
-        assert mcp_id.protocol == "mcp"
+        assert credential["Authorization"] == f"Bearer {env._unit_principal().access_token}"
+        assert env._unit_principal().principal_id == "p1"
+        assert credential["x-adcp-tenant"] == "t1"
+        assert "x-dry-run" not in credential
 
-        a2a_id = env.identity_for(Transport.A2A)
-        assert a2a_id.protocol == "a2a"
+    def test_credential_overrides(self):
+        """token=None presents nothing; an invalid token is presented; dry_run adds the header."""
+        from tests.harness._base import INVALID_TOKEN, BaseTestEnv
 
-        rest_id = env.identity_for(Transport.REST)
-        assert rest_id.protocol == "rest"
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1", dry_run=True)
 
-        # All share same principal/tenant
-        for ident in [mcp_id, a2a_id, rest_id]:
-            assert ident.principal_id == "p1"
-            assert ident.tenant_id == "t1"
+        assert env.credential()["x-dry-run"] == "true"
+        assert "Authorization" not in env.credential(token=None)
+        assert env.credential(token=None)["x-adcp-tenant"] == "t1"
+        assert env.credential(token=INVALID_TOKEN)["Authorization"] == f"Bearer {INVALID_TOKEN}"
+        assert env.credential(tenant="other")["x-adcp-tenant"] == "other"
 
-    def test_identity_for_is_cached_per_protocol(self):
-        """Repeated calls with same transport return same identity object."""
+    def test_switch_principal_changes_the_credential(self):
+        """After switch_principal the credential carries the new principal's token."""
         from tests.harness._base import BaseTestEnv
-        from tests.harness.transport import Transport
 
-        env = BaseTestEnv()
-        id1 = env.identity_for(Transport.REST)
-        id2 = env.identity_for(Transport.REST)
-        assert id1 is id2
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1")
+        before = env.credential()["Authorization"]
+        env.switch_principal("p2")
+        after = env.credential()["Authorization"]
+        assert before != after
+        assert env._unit_principal().principal_id == "p2"
+
+    def test_unit_env_resolves_its_own_credential_on_the_wire(self):
+        """The real resolver, over the substitutes, builds the env's identity from credential()."""
+        from src.core.resolved_identity import TransportProtocol, _resolve_identity
+        from tests.harness._base import INVALID_TOKEN, BaseTestEnv
+
+        mcp = TransportProtocol.MCP
+        with BaseTestEnv(principal_id="p1", tenant_id="t1") as env:
+            identity = _resolve_identity(env.credential(), require_valid_token=True, protocol=mcp)
+            assert identity.principal_id == "p1"
+            assert identity.tenant_id == "t1"
+
+            anonymous = _resolve_identity(env.credential(token=None), require_valid_token=False, protocol=mcp)
+            assert anonymous.principal_id is None
+            assert anonymous.tenant_id == "t1"
+
+            rejected = _resolve_identity(env.credential(token=INVALID_TOKEN), require_valid_token=False, protocol=mcp)
+            assert rejected.principal_id is None
 
     def test_identity_backward_compat(self):
         """env.identity still works and defaults to the mcp protocol."""

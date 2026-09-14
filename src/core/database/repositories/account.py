@@ -54,14 +54,10 @@ class NaturalKeyConflict(AdCPConflictError, ValueError):
     def __init__(self, message: str, *, existing_account_id: str | None = None) -> None:
         # OPERATOR-facing, never the buyer wire: the admin form flashes this so the
         # human sees which account to edit. The buyer-facing sentence is CODE_TABLE's,
-        # resolved from CONFLICT, and this text also goes to internal_detail for the
-        # server log.
+        # resolved from CONFLICT.
         self.operator_message = message
         self.existing_account_id = existing_account_id
-        super().__init__(
-            details=ConflictDetails(account_id=existing_account_id),
-            internal_detail=message,
-        )
+        super().__init__(details=ConflictDetails(account_id=existing_account_id))
 
 
 @dataclass(frozen=True)
@@ -228,7 +224,7 @@ class AccountRepository:
         For ambiguity *detection* prefer list_by_natural_key(limit=2) (single query).
         This exact count is for ambiguity *disclosure* on the error path only — once
         detection has confirmed >1 match, callers use it to tell the buyer how many
-        accounts collide (see account_helpers._resolve_by_natural_key).
+        accounts collide (see ``account_lookup.find_account``).
 
         ``principal_id`` MUST mirror the value passed to list_by_natural_key so the
         disclosed count is scoped to the agent's accessible accounts — disclosing a

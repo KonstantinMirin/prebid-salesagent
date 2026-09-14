@@ -32,7 +32,7 @@ db_session = gam_db_session
 
 
 require_sync_api_key = require_api_key_auth(
-    env_var="SYNC_API_KEY",
+    setting="sync_api_key",
     config_key="api_key",
     header="X-API-Key",
 )
@@ -144,7 +144,6 @@ def trigger_sync(tenant_id: str) -> tuple[Response, int]:
                 network_code=adapter_config.gam_network_code or "",
                 advertiser_id=None,  # Not needed for inventory sync
                 trafficker_id=adapter_config.gam_trafficker_id or None,
-                dry_run=False,
                 audit_logger=None,
                 tenant_id=tenant_id,
             )

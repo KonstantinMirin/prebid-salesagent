@@ -4,14 +4,12 @@ import logging
 from typing import Any
 
 from adcp import PushNotificationConfig
-from adcp.types import ContextObject
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import CreativeUoW, WorkflowUoW
-from src.core.exceptions import AdCPAdapterError, AdCPAuthRequiredError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.exceptions import AdCPAdapterError
 from src.core.schemas import CreativeStatusEnum
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)
 
@@ -19,11 +17,9 @@ logger = logging.getLogger(__name__)
 def _create_sync_workflow_steps(
     creatives_needing_approval: list[dict[str, Any]],
     principal_id: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     approval_mode: str,
     push_notification_config: PushNotificationConfig | None,
-    context: ContextObject | dict | None,
-    identity: ResolvedIdentity | None = None,
     *,
     uow: CreativeUoW,
 ) -> None:
@@ -39,12 +35,9 @@ def _create_sync_workflow_steps(
     effect of that unit — cannot name a step the commit has not yet released
     (GH #2002).
     """
-    # Ensure principal_id is available (should always be set by this point).
-    # No principal_id at all -> AUTH_MISSING per v3.1.1 error-code.json
-    # (absent credential, not presented-but-rejected).
-    if principal_id is None:
-        raise AdCPAuthRequiredError()
-
+    # ``principal_id`` is a ``str``: the caller read it off a ResolvedIdentity, whose principal
+    # is not optional, so there is no anonymous case to refuse here and nothing re-derives
+    # what the resolver decided.
     assert uow.workflows is not None
     # Context creation joins the caller's transaction too. The repository
     # takes no tenant_id (it uses its own scope) and create_step takes the
@@ -71,17 +64,11 @@ def _create_sync_workflow_steps(
         else:
             comment = f"Creative '{creative_info['name']}' (format: {creative_info['format']}) requires review"
 
-        # Create workflow step for creative approval
-        # Serialize format to JSON-compatible form (FormatId is a Pydantic model)
-        from pydantic import BaseModel
-
-        format_value = creative_info["format"]
-        if isinstance(format_value, BaseModel):
-            format_value = format_value.model_dump(mode="json")
-
+        # Create workflow step for creative approval. The format is a FormatId model;
+        # the JSON column type serializes it at flush.
         request_data_for_workflow = {
             "creative_id": creative_info["creative_id"],
-            "format": format_value,
+            "format": creative_info["format"],
             "name": creative_info["name"],
             "status": status,
             "approval_mode": approval_mode,
@@ -90,10 +77,6 @@ def _create_sync_workflow_steps(
         # Engine's _pydantic_json_serializer handles Pydantic models in JSONB automatically
         if push_notification_config:
             request_data_for_workflow["push_notification_config"] = push_notification_config
-
-        # Store context if provided (for echoing back in webhook)
-        if context:
-            request_data_for_workflow["context"] = context
 
         # (Deleted) The caller's transport was stored here "for webhook payload creation".
         # Nothing ever read it back -- the approval webhook is built in
@@ -107,7 +90,7 @@ def _create_sync_workflow_steps(
         # events -- but that is the task-status push envelope, not this one.)
 
         step = uow.workflows.create_step(
-            context=persistent_ctx,
+            persistent_context=persistent_ctx,
             step_type="creative_approval",
             owner="publisher",
             status="requires_approval",
@@ -131,7 +114,7 @@ def _create_sync_workflow_steps(
 
 def _send_creative_notifications(
     creatives_needing_approval: list[dict[str, Any]],
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     approval_mode: str,
     principal_id: str | None,
 ) -> None:
@@ -143,15 +126,15 @@ def _send_creative_notifications(
     # Note: For ai-powered mode, notifications are sent AFTER AI review completes (with AI reasoning)
     # Only send immediate notifications for require-human mode or existing creatives with AI review results
     logger.info(
-        f"Checking Slack notification: creatives={len(creatives_needing_approval)}, webhook={tenant.get('slack_webhook_url')}, approval_mode={approval_mode}"
+        f"Checking Slack notification: creatives={len(creatives_needing_approval)}, webhook={tenant.slack_webhook_url}, approval_mode={approval_mode}"
     )
-    if not (creatives_needing_approval and tenant.get("slack_webhook_url") and approval_mode == "require-human"):
+    if not (creatives_needing_approval and tenant.slack_webhook_url and approval_mode == "require-human"):
         return
 
     from src.services.slack_notifier import get_slack_notifier
 
     logger.info(f"Sending Slack notifications for {len(creatives_needing_approval)} creatives (require-human mode)")
-    tenant_config = {"features": {"slack_webhook_url": tenant["slack_webhook_url"]}}
+    tenant_config = {"features": {"slack_webhook_url": tenant.slack_webhook_url}}
     notifier = get_slack_notifier(tenant_config)
 
     for creative_info in creatives_needing_approval:
@@ -171,7 +154,7 @@ def _send_creative_notifications(
                 principal_name=principal_name_str,
                 format_type=format_str,
                 media_buy_id=None,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 ai_review_reason=ai_review_reason,
             )
         else:
@@ -181,13 +164,13 @@ def _send_creative_notifications(
                 principal_name=principal_name_str,
                 format_type=format_str,
                 media_buy_id=None,
-                tenant_id=tenant["tenant_id"],
+                tenant_id=tenant.tenant_id,
                 ai_review_reason=ai_review_reason,
             )
 
 
 def _audit_log_sync(
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
     principal_id: str | None,
     synced_creatives: list,
     failed_creatives: list[dict[str, Any]],
@@ -205,7 +188,7 @@ def _audit_log_sync(
     Writes two audit entries: one at the AdCP level (always) and one at the
     sync_creatives level (only when the principal is found in the database).
     """
-    audit_logger = get_audit_logger("AdCP", tenant["tenant_id"])
+    audit_logger = get_audit_logger("AdCP", tenant.tenant_id)
 
     # Build error message from failed creatives
     error_message = None
@@ -240,12 +223,12 @@ def _audit_log_sync(
 
     # Log audit trail for sync_creatives operation (with principal name from DB)
     try:
-        with WorkflowUoW(tenant["tenant_id"]) as uow:
+        with WorkflowUoW(tenant.tenant_id) as uow:
             assert uow.workflows is not None
             principal_name = uow.workflows.get_principal_name(principal_id) if principal_id else None
 
             if principal_name:
-                audit_logger = get_audit_logger("sync_creatives", tenant["tenant_id"])
+                audit_logger = get_audit_logger("sync_creatives", tenant.tenant_id)
                 audit_logger.log_operation(
                     operation="sync_creatives",
                     principal_name=principal_name,
@@ -262,7 +245,7 @@ def _audit_log_sync(
                         "dry_run": dry_run,
                         "creative_ids_filter": creative_ids,
                     },
-                    tenant_id=tenant["tenant_id"],
+                    tenant_id=tenant.tenant_id,
                 )
     except Exception as e:
         # Don't fail the operation if audit logging fails

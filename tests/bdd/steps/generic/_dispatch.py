@@ -18,10 +18,10 @@ if TYPE_CHECKING:
 
 # NOTE: NO_IDENTITY_OVERRIDE is IMPORTED, never re-declared. A local
 # `_SENTINEL = object()` renamed into this name would be a SECOND distinct
-# object wearing the canonical name, and `identity is not NO_IDENTITY_OVERRIDE`
+# object wearing the canonical name, and `credential is not NO_IDENTITY_OVERRIDE`
 # would then compare against the local one — so a caller passing the harness's
 # real sentinel (meaning "no override") would be misread as HAVING overridden
-# identity. One object, one name.
+# the credential. One object, one name.
 
 
 class WireCtx(TypedDict, total=False):
@@ -199,20 +199,22 @@ def gate_and_record(payload: dict[str, Any]) -> None:
     record_dispatched_request(payload)
 
 
-def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwargs: Any) -> None:
+def dispatch_request(ctx: dict, *, credential: Any = NO_IDENTITY_OVERRIDE, **kwargs: Any) -> None:
     """Dispatch a request through ctx['transport'] via ``env.call_via``.
 
     Stores the TransportResult in ctx["result"]; ctx["error"] on failure.
     If ctx["transport"] is a Transport enum, uses call_via directly.
     If it's a string, maps to Transport enum first.
 
-    The ``identity`` kwarg overrides the default identity for multi-agent
-    and no-auth scenarios. When provided, it flows through to call_via
-    (which uses kwargs.setdefault, so an explicit identity won't be clobbered).
-    Use ``identity=None`` for no-auth scenarios.
+    The ``credential`` kwarg overrides the env's own credential for multi-agent
+    and no-auth scenarios: a headers dict, built by ``env.credential(...)`` or
+    ``credential_headers(...)``. When provided, it flows through to call_via
+    (which uses kwargs.setdefault, so an explicit credential won't be clobbered).
+    ``env.credential(token=None)`` presents nothing on the env's tenant; ``{}``
+    sends no headers at all.
     """
-    if identity is not NO_IDENTITY_OVERRIDE:
-        kwargs["identity"] = identity
+    if credential is not NO_IDENTITY_OVERRIDE:
+        kwargs["credential"] = credential
 
     # Grade the ITEMS against the pinned model before anything else touches them. This
     # is the half that FINDS unmarked malformations, and it looks for validity, never
@@ -263,7 +265,7 @@ def dispatch_request(ctx: dict, *, identity: Any = NO_IDENTITY_OVERRIDE, **kwarg
     _populate_ctx_from_result(cast("WireCtx", ctx), result)
 
 
-def dispatch_raw_document(ctx: dict, document: Any, *, identity: Any = NO_IDENTITY_OVERRIDE) -> None:
+def dispatch_raw_document(ctx: dict, document: Any, *, credential: Any = NO_IDENTITY_OVERRIDE) -> None:
     """Dispatch a document the client cannot shape, through ``tests/harness/raw_wire.py``.
 
     The same ctx contract as :func:`dispatch_request`, published through the same single
@@ -275,10 +277,12 @@ def dispatch_raw_document(ctx: dict, document: Any, *, identity: Any = NO_IDENTI
 
     env = ctx["env"]
     transport = _as_transport(ctx, "dispatch_raw_document")
-    _populate_ctx_from_result(cast("WireCtx", ctx), dispatch_raw(env, transport, document, identity))
+    _populate_ctx_from_result(cast("WireCtx", ctx), dispatch_raw(env, transport, document, credential))
 
 
-def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identity: Any = NO_IDENTITY_OVERRIDE) -> None:
+def dispatch_via_client(
+    ctx: dict, tool: str, payload: dict[str, Any], *, credential: Any = NO_IDENTITY_OVERRIDE
+) -> None:
     """Dispatch through ``AdCPTestClient.call`` instead of ``env.call_via``.
 
     The same single dispatch seam reached through the transport-generic client
@@ -308,14 +312,14 @@ def dispatch_via_client(ctx: dict, tool: str, payload: dict[str, Any], *, identi
     # ``sync_accounts``. Two entries in one module is the achievable end state; both of
     # them gate.
     #
-    # ``payload`` only: ``identity`` travels beside the bag here rather than inside it,
+    # ``payload`` only: ``credential`` travels beside the bag here rather than inside it,
     # and the capture's identity token exists for the bag. Measured: every recorded
-    # ``dispatch_via_client`` dispatch took the no-identity branch (0 of 55 —
+    # ``dispatch_via_client`` dispatch took the no-credential branch (0 of 55 —
     # salesagent-ryzil.2), so nothing is lost today; the day one does not, the
     # difference to record is still whether auth was carried, not what it held.
     gate_and_record(payload)
-    if identity is not NO_IDENTITY_OVERRIDE:
-        result = client.call(tool, payload, transport, identity=identity)
+    if credential is not NO_IDENTITY_OVERRIDE:
+        result = client.call(tool, payload, transport, credential=credential)
     else:
         result = client.call(tool, payload, transport)
     _populate_ctx_from_result(cast("WireCtx", ctx), result)

@@ -112,8 +112,9 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='invalid_placement_ids'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
+
+        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         MODULE = "src.core.tools.media_buy_update"
@@ -144,11 +145,6 @@ class TestPlacementIdsValidation:
         mock_uow.__exit__ = Mock(return_value=False)
 
         with (
-            patch(
-                "src.core.helpers.context_helpers.ensure_tenant_context",
-                return_value={"tenant_id": "t1", "name": "Test"},
-            ),
-            patch("src.core.auth.get_principal_object") as m_principal_obj,
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
             patch(f"{MODULE}.get_adapter") as m_adapter,
@@ -156,8 +152,6 @@ class TestPlacementIdsValidation:
             patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
             patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
         ):
-            m_principal_obj.return_value = MagicMock(principal_id="principal_test")
-
             mock_step = MagicMock(step_id="step_001")
             mock_ctx_mgr = MagicMock()
             mock_ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_001")
@@ -229,8 +223,9 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='placement_targeting_not_supported'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.testing_hooks import AdCPTestContext
+
+        from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         MODULE = "src.core.tools.media_buy_update"
@@ -260,11 +255,6 @@ class TestPlacementIdsValidation:
         mock_uow.__exit__ = Mock(return_value=False)
 
         with (
-            patch(
-                "src.core.helpers.context_helpers.ensure_tenant_context",
-                return_value={"tenant_id": "t1", "name": "Test"},
-            ),
-            patch("src.core.auth.get_principal_object") as m_principal_obj,
             patch(f"{MODULE}._verify_principal"),
             patch(f"{MODULE}.get_context_manager") as m_ctx_mgr,
             patch(f"{MODULE}.get_adapter") as m_adapter,
@@ -272,8 +262,6 @@ class TestPlacementIdsValidation:
             patch(f"{MODULE}.MediaBuyUoW", return_value=mock_uow),
             patch(f"{DB_MODULE}.get_db_session", return_value=mock_cm),
         ):
-            m_principal_obj.return_value = MagicMock(principal_id="principal_test")
-
             mock_step = MagicMock(step_id="step_001")
             mock_ctx_mgr = MagicMock()
             mock_ctx_mgr.get_or_create_context.return_value = MagicMock(context_id="ctx_001")

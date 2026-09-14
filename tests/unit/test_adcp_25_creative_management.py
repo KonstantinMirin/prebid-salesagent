@@ -42,9 +42,8 @@ class TestSyncCreativesCreativeIdsFilter:
         assert request.creative_ids == ["creative_1"]
         assert request.creatives[0].creative_id == "creative_1"
 
-    @patch("src.core.helpers.context_helpers.ensure_tenant_context")
     @patch("src.core.tools.creatives._sync.CreativeUoW")
-    def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls, mock_tenant):
+    def test_sync_creatives_filters_by_creative_ids(self, mock_uow_cls):
         """Test _sync_creatives_impl filters creatives by creative_ids."""
         from src.core.tools.creatives._sync import _sync_creatives_impl
 
@@ -54,8 +53,6 @@ class TestSyncCreativesCreativeIdsFilter:
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
             protocol="mcp",
         )
-        mock_tenant.return_value = {"tenant_id": "tenant_1", "adapter_type": "mock"}
-
         # Mock UoW with creative repo
         mock_uow = MagicMock()
         mock_creative_repo = MagicMock()

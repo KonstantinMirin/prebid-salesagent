@@ -412,9 +412,9 @@ def when_sync_creative(ctx: dict) -> None:
     the step text says "syncs the creative". Error handling is the production
     code's responsibility, not the step's.
 
-    Honors ``ctx["has_auth"] is False`` by passing ``identity=ctx["identity"]``
-    (typically None or a principal-less identity) so the auth boundary check
-    in _sync_creatives_impl fires.
+    Honors ``ctx["has_auth"] is False`` by presenting ``ctx["credential"]``
+    (a token-less credential, or one addressing a tenant that does not exist) so the
+    resolver's refusal fires on the wire.
     """
     account_ref = ctx.get("account_ref")
     creatives = ctx.get("creatives", [])
@@ -438,7 +438,7 @@ def when_sync_creative(ctx: dict) -> None:
     if "creative_ids" in ctx:
         kwargs["creative_ids"] = ctx["creative_ids"]
     if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=ctx.get("identity"), **kwargs)
+        dispatch_request(ctx, credential=ctx["credential"], **kwargs)
     else:
         dispatch_request(ctx, **kwargs)
 
@@ -543,15 +543,10 @@ def then_proceed_with_resolved_account(ctx: dict) -> None:
 
     # Authenticated principal the creative must be scoped to (isolation guard).
     # Given steps expose it as ctx["principal_id"] (string) or ctx["principal"]
-    # (Principal object set by _ensure_tenant_principal); identity is the fallback.
+    # (Principal object set by _ensure_tenant_principal).
     expected_principal = ctx.get("principal_id")
     if not expected_principal and ctx.get("principal") is not None:
         expected_principal = getattr(ctx["principal"], "principal_id", None)
-    if not expected_principal and ctx.get("identity") is not None:
-        identity = ctx["identity"]
-        expected_principal = (
-            identity.get("principal_id") if isinstance(identity, dict) else getattr(identity, "principal_id", None)
-        )
     assert expected_principal, "Test setup error: no expected principal in ctx to verify account resolution"
 
     creative_id = latest_creative_id(ctx)
@@ -2037,21 +2032,9 @@ def given_creative_with_unreachable_agent(ctx: dict) -> None:
     registry.get_format = AsyncMock(side_effect=OutboundDeliveryFailed(attempts=1, http_status=None))
 
 
-@given("the request has an empty principal_id")
-def given_request_empty_principal_id(ctx: dict) -> None:
-    """Buyer presents an identity whose principal_id is the empty string.
-
-    Distinct from 'no authentication credentials' (identity=None entirely):
-    here the identity resolves but principal_id is empty, which
-    _sync_creatives_impl rejects via ``if not principal_id`` before any DB
-    or adapter work.
-    """
-    env = ctx["env"]
-    ctx["has_auth"] = False
-    ctx["identity"] = PrincipalFactory.make_identity(
-        principal_id="",
-        tenant_id=env._tenant_id,
-    )
+# "the request has an empty principal_id" is a sentence of the generic
+# ``given_buyer_no_auth`` (tests/bdd/steps/generic/given_auth.py): on the wire a principal
+# is present or absent, never empty, and absent is the state that step establishes.
 
 
 def _assert_auth_rejection(ctx: dict, expected_code: str) -> None:
@@ -3801,9 +3784,12 @@ def then_no_field_level_merging(ctx: dict) -> None:
     assert asset_provenance, (
         "SPEC-PRODUCTION GAP: no asset-level provenance stored — cannot verify replacement semantics. BR-RULE-094 INV-5."
     )
-    # Full replacement: creative-only provenance keys must NOT appear in asset
-    creative_only_keys = set(creative_provenance.keys()) - {"digital_source_type"}
-    leaked = {k for k in creative_only_keys if k in asset_provenance}
+    # Full replacement: a creative-only provenance VALUE must not appear on the asset.
+    # Provenance is stored as the typed model it is, so every optional field is present
+    # on both sides, None when undeclared; a None is an absent field, not a merged one,
+    # and only a declared creative-level value that turns up on the asset is a leak.
+    creative_only_keys = {k for k, v in creative_provenance.items() if v is not None} - {"digital_source_type"}
+    leaked = {k for k in creative_only_keys if asset_provenance.get(k) is not None}
     assert not leaked, (
         f"INV-5: Field-level merge detected — creative-only provenance fields "
         f"leaked into asset provenance: {leaked}. "

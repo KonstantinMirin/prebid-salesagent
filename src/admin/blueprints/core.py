@@ -1,9 +1,6 @@
 """Core application routes blueprint."""
 
 import logging
-import os
-import secrets
-import string
 from datetime import UTC, datetime
 
 from flask import (
@@ -23,6 +20,7 @@ from sqlalchemy import select, text
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
 from src.admin.utils.operator_errors import safe_error_message
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
@@ -179,8 +177,9 @@ def render_super_admin_index():
             )
 
     # Get environment info for URL generation
-    is_production = os.environ.get("PRODUCTION") == "true"
-    mcp_port = int(os.environ.get("ADCP_SALES_PORT", 8080)) if not is_production else None
+    runtime = get_settings().runtime
+    is_production = runtime.is_production
+    mcp_port = runtime.adcp_sales_port if not is_production else None
 
     return render_template(
         "index.html",
@@ -461,9 +460,6 @@ def create_tenant():
 
         tenant_id = f"tenant_{subdomain}"
 
-        # Generate admin token
-        admin_token = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
-
         with get_db_session() as db_session:
             # Create new tenant
             new_tenant = Tenant(
@@ -472,7 +468,6 @@ def create_tenant():
                 subdomain=subdomain,
                 is_active=True,
                 ad_server=ad_server,
-                admin_token=admin_token,
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
                 # Set default measurement provider (Publisher Ad Server)

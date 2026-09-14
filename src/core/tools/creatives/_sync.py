@@ -9,15 +9,14 @@ from typing import Any
 from adcp.types import CreativeAction, CreativeAsset
 from pydantic import BaseModel
 
-from src.core.auth import require_identity, require_principal_id, require_tenant
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPSalesAgentError, adcp_error_for
 from src.core.helpers import enum_value, log_tool_activity
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import SyncCreativeResult, SyncCreativesResponse
 from src.core.schemas.creative import SyncCreativesRequest
-from src.core.tenant_context import LazyTenantContext
+from src.core.tenant_context import TenantContext
 from src.core.validation_helpers import format_validation_error, run_async_in_sync_context
 from src.core.webhook_validator import webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
@@ -44,7 +43,7 @@ def _with_creative(details: ValidationDetails | None, creative_id: str) -> Valid
 
 def _sync_creatives_impl(
     req: SyncCreativesRequest,
-    identity: ResolvedIdentity | None = None,
+    identity: AccountIdentity,
 ) -> SyncCreativesResponse:
     """The sync_creatives CONTROLLER: resolve who is calling, then run the service.
 
@@ -58,10 +57,7 @@ def _sync_creatives_impl(
     carried the outer request's ``idempotency_key`` into a function that had no business
     seeing it, and inherited an auth check that had already run. They call the SERVICE now.
     """
-    principal_id = require_principal_id(identity, context=req.context)
-    identity = require_identity(identity, context=req.context)
-    tenant = require_tenant(identity, context=req.context)
-    return sync_creatives(req, identity=identity, principal_id=principal_id, tenant=tenant)
+    return sync_creatives(req, identity=identity, principal_id=identity.principal.principal_id, tenant=identity.tenant)
 
 
 def sync_creatives(
@@ -69,7 +65,7 @@ def sync_creatives(
     *,
     identity: ResolvedIdentity,
     principal_id: str,
-    tenant: LazyTenantContext,
+    tenant: TenantContext,
 ) -> SyncCreativesResponse:
     """Sync creative assets to the centralized creative library.
 
@@ -116,7 +112,6 @@ def sync_creatives(
         registration = accept_push_notification_config(
             req.push_notification_config,
             field_prefix="push_notification_config",
-            context=req.context,
         )
         webhook_url = registration.url
         if webhook_url is not None and str(webhook_url).strip():
@@ -144,17 +139,15 @@ def sync_creatives(
 
     # Get tenant creative approval settings
     # approval_mode: "auto-approve", "require-human", "ai-powered"
-    logger.info(f"[sync_creatives] Tenant dict keys: {list(tenant.keys())}")
-    logger.info(f"[sync_creatives] Tenant approval_mode field: {tenant.get('approval_mode', 'NOT FOUND')}")
-    approval_mode = tenant.get("approval_mode", "require-human")
-    logger.info(f"[sync_creatives] Final approval mode: {approval_mode} (from tenant: {tenant.get('tenant_id')})")
+    approval_mode = tenant.approval_mode
+    logger.info(f"[sync_creatives] Approval mode: {approval_mode} (from tenant: {tenant.tenant_id})")
 
     # Fetch creative formats ONCE before processing loop (outside any transaction)
     # This avoids async HTTP calls inside database savepoints which cause transaction errors
     from src.core.creative_agent_registry import get_creative_agent_registry
 
     registry = get_creative_agent_registry()
-    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant["tenant_id"]))
+    all_formats = run_async_in_sync_context(registry.list_all_formats(tenant_id=tenant.tenant_id))
 
     # ONE write path for both branches: dry_run rolls this transaction back on clean
     # exit instead of committing it (BaseUoW), so preview and live run identical
@@ -167,26 +160,26 @@ def sync_creatives(
     # both stages share the one rolled-back transaction. A second invocation
     # under an `if dry_run:` would re-fork the very seam this collapses.
     with ExitStack() as stack:
-        uow = stack.enter_context(CreativeUoW(tenant["tenant_id"], dry_run=dry_run))
+        uow = stack.enter_context(CreativeUoW(tenant.tenant_id, dry_run=dry_run))
         assert uow.creatives is not None
-        assert uow.accounts is not None
         creative_repo = uow.creatives
 
         # sync-creatives-response.json (SyncCreativesSuccess.sandbox): "When true, this
         # response contains simulated data from sandbox mode"; core/account.json: a sandbox
         # account is one with "no real platform calls, no real spend". The account the
-        # request names (required by the pin, resolved at the boundary) is what says so.
-        # Set only when true and omitted otherwise: the error shape forbids the field, and
-        # a production account's response simply has none.
-        account = uow.accounts.get_by_id(identity.account_id) if identity.account_id else None
-        sandbox = True if account is not None and account.sandbox else None
+        # request names (required by the pin) is what says so, and the resolver already
+        # loaded it onto the identity, so it is read off ``identity.account`` like the
+        # tenant and principal -- no second select. Set only when true and omitted
+        # otherwise: the error shape forbids the field, and a production account's
+        # response simply has none.
+        sandbox = True if identity.account is not None and identity.account.sandbox else None
 
         # Check if any product in this tenant requires AI provenance metadata
         provenance_policies = creative_repo.get_provenance_policies()
         tenant_requires_provenance = len(provenance_policies) > 0
         if tenant_requires_provenance:
             logger.info(
-                f"[sync_creatives] Tenant {tenant['tenant_id']} has "
+                f"[sync_creatives] Tenant {tenant.tenant_id} has "
                 f"{len(provenance_policies)} product(s) requiring AI provenance"
             )
 
@@ -214,7 +207,7 @@ def sync_creatives(
                     creative_id = creative.creative_id or "unknown"
                     # Format ValidationError nicely for clients, pass through ValueError as-is
                     if isinstance(validation_error, ValidationError):
-                        error_msg = format_validation_error(validation_error, context=f"creative {creative_id}")
+                        error_msg = format_validation_error(validation_error, label=f"creative {creative_id}")
                     else:
                         error_msg = str(validation_error)
                     failed_creatives.append({"creative_id": creative_id, "error": error_msg})
@@ -262,7 +255,6 @@ def sync_creatives(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=req.context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -315,7 +307,6 @@ def sync_creatives(
                             approval_mode=approval_mode,
                             tenant=tenant,
                             webhook_url=webhook_url,
-                            context=req.context,
                             all_formats=all_formats,
                             registry=registry,
                             principal_id=principal_id,
@@ -440,8 +431,6 @@ def sync_creatives(
                 tenant=tenant,
                 approval_mode=approval_mode,
                 push_notification_config=req.push_notification_config,
-                context=req.context,
-                identity=identity,
                 uow=uow,
             )
 
@@ -497,9 +486,7 @@ def sync_creatives(
         creatives_needing_approval=creatives_needing_approval,
     )
 
-    # Log activity
-    if identity is not None:
-        log_tool_activity(identity, "sync_creatives", start_time)
+    log_tool_activity(identity, "sync_creatives", start_time)
 
     # Build message
     message = f"Synced {created_count + updated_count} creatives"
@@ -526,7 +513,6 @@ def sync_creatives(
         creatives=results,
         dry_run=dry_run,
         sandbox=sandbox,
-        context=req.context,
         message=message,
     )
 

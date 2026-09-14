@@ -382,8 +382,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/conftest.py", "create_test_product_with_pricing"),
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
-    # tests/integration/test_a2a_skill_invocation.py
-    ("tests/integration/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
     # tests/integration/test_admin_ui_data_validation.py
     ("tests/integration/test_admin_ui_data_validation.py", "test_products_list_no_duplicates_with_pricing_options"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_principals_list_no_duplicates_with_relationships"),
@@ -699,8 +697,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/conftest.py", "sample_products"),
     ("tests/integration/conftest.py", "sample_tenant"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),
-    ("tests/integration/test_a2a_skill_invocation.py", "test_explicit_skill_create_media_buy_manual_approval"),
-    ("tests/integration/test_a2a_skill_invocation.py", "test_update_media_buy_skill"),
     ("tests/integration/test_adapter_config_repository.py", "_tenants"),
     ("tests/integration/test_adapter_config_repository.py", "test_find_by_tenant_returns_config"),
     ("tests/integration/test_adapter_config_repository.py", "test_find_by_tenant_returns_none_for_unconfigured"),

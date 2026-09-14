@@ -47,7 +47,6 @@ from .logging import (
     GAMOperation,
     log_api_call,
     log_configuration,
-    log_dry_run,
     log_gam_operation,
     log_validation_error,
 )
@@ -74,7 +73,6 @@ __all__ = [
     "GAMMetrics",
     "log_gam_operation",
     "log_api_call",
-    "log_dry_run",
     "log_validation_error",
     "log_configuration",
     # Health checking

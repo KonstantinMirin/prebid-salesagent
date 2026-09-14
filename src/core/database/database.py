@@ -1,21 +1,20 @@
-import os
-import secrets
 from datetime import UTC, datetime
 from typing import cast
 
 from sqlalchemy import func, select
 
 from scripts.ops.migrate import run_migrations
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     AdapterConfig,
     AuthorizedProperty,
     CurrencyLimit,
-    Principal,
     Product,
     Tenant,
     TenantAuthConfig,
 )
+from src.core.database.repositories.principal import PrincipalRepository
 
 
 def init_db(exit_on_error=False):
@@ -25,16 +24,15 @@ def init_db(exit_on_error=False):
         exit_on_error: If True, exit process on migration error. If False, raise exception.
                       Default False for test compatibility.
     """
-    # Skip migrations if requested (for testing)
-    if os.environ.get("SKIP_MIGRATIONS") != "true":
+    testing = get_settings().testing
+    if not testing.skip_migrations:
         # Run migrations first - this creates all tables
         print("Applying database migrations...")
         run_migrations(exit_on_error=exit_on_error)
 
-    # Check if demo tenant should be created
-    # CREATE_DEMO_TENANT=false (default) for production deployments
-    # CREATE_DEMO_TENANT=true creates a fully configured demo with mock adapter
-    create_demo_tenant = os.environ.get("CREATE_DEMO_TENANT", "false").lower() == "true"
+    # A demo tenant is a fully configured tenant with the mock adapter; production
+    # deployments start blank.
+    create_demo_tenant = testing.create_demo_tenant
 
     # Check if we need to create a default tenant
     with get_db_session() as db_session:
@@ -45,8 +43,6 @@ def init_db(exit_on_error=False):
         existing_tenant = db_session.scalars(stmt).first()
 
         if not existing_tenant:
-            admin_token = secrets.token_urlsafe(32)
-
             if create_demo_tenant:
                 # Demo mode: Create fully configured tenant with mock adapter
                 new_tenant = Tenant(
@@ -65,7 +61,6 @@ def init_db(exit_on_error=False):
                         "video_30s",
                     ],
                     human_review_required=False,
-                    admin_token=admin_token,
                     auth_setup_mode=False,  # Disable setup mode for demo (simulates SSO configured)
                 )
             else:
@@ -80,7 +75,6 @@ def init_db(exit_on_error=False):
                     billing_plan="standard",
                     ad_server=None,  # No adapter - user must configure
                     enable_axe_signals=False,  # User should explicitly enable
-                    admin_token=admin_token,
                 )
 
             db_session.add(new_tenant)
@@ -99,14 +93,12 @@ def init_db(exit_on_error=False):
                 db_session.add(new_adapter)
 
                 # Create a CI test principal for E2E testing
-                ci_test_principal = Principal(
-                    tenant_id="default",
+                PrincipalRepository(db_session, "default").create_with_token(
+                    "ci-test-token",  # Fixed token for E2E tests; stored hashed like any other
                     principal_id="ci-test-principal",
                     name="CI Test Principal",
                     platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
-                    access_token="ci-test-token",  # Fixed token for E2E tests
                 )
-                db_session.add(ci_test_principal)
 
                 # Add currency limits for demo
                 for currency in ["USD", "EUR", "GBP"]:
@@ -142,7 +134,7 @@ def init_db(exit_on_error=False):
                 db_session.add(auth_config)
 
             # Only create additional sample advertisers if this is a development environment
-            if create_demo_tenant and os.environ.get("CREATE_SAMPLE_DATA", "false").lower() == "true":
+            if create_demo_tenant and testing.create_sample_data:
                 principals_data = [
                     {
                         "principal_id": "acme_corp",
@@ -163,14 +155,12 @@ def init_db(exit_on_error=False):
                 ]
 
                 for p in principals_data:
-                    new_principal = Principal(
-                        tenant_id="default",
+                    PrincipalRepository(db_session, "default").create_with_token(
+                        p["access_token"],
                         principal_id=p["principal_id"],
                         name=p["name"],
                         platform_mappings=p["platform_mappings"],
-                        access_token=p["access_token"],
                     )
-                    db_session.add(new_principal)
 
             # Commit tenant, principals, and adapter config
             db_session.commit()
@@ -233,7 +223,7 @@ def init_db(exit_on_error=False):
 
         # Create sample products if CREATE_SAMPLE_DATA is set and products don't exist
         # This runs regardless of whether tenant was just created or already existed
-        if os.environ.get("CREATE_SAMPLE_DATA", "false").lower() == "true":
+        if testing.create_sample_data:
             # Check if products already exist
             stmt_products = select(func.count()).select_from(Product).where(Product.tenant_id == "default")
             existing_products_count = db_session.scalar(stmt_products)

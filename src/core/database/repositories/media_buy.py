@@ -14,7 +14,7 @@ from __future__ import annotations
 import datetime
 from collections.abc import Collection
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
@@ -26,9 +26,6 @@ from src.core.database.models import (
 )
 from src.core.errors.details import EntityRefDetails
 from src.core.idempotency_canonical import canonical_request_hash
-
-if TYPE_CHECKING:
-    from adcp.types import ContextObject
 
 
 class MediaBuyRepository:
@@ -77,25 +74,19 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_by_id_or_raise(
-        self, media_buy_id: str, *, context: ContextObject | dict[str, Any] | None = None
-    ) -> MediaBuy:
+    def get_by_id_or_raise(self, media_buy_id: str) -> MediaBuy:
         """Get a media buy by ID or raise ``AdCPMediaBuyNotFoundError``.
 
         Collapses the "look up the media buy, raise the typed not-found if it
         does not exist" guard duplicated across the update tool into one place.
-        ``context`` is echoed into the error envelope so buyer agents can
-        correlate the failure. Coexists with ``get_by_id`` — callers that
-        deliberately tolerate ``None`` keep using that.
+        Coexists with ``get_by_id`` — callers that deliberately tolerate ``None``
+        keep using that.
         """
         media_buy = self.get_by_id(media_buy_id)
         if media_buy is None:
             from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-            raise AdCPMediaBuyNotFoundError(
-                details=EntityRefDetails(media_buy_id=media_buy_id),
-                context=context,
-            )
+            raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
         return media_buy
 
     def find_by_idempotency_key(
@@ -205,14 +196,11 @@ class MediaBuyRepository:
             )
         ).first()
 
-    def get_package_or_raise(
-        self, media_buy_id: str, package_id: str, *, context: ContextObject | dict[str, Any] | None = None
-    ) -> MediaPackage:
+    def get_package_or_raise(self, media_buy_id: str, package_id: str) -> MediaPackage:
         """Get a package or raise ``AdCPPackageNotFoundError``.
 
         Collapses the package fetch-and-raise guard duplicated across the update
-        tool. ``context`` is echoed into the error envelope. Coexists with
-        ``get_package`` for callers that tolerate ``None``.
+        tool. Coexists with ``get_package`` for callers that tolerate ``None``.
         """
         package = self.get_package(media_buy_id, package_id)
         if package is None:
@@ -220,7 +208,6 @@ class MediaBuyRepository:
 
             raise AdCPPackageNotFoundError(
                 details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
-                context=context,
             )
         return package
 

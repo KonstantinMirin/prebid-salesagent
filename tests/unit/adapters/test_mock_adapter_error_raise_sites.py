@@ -116,9 +116,10 @@ class TestMockBudgetExhaustedRaiseSite:
         Mirrors the inventory-unavailable sibling below: both raises live in the
         same simulation force-error block, with the budget check evaluated first.
         """
+        from src.core.strategy import StrategyContext
+
         from src.core.database.models import Strategy as StrategyModel
         from src.core.exceptions import AdCPBudgetExhaustedError
-        from src.core.strategy import StrategyContext
 
         # In-memory simulation strategy: is_simulation + sim_ prefix + force flag.
         # should_force_error("budget_exceeded") reads config["force_budget_exceeded"].
@@ -160,9 +161,10 @@ class TestMockInventoryUnavailableRaiseSite:
     def test_simulation_force_inventory_unavailable_raises_inventory_error(self):
         """A simulation strategy with ``force_inventory_unavailable`` drives the
         immediate-create raise site."""
+        from src.core.strategy import StrategyContext
+
         from src.core.database.models import Strategy as StrategyModel
         from src.core.exceptions import AdCPProductUnavailableError
-        from src.core.strategy import StrategyContext
 
         # In-memory simulation strategy: is_simulation + sim_ prefix + force flag.
         strategy_model = StrategyModel(
