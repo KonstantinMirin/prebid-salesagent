@@ -1,7 +1,17 @@
 """BDD scenarios + steps for UC-018: list_creatives library queries.
 
-Binds the UC-018 feature; several scenarios are wired (the rest xfail at the
-conftest harness fixture):
+Binds the UC-018 feature. There is no longer a "wired subset": the catch-all route that
+parked the rest by carrying a reason string is gone, so every scenario of this feature
+executes, and one whose step has no binding FAILS with the missing step named rather than
+xfailing out of sight. The families that still have no binding are the ones production
+cannot yet seed or answer — the delivery snapshot, dynamic-content variables, multi-asset
+items, account rate cards for pricing_options, the has_variables / has_served boolean
+filters, and cursor traversal — plus the ``fields`` projection, which those rows state in a
+way the pinned response schema cannot satisfy (a creative object carrying one field, and
+compliance with six REQUIRED members).
+
+Three scenarios have their own notes below because they were the first wired, and their
+spec citations are the ones the rest were checked against:
 
 - ``T-UC-018-storyboard-list-all-creatives-after-sync`` (#1405): after the buyer
   syncs creatives across formats, ``list_creatives`` with no filters returns the
@@ -71,13 +81,12 @@ is exercised faithfully.
 **Corrupt-blob coercion reconciliation (#1508):** ``list_creatives`` drops a corrupt
 ``tags``/``assets`` blob value to absent, and collapses a stored empty ``tags`` list to
 omission (both conformant at 3.1.1 — the schema permits ``[]`` and absent for ``tags``,
-``{}`` and absent for ``assets``, ``null`` for neither). So whoever wires the dormant
-all-13-fields boundary graders (``BR-UC-018-list-creatives.feature:292``, ``:312``, ``:549``,
-``:575``) must assert value-when-present, not key-presence-of-13 — a creative with empty or
-absent tags legitimately omits the key. (``:403``, the ``BR-RULE-148`` tags-AND-semantics
-scenario, is separately dormant but seeds a non-empty ``tags`` value by construction, so this
-empty/omission caveat doesn't apply there.) The coercion itself is graded on real wire bytes
-across a2a/mcp/rest in ``tests/integration/test_list_creatives_concept_filter.py``.
+``{}`` and absent for ``assets``, ``null`` for neither). An "all fields are present" Then
+therefore asserts value-when-present over a library seeded WITH those values, never
+key-presence of the 13 enum members: a creative with empty or absent tags legitimately
+omits the key, and a seller holding no snapshot for a creative omits that too. The
+coercion itself is graded on real wire bytes across a2a/mcp/rest in
+``tests/integration/test_list_creatives_concept_filter.py``.
 """
 
 from __future__ import annotations
@@ -588,14 +597,12 @@ def then_none_belong_to(ctx: dict, principal_id: str) -> None:
 # pagination. The singular media_buy_id is this agent's documented backward-compat
 # flat param, which is exactly why nothing on the request model protects it.
 
-#: The two media buys whose creatives the merge row expects back, plus a decoy the
-#: request never names. Literal ids because the scenario names them literally.
+#: The media buys the filter rows name. Literal ids because the scenarios name them
+#: literally; the decoy buys each library needs are spelled by that library's own spec.
 _MERGE_MEDIA_BUY_IDS = ("mb1", "mb2")
-_DECOY_MEDIA_BUY_ID = "mb3"
 
-#: Row count for the pagination/sorting boundary outline ("60 approved creatives"),
-#: and the default page size the reader applies when no pagination is requested.
-_PAGINATION_SEED_COUNT = 60
+#: The page size the reader applies when the request carries no pagination object
+#: (core/pagination-request.json's default for max_results).
 _DEFAULT_PAGE_SIZE = 50
 
 
