@@ -10,7 +10,8 @@ import secrets
 import sys
 
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Principal, Tenant, User
+from src.core.database.models import AdapterConfig, Tenant, User
+from src.core.database.repositories.principal import PrincipalRepository
 
 
 def create_tenant(args):
@@ -137,14 +138,12 @@ def create_tenant(args):
         else:
             platform_mappings = {}
 
-        default_principal = Principal.with_token(
+        PrincipalRepository(session, tenant_id).create_with_token(
             principal_token,
-            tenant_id=tenant_id,
             principal_id=principal_id,
             name=f"{args.name} Default Principal",
             platform_mappings=json.dumps(platform_mappings),
         )
-        session.add(default_principal)
 
         session.commit()
 

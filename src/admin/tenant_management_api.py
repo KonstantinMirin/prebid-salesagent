@@ -17,12 +17,12 @@ from src.core.database.models import (
     AdapterConfig,
     AuditLog,
     MediaBuy,
-    Principal,
     Product,
     Tenant,
     User,
 )
 from src.core.database.repositories import TenantLookupRepository
+from src.core.database.repositories.principal import PrincipalRepository
 
 logger = logging.getLogger(__name__)
 
@@ -282,14 +282,12 @@ def create_tenant():
                     default_mappings = {"mock": {"advertiser_id": "default"}}
 
                 # The token is returned once, in the result; the row keeps its hash.
-                new_principal, principal_token = Principal.issue(
-                    tenant_id=tenant_id,
+                new_principal, principal_token = PrincipalRepository(db_session, tenant_id).issue(
                     principal_id=principal_id,
                     name=f"{data['name']} Default Principal",
                     platform_mappings=default_mappings,
                     created_at=datetime.now(UTC),
                 )
-                db_session.add(new_principal)
 
             db_session.commit()
 
@@ -388,9 +386,7 @@ def get_tenant(tenant_id):
                 result["adapter_config"] = adapter_data
 
             # Get principals count
-            stmt = select(func.count()).select_from(Principal).filter_by(tenant_id=tenant_id)
-            principals_count = db_session.scalar(stmt)
-            result["principals_count"] = principals_count
+            result["principals_count"] = PrincipalRepository(db_session, tenant_id).count()
 
             return jsonify(result)
 
@@ -529,7 +525,7 @@ def delete_tenant(tenant_id):
             if hard_delete:
                 # Delete related records first due to foreign key constraints
                 db_session.execute(delete(AdapterConfig).where(AdapterConfig.tenant_id == tenant_id))
-                db_session.execute(delete(Principal).where(Principal.tenant_id == tenant_id))
+                PrincipalRepository(db_session, tenant_id).delete_all()
                 db_session.execute(delete(Product).where(Product.tenant_id == tenant_id))
                 db_session.execute(delete(MediaBuy).where(MediaBuy.tenant_id == tenant_id))
                 db_session.execute(delete(AuditLog).where(AuditLog.tenant_id == tenant_id))

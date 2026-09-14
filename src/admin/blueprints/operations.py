@@ -121,10 +121,19 @@ def media_buy_detail(tenant_id, media_buy_id):
             if not media_buy:
                 return "Media buy not found", 404
 
-            # Get principal info
-            principal = None
+            # The buy's owner, loaded ONCE: the same stored-ids resolution the approval
+            # path uses, so the template's principal and the adapter's identity are one
+            # load. A buy whose owner row is gone renders without one.
+            from src.core.exceptions import AdCPConfigurationError
+            from src.core.resolved_identity import identity_of
+
+            owner = None
             if media_buy.principal_id:
-                principal = PrincipalRepository(db_session, tenant_id).get(media_buy.principal_id)
+                try:
+                    owner = identity_of(tenant_id, media_buy.principal_id)
+                except AdCPConfigurationError:
+                    owner = None
+            principal = owner.principal if owner else None
 
             # Get packages for this media buy from MediaPackage table
             media_packages = repo.get_packages(media_buy_id)
@@ -221,12 +230,11 @@ def media_buy_detail(tenant_id, media_buy_id):
                     from datetime import UTC, datetime, timedelta
 
                     from src.core.helpers.adapter_helpers import get_adapter
-                    from src.core.resolved_identity import identity_of
                     from src.core.schemas import ReportingPeriod
 
-                    if principal:
-                        # Resolution from stored ids: the operator view acts as the buy's owner.
-                        adapter = get_adapter(identity_of(tenant_id, media_buy.principal_id))
+                    if owner:
+                        # The operator view acts as the buy's owner, resolved above.
+                        adapter = get_adapter(owner)
 
                         # Calculate date range (last 7 days or campaign duration) - always use UTC
                         end_date = datetime.now(UTC)

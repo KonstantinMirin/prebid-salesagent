@@ -9,11 +9,9 @@ inside the session so the resolver keeps what was loaded.
 
 import logging
 
-from sqlalchemy import select
-
 from src.core.credentials import hash_token
 from src.core.database.database_session import execute_with_retry
-from src.core.database.models import Principal as ModelPrincipal
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.schemas import Principal
 
 logger = logging.getLogger(__name__)
@@ -31,9 +29,8 @@ def get_principal_from_token(token: str, tenant_id: str) -> Principal | None:
     token_hash = hash_token(token)
 
     def _lookup_principal(session):
-        stmt = select(ModelPrincipal).filter_by(token_hash=token_hash, tenant_id=tenant_id)
-        principal = session.scalars(stmt).first()
-        return Principal.from_row(principal) if principal else None
+        row = PrincipalRepository(session, tenant_id).find_by_token_hash(token_hash)
+        return Principal.from_row(row) if row else None
 
     return execute_with_retry(_lookup_principal)
 
@@ -46,8 +43,7 @@ def get_principal_by_id(tenant_id: str, principal_id: str) -> Principal | None:
     """
 
     def _lookup_principal(session):
-        stmt = select(ModelPrincipal).filter_by(principal_id=principal_id, tenant_id=tenant_id)
-        principal = session.scalars(stmt).first()
-        return Principal.from_row(principal) if principal else None
+        row = PrincipalRepository(session, tenant_id).get(principal_id)
+        return Principal.from_row(row) if row else None
 
     return execute_with_retry(_lookup_principal)

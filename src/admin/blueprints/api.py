@@ -4,13 +4,13 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from flask import Blueprint, jsonify, request
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 
 from src.admin.utils import require_auth
 from src.admin.utils.audit_decorator import log_admin_action
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, Principal, Product
+from src.core.database.models import Product
 
 logger = logging.getLogger(__name__)
 
@@ -56,22 +56,11 @@ def revenue_chart_api(tenant_id):
         date_start = datetime.now(UTC) - timedelta(days=days)
 
         # Query revenue by principal
-        stmt = (
-            select(Principal.name, func.sum(MediaBuy.budget).label("revenue"))
-            .join(
-                MediaBuy,
-                (MediaBuy.principal_id == Principal.principal_id) & (MediaBuy.tenant_id == Principal.tenant_id),
-            )
-            .filter(
-                MediaBuy.tenant_id == tenant_id,
-                MediaBuy.created_at >= date_start,
-                MediaBuy.status.in_(["active", "completed"]),
-            )
-            .group_by(Principal.name)
-            .order_by(func.sum(MediaBuy.budget).desc())
-            .limit(10)
+        from src.core.database.repositories.principal import PrincipalRepository
+
+        results = PrincipalRepository(db_session, tenant_id).revenue_by_name(
+            since=date_start, statuses=["active", "completed"], limit=10
         )
-        results = db_session.execute(stmt).all()
 
         labels = []
         values = []

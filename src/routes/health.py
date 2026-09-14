@@ -11,12 +11,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 
-from src.core.config_loader import get_tenant_by_virtual_host
-from src.core.credentials import hash_token
+from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant
-from src.core.database.repositories.principal_lookup import PrincipalLookupRepository
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.domain_config import extract_subdomain_from_host, is_sales_agent_domain
 from src.landing import generate_tenant_landing_page
 
@@ -72,7 +71,14 @@ async def debug_db_state(request: Request):
             product_stmt = select(ModelProduct)
             all_products = session.scalars(product_stmt).all()
 
-            principal = PrincipalLookupRepository(session).find_by_token_hash(hash_token("ci-test-token"))
+            # The CI seed is identified the way the resolver identifies a caller: tenant
+            # first, by its stable subdomain, then the principal inside it. No token is
+            # turned into a principal here; the seed tenant holds exactly one principal,
+            # and this route only reports whether the seed exists.
+            seed_tenant_id = tenant_id_for(subdomain="ci-test")
+            principal = (
+                next(iter(PrincipalRepository(session, seed_tenant_id).list_all()), None) if seed_tenant_id else None
+            )
 
             principal_info = None
             tenant_info = None
@@ -194,10 +200,10 @@ async def debug_landing(request: Request):
     virtual_host = apx_host or host_header
 
     if virtual_host:
-        tenant = get_tenant_by_virtual_host(virtual_host)
-        if tenant:
+        tenant_row = get_tenant_by_virtual_host(virtual_host)
+        if tenant_row:
             try:
-                html_content = generate_tenant_landing_page(tenant, virtual_host)
+                html_content = generate_tenant_landing_page(tenant_row, virtual_host)
                 return HTMLResponse(content=html_content)
             except Exception as e:
                 return JSONResponse({"error": f"Landing page generation failed: {e}"}, status_code=500)

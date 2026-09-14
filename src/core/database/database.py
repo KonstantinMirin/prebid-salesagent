@@ -10,11 +10,11 @@ from src.core.database.models import (
     AdapterConfig,
     AuthorizedProperty,
     CurrencyLimit,
-    Principal,
     Product,
     Tenant,
     TenantAuthConfig,
 )
+from src.core.database.repositories.principal import PrincipalRepository
 
 
 def init_db(exit_on_error=False):
@@ -93,14 +93,12 @@ def init_db(exit_on_error=False):
                 db_session.add(new_adapter)
 
                 # Create a CI test principal for E2E testing
-                ci_test_principal = Principal.with_token(
+                PrincipalRepository(db_session, "default").create_with_token(
                     "ci-test-token",  # Fixed token for E2E tests; stored hashed like any other
-                    tenant_id="default",
                     principal_id="ci-test-principal",
                     name="CI Test Principal",
                     platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
                 )
-                db_session.add(ci_test_principal)
 
                 # Add currency limits for demo
                 for currency in ["USD", "EUR", "GBP"]:
@@ -157,14 +155,12 @@ def init_db(exit_on_error=False):
                 ]
 
                 for p in principals_data:
-                    new_principal = Principal.with_token(
+                    PrincipalRepository(db_session, "default").create_with_token(
                         p["access_token"],
-                        tenant_id="default",
                         principal_id=p["principal_id"],
                         name=p["name"],
                         platform_mappings=p["platform_mappings"],
                     )
-                    db_session.add(new_principal)
 
             # Commit tenant, principals, and adapter config
             db_session.commit()

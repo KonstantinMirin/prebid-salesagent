@@ -13,7 +13,7 @@ from src.admin.services import DashboardService
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action, record_admin_action_failure
 from src.core.database.database_session import get_db_session
-from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
+from src.core.database.models import MediaBuy, PushNotificationConfig, Tenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.database.repositories.uow import PushNotificationConfigUoW
 from src.core.exceptions import AdCPValidationError
@@ -193,16 +193,13 @@ def create_principal(tenant_id):
 
             # The token is minted here and shown ONCE, in the flash below; the row keeps
             # its hash. An operator who loses it rotates it.
-            principal, token = Principal.issue(
-                tenant_id=tenant_id,
+            principal, token = PrincipalRepository(db_session, tenant_id).issue(
                 principal_id=principal_id,
                 name=principal_name,
                 platform_mappings=platform_mappings,  # JSONType handles serialization
                 created_at=datetime.now(UTC),
                 updated_at=datetime.now(UTC),
             )
-
-            db_session.add(principal)
             db_session.commit()
 
             flash(

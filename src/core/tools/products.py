@@ -622,7 +622,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: ResolvedIdentity
                         continue
                 else:
                     # Product has no channels - use adapter defaults
-                    adapter_channels = get_adapter_default_channels(tenant.ad_server or "mock")
+                    adapter_channels = get_adapter_default_channels(tenant.ad_server)
 
                     # Product matches if any of adapter's default channels is in request
                     if adapter_channels and not request_channels.intersection(set(adapter_channels)):

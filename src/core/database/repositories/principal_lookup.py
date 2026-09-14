@@ -1,38 +1,45 @@
 """Principal lookups for cross-cutting concerns outside the tenant-scoped
-Account/Principal repositories (e.g. activity-feed logging).
+``PrincipalRepository`` (activity-feed logging, the bulk setup checklist).
 
-``read_principal_name`` is a module-level, session-owning read -- like
-``adapter_config.read_adapter_config`` -- rather than a class, because it is one query
-with no CRUD to group it with. ``PrincipalLookupRepository`` is the cross-tenant
-counterpart of ``tenant_lookup.TenantLookupRepository``: it answers a question about
-a row whose tenant the caller does not yet know.
+Module-level reads -- like ``adapter_config.read_adapter_config`` -- rather than a
+class, because each is one query with no CRUD to group it with.
 """
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from collections.abc import Iterable
+
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Principal
 
 
-class PrincipalLookupRepository:
-    """Read access to principals by a unique key, across all tenants.
+def find_principal_by_token_hash(session: Session, token_hash: str) -> Principal | None:
+    """The principal holding ``token_hash``, whichever tenant it is in, or ``None``.
 
-    Not the credential path. The resolver looks a token up INSIDE the tenant the request
-    addressed (``src/core/auth_utils.get_principal_from_token``); this exists for the
-    testing-only debug endpoint that reports which tenant a known token belongs to.
-
-    Args:
-        session: SQLAlchemy session (caller manages lifecycle).
+    Not the credential path: a request's token is resolved INSIDE the tenant the request
+    addressed (``PrincipalRepository.find_by_token_hash``). This is seed maintenance --
+    ``scripts/setup/init_database_ci.py`` asks whether its documented token already exists
+    anywhere, because ``token_hash`` is unique across tenants and a stale row in another
+    tenant has to be moved, not duplicated.
     """
+    return session.scalars(select(Principal).filter_by(token_hash=token_hash)).first()
 
-    def __init__(self, session: Session) -> None:
-        self._session = session
 
-    def find_by_token_hash(self, token_hash: str) -> Principal | None:
-        """The principal holding ``token_hash``, whichever tenant it is in."""
-        return self._session.scalars(select(Principal).filter_by(token_hash=token_hash)).first()
+def count_principals_by_tenant(session: Session, tenant_ids: Iterable[str]) -> dict[str, int]:
+    """How many principals each of *tenant_ids* holds, keyed by tenant_id.
+
+    Cross-tenant by design: the bulk setup checklist grades many tenants in one query.
+    A tenant with no principals is absent from the result. Takes the caller's session
+    because it runs beside the sibling per-tenant counts in the same transaction.
+    """
+    stmt = (
+        select(Principal.tenant_id, func.count())
+        .where(Principal.tenant_id.in_(list(tenant_ids)))
+        .group_by(Principal.tenant_id)
+    )
+    return dict(session.execute(stmt).tuples().all())
 
 
 def read_principal_name(tenant_id: str, principal_id: str) -> str | None:

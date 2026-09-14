@@ -9,7 +9,8 @@ from sqlalchemy import or_, select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
-from src.core.database.models import AdapterConfig, CurrencyLimit, Principal, Tenant, User
+from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.repositories.principal import PrincipalRepository
 from src.core.domain_config import extract_subdomain_from_host, get_sales_agent_domain, is_sales_agent_domain
 
 logger = logging.getLogger(__name__)
@@ -256,8 +257,7 @@ def provision_tenant():
 
             # Create default principal (for testing/demo purposes). Its token is shown once,
             # on the completion page; the row keeps the hash.
-            default_principal, demo_token = Principal.issue(
-                tenant_id=tenant_id,
+            default_principal, demo_token = PrincipalRepository(db_session, tenant_id).issue(
                 principal_id=f"{tenant_id}_default",
                 name=f"{publisher_name} Demo Principal",
                 platform_mappings={
@@ -268,7 +268,6 @@ def provision_tenant():
                 },
                 created_at=now,
             )
-            db_session.add(default_principal)
 
             db_session.commit()
 

@@ -6,7 +6,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
 from scripts.ops.migrate import run_migrations
 from src.core.database.database_session import get_db_session
-from src.core.database.models import AdapterConfig, Principal, Product, Tenant, TenantManagementConfig
+from src.core.database.models import AdapterConfig, Product, Tenant, TenantManagementConfig
+from src.core.database.repositories.principal import PrincipalRepository
 
 
 def init_db(exit_on_error=False):
@@ -141,14 +142,12 @@ def init_db(exit_on_error=False):
 
             # Create default principal with well-known token for easy testing
             # This token is documented and can be used immediately after docker-compose up
-            default_principal = Principal.with_token(
+            PrincipalRepository(session, "default").create_with_token(
                 "test-token",  # Well-known token for easy testing; stored hashed like any other
-                tenant_id="default",
                 principal_id="default_principal",
                 name="Default Principal",
                 platform_mappings={"mock": {"advertiser_id": "mock-default"}},
             )
-            session.add(default_principal)
 
             # Always create basic products for demo/testing
             basic_products = [
@@ -242,14 +241,12 @@ def init_db(exit_on_error=False):
                 ]
 
                 for p in principals_data:
-                    principal = Principal.with_token(
+                    PrincipalRepository(session, "default").create_with_token(
                         p["access_token"],
-                        tenant_id="default",
                         principal_id=p["principal_id"],
                         name=p["name"],
                         platform_mappings=p["platform_mappings"],
                     )
-                    session.add(principal)
 
                 # Create sample products
                 products_data = [

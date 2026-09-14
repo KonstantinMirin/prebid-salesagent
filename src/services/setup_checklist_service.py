@@ -16,7 +16,6 @@ from src.core.database.models import (
     AuthorizedProperty,
     CurrencyLimit,
     GAMInventory,
-    Principal,
     Product,
     PublisherPartner,
     Tenant,
@@ -176,14 +175,9 @@ class SetupChecklistService:
             }
 
             # Principals per tenant
-            principal_stmt = (
-                select(Principal.tenant_id, func.count())
-                .where(Principal.tenant_id.in_(uncached_ids))
-                .group_by(Principal.tenant_id)
-            )
-            principal_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(principal_stmt).all()
-            }
+            from src.core.database.repositories.principal_lookup import count_principals_by_tenant
+
+            principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
 
             # Verified publisher partners per tenant
             verified_publisher_stmt = (
@@ -522,8 +516,9 @@ class SetupChecklistService:
             )
 
         # 6. Principals Created
-        stmt = select(func.count()).select_from(Principal).where(Principal.tenant_id == self.tenant_id)
-        principal_count = session.scalar(stmt) or 0
+        from src.core.database.repositories.principal import PrincipalRepository
+
+        principal_count = PrincipalRepository(session, self.tenant_id).count()
         tasks.append(
             SetupTask(
                 key="principals_created",
