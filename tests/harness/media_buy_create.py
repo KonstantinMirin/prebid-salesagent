@@ -14,6 +14,7 @@ import uuid
 from typing import Any, cast
 from unittest.mock import MagicMock
 
+from src.adapters.base import AdapterCreateResult, ResponsePackage
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
@@ -244,42 +245,34 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
     def _configure_mocks(self) -> None:
         """Set up happy-path defaults for external mocks."""
-        # Adapter: mock create_media_buy — returns response matching the request packages.
-        # The side_effect dynamically generates package_ids from the request.
+        # Adapter: mock create_media_buy — the side_effect returns one response
+        # package per package the tool handed it, echoing each package_id.
         mock_adapter = MagicMock()
 
-        def _adapter_create_response(*args: Any, **kwargs: Any) -> Any:
-            """Generate adapter response with package_ids matching request packages."""
-            from src.core.schemas._base import CreateMediaBuySuccess
+        def _adapter_create_response(*args: Any, **kwargs: Any) -> AdapterCreateResult:
+            """Stand in for an ad server's ``create_media_buy`` return.
 
-            # Determine package count from request
-            req_obj = kwargs.get("request") or (args[0] if args else None)
-            pkg_count = 0
-            if req_obj and hasattr(req_obj, "packages") and req_obj.packages:
-                pkg_count = len(req_obj.packages)
-            # Also check the 'packages' kwarg (MediaPackage list)
-            pkgs_arg = kwargs.get("packages")
-            if pkgs_arg:
-                pkg_count = max(pkg_count, len(pkgs_arg))
-            if pkg_count == 0:
-                pkg_count = 1
+            The carrier type is the adapter contract, not a wire model: an adapter
+            has no row to read ``confirmed_at`` / ``revision`` from, and
+            ``AdapterCreateResult`` simply does not declare them, so the fake cannot
+            speak for fields it is not entitled to. It carries exactly what the tool
+            reads off an adapter — ``media_buy_id``, and each package's
+            ``package_id`` and ``paused``.
 
-            media_buy_id = mint(f"mb_{uuid.uuid4().hex[:8]}")
-            # adapter_ack, not a bare construction: this stands in for an ad-server
-            # adapter's return, and an adapter has no row to read confirmed_at/revision
-            # from. Using the same factory production adapters use keeps the fake
-            # honest about which envelope fields it is entitled to speak for.
-            return CreateMediaBuySuccess.carrier(
-                media_buy_id=media_buy_id,
-                packages=[
-                    {
-                        "package_id": mint(f"pkg_{uuid.uuid4().hex[:8]}"),
-                        "product_id": f"prod_{i}",
-                        "budget": 5000.0,
-                        "status": "active",
-                    }
-                    for i in range(pkg_count)
-                ],
+            The seller has already minted a ``package_id`` per requested package by
+            the time the adapter is called, and every real adapter echoes it back
+            through ``AdServerAdapter._build_package_responses``. So this echoes it
+            too, one response package per requested package, which is what keeps
+            the tool's positional ``req.packages[i] -> response.packages[i]`` walk
+            lined up.
+            """
+            # The tool calls adapter.create_media_buy(request, packages, ...)
+            # positionally, so the MediaPackage list arrives as args[1].
+            media_packages = kwargs.get("packages") or (args[1] if len(args) > 1 else None) or []
+
+            return AdapterCreateResult(
+                media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
+                packages=[ResponsePackage(package_id=pkg.package_id, paused=False) for pkg in media_packages],
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response
