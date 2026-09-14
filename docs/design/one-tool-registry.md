@@ -1,5 +1,9 @@
 # One tool registry
 
+> **Superseded.** The decisions here are recorded, as they stand, in
+> [Building a tool](../development/building-tools.md). This file is kept as the record of
+> how they were reached and is not maintained.
+
 **Status:** design, not implemented.
 **Measured at:** `c7a3a98d5`, 2026-09-04.
 

@@ -1,5 +1,9 @@
 # One tool registry: what is left
 
+> **Superseded.** The decisions here are recorded, as they stand, in
+> [Building a tool](../development/building-tools.md). This file is kept as the record of
+> how they were reached and is not maintained.
+
 Companion to [One tool registry](one-tool-registry.md). Every step of that document's
 migration order has landed, and so has every item in this one except R6. This says what the
 design's own sentence cost to make true:

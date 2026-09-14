@@ -1,384 +1,656 @@
-# How a tool works
+# Building a tool
 
-This document describes the design the codebase implements. Read "One declaration" and "The
-request lifecycle" first: the lifecycle is the spine, and every other rule follows from it.
+This page is the how-to for adding or changing an AdCP tool in this codebase. It describes
+the tree as it is, and it carries every decision the tree rests on, with the reason beside
+each one. Read it top to bottom when you add a tool, and jump to a section when you change
+one.
 
-The system rests on five seams. Each is the single place its concern is decided. Each replaced
-a set of per-transport copies that could disagree:
+The system rests on a small number of seams, and each seam is the single place its concern is
+decided. A tool is one registry row. One resolver identifies the caller. The boundary runs the
+tool once, for every transport. A response becomes a body in one function. An error names a
+code and supplies facts. Because there is one of each, a rule holds everywhere by
+construction, and most of the checks that used to police agreement between copies are gone.
 
-- **The declaration.** `TOOLS` names a tool once. MCP registration, the A2A skill and agent
-  card, and the REST route all derive from that row.
-- **The request boundary.** Every transport validates into the same DTO and then calls
-  `invoke_tool`. Account scope, idempotency and the version stamp happen there, once.
-- **The response.** `to_wire` produces every body. The transports differ only in the container
-  they put it in.
-- **The errors.** A raise site names a code and supplies facts. `CODE_TABLE` owns every
-  sentence a buyer reads.
-- **The outbound calls.** One send path owns address policy, retries and redirect refusal.
+The codebase targets AdCP 3.1.1 through the `adcp` SDK. Companion pages:
+[Architecture guide](architecture.md), [Request lifecycle](request-lifecycle.md),
+[Patterns reference](patterns-reference.md), and [Structural guards](structural-guards.md).
 
-Having one of each means a rule holds everywhere by construction. Most of the checks that
-policed agreement between copies are therefore gone. It is also why this document tells you to
-make a mistake unconstructible before reaching for a guard.
+## A tool is one registry row
 
-BDD scenarios executed across every transport grade the behaviour, and the conformance
-storyboards grade it again from outside.
-
-AdCP **3.1.1** via the `adcp` SDK. Companion pages: [architecture.md](architecture.md),
-[patterns-reference.md](patterns-reference.md), [structural-guards.md](structural-guards.md).
-
----
-
-## One declaration
-
-A tool is declared once, in `src/core/tools/registry.py`:
+You declare a tool once, in `src/core/tools/registry.py`, as a `ToolSpec` row keyed by its
+AdCP tool name:
 
 ```python
-TOOLS: Mapping[str, ToolSpec] = {
     "get_products": ToolSpec(
-        dto=GetProductsRequest,      # what it accepts
-        impl=_get_products_impl,     # what runs
+        dto=GetProductsRequest,
+        impl=_get_products_impl,
         rest=RestBinding("POST", "/products"),
-        a2a=True,
-        auth="optional",
     ),
-    ...
-}
 ```
 
-`ToolSpec` says **where** a tool is reachable and **what** runs it. It says nothing about its
-shape, because the DTO says that itself — which is why `dto` holds a model rather than a
-description of one.
+A row carries four things:
 
-Everything else is derived, so nothing can disagree with it:
+- `dto`: the request model the transports validate into. The DTO says what the tool accepts,
+  which is why the row holds a model rather than a description of one.
+- `impl`: the function that runs. Its signature is the subject of a later section.
+- `rest`: the REST binding, or `None` for a tool with no REST route.
+- `a2a`: whether the A2A agent card advertises the tool. The default is `True`.
 
-| derived | from |
+Everything else is derived from the row, so nothing can disagree with it. The following table
+lists what each transport derives and from which part of the row.
+
+| Derived | From |
 |---|---|
-| MCP tool + advertised JSON Schema | `spec.dto.model_json_schema()` |
-| A2A skill, agent-card entry, dispatch | iteration over `TOOLS` |
-| REST route + request body | `spec.rest` + `spec.dto` |
-| auth requirement on all three | `spec.auth` |
+| The MCP tool and its advertised JSON Schema | `spec.dto.model_json_schema()` |
+| The A2A skill, agent-card entry, and dispatch | Iteration over `TOOLS` |
+| The REST route and its documented request body | `spec.rest` and `spec.dto` |
+| Whether a caller needs a credential | The `identity` annotation on `spec.impl` |
+| Whether the boundary resolves an account | The `account` field on `spec.dto` |
 
-`auth` is a property of the **tool**, not of a transport. That is what makes "MCP soft-returns
-where A2A hard-refuses" unrepresentable instead of a bug to find.
+There is no field for the credential policy and no field for the account policy. The row
+used to carry an `auth` literal beside the implementation. A literal is a second statement of
+a fact the implementation already states, and the two disagreed. The annotation and the DTO
+are the policy, as [Policy is derived](#policy-is-derived-and-the-registry-checks-it)
+describes.
 
-### Registration refuses
+### Registration refuses an incoherent row
 
-`_register_tool` raises at import rather than registering something incoherent:
+`_register_tool` in `src/core/main.py` raises `RuntimeError` at import instead of registering a
+row it cannot derive from. It refuses three rows:
 
-1. **No request DTO** — nothing to derive an advertised shape from.
-2. **A DTO that does not inherit the SDK's request model**, for a tool the pin defines. The
-   announced shape would become tautological: it would advertise whatever we happened to
-   write. `sdk_grounding()` decides this by walking the live MRO and asking where a
-   field-carrying ancestor is *defined*, so it depends on no import spelling.
-3. **A response model that does not descend from `AdcpVersionEnvelope`** — it could not carry
-   `adcp_version`, and since `exclude_none=True` drops unset fields, the omission would be
-   silent on every transport.
+- A request DTO that does not descend from the SDK's `AdcpVersionEnvelope`.
+- A response model that does not descend from `AdcpResponse`.
+- A DTO that does not inherit the SDK's request model, for a tool the pinned spec defines.
 
-Each refusal replaces a guard that would have reported the violation afterwards. Making the
-making the state unreachable beats grading it. See "Guards are the last resort, not the first".
+The `ToolSpec` constructor adds a fourth refusal, described under
+[Policy is derived](#policy-is-derived-and-the-registry-checks-it). Each refusal replaces a
+guard that reported the violation afterwards.
 
----
-
-## The request lifecycle
-
-**This is the design. Everything that follows is a consequence.**
-
-**The shape, from far away.** Four stages, and only the third is the tool's own code:
-
-```mermaid
-flowchart LR
-    P["buyer payload"] --> V["<b>validate</b><br/>dto.model_validate"]
-    V --> R["<b>run</b><br/>invoke_tool"]
-    R --> S["<b>stamp</b><br/>_served"]
-    S --> W["<b>serialize</b><br/>to_wire"]
-    W --> C["one of three<br/>containers"]
-```
-
-Each transport owns only the first stage — turning its bytes into a DTO — and then names the
-tool. Everything from `invoke_tool` onward is shared, which is why a behaviour cannot exist on
-one transport and not another.
-
-**Zooming into `invoke_tool`.** It resolves the implementation from the registry, resolves the
-caller, and decides whether this call is idempotent:
-
-```mermaid
-flowchart TD
-    IN["invoke_tool(tool_name, req, headers, protocol)"] --> IMPL["impl := TOOLS[tool_name].impl"]
-    IMPL --> RES["identity := _resolve_identity(headers,<br/>require_valid_token=spec.requires_credential())"]
-    RES --> ACCQ{"req.get_account()<br/>present?"}
-    ACCQ -- yes --> ENR["identity = enrich_identity_with_account(...)"]
-    ACCQ -- no --> SC
-    ENR --> SC["scope = _keyed_scope(req, identity)"]
-    SC -- "None · no key, or<br/>no tenant / principal" --> RUN["_run(impl, req=, identity=)"]
-    SC -- "scope" --> IDEM["the idempotent path<br/>see Idempotency"]
-    IDEM -- "fresh" --> RUN
-    IDEM -- "replay" --> SERVED
-    RUN --> SERVED["_served(response)<br/>response.adcp_version = SERVED_ADCP_VERSION"]
-    SERVED --> WIRE["to_wire(response)"]
-```
-
-`_run` calls the implementation and awaits it only if it returned an awaitable, so a plain
-`def` and an `async def` are both registrable. `_served` wraps *both* answers — a fresh run and
-a replay — so a replayed response echoes the release serving it.
-
-
-
-
-
-Three properties define the system:
-
-**One entry.** A transport's last act is to name a tool and hand over the request it validated;
-everything after that is inside `invoke_tool` → `invoke`. Which function runs is the registry's
-answer, not the caller's, so no transport can reach a different implementation — or a different
-pre-implementation sequence — than the others.
-
-Two paths in that diagram are worth naming, and both are load-bearing. **The unkeyed
-short-circuit:** `_keyed_scope` returns `None` when the request carries no key *or* the
-identity resolved no tenant or principal, and that path never hashes and never looks up a
-replay. **The conflict exit:** a payload conflict is *raised*, so it leaves `_invoke` as an
-exception and never passes through `_served` — an error is not a response and is never
-stamped, never cached.
-
-**One signature.** Every implementation is `(req, identity)` and nothing else. There is no
-per-transport channel, so no transport can hand an implementation a value the others cannot.
-A `**extra` kwarg filled by one transport is how a branch becomes reachable on one of three.
-
-**One exit.** `to_wire()` is the only place a response model becomes a body, and it is
-`model_dump(mode="json")` and nothing else. The three transports differ only in the
-*container* — that is the only thing that legitimately differs between them.
-
-### Consequences
-
-- **MCP subclasses `Tool`, not `FunctionTool`.** FastMCP validates a function tool through a
-  TypeAdapter built from its annotations, which reaches the SDK's nested models before any of
-  our code runs — a second validation program with different answers. `RegistryTool.run`
-  receives the raw argument dict and validates the way the other transports do. That
-  divergence is why MCP once needed a compatibility layer of its own; the `mode="before"`
-  validator on the model answers, for every transport, the question that layer existed to
-  answer on one.
-- **No implementation calls another implementation.** A controller may delegate to a
-  *service*; it never re-enters the boundary. Beyond layering, this is what stops a nested
-  call from being "a second request wearing the same idempotency key".
-- **Nothing reaches an `_impl` except through `invoke()`.** A service that imports one
-  directly bypasses the account scope, the replay, and the version stamp.
-- **An implementation returns a model and never serializes.** No `.model_dump()` in an
-  `_impl`; the body is produced once, at the boundary.
-- **An implementation is typed to OUR model, never the SDK's.** The SDK's model is the spec's
-  shape; ours is that shape plus internal fields the wire never sees. Ours subclasses theirs,
-  so `isinstance(ours, LibraryRequest)` holds and the reverse does not — typing a parameter to
-  the SDK model would accept an instance our code cannot rely on. Every `_impl` has the same
-  signature: `req: <Tool>Request, identity: ResolvedIdentity`. The boundary calls all of them
-  identically, so a drifting signature raises `TypeError` at the one call site instead of
-  rebinding silently.
-- **A return is a success.** There is no status-sniffing on the way out; an error is raised,
-  not returned.
-
----
-
-## Shapes: request, response, envelope
-
-### The DTO is the SDK's model, extended
+## What a tool declares: the DTO
 
 A request DTO subclasses the SDK's pinned request model and adds nothing the spec does not
-declare. `build_request` is `TOOLS[tool].dto.model_validate(payload)` — one line, because the
-DTO is already the accepted shape.
+declare. The DTO carries the spec's whole vocabulary, and a field this seller does not
+implement is unused rather than removed.
 
-**We do not declare a narrowed subset of the SDK's fields.** The DTO carries the spec's whole
-vocabulary; a field this codebase does not implement is unused. Inheritance is what makes the
-model's provenance checkable — `sdk_grounding()` proves a DTO carries the spec's fields by
-walking the live MRO, which is why the DTO must *extend* the SDK model rather than be
-reconstructed from it.
+```python
+class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
+```
 
-> **Why narrowing is fragile**, recorded so it is not reattempted. Popping from `model_fields`
-> plus `model_rebuild(force=True)` narrows the class itself but does not survive subclassing,
-> and it fails destructively: a subclass re-collects from the annotation, so popped fields
-> return — and return **required**, because the pop destroyed the `FieldInfo` carrying their
-> defaults. Building the model with `create_model` from the SDK's own `FieldInfo` objects
-> avoids the mutation and works, but breaks `sdk_grounding()`'s MRO walk, which is the check
-> that makes provenance provable. Narrowing also buys nothing a buyer can observe: production
-> runs `extra="ignore"`, so an unimplemented field is ignored whether popped or merely unused.
+`sdk_grounding()` proves a DTO carries the spec's fields by walking the live method resolution
+order. That proof is why the DTO extends the SDK model rather than being rebuilt from it.
 
-### Envelope fields vs request fields
+> Narrowing is fragile, and this note records why so nobody reattempts it. Popping from
+> `model_fields` plus `model_rebuild(force=True)` narrows the class but does not survive
+> subclassing. The popped fields return as required fields, because the pop destroyed their
+> defaults. Narrowing also changes nothing a buyer can observe: production runs
+> `extra="ignore"`, so an unimplemented field is ignored whether popped or unused.
 
-**Envelope fields** are properties of the call and the seller. They are declared by the SDK's
-`AdcpVersionEnvelope` / `ProtocolEnvelope` and inherited by every model. An implementation
-neither knows them nor should have to.
+### The accepted shape is the declared shape
 
-| field | request | response |
+`SalesAgentBaseModel` in `src/core/schemas/_base.py` sets `extra` from the settings object:
+`forbid` outside production and `ignore` in production. `BuyerRequest` adds a `mode="before"`
+validator, `_accept_only_declared_fields`, that calls `deep_strip_to_schema` in
+`src/core/schemas/_accepted_shape.py`. That function is a recursive JSON Schema walk that
+keeps only the fields the DTO declares, at every nesting depth. The following table gives the
+outcome per environment.
+
+| Environment | A field the models do not declare |
+|---|---|
+| Development and CI | Rejected, so an unimplemented spec field is loud |
+| Production | Dropped, so a buyer sending a field from a later release is served |
+
+The strip ignores `additionalProperties` on purpose. A pinned schema saying
+`additionalProperties: true` is the spec permitting a sender to add fields. It is not an
+instruction to this seller to carry them inward, because the DTO is what keeps the internal
+models predictable. If the tool should accept a field, declare it on the DTO. That is the only
+mechanism.
+
+A free-form container such as `ext` or `context` keeps its contents. An object that declares
+no properties is the schema's way of saying arbitrary data lives there. There is no
+compatibility middleware and no coercion of legacy shapes on the models. A DTO is the pinned
+schema, and a shape AdCP does not define is refused in development. Behaviour that depends on
+the spec version the buyer speaks belongs in the implementation, which already holds
+`req.adcp_version` and `req.adcp_major_version` as envelope fields.
+
+### The account is a reference, never an id
+
+No request DTO declares a top-level `account_id`. The pinned schemas declare `account`, whose
+type is the SDK's `AccountReference`: a `oneOf` of a reference by id and a reference by
+natural key. The boundary resolves that reference for the caller, and the tool reads the
+result off the identity. `create_media_buy`, `update_media_buy`, and `sync_creatives` declare
+`account` as required; `get_media_buys` declares it as optional.
+
+### Envelope fields and request fields
+
+Envelope fields are properties of the call and the seller. The SDK's `AdcpVersionEnvelope`
+and `ProtocolEnvelope` declare them, every model inherits them, and an implementation neither
+knows them nor should have to.
+
+| Field | Request | Response |
 |---|---|---|
-| `adcp_version` | the release the buyer pins | the release we served — set by `_served()` |
-| `adcp_major_version` | the major the buyer pins | — |
-| `idempotency_key` | at-most-once key, read by the boundary | — |
-| `replayed` | — | set by the boundary on a cache hit |
-| `message` | — | a declared field the implementation fills |
-| `context`, `ext` | echoed / free-form | echoed / free-form |
+| `adcp_version` | The release the buyer pins | The release this seller served, set by `_served` |
+| `adcp_major_version` | The major version the buyer pins | Not on a response |
+| `idempotency_key` | The at-most-once key, read by the boundary | Not on a response |
+| `replayed` | Not on a request | Set by the boundary on a cache hit |
+| `status`, `message` | Not on a request | Declared fields the implementation fills |
+| `context`, `ext` | Echoed, free-form | Echoed, free-form |
 
-**Request fields** are the tool's own vocabulary — `brief`, `packages`, `media_buy_id`. They
-are what the implementation reads.
+Request fields are the tool's own vocabulary, `brief`, `packages`, `media_buy_id`, and they
+are what the implementation reads. You never add an envelope field to a model. `BuyerRequest`
+lets the boundary ask any request for its account and its key, even when the request's schema
+declares neither. Those are methods, because pydantic does not let a field shadow a property
+of the same name.
 
-You never add an envelope field to a model; extending the SDK's model gives you the whole
-envelope with the SDK's types and constraints. `BuyerRequest` lets the boundary ask any
-request for its account and key even when that request's schema declares neither — as
-*methods*, because pydantic will not let a field shadow a property of the same name.
+## What a tool declares: the identity type
 
-### allOf is inheritance; oneOf is one class per branch
+Every implementation declares exactly two parameters: the request DTO and an identity. The
+identity parameter takes one of three types, and each type is a guarantee the boundary has
+already enforced before the implementation runs.
+
+| Annotation | What the resolver guarantees | Which tools |
+|---|---|---|
+| `PublicIdentity` | Whoever arrived: `principal` and `tenant` may be `None`. The tool branches on `identity.principal is None` itself. | `get_products`, `list_creative_formats`, `get_adcp_capabilities` |
+| `ResolvedIdentity` | An authenticated caller: `principal` and `tenant` are present. `account` is the account the request named, or `None` when it named none. | Every protected tool whose DTO declares `account` as optional, or not at all |
+| `AccountIdentity` | Everything `ResolvedIdentity` guarantees, and `account` is present. | `create_media_buy`, `update_media_buy`, `sync_creatives` |
+
+The three classes live in `src/core/resolved_identity.py`. Their fields are the resolved
+types, never dicts:
+
+```python
+class PublicIdentity(BaseModel):
+    principal: InstanceOf[Principal] | None = None
+    tenant: InstanceOf[TenantContext] | None = None
+
+class ResolvedIdentity(PublicIdentity):
+    principal: InstanceOf[Principal]
+    tenant: InstanceOf[TenantContext]
+    account: InstanceOf[Account] | None = None
+
+class AccountIdentity(ResolvedIdentity):
+    account: InstanceOf[Account]
+```
+
+`InstanceOf` is the reason a dict fails at construction. Without it, pydantic coerces
+`{"tenant_id": "d"}` into a `TenantContext`. That coercion is how test code kept building
+identities from dicts after the tenant became one type. The model is frozen and declares
+`extra="forbid"`, so a caller passing `principal_id=` or `tenant_id=` fails instead of building
+an anonymous identity. An identity is constructed in that module and in the test factory only,
+which `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` enforces.
+
+The three real signatures, one per type:
+
+```python
+async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) -> GetProductsResponse:
+```
+
+```python
+def _get_media_buys_impl(
+    req: GetMediaBuysRequest,
+    identity: ResolvedIdentity,
+) -> GetMediaBuysResponse:
+```
+
+```python
+async def _create_media_buy_impl(
+    req: CreateMediaBuyRequest,
+    identity: AccountIdentity,
+) -> CreateMediaBuyResult:
+```
+
+A plain `def` and an `async def` are both registrable. The boundary awaits the result only
+when the implementation returned an awaitable.
+
+The `ToolImpl` protocol types `ToolSpec.impl`, so mypy checks each row. An implementation
+fails to type-check at the row in the following cases:
+
+- Its `req` is not the row's DTO.
+- Its `identity` is none of the three types.
+- It declares a third parameter without a default.
+
+Two shapes a protocol cannot refuse are refused by
+`.ast-grep/rules/impl-signature-is-request-and-identity.yml`: an `identity` declared optional
+or defaulted, and an extra parameter with a default.
+
+A tool reads `identity.principal`, `identity.tenant`, and `identity.account`, and nothing
+else. There is no helper that re-checks whether a principal is present, because on a
+`ResolvedIdentity` the check has no branch to take. Two such helpers used to exist, and each
+was a second place that minted the same refusal the boundary had already decided. The name a
+media buy records for its advertiser is `identity.principal.name`; the account a media buy is
+filed under is `identity.account.account_id`.
+
+## Policy is derived, and the registry checks it
+
+**The credential policy is the annotation.** `ToolSpec.requires_credential()` answers `True`
+when the implementation annotates `ResolvedIdentity` or `AccountIdentity`, and `False` for
+`PublicIdentity`. The resolver refuses a missing credential with `AUTH_MISSING` and a rejected
+one with `AUTH_INVALID` before a protected implementation runs. A seller's policy can add a
+requirement. When the DTO declares `brand` and the tenant's `brand_manifest_policy` is
+`require_auth`, `requires_credential(tenant)` answers `True`. The resolver loads the tenant
+first, asks that question, and refuses the anonymous caller the same way. The tool never sees
+the difference: `get_products` keeps `identity: PublicIdentity` and receives a
+`ResolvedIdentity` when the policy applied.
+
+**The account policy is the DTO.** The boundary resolves an account when, and only when, the
+DTO declares `account` and the request carries one. A DTO that requires `account` guarantees
+the implementation an `AccountIdentity`.
+
+The registry refuses a disagreement between the annotation and the DTO at load, in both
+directions. An implementation that annotates `AccountIdentity` on a DTO whose `account` is
+optional raises:
 
 ```
-REQUEST — every tool, no exceptions
+TypeError: <function _get_media_buys_impl ...> declares identity: AccountIdentity but GetMediaBuysRequest does not require account; annotate ResolvedIdentity
+```
+
+An implementation that annotates `ResolvedIdentity` on a DTO that requires `account` raises:
+
+```
+TypeError: <function _create_media_buy_impl ...> declares identity: ResolvedIdentity but CreateMediaBuyRequest requires account; annotate AccountIdentity
+```
+
+The second refusal matters as much as the first. A tool that is guaranteed an account must
+not be written to narrow an optional, because that narrowing is the re-check this design
+removes.
+
+## Resolution: one resolver, private to the boundary
+
+`_resolve_identity` in `src/core/resolved_identity.py` is the one identity resolution in the
+tree, and `invoke_tool` is its only caller. The leading underscore is the design: a transport
+that wanted to resolve its own identity has no public name to reach for. Four transports used
+to resolve their own, and they disagreed twice. A2A refused a credential on a public task that
+MCP and REST served. REST's discovery route hardcoded the credential as optional, so a
+rejected credential answered 200 there and 401 everywhere else. `ruff-boundary.toml` bans
+importing the resolver outside the boundary, so the privacy is enforced at lint time.
+
+The resolver reads the headers once and resolves in this order:
+
+1. **The Bearer value**, parsed here and nowhere else. On a surface that requires one, a
+   missing credential is refused with `AUTH_MISSING` before any database read. That is the
+   pinned enum's split: `AUTH_MISSING` when nothing was presented, `AUTH_INVALID` when
+   something was presented and did not resolve.
+2. **The tenant**, identified from the headers and then loaded through `TenantContext.load`.
+   `_detect_tenant` tries the `Host` header as a virtual host and then as a subdomain. It
+   then tries the `x-adcp-tenant` header, the `Apx-Incoming-Host` header, and finally
+   `localhost` as the default tenant. Identification selects one indexed column per strategy and loads no row,
+   because the row is hydrated once, after the tenant is known.
+3. **The seller's policy**, asked once the tenant row is loaded, through the row's
+   `requires_credential(tenant)`. A public tool on a tenant that requires a credential refuses
+   the anonymous caller here, with the same `AUTH_MISSING`.
+4. **The principal**, looked up inside that tenant by the hash of the presented token. A
+   principal is a row in exactly one tenant, so a token minted for one tenant never acts on
+   another. No tenant, no lookup.
+5. **The account**, when the request names one, resolved for that principal through
+   `find_account` in `src/core/database/repositories/account_lookup.py`. Naming an account is
+   itself a claim that needs a credential, so a request that carries `account` requires a
+   valid token even on a public tool.
+
+The resolver builds the identity once, from the resolved rows, with the account inside. It
+returns a `PublicIdentity` for a public tool, a `ResolvedIdentity` for a protected one, and an
+`AccountIdentity` when the request named an account. The overloads make that static, so the
+boundary consumes the matching type with no `isinstance`. No identity is copied or amended
+afterwards. The account used to be resolved after the identity existed, by copying the
+identity. That order is how a tool could hold an identity with no account where the schema
+promised one.
+
+### Server-initiated work
+
+Two jobs run with no request at all: executing a media buy after a human approves it, and the
+delivery scheduler reporting on stored buys. They act as the buy's owner, on the buy's
+account, and they get an identity from `identity_of` in `src/core/resolved_identity.py`:
+
+```python
+def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None) -> ResolvedIdentity:
+```
+
+`identity_of` loads the tenant and then the principal inside it, by id. When the row names an
+account, it loads that account through the same access-checked lookup a request goes through.
+It returns an `AccountIdentity` when `account_id` is given and a `ResolvedIdentity` otherwise,
+and the overloads make the return type static. The approval executor in
+`src/core/tools/media_buy_create.py` and the delivery job in
+`src/core/tools/media_buy_delivery.py` pass `media_buy.account_id` off the persisted row.
+
+Two rules follow. Server-initiated work never resolves an account by reference, because the
+row already carries the resolved id. And it never fabricates one: a media buy row with no
+`account_id` is refused with `AdCPPersistedStateError`. That row is a seller-side store defect,
+and a placeholder id hides it. The approval executor reports that refusal as a
+persisted-row defect and leaves the buy pending approval, so an operator who repairs the row
+can retry.
+
+There is no ambient tenant. A `ContextVar` used to carry the tenant to readers that held no
+identity, and it was a second channel that could disagree with the first. `get_adapter` in
+`src/core/helpers/adapter_helpers.py` takes the identity and reads the tenant and the principal
+off it, so the two cannot be handed over as a mismatched pair.
+
+### Ownership is enforced by import bans
+
+Two ruff configs ban the modules that can load a principal row or an account row everywhere
+under `src/` and `scripts/`. A tool that needs a principal or an account has one way to get
+it: the identity. Ruff exempts a whole rule per path, so each ban lives in the config whose
+exemption set fits it.
+
+`ruff-ownership.toml` carries the bans whose exemptions are wide. Its exemptions are the
+resolver, the repositories, and the surfaces that manage principals and accounts as data,
+which means the admin tree and the setup scripts. It bans the following five names:
+
+- `src.core.database.repositories.principal`
+- `src.core.database.repositories.principal_lookup`
+- `src.core.auth_utils`
+- `src.core.database.repositories.account`
+- `src.core.database.repositories.uow.AccountUoW`
+
+`ruff-boundary.toml` carries the two bans whose exemptions are narrow. The ORM `Principal`
+model is importable only by the four repository modules that query it, and
+`repositories.account_lookup` only by the resolver. Under the ownership config's admin and
+scripts exemptions, both were importable from an admin blueprint and a setup script.
+
+`make quality-ci` runs both configs beside `ruff-egress.toml`, and
+`tests/unit/test_ruff_boundary_bans.py` proves every banned name fires.
+
+## What the boundary does once per request
+
+A transport hands its bytes to `serve` in `src/core/tools/_boundary.py`:
+
+```python
+async def serve(
+    tool_name: str,
+    raw: Any,
+    headers: Mapping[str, str],
+    protocol: TransportProtocol,
+) -> AdcpResponse:
+```
+
+`serve` validates the payload into the row's DTO and calls `invoke_tool`. `invoke_tool` is
+the entry for a caller that already holds a validated request. From there, the boundary does
+the following, in this order, for every transport:
+
+1. Captures the buyer's `context` object off the request, to stamp it back unchanged. A
+   payload that fails validation has no request to read, so the echo is read off the raw
+   payload and the rejection carries it too.
+2. Resolves the identity through `_resolve_identity`, in a worker thread, as
+   [Resolution](#resolution-one-resolver-private-to-the-boundary) describes. The boundary
+   computes the credential flag from the row and hands the row's tenant-dependent policy to
+   the resolver.
+3. Negotiates the version the buyer pinned, before any account or replay work. A rejected pin
+   must not touch the replay cache or be answered from it.
+4. Computes the idempotency scope from the identity's own `replay_scope()`. That method
+   returns the tenant, principal, and account ids, or `None` for a caller with no tenant or
+   principal. A request with a key and a scope takes the replay path described under
+   [Idempotency](#idempotency).
+5. Calls `impl(req=..., identity=...)`.
+6. Stamps `adcp_version` and the captured `context` onto the response through `_served`. A
+   replayed response is stamped the same way, so it carries the release serving it and the
+   context of the caller being served.
+7. Turns any exception, from any step, into an `AdcpFailure` carrying the `AdcpErrorResponse`
+   that answers it, after recording the failure with the identity it resolved.
+
+`_served` is the one writer of both fields, on every outcome:
+
+```python
+def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) -> Served:
+    response.adcp_version = SERVED_ADCP_VERSION
+    object.__setattr__(response, "context", echo)
+    return response
+```
+
+`AdcpResponse` refuses `context` on construction and on assignment, and `_served` writes it
+through `object.__setattr__`, which bypasses both. That is what makes the boundary the one
+writer rather than the customary one. Business logic used to thread the context through
+sixteen signatures and over a hundred call sites to reach the raise sites. One missed site
+was a response with no echo.
+
+### What a transport does
+
+A transport does three things and nothing more: it calls `serve`, it catches `AdcpFailure`,
+and it adds its own failure marker. The REST route is the whole pattern:
+
+```python
+        try:
+            response = await serve(tool_name, body, request.headers, TransportProtocol.REST)
+        except AdcpFailure as failure:
+            # REST's wire failure marker is the HTTP STATUS, and that is all this transport
+            # adds. The BODY is the response the boundary built, serialized by the same
+            # function the success path uses.
+            return JSONResponse(status_code=failure.response.http_status, content=to_wire(failure.response))
+```
+
+MCP's marker is a raised `ToolError` and A2A's marker is the task state. The body inside each
+container is the same bytes, produced by `to_wire` in `src/core/tools/_wire.py`. A transport
+that stamps a key of its own into the body turns one response object into a different
+document per transport. That divergence is what the boundary exists to prevent.
+
+`protocol` labels the observability record a failure writes. Nothing branches on it, and the
+identity does not carry it. Requests carry no testing headers either: the identity has no
+testing context, and no adapter carries a dry-run flag. The only `dry_run` is the request
+field on the sync tools, implemented as a unit-of-work rollback.
+
+## Errors
+
+An implementation raises an `AdCPSalesAgentError` subclass from `src/core/exceptions.py` and
+returns only on success. There is no status field to inspect on the way out: a return is a
+success, and an error is an exception.
+
+```python
+    def __init__(
+        self,
+        *,
+        error_code: ErrorCodeT | None = None,
+        details: DetailsT | None = None,
+        issues: list[ErrorIssue] | None = None,
+        field: str | None = None,
+        retry_after: int | None = None,
+        internal_detail: BaseException | None = None,
+    ) -> None:
+```
+
+The constructor has no `message` parameter. A raise site supplies facts through `details`,
+`field`, and `issues`; it cannot author a sentence. `CODE_TABLE` in `src/core/errors/codes.py`
+owns the four things a buyer needs with a code: the message, the recovery, the suggestion,
+and the HTTP status. The published codes are loaded from the pinned schema bundle's
+`enumMetadata`, so the table cannot drift from the file it came from.
+
+`internal_detail` is typed `BaseException | None`, so it takes the caught exception and
+nothing else. It goes to the server-side record and never to the wire. Forty-five raise sites
+used to put an authored sentence there. None of those sentences said anything the code,
+the class, and the typed details did not already say. When you catch an exception and raise
+a typed one, pass the caught exception.
+
+The two authentication errors are the resolver's alone. `ruff-boundary.toml` bans importing
+`AdCPAuthRequiredError` and `AdCPAuthenticationError` outside `src/core/resolved_identity.py`.
+A tool that needs a caller declares `identity: ResolvedIdentity`. The boundary refuses the
+anonymous caller before the tool runs, so there is nothing left for the tool to refuse.
+
+`ToolError` is MCP's wire type. `ruff-boundary.toml` bans importing it anywhere under `src/`
+except the module that mints one on the way out to MCP and the app module that renders it.
+A `ToolError` travelling inwards is a transport error inside transport-agnostic code, and the
+boundary needs a carve-out to let it past.
+
+`AdCPSalesAgentError` is unrelated to `adcp.exceptions.ADCPError`, which is the SDK's client
+hierarchy for calls this seller makes to other agents. Adapters raise into the seller
+hierarchy; no module under `src/adapters/` defines an exception class.
+
+### A failure is a response
+
+`AdcpErrorResponse.of` in `src/core/schemas/_base.py` is the only place a failure response is
+built. AdCP models a failure as a response, not as a separate document. The protocol envelope
+declares `adcp_error`, `context`, and `status` on every response and lists `status` as
+required. The hand-assembled dict this replaced could not carry `status`, so every error body
+this seller emitted was invalid against every pinned response schema. Nothing caught it.
+The HTTP status a transport signals is `AdcpErrorResponse.http_status`, read from
+`CODE_TABLE` by the wire code. A code outside the table raises rather than answering a status
+the table never declared.
+
+### Which code
+
+The following table gives the two codes that are most often confused.
+
+| Code | The pin's words | So |
+|---|---|---|
+| `INVALID_REQUEST` | "malformed, missing required fields, or violates **schema constraints**" | Any pydantic `ValidationError` |
+| `VALIDATION_ERROR` | "invalid field values or violates business rules **beyond schema validation**" | This seller's own logic refusing |
+
+Nothing rewrites a code between the raise site and the envelope.
+
+### Facts, not sentences
+
+A structured rejection carries `ErrorProblem` entries: `code`, `subject_type`, `subject_id`,
+`field`, `rejected_value`, and `accepted_values`. There is no free-text field on purpose. A
+declared class stops field-name drift but not text inside a declared field, so there is no
+`reason` slot for an f-string to move into.
+
+### Batch tools have two levels of failure
+
+A tool that takes a list, such as `sync_accounts` or `sync_creatives`, answers for each entry
+separately. What kind of wrong an entry is decides the level, not how many entries failed.
+
+| The entry is | Level | What the buyer gets |
+|---|---|---|
+| Structurally invalid: it violates the request schema itself | Operation-level | The call is refused with a `raise`, and the details carry the entry's `index` |
+| Schema-legal but refused by a business rule | Per-entry | The call succeeds; that entry carries `action: "failed"`, `status: "rejected"`, and its own `errors` array |
+
+A partial failure is a successful response, and the operation-level `errors` field stays
+absent. Per-entry refusals are declared as `GateFailure` values naming why a gate refused.
+One converter turns those into wire errors, and `failure_class` maps to a code that supplies
+the sentence. Entry-relative pointers are rooted at the entry, `"brand.domain"`, never at the
+entry's position in the batch.
+
+## How a response is produced
+
+### The response model conforms by inheritance
+
+An implementation returns a model that extends the SDK's success model and `AdcpResponse`.
+`AdcpResponse` inherits the SDK's `AdcpVersionEnvelope` and `ProtocolEnvelope` and declares
+no fields of its own. Every response schema opens with that pair under a root `allOf`, and a
+root `allOf` applies to every branch of a root `oneOf`. The SDK's generator applies the bases
+to some branches and not others, so inheriting `AdcpResponse` restores the composition
+without widening anything.
+
+```
+REQUEST: every tool, no exceptions
 
     adcp.types.<Tool>Request              BuyerRequest
-    (SDK · the spec's fields)             (ours · account + key accessors)
+    (SDK: the spec's fields)              (ours: account and key accessors)
                         \                /
                          <Tool>Request
-                         (ours · what the tool accepts)
+                         (ours: what the tool accepts)
 
 
-RESPONSE — single-shape tools
+RESPONSE: single-shape tools
 
-    AdcpVersionEnvelope        ProtocolEnvelope        (SDK · the schema's allOf pair)
+    AdcpVersionEnvelope        ProtocolEnvelope        (SDK: the schema's allOf pair)
                         \     /
-                      AdcpResponse                     (ours · declares no fields itself)
+                      AdcpResponse                     (ours: declares no fields itself)
                             |
-    adcp.types.<Tool>Response                          (SDK · the tool's own fields)
+    adcp.types.<Tool>Response                          (SDK: the tool's own fields)
                         \     /
-                     <Tool>Response                    (ours · what the impl returns)
+                     <Tool>Response                    (ours: what the impl returns)
 
 
-RESPONSE — oneOf tools
+RESPONSE: oneOf tools
 
                       AdcpResponse
                             |
-                       <Tool>Result                    (ours · the union, named as a TYPE)
+                       <Tool>Result                    (ours: the union, named as a type)
                     /       |       \
       <Tool>Success   <Tool>Error   <Tool>Submitted    (one class per branch, flattened)
-      each branch: (adcp.types.<Tool>Success, <Tool>Result)
 ```
 
-Those three shapes, spelled out in real declarations:
+The same shapes, as real declarations:
 
 ```python
-# request — the SDK's model plus the boundary's accessors
+# request: the SDK's model plus the boundary's accessors
 class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest): ...
 
-# response, single shape — the SDK's response, carrying the envelope
+# response, single shape: the SDK's response, carrying the envelope
 class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, AdcpResponse): ...
 
-# response, oneOf — the union as a type, then one class per branch
+# response, oneOf: the union as a type, then one class per branch
 class CreateMediaBuyResult(AdcpResponse): ...
 class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess, CreateMediaBuyResult): ...
 class CreateMediaBuyError(AdCPCreateMediaBuyError, CreateMediaBuyResult): ...
 class CreateMediaBuySubmitted(AdCPCreateMediaBuySubmitted, CreateMediaBuyResult): ...
 
-# a local tool with no SDK counterpart — the envelope, directly
+# a local tool with no SDK counterpart: the envelope, directly
 class CompleteTaskResponse(AdcpResponse): ...
 ```
 
-The `Library*` alias marks an SDK import; a mixin (`NestedModelSerializerMixin`,
-`AlwaysIncludeFieldsMixin`) precedes it where a tool needs one, and the SDK parent always
-precedes `AdcpResponse`.
-
-**Every request and every response follows this hierarchy — that uniformity is the point.**
-Because each one is an `AdcpResponse`, the boundary can stamp `adcp_version`, set `replayed`,
-serialize with `to_wire` and revive a cached body without knowing which tool it is holding.
-One implementation of each of those covers every tool, and a tool inherits them by declaring
-its models this way rather than by being added to anything.
-
 The rules the shape encodes:
 
-- **`allOf` is multiple inheritance.** Every response schema opens with
-  `allOf: [version-envelope.json, protocol-envelope.json]`, and a root `allOf` applies to the
-  whole document — so `AdcpResponse` inherits both. It declares nothing of its own: a field
-  added there would put a key on the wire that no pinned schema defines.
-- **A `oneOf` member is a *branch*, and each branch is its own class**, carrying the envelope
-  fields plus that branch's fields, flat. The class *is* the document the buyer receives.
-- **The union is named as a type, never a bare SDK union alias.** `_response_model_for` reads
-  the implementation's return annotation and requires a class; given a union alias it returns
-  `None`, and replay silently disables for that tool.
-- **MRO order is load-bearing.** The SDK parent is listed before `AdcpResponse`, so the
-  parent's narrower `Literal` wins and `status="failed"` on a success branch stays a type
-  error rather than a runtime surprise.
-- **A local tool with no SDK counterpart** inherits the envelope directly instead of an SDK
-  model. It is the only variation, and it is visible in the declaration.
+- `allOf` is multiple inheritance. Every response schema opens with the version and protocol
+  envelopes, so `AdcpResponse` inherits both and declares nothing of its own.
+- A `oneOf` member is a branch, and each branch is its own class, carrying the envelope fields
+  plus that branch's fields, flat. The class is the document the buyer receives.
+- The union is named as a type, never a bare SDK union alias. `_response_model_for` reads the
+  implementation's return annotation and requires a class.
+- Method resolution order matters: the SDK parent precedes `AdcpResponse`, so the parent's
+  narrower `Literal` wins and `status="failed"` on a success branch stays a type error.
+- A local tool with no SDK counterpart inherits the envelope directly. It is the only
+  variation, and it is visible in the declaration.
 
-### Serialization happens at the boundary only
+Because every response is an `AdcpResponse`, the boundary never needs to know which tool it
+holds. It can stamp `adcp_version`, set `replayed`, serialize with `to_wire`, and revive a
+cached body.
 
-`to_wire()` in and `AdcpResponse.revive` out. An `_impl` never serializes and never parses.
-The forward-compatibility strip is boundary-side too, and it is a **recursive JSON Schema
-walk** rather than a `model_config` setting. `BuyerRequest._accept_only_declared_fields`
-(`mode="before"`) calls `deep_strip_to_schema`. That walk resolves `$ref`, merges declared
-properties across `allOf`, and for `anyOf`/`oneOf` strips against each branch and keeps the
-best match.
+### Who fills which envelope field
 
-| environment | a field our models do not declare |
-|---|---|
-| development / CI | **rejected** — an unimplemented spec field is loud |
-| production | **dropped** — a buyer sending a field from a later release is served, not refused |
+The implementation fills `status` and `message`, because both are declared fields on the model
+it returns. A create awaiting human approval returns the `submitted` branch with its own
+status. A response with no status is not a task envelope, and it succeeded by having returned.
+The boundary writes exactly three fields onto a response: `adcp_version` and `context` in
+`_served`, and `replayed` in the replay deserializer. Nothing per transport is added anywhere.
 
-It is a validator on a model rather than a seam because a seam has to be reached and a
-validator cannot be missed. A free-form container (`ext`, `context`) keeps its contents: an
-object declaring no properties is the schema's way of saying arbitrary data lives here.
+### Serialization happens at the wire only
 
-### What the wire keeps, and what it drops
+`to_wire()` in `src/core/tools/_wire.py` produces every body, and `AdcpResponse.revive` parses
+every cached one. An implementation never serializes and never parses. A model is the value;
+a dict built from it mid-flow is a second representation that drifts. There are four
+serialization edges, each with one owner. They are the wire, outbound bodies to another agent
+or a webhook target, the idempotency hash, and the documents repositories compose.
+Persistence is not an edge that
+needs a call, as [Persistence](#persistence) describes.
+`tests/unit/test_architecture_no_model_dump_in_impl.py` fails the build on a `.model_dump()`
+in an implementation's call graph.
 
-The reply's field set, types and shape all follow from the class the implementation returned,
-so they cannot drift from it. Two adjustments are made at the boundary, and both are derived
-rather than declared:
+A wire model does not shape its own output. There is one serializer seat,
+`WireSerializerMixin` in `src/core/schemas/_base.py`, because pydantic runs only the first
+model serializer in the method resolution order and silently drops the rest. The seat carries
+exactly two concerns:
 
-- **Required-and-nullable fields are retained.** The SDK base serializes `exclude_none=True`,
-  which would drop a key the pin lists in `required` while typing it nullable. The boundary reads the retained
-  set off the model's own `model_fields`: a field the model declares required whose type
-  admits `None`. Nothing names a schema, so a field added by a spec bump is covered the
-  moment the model carries it.
-- **Internal fields are stripped.** Anything we declare for our own use is marked
-  `exclude=True` and never reaches a protocol response. This is the only subtractive exception,
-  and it is the only kind there is: nothing at the boundary ADDS a property the pinned schema
-  does not define.
+- `NestedModelSerializerMixin` re-serializes children by their instance rather than the
+  declared library type, which is what keeps a local subclass's extra fields on the wire.
+- `AlwaysIncludeFieldsMixin` keeps a required field whose value is `None` on the wire under
+  `exclude_none`. The set is read off the model's own `model_fields`, never off a schema path.
 
-### Compatibility middleware is absent by design
+A field that must exist on the model and not on the wire is `Field(exclude=True)` at its
+declaration, nowhere else. The per-class hook and the per-class strip set that used to sit in
+the seat are deleted. Every use did one of two things. It patched back the output of a
+redeclaration that had weakened the library type. Or it stripped a field that belongs on the
+wire, such as `Product.expires_at`. Never override `model_dump`: an override runs on one of three
+serialization paths and a `@model_serializer` runs on all three.
 
-There is no compatibility *middleware*. This codebase removed the request-normalization and response-compat layer rather than
-porting it. Most of it existed to give one transport its own answer to a question the DTO
-answers for all of them: its strip duplicated the model's, and its retry depended on a
-TypeAdapter error that can no longer occur. Measured through a
-real client before and after removal, the behaviour matrix was identical.
+### Adapters return a carrier, not a wire model
 
-Compatibility itself is not absent. It moved to where it applies everywhere by construction,
-and there are three places to put it depending on what kind it is:
+An ad-server adapter returns `AdapterCreateResult` or `AdapterUpdateResult` from
+`src/adapters/base.py`, never the buyer's response model:
 
-**A shape the buyer sends differently → a `mode="before"` validator on the model.** Every
-transport constructs the DTO, so a validator runs for all of them and there is no call to
-forget. This is where an older or looser spelling is coerced into the pinned shape — a bare
-domain into a `BrandReference`, a legacy geo block into the current targeting shape, an old
-format id into its current one. The tree already carries several: `Targeting.normalize_legacy_geo`,
-`PackageRequest.upgrade_legacy_format_ids`, `UpdateMediaBuyRequest.unwrap_and_parse`. Put the
-coercion on the model that owns the field, not at a call site.
+```python
+class AdapterCreateResult(BaseModel):
+    media_buy_id: str
+    packages: list[ResponsePackage]
+    creative_deadline: AwareDatetime | None = None
+    #: package_id -> ad-server line-item id, persisted as package_config["platform_line_item_id"].
+    platform_line_item_ids: dict[str, str] = Field(default_factory=dict)
+```
 
-**A field we do not declare → the environment's extra policy.** Rejected in dev, dropped in
-production; nothing per-tool to write.
-
-**Behaviour that depends on which spec version the buyer speaks → the `_impl`.** This is the
-one worth knowing about: `adcp_version` and `adcp_major_version` are envelope fields on
-*every* request, so an implementation already holds the version its caller is speaking and can
-branch on it directly. That makes version-conditional behaviour a property of the
-implementation rather than of a middleware — transport-independent by construction, typed, and
-visible in the function that owns the decision, with no wrapper to keep in step.
-
-Two further points apply to anything, not only compatibility: `to_wire` is where the body is
-adjusted, and `invoke()` is where per-call behaviour around every tool goes.
-
-A rule placed at any of these applies everywhere by construction, which is what makes it safe
-to add. The old layer could not offer that — it was reachable on one transport, so every rule
-in it was also a divergence.
-
----
+The carrier is never serialized to a buyer, so it carries a seller-internal value without a
+wire model having to strip it. The tool writes the row, then builds the buyer's
+`CreateMediaBuySuccess` from the persisted row, so the buyer sees what was stored.
 
 ## Idempotency
 
-An `idempotency_key` on a request makes the call at-most-once. The boundary derives the scope — tenant, principal, account, key — and hashes the canonical
-request. A repeat of the same key with the same payload replays the first response. The same
-key with a *different* payload is a conflict, not a second execution.
-
-Zooming into the keyed path:
+An `idempotency_key` on a request makes the call at-most-once. The boundary takes the scope
+from `identity.replay_scope()`, which is the tenant, principal, and account ids, and hashes
+the canonical request. A repeat of the same key with the same payload replays the first
+response. The same key with a different payload is a conflict, not a second execution.
 
 ```mermaid
 flowchart TD
@@ -395,138 +667,112 @@ flowchart TD
 ```
 
 A miss rate-limits before running, because a fresh key inserts a row and the per-scope insert
-rate is bounded. A hit whose stored envelope no longer deserializes is treated exactly like a
-miss, so a deploy that changes a response shape inside the TTL window re-executes rather than
-erroring. Errors are never cached, and a conflict is *raised* — it leaves the boundary as an
-exception, so it never reaches `_served` and is never stamped.
+rate is bounded. A hit whose stored envelope no longer deserializes is treated like a miss.
+A deploy that changes a response shape inside the TTL window therefore re-executes rather than
+erroring. Errors are never cached, and a conflict is raised, so it leaves the boundary as an
+exception and is never stamped. The cache stores the result's own protocol status, so a
+replay of a `submitted` answer reconstructs the `submitted` branch.
 
-**The hash is taken over the VALIDATED model, after the undeclared-field strip.** That is the
-load-bearing detail, and it has two consequences worth stating outright:
+`canonical_request_hash` in `src/core/idempotency_canonical.py` hashes the validated model,
+after the undeclared-field strip. Two requests carrying the same key that differ only in
+fields this seller does not declare hash the same and replay. That is the accurate answer,
+because those fields never reach an implementation. Changing the `idempotency_key` is what
+asks for another execution, and it is the only thing that does. This is a deliberate
+divergence from a strict reading of the spec, which describes the hash over the request as
+sent.
 
-- Two requests carrying the same key that differ **only in fields we do not declare** hash the
-  same and therefore replay. This is correct: those fields never reach an implementation, so
-  the two requests are the same request as far as this seller is concerned, and a replay is the
-  honest answer. Hashing raw wire bytes would instead answer `IDEMPOTENCY_CONFLICT` for two
-  requests that would have done exactly the same thing.
-- A buyer cannot defeat idempotency by adding an undeclared field — appending `cache=abcd`
-  changes nothing, because the field is gone before the hash. **Changing the
-  `idempotency_key` is what asks for another execution**, and it is the only thing that does.
+Replay is a property of the boundary, not of a tool. A nested call carries its own key,
+because a controller delegates to a service rather than re-entering the boundary. Reads take
+no key: a read is idempotent by construction, and no read schema declares one.
 
-This is a deliberate divergence from a strict reading of the spec, which describes the hash
-over the request as sent. It has no observable effect on any request built from declared
-fields, and it makes the key mean exactly one thing.
+Concurrent same-key requests are not implemented. The intended design writes the attempt row
+before the work, so a second concurrent request observes a row whose response slot is empty
+and answers `IDEMPOTENCY_IN_FLIGHT`. It is filed as prebid/salesagent#2217.
 
-Replay is a property of the boundary, not of a tool: it cannot be enabled on one transport and
-not another, and a tool cannot opt out by accident. A nested call carries its own key, because
-a controller delegates to a service rather than re-entering the boundary — so "a second request
-wearing the same identifier" is not expressible.
+## Persistence
 
-**Not yet built:** concurrent same-key requests. The intended design writes the attempt row
-*before* the work, carrying the canonical payload hash, so a second concurrent request observes
-a row whose response slot is empty and answers `IDEMPOTENCY_IN_FLIGHT`. Until that lands, two
-simultaneous requests with one key can both execute. It is gradable without concurrency: the
-observable state is a row with a populated hash and an empty response slot, which a Given can
-seed.
+**Hand the model to the column.** A `JSONType` column in `src/core/database/json_type.py`
+takes a pydantic model, a dict, or a list. The engine serializes a model through
+`pydantic_core.to_json`, the same serializer the wire uses. A column declared
+`JSONType(model=...)` validates the stored value back into that model on read. Never call
+`json.dumps` or `model_dump` before the column. The column raises on a pre-serialized string,
+because the old coercion to an empty document turned that type error into silent data loss.
 
----
+**Repositories compose stored documents.** A repository method such as
+`MediaBuyRepository.create_from_request` in `src/core/database/repositories/media_buy.py`
+takes the request model and serializes it at the database boundary. The account
+normalizers in `src/core/database/repositories/account_serialization.py` live there for the
+same reason. They are persistence normalization, and keeping them beside the tool put
+`model_dump` inside the business-logic call graph. A tool, helper, or validator composes no
+document.
 
-## Errors
+**A stored document that does not fit its model is migrated once.** `Targeting` used to carry
+a validator that rewrote legacy flat geo keys into the structured fields on every validation.
+The validator is deleted. Migration `f7c3a9d21b64` in `alembic/versions/` rewrote the rows
+that still carried those keys, once. Every touched row was copied to a backup table first, so
+the downgrade restores the exact prior document. A validator that reshapes input runs
+on every read forever and hides which rows are legacy; a migration answers the question once.
 
-### The hierarchy
+**No input reshaping on a wire model.** The four `mode="before"` validators that mutated their
+input on `Creative`, `PackageRequest`, `UpdateMediaBuyRequest`, and `Targeting` are deleted,
+because the accepted shape is what the fields declare. The one adopt validator that remains
+is `Creative._adopt_library_provenance`, which rebuilds the library's `Provenance` instance
+into the local subclass from its attributes. Pydantic validates a model-typed field by
+instance, so pydantic refuses the library instance without it, and the rebuild is a
+model-to-model step, never a dump. `Creative.assets` is inherited as the library's typed asset
+map. The stored blob is validated into that map at the one place a row becomes a model,
+`_coerce_blob_assets` in `src/core/tools/creatives/listing.py`. A stored value that does not
+validate is dropped with a warning rather than crashing the whole listing on one bad row.
 
-`AdCPSalesAgentError[DetailsT]` (`src/core/exceptions.py`) is the server-side tree: what this
-sales agent raises when it refuses a buyer. It is unrelated to `adcp.exceptions.ADCPError`,
-which is the SDK's **client** hierarchy — "the agent I called failed". They share no ancestor
-but `Exception`, and ours is deliberately not aliased to theirs: their constructor takes a
-message and a suggestion, and ours takes neither.
+## Settings
 
-```python
-class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
-    _code: ClassVar[ErrorCodeT]        # a subclass declares exactly one
-    @property message   -> str         # read-only, from CODE_TABLE
-    @property error_code -> ErrorCodeT
-    @property recovery  -> Recovery
-    @property suggestion -> str
-```
+`src/core/config.py` is the one reader of the process environment. It loads a `Settings`
+object with named groups, `runtime`, `testing`, `database`, `auth`, `integrations`, and
+`limits`, and named derived properties. A bad numeric knob fails at startup instead of being
+logged and ignored. Business logic reads a fact off that object, never the environment. The
+three spellings of "production" collapse to one property, so a security-sensitive check
+cannot drift on the difference.
 
-**`__init__` has no `message` parameter.** A raise site supplies facts; it cannot author a
-sentence. `__new__` refuses both halves of the invariant: a class that already names a code
-being handed one, and a code-less base built without one.
+`ADCP_TESTING` is never read by business code. Each allowance it implies has its own name,
+such as `debug_routes_enabled`, `reference_formats_only`, and `loopback_webhooks_allowed`.
+Where an allowance selects a component, the selection happens at composition. The debug
+router is mounted or absent, and the creative registry is the reference-formats registry or
+the live one. The `extra` mode of every request model is the settings object's
+`pydantic_extra_mode`.
 
-`DetailsT` is the details **shape**, so mypy rejects both a raw dict and the wrong shape for
-that error. The exception owns the code and the detail class is only a shape — one shape
-legitimately serves several errors, and code→class is not a function anyway.
+## Credentials
 
-### CODE_TABLE
-
-`src/core/errors/codes.py` holds one table. The published codes are **loaded** from the pinned
-schema bundle's normative `enumMetadata` — a loaded table cannot drift from the file it came
-from, so it needs no guard checking that it hasn't. Platform codes are added as
-`AppErrorCode`; `ErrorCodeT` is their union, because an enum with members cannot be subclassed.
-
-**Nothing rewrites a code between the raise site and the envelope.** The AdCP vocabulary is
-open: `error.code` is a wire-typed string, published codes are documentary, senders MAY emit
-outside the set, and receivers MUST decode via `error.recovery`. So there is no translation
-table, and `AdcpErrorResponse.of` is the only place a failure response is built.
-
-### Which code
-
-| code | the pin's words | so |
-|---|---|---|
-| `INVALID_REQUEST` | "malformed, missing required fields, or violates **schema constraints**" | any pydantic `ValidationError` |
-| `VALIDATION_ERROR` | "invalid field values or violates business rules **beyond schema validation**" | our own logic refusing |
-
-One code per fact, on every transport.
-
-### Facts, not sentences
-
-Structured rejections carry `ErrorProblem`: `code`, `subject_type`, `subject_id`, `field`,
-`rejected_value`, `accepted_values`. There is deliberately **no free-text field** — a declared
-class stops field-name drift but not prose inside a declared field, so there is no `reason:
-str` slot for an f-string to move into. `code` classifies the problem in the same vocabulary
-as the error carrying it, so a buyer renders each problem from `CODE_TABLE` exactly as they
-render the error.
-
-### Batch tools: two levels of failure
-
-A tool that takes a list — `sync_accounts`, `sync_creatives` — has to answer for each entry
-separately. Which level a refusal belongs to is decided by *what kind* of wrong it is, not by
-how many entries failed:
-
-| the entry is… | level | what the buyer gets |
-|---|---|---|
-| **structurally invalid** — violates the request schema itself, for example an item that satisfies no branch of the item `oneOf` | **operation-level** | the call is refused: `raise`, with the entry's `index` in the details |
-| **schema-legal but refused by a business rule** — an unsupported billing model, a rejected field | **per-entry** | the call SUCCEEDS: that entry carries `action: "failed"`, `status: "rejected"` and its own `errors` array; the others still apply |
-
-A partial failure is a successful response. The operation-level `errors` field stays absent —
-its presence would say the whole call failed, which is not what happened.
-
-Per-entry refusals are declared, not assembled. A gate returns a `GateFailure` naming *why* it
-refused, and one converter turns those into wire errors:
+A buyer credential is a `Principal` row and nothing else. `src/core/credentials.py` owns the
+three facts about a token: how one is minted, how one is hashed, and how much of one is shown.
 
 ```python
-GateFailure(failure_class="billing_not_supported", field="billing", details=...)
+def mint_token() -> str:
+    """A fresh buyer token: ``tok_`` and 32 URL-safe random bytes."""
+    return f"tok_{secrets.token_urlsafe(32)}"
+
+
+def hash_token(token: str) -> str:
+    """The stored form of *token*: hex SHA-256 of its UTF-8 bytes."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
 ```
 
-`failure_class` maps to a code; the code supplies the sentence from `CODE_TABLE`. There is no
-`message` or `suggestion` on a gate, for the same reason there is none on an exception — a
-site that has to invent buyer-facing prose is the defect.
+The row stores the SHA-256 of the token and a twelve-character display prefix. A random
+256-bit token is not a password, so there is no slow hash and no salt. The equality lookup
+stays an index hit, and the table cannot be inverted. The resolver hashes what a request
+presents and compares hashes. `Principal.issue`, `Principal.with_token`, and
+`Principal.rotate_token` in `src/core/database/models.py` are the only constructors of a
+credential. A token is shown exactly once, when it is minted or rotated, and the admin UI
+offers rotation in place of display.
 
-**Entry-relative pointers.** `field` is rooted at the entry — `"brand.domain"`,
-`"notification_configs[0].url"` — never `"accounts[2].brand.domain"`. The pointer describes
-the entry, not its accidental position in a batch, and it is the rooting the graded contract
-pins.
-
-
-Adapters raise into this tree. No module under `src/adapters/` defines an exception class, so
-there is no parallel hierarchy whose diagnosis dies at the adapter boundary.
-
----
+There is no tenant admin token. A tenant is not a caller, and the resolver fallback that
+accepted one as a Bearer credential is deleted with the column. The `Authorization: Bearer`
+header is the only place the credential is read from. A token that hashes to a principal
+row in the addressed tenant is the only credential the resolver accepts.
 
 ## Add a tool
 
-1. **Extend the SDK's request model.** If the pin defines the tool, you extend; you do not
-   write a model.
+1. **Extend the SDK's request model.** If the pinned spec defines the tool, extend the SDK
+   model; do not write one. Mark internal fields `exclude=True`.
 
    ```python
    from adcp.types import GetProductsRequest as LibraryGetProductsRequest
@@ -535,172 +781,123 @@ there is no parallel hierarchy whose diagnosis dies at the adapter boundary.
        implementation_config: dict | None = Field(default=None, exclude=True)
    ```
 
-2. **Declare the response** as `AdcpResponse` (or a branch class per `oneOf` member), so it
-   carries the envelope.
+2. **Declare the response** as an `AdcpResponse`, or one branch class per `oneOf` member, so
+   it carries the envelope. See
+   [The response model conforms by inheritance](#the-response-model-conforms-by-inheritance).
 
-3. **Write the `_impl`**: `req: <Tool>Request, identity: ResolvedIdentity`, returns a model,
-   raises `AdCPSalesAgentError`.
-   No transport imports, no `ToolError`, no `.model_dump()`, no `get_db_session()`, no call to
-   another `_impl`.
+3. **Write the implementation.** Declare `(req: <Tool>Request, identity: <type>)`, where the
+   type is `PublicIdentity` for a public tool, `AccountIdentity` when the DTO requires
+   `account`, and `ResolvedIdentity` otherwise. Return a model and raise
+   `AdCPSalesAgentError` subclasses. No transport imports, no `ToolError`, no
+   `.model_dump()`, no `get_db_session()`, no principal or account lookup, and no call to
+   another implementation. A controller that needs another tool's work calls that tool's
+   service function, as `create_media_buy` calls `sync_creatives`.
 
-4. **Add the registry row.** That registers it on every transport it declares.
+4. **Add the registry row.** The row registers the tool on every transport it declares. If
+   registration raises, the message names which refusal you hit.
 
-5. **Grade it with BDD.** See "Test a tool".
+5. **Grade it with BDD scenarios** that run on every transport. See
+   [Test a tool](#test-a-tool).
 
 There is no step where you write a wrapper, a builder, a body model, an `AgentSkill` literal,
-or a route decorator. If registration raises, the message names which refusal you hit.
+or a route decorator.
+
+### Substitute an implementation in a test
+
+`TOOLS` holds the function object, and every transport calls the object the row holds. Patching
+the module attribute `src.core.tools.<mod>._<tool>_impl` renames something nothing consults.
+Substitute the row instead, with the helpers in `tests/helpers/capture_wrapper_req.py`:
+
+```python
+with stub_impl("get_products") as mock_impl:
+    ...
+    mock_impl.assert_called_once_with(req=..., identity=...)
+```
+
+`stub_impl` replaces the row's `impl` with an `AsyncMock` and stubs the boundary's
+database-backed steps for the duration: the replay cache and the resolver's account read.
+`registry_impl(tool_name, impl)` substitutes a real function without the stubs, for a test
+that grades replay or account resolution against a real database.
 
 ### Persistence and effects
 
-Writes go through repositories and a Unit of Work. A preview is **transaction disposal**, not a
+Writes go through repositories and a Unit of Work. A preview is transaction disposal, not a
 shadow path: `dry_run` rolls back instead of committing, so it runs the same code. Side
-effects register on the unit (`repo.after_commit(fn)`, `repo.outbound(call)`) and are
-discarded with it — scopes nest, so an inner rollback discards its own queued effects rather
-than letting the outer commit drain them.
+effects register on the unit of work through `repo.after_commit(fn)` and
+`repo.outbound(call)` and are discarded with it. An implementation never dials out; effects
+drain after commit.
 
----
+## What this design replaced
+
+The tree used to carry mechanisms this page no longer describes:
+
+- A per-tool transport wrapper for each of three transports. The wrappers disagreed about
+  account resolution and idempotency.
+- An `auth` literal on the registry row. The literal could disagree with the implementation.
+- Two helpers that re-checked inside every tool whether the admitted caller was present. The
+  helpers minted the same refusal in a second place.
+- A second identity resolver, kept alive by its own tests, and an ambient tenant `ContextVar`
+  beside the identity.
+- The buyer's context threaded through signatures to raise sites, and a hand-assembled error
+  dict with no `status`.
+- Per-class serializer hooks, strip sets, `model_dump` overrides, and input-reshaping
+  validators on wire models.
+- Environment reads scattered across forty modules, and a plaintext token column with a
+  tenant admin token beside it.
+
+On this tree, each of those is one seam:
+
+- The annotation is the credential policy, and the DTO is the account policy.
+- The resolver builds one identity with the account inside.
+- The boundary stamps the envelope, and the wire function serializes.
+- The settings object reads the environment, and the credential module owns the token.
 
 ## Test a tool
 
-**Behaviour is graded by BDD scenarios executed across transports. Integration tests cover
-what BDD cannot observe. There is no third category.**
-
-Do not write a unit test for tool behaviour. A unit test of an `_impl` cannot cross the transport boundary, so it cannot grade wire
-conformance. That is why the transport enum no longer lists `IMPL`: an implementation is not
-a transport, and grading one produced almost no coverage the transports did not already give.
+BDD scenarios executed across transports grade behaviour. Integration tests cover what BDD
+cannot observe. There is no third category, and there is no unit test of an implementation's
+behaviour. An implementation is not a transport, so a test of it cannot grade wire
+conformance. The authoritative recipe is [Test architecture](../../tests/CLAUDE.md); this
+section gives the shape.
 
 ### The transports
 
-| transport | path |
-|---|---|
-| `MCP` | mock context → MCP tool → boundary |
-| `A2A` | A2A handler → boundary |
-| `REST` | TestClient → route → boundary |
-| `E2E_MCP` | real HTTP → nginx → server |
-| `E2E_A2A` | real HTTP → nginx → server |
-| `E2E_REST` | real HTTP → nginx → server |
+The following table lists the transports a scenario runs on.
 
-Six transports, one scenario. The in-process three run always; the e2e counterparts run in the
-in-network job. A scenario written once and executed six ways is what makes a transport
-divergence impossible to hide inside the test meant to catch it.
+| Transport | Path |
+|---|---|
+| `MCP` | The in-memory FastMCP client, through the registered tool, to the boundary |
+| `A2A` | The A2A handler to the boundary |
+| `REST` | A `TestClient` through the route to the boundary |
+| `E2E_REST` | Real HTTP through nginx to the server |
+| `E2E_MCP`, `E2E_A2A` | Real HTTP through nginx to the server, declared as placeholders in `tests/harness/transport.py` |
+
+The in-process transports run always; the end-to-end counterparts run in the in-network job.
+A scenario written once and run on every transport is what makes a transport divergence
+impossible to hide inside the test meant to catch it.
 
 ### Scenarios
 
-- **Given steps go through the shared cross-transport harness** — the domain env and
-  factories. A Given that hand-rolls transport-specific setup means the transports are not
-  running the same scenario.
-- **Steps dispatch the raw payload.** A step that builds the DTO in the test process catches
-  the `ValidationError` there and never crosses the wire: it grades local pydantic, not the
-  seller, and shows green while grading nothing.
-- **Then steps read the wire envelope** through the harness readers, on the exact response
-  from the run: `assert_envelope_shape(result.wire_error_envelope, CODE, recovery=...)`. An
-  assertion on a reconstructed exception can pass vacuously.
-- **You cannot assert prose.** There is no substring matcher; passing one is a `TypeError`.
-  Grade codes, fields and recovery — the things a buyer parses.
+- Given steps go through the shared cross-transport harness, the domain env and the
+  factories. A Given that writes transport-specific setup by hand means the transports are
+  not running the same scenario.
+- Steps dispatch the raw payload. A step that builds the DTO in the test process catches the
+  `ValidationError` there and never crosses the wire.
+- Then steps read the wire through the harness readers on the exact response from the run.
+  Use `result.assert_wire_error(code, recovery=...)` for an error and `wire_field(ctx, ...)`
+  for a success. An assertion on a reconstructed exception can pass vacuously.
+- You cannot assert a sentence. Grade codes, fields, and recovery, which are the things a
+  buyer parses.
 
-### The scenario vocabulary
-
-Scenarios are written from a small closed vocabulary, not free prose. The shape:
-
-**Given — state primitives.** A small closed set covers the corpus: the buyer is authenticated
-as a principal on a tenant; a tenant setting has a value; a principal owns a media buy with a
-status; an account exists for a brand and operator. A primitive is one implementation with
-parameters, not one sentence per phrasing — two sentences that read differently but call the
-same body are the same primitive and should be written as one.
-
-**When — one primitive.** Nearly every When is *dispatch tool T with payload P*. Only two
-things reach the seam that are not payload:
-
-- an **identity override** — absent, anonymous, invalid token, or a second principal;
-- a **verbatim body**, the negative-path seam, for a payload the local model would reject. A
-  scenario that lets the local model reject it grades the model instead of the seller.
-
-`dry_run`, `idempotency_key` and `adcp_version` are AdCP **request fields**, not call manner —
-they belong in the payload. Repetition and concurrency are the primitive invoked twice, not a
-third sentence form. Genuine non-dispatch events are rare: an admin UI action, a
-seller-initiated webhook, clock advancement.
-
-**Payload — a named baseline plus a delta.** Not a JSON body. The scenario names a factory
-baseline and the fields it overrides, so the baseline name and the overridden field and value
-are what appear in `Examples` columns. A full body does not fit a table cell; a tool name plus
-one field and one value does.
-
-**Then — resolved, never named.** A scenario does not name the response schema it expects; the
-tool it called determines that. Naming the schema is a second place stating which tool the
-scenario exercises, and it can drift from the When.
-
-### What a scenario looks like
-
-```gherkin
-@T-UC-011-ext-b-partial @sync @partial-failure @invariant
-Scenario: Sync partial_failure -- success_partial_failure with action=failed
-  Given the Buyer is authenticated
-  And the seller does not support "advertiser" billing
-  When the Buyer Agent sends a sync_accounts request with:
-  | brand.domain    | operator        | billing    |
-  | acme-corp.com   | acme-corp.com   | operator   |
-  | nova-motors.com | nova-motors.com | advertiser |
-  Then the response is compliant with the sync_accounts success spec
-  And the account for brand domain "acme-corp.com" has action "created"
-  And the account for brand domain "nova-motors.com" has action "failed"
-  And the failed account includes a per-account errors array
-  And the response does not contain an operation-level errors field
-```
-
-Read what that scenario does *not* do. It names no transport — it runs on all of them. It
-names no tenant, principal or account id — the Given seeds them. It names no schema file — the
-compliance check resolves the schema from the tool that was called. And it grades the batch contract from
-"Errors" exactly: one entry created, one failed with its own errors, and no
-operation-level errors field.
-
-### What a good Given looks like
-
-A Given establishes **state**, and it does so through the shared harness so that every
-transport starts from the same place. Tenant and principal are standard seeding — a scenario
-says it is authenticated and gets a tenant and a principal, rather than naming ids:
-
-```gherkin
-Given the Buyer is authenticated
-```
-
-which resolves through `ensure_tenant_principal(ctx, env)` → `env.setup_default_data()`. A
-scenario only names an entity when the entity is the subject: *an account "A" exists for brand
-"B"*, *the principal owns media buy "M" with status "S"*.
-
-What makes a Given bad is transport-specific setup — raw SQL, a per-transport branch, poking a
-mock directly. That means the transports are no longer running the same scenario, and the
-scenario stops being evidence about any of them.
-
-### Responses are schema-checked automatically
-
-**Every scenario carries a response compliance check**, so a scenario that passes is compliant
-with the pinned schema:
-
-```gherkin
-Then the response is compliant with the sync_accounts success spec
-```
-
-The general check grades the whole document; the scenario's own assertions remain as the
-specific check. Two properties matter:
-
-- **It names the tool, never a schema file.** The schema is resolved from the tool that was
-  actually called, so a scenario that changes its tool cannot keep grading the old shape. A
-  branching tool must name its branch or be refused.
-- **Refusals are graded too.** A refusal carries no response document, and leaving the error
-  path unchecked is how "the suite is schema-clean" comes to mean "the happy paths are". The
-  error envelope's `errors[]` entries are `core/error.json` objects and are validated as such.
-
-It reads the **real wire** — REST's HTTP body, MCP's `structured_content`, A2A's artifact
-`DataPart` — and *raises* if a real-wire transport stashed nothing, rather than falling back to
-re-serializing the typed payload. That fallback is worse than no check. `status` is a model field with a default, so a
-re-serialized payload carries it whether or not the envelope reached the wire. The instrument
-then reports success precisely where it could not observe what it grades.
+Every scenario carries a response compliance check that names the tool, never a schema file.
+The check reads the real wire: REST's HTTP body, MCP's `structured_content`, and A2A's
+artifact `DataPart`. When a transport stashed nothing, the check raises rather than
+re-serializing the typed payload.
 
 ### Fixtures
 
-Test data comes from factories, never inline `session.add()`. Requests come from a factory per
-registered tool, bound to the registry DTO so a factory cannot drift from the shape it claims
-to build:
+Test data comes from factories, never from inline `session.add()`. Requests come from a
+factory per registered tool, bound to the registry DTO:
 
 ```python
 payload = CreateMediaBuyRequestFactory.payload()                        # conformant baseline
@@ -709,135 +906,80 @@ payload = CreateMediaBuyRequestFactory.payload(idempotency_key=OMIT)    # requir
 req     = CreateMediaBuyRequestFactory.build(po_number="PO-1")          # typed, DTO validation runs
 ```
 
-**A factory can only build a VALID request**, and that is not a limitation to work around —
-it follows from the DTO being the accepted shape. `build()` constructs the model, and
-constructing the model validates it, so there is no way to express an invalid request as a
-model. Any attempt would be rejected by the very contract the test wants to probe.
+A factory can only build a valid request, because constructing the model validates it. A
+negative path is therefore build, dump, then modify. `payload()` applies overrides after the
+dump, when the payload is a plain dict that can carry a value the DTO rejects. `OMIT` deletes a
+key from that dict, which is the only way to express a missing required field once the model
+has refused to build one.
 
-So a negative path is **build, dump, then modify**:
-
-```python
-data = cls.build().model_dump(mode="json", exclude_none=True)   # valid by construction
-data[key] = value                                                # perturbed on the wire dict
-```
-
-`payload()` applies overrides *after* the dump for exactly this reason — at that point the
-payload is a plain dict and may carry values the DTO would reject, which is the point of a
-perturbation. Everything the test did not name stays conformant, so the scenario grades the one
-field it is about rather than a payload that is wrong in several ways at once.
-
-**`OMIT` exists for the same reason, one step further.** A test grading a *missing* required
-field cannot say `payload(account=None)`: `None` is a value, and the baseline dump already
-drops nulls (`exclude_none=True`), so that would read as "leave the default in place" rather
-than "send a request with no account". `OMIT` is a sentinel that deletes the key from the dict
-instead of setting it — the only way to express absence once the model has already refused to
-build one.
-
-Use `build()` when you want the typed object and DTO validation to run; use `payload()` when
-the scenario is about what happens to a request the model would not have accepted.
+Identities in tests come from `PrincipalFactory` in `tests/factories/principal.py`.
+`make_identity` builds a `ResolvedIdentity` and `make_public_identity` builds the anonymous
+form. `make_account_identity` builds an `AccountIdentity` from an identity and a resolved
+account. None of them accepts a dict, and an unknown keyword is a `TypeError` rather than a
+dropped key.
 
 ### Conformance storyboards
 
 `tests/storyboard/` grades a measured run of the real `@adcp/sdk` storyboard runner as
-parametrized pytest, one test per `(protocol, track, storyboard, step)`. It runs **once per
-protocol** — MCP and A2A get separate agent URLs and ledger namespaces — because grading only
-MCP would let the A2A surface drift while CI stayed green. `known_failures.txt` xfails
-specific checks and enforces two signals: an unlisted failure fails CI, and a listed entry
-that resolves to **no collected check** also fails CI, which is how you learn the suite
-stopped producing checks it used to produce.
+parametrized pytest, one test per protocol, track, storyboard, and step. It runs once per
+protocol, because grading only MCP lets the A2A surface drift while CI stays green.
+`known_failures.txt` records the checks that fail, and a listed entry that resolves to no
+collected check fails CI too.
 
-### Guards are the last resort, not the first
+### Guards are the last resort
 
-**There is an infinite number of ways to write incorrect code.** A guard enumerates the wrong
-shapes someone thought of; the space of wrong shapes is unbounded, so a guard can never
-guarantee non-violation in the general case — it can only report the instances it recognises,
-after they are written. Prefer, in order:
+A guard enumerates the wrong shapes someone thought of, and the space of wrong shapes is
+unbounded. Prefer, in order:
 
-**1 — Make the wrong thing unconstructible.** The strongest option, because it forecloses
-every spelling at once rather than the ones anticipated.
+1. **Make the wrong thing unconstructible.** `AdCPSalesAgentError.__init__` has no `message`
+   parameter, so a raise site cannot author a sentence. `ToolSpec` refuses an identity
+   annotation that disagrees with its DTO. An identity refuses a dict.
+2. **Ban the import or the call spelling with ruff.** `ruff-boundary.toml`,
+   `ruff-ownership.toml`, and `ruff-egress.toml` each run as their own quality line.
+   `tests/unit/test_ruff_boundary_bans.py` proves every banned name fires.
+3. **Write an AST guard only for what neither can express.** Write it against the call graph
+   rather than a file list, and prove it non-vacuous by breaking the code on purpose.
 
-```python
-class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
-    _code: ClassVar[ErrorCodeT]
-    @property
-    def message(self) -> str: ...       # read-only, from CODE_TABLE
-```
-
-`__init__` has **no `message` parameter**. A raise site does not "avoid" authoring a sentence;
-it cannot. `DetailsT` does the same for the payload: mypy rejects a raw dict *and* the wrong
-details shape for that error, so there is no guard needed for "details must be typed". `__new__`
-refuses a class that already names a code being handed another one. `_register_tool` refuses a
-tool with no DTO, or one whose response cannot carry the envelope. In the test harness, the
-prose matcher was removed from the step signature, so asserting on a message is a `TypeError`
-rather than a convention.
-
-Ask first whether the constructor, the type, or the registration cannot admit the
-mistake. Most of this document's rules are enforced that way and have no guard at all.
-
-**2 — Ruff, when the wrong thing is an import or a call spelling.** `ruff-egress.toml` bans the
-network libraries in `src/` and `scripts/`, so production code cannot reach `httpx` directly
-and must cross the egress seam. It runs as its own quality line, and it **replaced two AST
-scans** that were doing the same job less reliably.
-
-Two details worth copying. The ban enumerates *every* resolving import path, because a
-textual `banned-api` match on one path is bypassable through a re-export. And the residual is
-recorded rather than papered over: a dynamic `importlib.import_module("httpx")` evades the
-table, and the file says so — *"the threat model is honest drift, not an adversarial author —
-and no in-repo gate survives its own author."* That is the right way to state a limit: name
-what the mechanism does not cover, instead of implying it covers everything.
-
-**3 — An AST guard, only for what neither can express.** Some invariants are genuinely about
-shape — "no `_impl` in this call graph reaches `model_dump`", "every transport's response path
-calls `to_wire` and does not serialize or post-assign". Those earn a guard. Write it against
-the call graph rather than a file list, and prove it non-vacuous by mutation: break the code
-deliberately and confirm the guard fails.
-
-**Delete guards as they become unnecessary.** When a structural change makes a violation
-unrepresentable, remove the guard in the same change and say which change made it dead. A guard
-that can no longer fail is not free — it runs on every commit and reads as protection that is
-no longer doing anything.
-
-Ratcheting baselines may only shrink, and the counter runs against upstream source rather than
-a file the same commit can edit.
-
----
+Delete a guard as soon as a structural change makes its violation unrepresentable, and say
+which change made it dead.
 
 ## Outbound: webhooks and egress
 
-Webhook registration is in-protocol — a buyer attaches a `push_notification_config` to a
-request. **The envelope shape does not depend on the transport the buyer registered over**;
-one builder produces every webhook body, and `operation_id` and the echo obligations ride on
-it.
+Webhook registration is in-protocol: a buyer attaches a `push_notification_config` to a
+request. One builder produces every webhook body, so the envelope shape does not depend on the
+transport the buyer registered over.
 
-Every outbound request goes through one send path (`src/core/security/outbound_http.py`,
-`src/core/security/egress/`). Not a client factory — a factory leaves the copies already in place
-place and add one more thing to get wrong. Address validation, cloud-metadata blocking and
+Every outbound request goes through one send path in `src/core/security/outbound_http.py` and
+`src/core/security/egress/`. Address validation, cloud-metadata blocking, and
 resolve-once-then-pin are delegated to the SDK rather than reimplemented. Registration-time
-checks are DNS-free and deterministic; dial-time resolution pins the address it resolved.
-
-An `_impl` never dials. Effects queue on the Unit of Work and drain after commit.
-
----
+checks are deterministic and make no DNS call; dial-time resolution pins the address it
+resolved. See [Outbound egress](../security/outbound-egress.md).
 
 ## Where things live
 
-**Nothing in the first three rows is hand-written.** The MCP registration, the A2A agent card
-and its dispatch, and the REST routes and their body models are all generated by iterating
-`TOOLS` at import. You do not add a tool to them; you add a row and they follow. Each file listed is where the *generator* lives, not a list to edit.
+The MCP registration, the A2A agent card and its dispatch, and the REST routes are generated
+by iterating `TOOLS` at import. You add a row, and they follow. The following table names the
+generator for each, not a list to edit.
 
-
-| what | where |
+| What | Where |
 |---|---|
-| the registry | `src/core/tools/registry.py` |
-| the boundary | `src/core/tools/_boundary.py` — `invoke_tool`, `invoke`, `_served` |
-| the response body | `src/core/tools/_wire.py` — `to_wire` |
-| MCP registration | `src/core/main.py` — `RegistryTool`, `_register_tool` *(generated from `TOOLS`)* |
-| A2A dispatch + agent card | `src/a2a_server/adcp_a2a_server.py` — `_dispatch_skill` *(generated from `TOOLS`)* |
-| REST routes + bodies | `src/routes/api_v1.py` *(generated from `TOOLS`)* |
-| request base + strip | `src/core/schemas/_base.py`, `_accepted_shape.py` |
-| errors | `src/core/exceptions.py`, `src/core/errors/` |
-| egress | `src/core/security/outbound_http.py`, `src/core/security/egress/` |
-| effects / UoW | `src/core/database/repositories/effects.py` |
-| harness | `tests/harness/` |
-| request factories | `tests/factories/request.py` |
-| storyboards | `tests/storyboard/` |
+| The registry | `src/core/tools/registry.py` |
+| The boundary | `src/core/tools/_boundary.py`: `serve`, `invoke_tool`, `_served` |
+| The identity types and the resolver | `src/core/resolved_identity.py` |
+| The account lookup | `src/core/database/repositories/account_lookup.py` |
+| The response body | `src/core/tools/_wire.py`: `to_wire` |
+| MCP registration | `src/core/main.py`: `RegistryTool`, `_register_tool` |
+| A2A dispatch and agent card | `src/a2a_server/adcp_a2a_server.py`: `_dispatch_skill`, `_derived_skills` |
+| REST routes | `src/routes/api_v1.py` |
+| Request base, response base, and strip | `src/core/schemas/_base.py`, `src/core/schemas/_accepted_shape.py` |
+| Errors and the code table | `src/core/exceptions.py`, `src/core/errors/codes.py` |
+| Import bans | `ruff-boundary.toml`, `ruff-ownership.toml`, `ruff-egress.toml` |
+| Adapter result types | `src/adapters/base.py` |
+| The JSON column type | `src/core/database/json_type.py` |
+| Settings | `src/core/config.py` |
+| Credentials | `src/core/credentials.py` |
+| Egress | `src/core/security/outbound_http.py`, `src/core/security/egress/` |
+| Effects and the Unit of Work | `src/core/database/repositories/effects.py` |
+| Harness | `tests/harness/` |
+| Request and identity factories | `tests/factories/request.py`, `tests/factories/principal.py` |
+| Storyboards | `tests/storyboard/` |
