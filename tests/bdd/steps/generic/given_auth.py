@@ -30,6 +30,7 @@ from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 @given("the Buyer has no authentication credentials")
 @given("the request has no valid authentication")
 @given("the request has an empty principal_id")
+@given("no authentication context")
 def given_buyer_no_auth(ctx: dict) -> None:
     """Buyer has no authentication credentials at all.
 

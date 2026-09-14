@@ -3154,7 +3154,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # not among the pin's 92 and is not even their shape. The reasoning is in
             # BR-UC-019-query-media-buys.feature where the scenario stood, and the real
             # refusals are graded by the principal scoping boundary outline.
-            "T-UC-019-ext-c",
+            # T-UC-019-ext-c is gone with its scenario, not graduated: it asked for a
+            # credential that resolves to no principal to be answered with an empty
+            # media_buys array and an errors[] code ("principal_not_found") that is not
+            # among the pin's 92 and is not their shape, and its Given reached that shape
+            # by injecting a fabricated identity past the resolver. The reasoning is in
+            # BR-UC-019-query-media-buys.feature where the scenario stood; the real
+            # refusal (AUTH_INVALID, terminal, hard) is graded by the principal scoping
+            # boundary outline on every transport.
             # Graduated (6szx): T-UC-019-ext-d — invalid parameter types are rejected at
             # request construction (GetMediaBuysRequest) and translated at the
             # transport boundary, with field-level details (field="media_buy_ids"),

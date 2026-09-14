@@ -893,102 +893,28 @@ def given_principal_owns_mb_simple(ctx: dict, principal_id: str, mb_id: str) -> 
 # then_status_handles_missing_date are removed with them.
 
 
-@given("an authenticated identity with no principal_id")
-def given_identity_no_principal(ctx: dict) -> None:
-    """Simulate an identity resolved but with no principal_id.
-
-    The buyer has valid tenant context (e.g., token resolved) but lacks a
-    principal_id — simulating an expired/revoked token or incomplete auth.
-    Sets has_auth=True so the When step sends a real identity, but with
-    principal_id=None so _impl can detect the missing principal and return
-    an appropriate error response.
-    """
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    identity = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=env._tenant_id,
-    )
-    ctx.setdefault("query_kwargs", {})["identity"] = identity
-
-
-@given(parsers.parse('the principal "{principal_id}" does not exist in the tenant database'))
-def given_principal_not_in_tenant_db(ctx: dict, principal_id: str) -> None:
-    """Ensure the specified principal does not exist in the tenant database.
-
-    For integration env: delete the principal if it exists. The env already
-    created a default principal, but the scenario has set up a different
-    principal_id (e.g., "buyer-unknown") that should NOT be in the database.
-    """
-    from sqlalchemy import delete, select
-
-    from src.core.database.models import Principal
-
-    env = ctx["env"]
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx"
-    if env._session is not None:
-        existing = env._session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
-        ).first()
-        if existing:
-            env._session.execute(
-                delete(Principal).where(
-                    Principal.principal_id == principal_id,
-                    Principal.tenant_id == tenant.tenant_id,
-                )
-            )
-            env._session.commit()
-
-
-@given(parsers.parse('an authenticated principal "{principal_id}" not in registry'))
-def given_principal_not_in_registry(ctx: dict, principal_id: str) -> None:
-    """Simulate an authenticated principal whose ID is not in the tenant database.
-
-    Sets up an identity with the given principal_id, but ensures no matching
-    Principal row exists in the DB. The _impl function should detect this
-    and return a "principal_not_found" error.
-    """
-    from sqlalchemy import delete, select
-
-    from src.core.database.models import Principal
-    from tests.factories.principal import PrincipalFactory
-
-    env = ctx["env"]
-    tenant = ctx.get("tenant")
-    assert tenant is not None, "No tenant in ctx"
-
-    # Build identity with the unregistered principal_id
-    identity = PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=env._tenant_id,
-    )
-    ctx.setdefault("query_kwargs", {})["identity"] = identity
-
-    # Ensure the principal does NOT exist in DB
-    if env._session is not None:
-        existing = env._session.scalars(
-            select(Principal).filter_by(principal_id=principal_id, tenant_id=tenant.tenant_id)
-        ).first()
-        if existing:
-            env._session.execute(
-                delete(Principal).where(
-                    Principal.principal_id == principal_id,
-                    Principal.tenant_id == tenant.tenant_id,
-                )
-            )
-            env._session.commit()
-
-
-@given("no authentication context")
-def given_no_auth_context(ctx: dict) -> None:
-    """Simulate a request with no authentication at all.
-
-    Sets has_auth=False so the When step sends identity=None, triggering
-    an AUTH_REQUIRED error from _impl.
-    """
-    ctx["has_auth"] = False
+# REMOVED with the scenarios they served: three Givens that INJECTED an identity into
+# the request kwargs instead of presenting a credential.
+#
+# `an authenticated identity with no principal_id` and `an authenticated principal "<id>"
+# not in registry` both built a PrincipalFactory.make_identity and put it in
+# ctx["query_kwargs"]["identity"], which is the simulated-identity path removed with the
+# IMPL transport: the resolver never ran, so the scenario graded a boundary decision the
+# boundary had not made. Their feature rows are gone for spec reasons recorded in
+# BR-UC-019-query-media-buys.feature (ext-b, ext-c and two boundary rows). The state they
+# described is graded by the principal scoping boundary outline, which presents a real
+# token that verifies against no principal and lets the resolver answer AUTH_INVALID.
+#
+# `the principal "<id>" does not exist in the tenant database` deleted the row the other
+# two depended on; no feature sentence matches it (UC-003's `... does not exist in the
+# database` is a different sentence bound in that use case's steps).
+#
+# `no authentication context` is now bound by the generic
+# steps/generic/given_auth.py::given_buyer_no_auth alongside its three sibling spellings.
+# The copy here set ctx["has_auth"] = False and nothing else, which stopped working the
+# moment the dispatcher began keying off ctx["credential"]: the flag was read by no step
+# in this use case, so the request went out carrying the env's OWN valid credential and
+# the row asserting AUTH_MISSING was served a successful empty result.
 
 
 @given(parsers.parse('snapshot data is available for package "{pkg_id}"'))
@@ -1096,8 +1022,19 @@ def when_query_no_filter_with_ids(ctx: dict, ids: str) -> None:
 
 @when("the Buyer Agent sends a get_media_buys request without authentication")
 def when_query_no_auth(ctx: dict) -> None:
-    """Send get_media_buys without authentication."""
-    ctx["has_auth"] = False
+    """Send get_media_buys presenting whatever credential the Given established.
+
+    The sentence names a property of the REQUEST, and the request's credential is set by
+    the scenario's Given (`the Buyer has no authentication credentials`, which presents
+    the env's tenant with no token). This step used to also write
+    ``ctx["has_auth"] = False``; no step in this use case read that flag, so it recorded
+    an intent nothing acted on while the dispatcher decided from ``ctx["credential"]``.
+    """
+    assert "credential" in ctx, (
+        "this When says the request carries no authentication, but no Given established a "
+        "credential to present — without one the dispatcher sends the env's OWN valid "
+        "credential and the scenario grades an authenticated request"
+    )
     _dispatch_query(ctx)
 
 
@@ -3037,12 +2974,21 @@ def _package_row(ctx: dict, pkg_id: str) -> Any:
 #: A value the pinned model accepts for each blob key the read path resolves. Used to
 #: give every scenario row valid siblings, so "degrades that field ALONE" has something
 #: to be false about.
+#: ``targeting_overlay`` carries the PINNED v3 geo spelling: core/targeting.json declares
+#: ``geo_countries`` (array of ISO 3166-1 alpha-2), and the flat ``geo_country_any_of`` this
+#: entry used to hold does not exist in 3.1.1 at all. Targeting states that it reshapes
+#: nothing on the way in (src/core/schemas/_base.py:1697), so the flat spelling raised
+#: extra_forbidden while REHYDRATING the sibling — which the boundary reported to the buyer
+#: as INVALID_REQUEST and failed the whole listing, the exact outcome these rows forbid.
+#: The key is the modern one for the same reason: a sibling has to be a value the pinned
+#: model accepts, and the legacy ``targeting`` key is consulted only when the modern key is
+#: absent (INV-8), so seeding the legacy key made every row depend on a fallback path.
 _VALID_BLOB_SIBLINGS = {
     "product_id": "guaranteed_display",
     "start_time": "2026-03-01T00:00:00Z",
     "end_time": "2026-03-31T00:00:00Z",
     "paused": False,
-    "targeting": {"geo_country_any_of": ["US"]},
+    "targeting_overlay": {"geo_countries": ["US"]},
 }
 
 

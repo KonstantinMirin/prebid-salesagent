@@ -139,17 +139,26 @@ Feature: BR-UC-019 Query Media Buys
   # refused hard with AUTH_INVALID, and no credential at all with AUTH_MISSING.
     # POST-F3: Buyer can infer corrective action
 
-  @T-UC-019-ext-c @extension @ext-c @error
-  Scenario: Principal not found - principal_id not in registry
-    Given an authenticated principal "buyer-unknown" not in registry
-    When the Buyer Agent sends a get_media_buys request
-    Then the response is compliant with the get_media_buys spec
-    And the response should include an empty media_buys array
-    And the response errors array should include error code "principal_not_found"
-    And the error should include a "suggestion" field
-    # POST-F1: Buyer knows no results were returned
-    # POST-F2: Error explains principal was not found
-    # POST-F3: Buyer can infer corrective action
+  # REMOVED: "Principal not found - principal_id not in registry".
+  #
+  # It is the same state as the principal scoping boundary row "credentials presented but
+  # not resolvable" — a credential that verifies against no principal row — and asked for
+  # the opposite answer: a compliant get_media_buys response, an empty media_buys array,
+  # and an errors[] entry coded "principal_not_found". Both halves contradict adcp 3.1.1.
+  #
+  # 1. The code is not in the protocol. enums/error-code.json declares 92 codes, none
+  #    containing "PRINCIPAL", and every one is upper snake case. No site under src/
+  #    emits "principal_not_found".
+  # 2. The shape contradicts the pin's own recovery. The refusal the pin defines for a
+  #    presented-and-rejected credential is AUTH_INVALID with recovery "terminal" and the
+  #    suggestion "do NOT auto-retry"; an empty array beside an advisory is a success
+  #    document, which a buyer may legitimately retry and reconcile against.
+  # 3. The Given could only reach that shape by injecting a fabricated identity into the
+  #    request kwargs, bypassing the resolver — the simulated-identity path this epic
+  #    removed with the IMPL transport.
+  #
+  # The behaviour it was reaching for is graded, on every transport, by the principal
+  # scoping boundary outline below.
 
   @T-UC-019-ext-d @extension @ext-d @error
   Scenario: Request validation failed - invalid parameter values
