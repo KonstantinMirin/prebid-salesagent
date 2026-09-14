@@ -181,6 +181,10 @@ class AdapterCreateResult(BaseModel):
     handed back here.
     """
 
+    # A carrier, never on the wire: an unknown keyword is a stale field from a deleted
+    # carrier version, so it fails at construction instead of being dropped silently.
+    model_config = ConfigDict(extra="forbid")
+
     media_buy_id: str
     packages: list[ResponsePackage]
     creative_deadline: AwareDatetime | None = None
@@ -195,6 +199,9 @@ class AdapterUpdateResult(BaseModel):
     buyer's ``UpdateMediaBuySuccess`` itself from the re-read row. Never serialized to
     a buyer.
     """
+
+    # Same reason as AdapterCreateResult: a stale keyword fails loudly.
+    model_config = ConfigDict(extra="forbid")
 
     media_buy_id: str
     affected_packages: list[AffectedPackage]

@@ -35,13 +35,11 @@ Wire effect: the account-level path keeps optional credentials (a credential-les
 required.
 """
 
-from typing import Any
-
 from adcp.types import NotificationConfig as LibraryNotificationConfig
 from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
 from adcp.types.generated_poc.core.notification_config import Authentication as LibraryNotificationAuthentication
 from adcp.types.generated_poc.core.push_notification_config import Authentication as LibraryPushAuthentication
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field
 
 __all__ = ["Authentication", "NotificationConfig", "PushAuthentication", "PushNotificationConfig"]
 
@@ -60,7 +58,27 @@ class PushAuthentication(Authentication, LibraryPushAuthentication):
     A narrowing subtype: an instance is an :class:`Authentication` and an instance of both
     generated classes. The one redeclaration tightens the base's optional ``credentials`` to
     required, with the parent's own ``minLength: 32`` and description restated.
+
+    ``from_attributes`` is what lets a BASE-typed block fill this slot. ``sync_accounts``
+    hands a ``NotificationConfig``'s block -- an :class:`Authentication` -- to the
+    registration gate, and pydantic refuses a base instance in a subtype slot by identity.
+    With this setting pydantic reads ``schemes`` and ``credentials`` off the base instance
+    and validates them against this class, so the block arrives AS the subtype and the push
+    pin's required ``credentials`` still does the refusing, at
+    ``authentication.credentials``. A hand-written ``mode="before"`` validator on
+    ``PushNotificationConfig`` used to do exactly this by rebuilding the subtype from the
+    base's two fields; pydantic's own mechanism makes it unnecessary, so it is deleted.
+
+    ``extra="forbid"`` is RESTATED rather than inherited, and dropping it would be a silent
+    widening: a ``model_config`` on a subclass REPLACES the parents' rather than merging
+    with it, so declaring this config for ``from_attributes`` alone would discard the
+    generated parent's ``extra="forbid"``. That setting is the pin's
+    ``additionalProperties: false`` on the authentication block
+    (``core/push-notification-config.json``), so losing it would let an undeclared key ride
+    along on a credential block.
     """
+
+    model_config = ConfigDict(extra="forbid", from_attributes=True)
 
     credentials: str = Field(
         min_length=32,
@@ -81,22 +99,10 @@ class NotificationConfig(LibraryNotificationConfig):
 class PushNotificationConfig(LibraryPushNotificationConfig):
     """The pinned ``core/push-notification-config.json``, with its block narrowed to the subtype."""
 
+    # No adoption validator. A base-typed block is accepted by PushAuthentication's own
+    # from_attributes, which reads the two fields off the instance and validates them
+    # against the subtype -- so the requiredness that refuses a credential-less block is
+    # the pin's, applied by the subtype, at the same pointer a wire dict earns.
     authentication: PushAuthentication | None = Field(
         default=None, description=LibraryPushNotificationConfig.model_fields["authentication"].description
     )
-
-    @field_validator("authentication", mode="before")
-    @classmethod
-    def _narrow_base_block(cls, v: Any) -> Any:
-        """Adopt a base-typed block by rebuilding the subtype from its own two fields.
-
-        ``sync_accounts`` hands a ``NotificationConfig``'s block, an :class:`Authentication`,
-        to the registration gate, which validates this model. Pydantic refuses a base instance
-        in a subtype slot, so the block is handed back as its two fields for the subtype to
-        validate: a model-to-model step, never a dump, and the push pin's required
-        ``credentials`` is refused by the subtype at ``authentication.credentials``, the same
-        pointer a wire dict earns.
-        """
-        if isinstance(v, Authentication) and not isinstance(v, PushAuthentication):
-            return {"schemes": v.schemes, "credentials": v.credentials}
-        return v

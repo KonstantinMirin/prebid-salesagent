@@ -360,6 +360,7 @@ class XandrAdapter(AdServerAdapter):
                 PublisherPropertySelector1,
             )  # TODO: no stable alias in adcp.types
 
+            from src.core.product_conversion import default_reporting_capabilities
             from src.core.schemas import CpmPricingOption, FormatId
 
             # In Xandr, products map to placement groups or custom deals
@@ -390,6 +391,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -418,6 +420,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -446,6 +449,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,
@@ -475,6 +479,7 @@ class XandrAdapter(AdServerAdapter):
                     brief_relevance=None,
                     estimated_exposures=None,
                     delivery_measurement=DeliveryMeasurement(provider="Xandr Reporting"),
+                    reporting_capabilities=default_reporting_capabilities(),
                     product_card=None,
                     product_card_detailed=None,
                     placements=None,

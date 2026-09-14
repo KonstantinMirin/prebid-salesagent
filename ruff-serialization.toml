@@ -29,8 +29,11 @@
 # database_session.py (what the JSONType column serializes a model through), the ORM
 # @validates hooks in json_validators.py that normalize a column document, and the documents
 # the repositories and the context manager compose or compare; the admin UI's JSON responses,
-# a wire the boundary's to_wire does not own; and the two schema modules that re-dump a nested
-# child inside the one serializer seat (_base.py) or coerce a library RootModel (pricing.py).
+# a wire the boundary's to_wire does not own; and the ONE schema module that re-dumps a nested
+# child inside the one serializer seat (_base.py). pricing.py was a second such module until
+# the validator that dumped an SDK pricing option to revalidate it was deleted: nothing in
+# production produced an SDK-typed option, so the coercion had no caller and the exemption no
+# subject (salesagent-3cs7o.32).
 #
 # Proven live by tests/unit/test_ruff_boundary_bans.py, which reads this table as well as the
 # boundary and ownership ones; there is no allowlist and no other guard.
@@ -54,7 +57,6 @@ select = ["TID251"]
 "src/core/json_validators.py" = ["TID251"]
 "src/admin/**" = ["TID251"]
 "src/core/schemas/_base.py" = ["TID251"]
-"src/core/schemas/pricing.py" = ["TID251"]
 
 [lint.flake8-tidy-imports.banned-api]
 "pydantic_core.to_jsonable_python".msg = "A model is serialized only at an edge (the wire, an outbound body, the idempotency hash, the persistence edge, the admin UI's JSON). Hand the model through; a receiving model adopts a sibling generated class with a mode='before' validator or from_attributes=True, never by a dump in the caller (salesagent-3cs7o.12)."

@@ -29,7 +29,7 @@ SDK names at package level, so ``from src.core.schemas import
 CpmPricingOption`` resolves to the local subclass (Pattern #7 applies).
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from adcp.types import CpaPricingOption as LibraryCpaPricingOption
 from adcp.types import CpcPricingOption as LibraryCpcPricingOption
@@ -50,7 +50,7 @@ from adcp.types import VcpmPricingOption as LibraryVcpmPricingOption
 from adcp.types.generated_poc.core.pricing_option import (
     PricingOption as _LibraryPricingOption,
 )
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -178,22 +178,24 @@ class PricingOption(_LibraryPricingOption):
         ),
     ]
 
-    @model_validator(mode="before")
-    @classmethod
-    def _coerce_sdk_instances(cls, value: Any) -> Any:
-        """Accept SDK-typed inputs by revalidating them into local members.
-
-        A raw SDK member (or SDK RootModel wrapper) is not an instance of the
-        local subclasses, so pydantic's model validation would reject it.
-        Round-tripping through ``model_dump`` revalidates the same wire shape
-        against the local members — which also applies this project's ``extra``
-        policy, so undeclared fields riding on an ``extra="allow"`` SDK
-        instance are surfaced (forbid) or dropped (ignore) instead of leaking.
-        """
-        if isinstance(value, PricingOption):
-            return value
-        if isinstance(value, _LibraryPricingOption):
-            value = value.root
-        if isinstance(value, BaseModel) and not isinstance(value, _MEMBER_TYPES):
-            value = value.model_dump(mode="python", exclude_none=True)
-        return value
+    # NO SDK-COERCING VALIDATOR. A ``mode="before"`` validator used to accept an SDK-typed
+    # member (or the SDK's own wrapper) by serializing it to a plain dict and revalidating
+    # that dict against the local members. That is the one spelling critical pattern 4 names
+    # twice: a pydantic
+    # validator on a wire model may not serialize, and a receiving model adopts a sibling
+    # generated class by reading its attributes, never by a dump. It survived only because
+    # this file carried a per-file exemption in ruff-serialization.toml and in the ast-grep
+    # rule; both entries are gone with it, so the ban now covers this file.
+    #
+    # It was deleted rather than rewritten to the attribute-reading form because nothing
+    # needs it. No production path produces an SDK-typed pricing option: every construction
+    # site under src/ imports the local subclass (product_conversion.py, whose comment says
+    # exactly that; dynamic_pricing_service.py; the Xandr adapter), and the single direct SDK
+    # pricing import in src/ is TimeParameters, a nested sub-object rather than a union
+    # member. Only tests ever built an SDK member.
+    #
+    # Its docstring claimed the dump was what kept an undeclared field from leaking off an
+    # ``extra="allow"`` SDK instance. That was backwards: the dump is what ACCEPTED the SDK
+    # instance in the first place, and re-applying the extra policy was a side effect of
+    # that acceptance. With no coercion an SDK instance is refused outright, under either
+    # extra mode, so there is nothing left for a field to leak through.

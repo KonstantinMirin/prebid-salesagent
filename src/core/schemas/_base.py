@@ -409,7 +409,7 @@ class WireSerializerMixin:
     There is deliberately no per-class hook and no per-class strip set. A wire model
     conforms by inheriting the pinned library parent; a field that must exist on the model
     and not on the wire is ``Field(exclude=True)`` at its declaration. Both of the
-    mechanisms that used to sit here (``_finish_wire``, ``_INTERNAL_ONLY_FIELDS``) existed
+    mechanisms that used to sit here (a per-class finishing hook and a per-class strip set) existed
     only to patch back the output of a redeclaration that had weakened the library type,
     or to hide a field that belongs on the wire.
     """
@@ -891,6 +891,16 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     ``SyncAccountsResponse``.
     """
 
+    # A RESPONSE model keeps nothing it was not declared. The SDK parent sets
+    # extra="allow", which STORES an unknown key and then serializes it, so
+    # ``workflow_step_id`` -- deleted from this class when adapters moved to a carrier type
+    # -- came back as an EXTRA the moment a construction site still passed it, and reached
+    # the buyer on all three dump paths. Deleting a seller-internal field from a wire model
+    # only removes it from the wire if the class also refuses to keep what it did not
+    # declare. "ignore" rather than "forbid": a response has no forward-compatibility
+    # reason to retain a sender's unknown keys and no reason to refuse them either.
+    model_config = ConfigDict(extra="ignore")
+
     # adcp 6.6 (spec 3.1.1) made these required on the success envelope. ``status`` is
     # REQUIRED and typed ``Literal["completed"]`` by the SDK parent, because this is the
     # success branch and the branch's schema makes the value a const. A local
@@ -1108,6 +1118,11 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     ``UNSUPPORTED_FEATURE`` notices when ``property_list`` is persisted but
     not yet compiled by the adapter.
     """
+
+    # A RESPONSE model keeps nothing it was not declared, for the reason spelled out on
+    # ``CreateMediaBuySuccess``: the SDK parent's extra="allow" turned the deleted
+    # ``workflow_step_id`` into an extra that serialized to the buyer.
+    model_config = ConfigDict(extra="ignore")
 
     # adcp 6.6 (spec 3.1.1) made status/revision required on the update success envelope.
     # status is REQUIRED and typed Literal["completed"] by the SDK parent, because this is the
@@ -1620,10 +1635,10 @@ class TargetingCapability(SalesAgentBaseModel):
     """Defines targeting dimension capabilities and restrictions."""
 
     dimension: str  # e.g., "geo_country"
-    # No "managed_only": the pinned targeting overlay declares no managed-only dimension,
-    # and the rows that carried the value described fields nothing declares
-    # (salesagent-3cs7o.22).
-    access: Literal["overlay", "both", "removed"] = "overlay"
+    # No "managed_only" and no "removed": the pinned targeting overlay declares no managed-only
+    # dimension, and the rows that carried either value described fields nothing declares
+    # (salesagent-3cs7o.22; the city-level refusal went with salesagent-3cs7o.15).
+    access: Literal["overlay", "both"] = "overlay"
     description: str | None = None
     allowed_values: list[str] | None = None  # For restricted value sets
 
@@ -1838,16 +1853,25 @@ class AIReviewPolicy(SalesAgentBaseModel):
 
 
 class CreativePolicy(LibraryCreativePolicy):
-    """Extends library CreativePolicy with AI provenance requirements.
+    """The pinned ``core/creative-policy.json``, adding nothing.
 
-    Library provides: co_branding, landing_page, templates_available.
-    Local extension adds provenance_required for EU AI Act Article 50 compliance.
+    ``provenance_required`` was redeclared here as a "local extension ... for EU AI Act
+    Article 50 compliance". It is not an extension: the pin declares it, and the parent
+    carries it with the same annotation, the same default, the same metadata and the same
+    optionality, so the redeclaration duplicated the field byte for byte and is now
+    inherited. The docstring it replaces also undercounted the parent, which provides six
+    fields, not three -- ``accepted_verifiers`` and ``provenance_requirements`` are pinned
+    too and this repo has never implemented either. Implementing them is feature work
+    tracked upstream, not something to start from a comment.
+
+    The duplication was not inert, which is why deleting it matters beyond tidiness. A
+    redeclaration replaces the parent's DESCRIPTION, and ours said the creative must
+    include provenance metadata and cited the regulation, where the pin says whether
+    creatives must include it and points the buyer at ``get_creative_features`` for the
+    seller's independent verification. A description lives on the field info rather than in
+    its metadata, so the inheritance guard's metadata axis cannot see the substitution: a
+    reworded pinned field passes as equivalent. Inheriting restores the pinned wording.
     """
-
-    provenance_required: bool | None = Field(
-        default=None,
-        description="When True, creatives must include AI provenance metadata (EU AI Act Article 50)",
-    )
 
 
 # --- Core Schemas ---
@@ -1975,22 +1999,23 @@ class PackageRequest(LibraryPackageRequest):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Internal fields (not in AdCP spec) - excluded from API responses
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
-    media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
-    platform_line_item_id: str | None = Field(
-        None, description="Internal: Platform-specific line item ID", exclude=True
-    )
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
-
-    # Legacy field (deprecated - use pricing_option_id instead)
-    pricing_model: PricingModel | None = Field(
-        None,
-        description="DEPRECATED: Use pricing_option_id instead. Selected pricing model for backward compatibility.",
-        exclude=True,
-    )
+    # DELETED, not moved: tenant_id, media_buy_id, platform_line_item_id, created_at,
+    # updated_at, metadata and a deprecated pricing_model. media-buy/package-request.json
+    # (AdCP 3.1.1, the pinned version) declares none of the seven, and the persisted
+    # MediaPackage row already owns each one -- media_buy_id and package_id are its primary
+    # key, platform_line_item_id is written into its package_config, and the timestamps
+    # belong to the parent media buy. Every read of those names on a package in src/ reaches
+    # an ORM row or the internal MediaPackage carrier, never this DTO, so there was nothing
+    # to route anywhere.
+    #
+    # pricing_model was the one of the seven a buyer could actually send, because declaring a
+    # field is what admits it (pattern 7: the DTO IS the accepted shape). It was a legacy
+    # alias for pricing_option_id with no producer anywhere in src/ or tests/, and the pin
+    # names pricing_option_id as the only pricing selector -- it is in
+    # package-request.json /required. A package that now carries pricing_model is an
+    # undeclared field and follows pattern 7: VALIDATION_ERROR in dev, silently dropped in
+    # production. Its three readers in media_buy_create.py went with it, which is why the
+    # currency resolution there no longer has a legacy branch.
 
     # RE-STATED rather than inherited. Deleting this would restore the parent's
     # Ge(ge=0.0) but would also silently UN-DEPRECATE the field: the parent describes it
@@ -2027,8 +2052,15 @@ class PackageRequest(LibraryPackageRequest):
         max_length=100,
         description="Full creative objects to upload and assign at creation time (alternative to creative_ids)",
     )
-    # V3: creative_ids moved to local extension for backward compatibility with internal code
-    # Library V3 uses creatives (full objects), but internal code often uses creative_ids (string list)
+    # The one field this DTO declares beyond the pin, and it survives on a reader census
+    # rather than on "backward compatibility". media-buy/package-request.json declared
+    # creative_ids up to AdCP 2.5 and dropped it at 3.0 in favour of `creatives` (full
+    # objects), but the create flow still routes ids, not objects, through it: the inline
+    # creative upload writes the merged ids back onto the package
+    # (src/core/helpers/creative_helpers.py, model_copy), and _get_creative_ids
+    # (src/core/tools/media_buy_create.py) reads them at every assignment, existence-check
+    # and persistence site. Deleting it would break that path, so it stays declared and
+    # exclude=True keeps it off the wire.
     creative_ids: list[str] | None = Field(
         None,
         description="Internal: List of creative IDs to assign (alternative to full creatives objects)",
@@ -2048,22 +2080,32 @@ class Package(LibraryPackage):
     - package_id, status
     """
 
-    # Internal fields (not in AdCP spec) - excluded from API responses
-    tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
-    media_buy_id: str | None = Field(None, description="Internal: Associated media buy ID", exclude=True)
-    platform_line_item_id: str | None = Field(
-        None, description="Internal: Platform-specific line item ID for creative association", exclude=True
-    )
-    created_at: datetime | None = Field(None, description="Internal: Creation timestamp", exclude=True)
-    updated_at: datetime | None = Field(None, description="Internal: Last update timestamp", exclude=True)
-    metadata: dict[str, Any] | None = Field(None, description="Internal: Additional metadata", exclude=True)
+    # A RESPONSE model keeps nothing it was not declared. The library parent sets
+    # extra="allow", which STORES an unknown key and then serializes it, so deleting the
+    # seven internal declarations below would have turned each one from a field that could
+    # never reach the wire (Field(exclude=True)) into an extra that always does. That is the
+    # opposite of what deleting them was for, and it is invisible: nothing refuses the
+    # construction and the value simply appears in the buyer's document. "ignore" is the
+    # right setting rather than "forbid" because a response has no forward-compatibility
+    # reason to retain a sender's unknown keys and no reason to refuse them either --
+    # a request's tolerance is pattern 7's business, not a response's.
+    model_config = ConfigDict(extra="ignore")
 
-    # Legacy field (deprecated - use pricing_option_id instead)
-    pricing_model: PricingModel | None = Field(
-        None,
-        description="DEPRECATED: Use pricing_option_id instead. Selected pricing model for backward compatibility.",
-        exclude=True,
-    )
+    # DELETED, not moved, and for the same reason as on PackageRequest above: tenant_id,
+    # media_buy_id, platform_line_item_id, created_at, updated_at, metadata and a
+    # deprecated pricing_model. core/package.json (AdCP 3.1.1, the pinned version) declares
+    # 29 properties and requires only package_id; none of the seven is among them. On this
+    # class they were deader than on the request: no site under src/ or scripts/ ever
+    # CONSTRUCTED a Package with one of them, and no site read one back. The four surviving
+    # reads of those names on anything package-shaped belong to the ORM MediaPackage row
+    # (src/core/database/repositories/media_buy.py and the _PackageData the list tool builds
+    # from it), which is where a persisted package's tenant, parent buy, line item and
+    # timestamps live.
+    #
+    # This class inherits extra="allow" from the library parent, so a caller that still
+    # passes one of the seven is not refused -- the value is accepted and dropped. That is
+    # the library's forward-compatibility choice, not a place for this class to declare a
+    # field.
 
     # Note: No need for validate_required hack - library Package already has package_id and status as required fields!
 

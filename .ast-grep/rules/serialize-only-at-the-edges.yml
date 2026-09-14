@@ -6,9 +6,12 @@
 # webhook target (the agent registries and the webhook services), the idempotency payload hash,
 # the persistence edge (the engine's JSON serializer behind the JSONType column, the ORM
 # @validates hooks in json_validators.py, and the documents repositories and the context
-# manager compose or compare), the admin UI's JSON responses, and the two schema modules that
-# coerce a library RootModel or re-dump a nested child inside the one serializer seat. Every
-# other `.model_dump(...)` / `.model_dump_json(...)` under src/ is a finding.
+# manager compose or compare), the admin UI's JSON responses, and the ONE schema module that
+# re-dumps a nested child inside the one serializer seat. Every other `.model_dump(...)` /
+# `.model_dump_json(...)` under src/ is a finding. pricing.py was a second exempt schema
+# module until the validator that dumped an SDK pricing option to revalidate it was deleted;
+# no production path produced an SDK-typed option, so the exemption lost its subject
+# (salesagent-3cs7o.32).
 #
 # WHY AST-GREP AND NOT RUFF. TID251 bans a NAME that is imported, and a method call on an
 # instance imports nothing: `req.model_dump()` reaches for no module. The ban has to fall on
@@ -49,7 +52,6 @@ ignores:
   - "src/core/json_validators.py"
   - "src/admin/**"
   - "src/core/schemas/_base.py"
-  - "src/core/schemas/pricing.py"
 rule:
   any:
     - pattern: $X.model_dump($$$)

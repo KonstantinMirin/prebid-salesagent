@@ -89,23 +89,12 @@ TARGETING_CAPABILITIES: dict[str, TargetingCapability] = {
         dimension="audience_segment", access="overlay", description="Third-party audience segments"
     ),
     "custom": TargetingCapability(dimension="custom", access="both", description="Platform-specific custom targeting"),
-    # ── Removed dimensions ───────────────────────────────────────────────
-    "geo_city": TargetingCapability(
-        dimension="geo_city",
-        access="removed",
-        description="City-level targeting (removed in v3, no adapter supports it)",
-    ),
 }
 
 
 def get_overlay_dimensions() -> list[str]:
     """Get list of dimensions available for overlay targeting."""
     return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access in ["overlay", "both"]]
-
-
-def get_removed_dimensions() -> list[str]:
-    """Get list of dimensions that have been removed."""
-    return [name for name, cap in TARGETING_CAPABILITIES.items() if cap.access == "removed"]
 
 
 # Explicit mapping from Targeting field names to capability dimension names.
@@ -144,9 +133,6 @@ FIELD_TO_DIMENSION: dict[str, str] = {
     "audiences_any_of": "audience_segment",
     "audiences_none_of": "audience_segment",
     "custom": "custom",
-    # ── Removed dimensions ───────────────────────────────────────────────
-    "geo_city_any_of": "geo_city",
-    "geo_city_none_of": "geo_city",
 }
 
 

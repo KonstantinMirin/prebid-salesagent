@@ -17,6 +17,7 @@ from adcp.types import CreativeAsset, FormatId
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
 from tests.factories import PricingOptionFactory
@@ -95,6 +96,10 @@ def create_test_product(
     if pricing_options is None:
         pricing_options = [create_test_cpm_pricing_option()]
 
+    # reporting_capabilities is required by the pin and inherited as required; the edge
+    # default is the one production supplies for a row that stores NULL.
+    kwargs.setdefault("reporting_capabilities", default_reporting_capabilities())
+
     return Product(
         product_id=product_id,
         name=name,
@@ -126,6 +131,7 @@ def create_minimal_product(**overrides) -> Product:
         "delivery_type": "guaranteed",
         "pricing_options": [create_test_cpm_pricing_option()],
         "delivery_measurement": {"provider": "test", "notes": "Test"},
+        "reporting_capabilities": default_reporting_capabilities(),
     }
     defaults.update(overrides)
     return Product(**defaults)

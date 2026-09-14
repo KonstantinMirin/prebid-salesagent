@@ -7,6 +7,7 @@ These tests verify that:
 4. AdCP protocol requirements are met
 """
 
+import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -1152,24 +1153,27 @@ class TestAdCPContract:
             for assignment in adcp_response["creative_assignments"]:
                 assert isinstance(assignment, dict), "each creative assignment must be object"
 
-        # Test internal model_dump includes all fields
-        internal_response = package.model_dump_internal()
+        # There is no second, internal dump any more, and no internal field for one to
+        # carry. This block used to call a model_dump_internal() helper and assert each
+        # internal name WAS present in it, then assert the internal dump had at least three
+        # keys the AdCP dump lacked -- a two-dump design where the wire shape was produced by
+        # stripping. Both the helper and the seven internal declarations on Package are gone:
+        # the model declares what the pin declares, and extra="ignore" means a value handed
+        # in under one of the removed names is not kept at all. That is what makes the
+        # absence assertions above a guarantee rather than a coincidence, so it is asserted
+        # here instead of the old helper's behaviour.
+        assert type(package).model_config.get("extra") == "ignore", (
+            "Package must refuse to keep undeclared keys; under the library parent's "
+            "extra='allow' every name above would be stored and then serialized"
+        )
         for field in internal_fields:
-            assert field in internal_response, f"Internal field '{field}' missing from internal response"
+            assert field not in type(package).model_fields, f"'{field}' must not be declared on the wire model"
+        assert not package.model_extra, f"undeclared input was retained: {package.model_extra}"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         # Package has 1 required field (package_id) + any optional fields that are set
         # We set several optional fields above, so expect at least 1 field
         assert len(adcp_response) >= 1, f"AdCP response should have at least required fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
-
-        # Verify internal response has more fields than external (due to internal fields)
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 3, (
-            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
-        )
 
     def test_package_ignores_invalid_fields(self):
         """Test that Package schema ignores fields that don't exist in AdCP spec.
@@ -2234,11 +2238,28 @@ class TestAdCPContract:
         assert "products" in data  # Domain field present
 
     def test_package_excludes_internal_fields(self):
-        """Test that Package model_dump excludes internal fields from AdCP responses.
+        """An internal name handed to the response Package reaches no serialization path.
 
-        Internal fields like platform_line_item_id, tenant_id, etc. should NOT appear
-        in external AdCP responses but SHOULD appear in internal database operations.
+        The names below were once declared on this class as Field(exclude=True), and the
+        class also had a model_dump_internal() helper, so this test asserted they were
+        absent from the AdCP dump and present in the internal one. Both halves are obsolete:
+        the declarations are deleted because the pin does not declare them, and the helper is
+        deleted because a model has one serializer.
+
+        What replaced the old guarantee is not "the field is excluded" but "the class does
+        not keep what it did not declare", and that distinction is the whole point of this
+        test. The library parent sets extra="allow", so with the declarations removed and
+        nothing else changed, each name below became an EXTRA -- stored on the model and
+        then serialized, on model_dump, model_dump_json and to_wire alike. Deleting an
+        internal field from a wire model made it MORE exposed, not less. extra="ignore" on
+        the class is what closes it, and this test fails if that setting is lost.
+
+        All three paths are checked because this class is what the buyer receives: it is
+        built into response_packages in the create tool and into CreateMediaBuySuccess for
+        the admin approval path, which reaches the buyer and the webhook.
         """
+        from src.core.tools._wire import to_wire
+
         # Create package with internal fields
         pkg = Package(
             package_id="pkg_test_123",
@@ -2252,26 +2273,38 @@ class TestAdCPContract:
             metadata={"internal_key": "internal_value"},
         )
 
-        # External response (AdCP protocol) - should exclude internal fields
-        external_dump = pkg.model_dump()
-        assert "package_id" in external_dump
-        assert "platform_line_item_id" not in external_dump, "platform_line_item_id should NOT be in AdCP response"
-        assert "tenant_id" not in external_dump, "tenant_id should NOT be in AdCP response"
-        assert "media_buy_id" not in external_dump, "media_buy_id should NOT be in AdCP response"
-        assert "created_at" not in external_dump, "created_at should NOT be in AdCP response"
-        assert "updated_at" not in external_dump, "updated_at should NOT be in AdCP response"
-        assert "metadata" not in external_dump, "metadata should NOT be in AdCP response"
+        internal_names = [
+            "platform_line_item_id",
+            "tenant_id",
+            "media_buy_id",
+            "created_at",
+            "updated_at",
+            "metadata",
+        ]
 
-        # Internal database dump - should include internal fields
-        internal_dump = pkg.model_dump_internal()
-        assert "package_id" in internal_dump
-        assert "paused" in internal_dump  # Changed from status in adcp 2.12.0
-        assert "platform_line_item_id" in internal_dump, "platform_line_item_id SHOULD be in internal dump"
-        assert internal_dump["platform_line_item_id"] == "gam_987654321"
-        assert "tenant_id" in internal_dump, "tenant_id SHOULD be in internal dump"
-        assert internal_dump["tenant_id"] == "tenant_test"
-        assert "media_buy_id" in internal_dump, "media_buy_id SHOULD be in internal dump"
-        assert internal_dump["media_buy_id"] == "mb_test_456"
+        # Not retained on the model in the first place. This is the assertion that fails
+        # under the parent's extra="allow", and it fails BEFORE any dump, which is why it
+        # comes first: every path below is clean only because nothing was kept.
+        assert not pkg.model_extra, f"undeclared input was retained on the model: {pkg.model_extra}"
+        assert type(pkg).model_config.get("extra") == "ignore"
+
+        # All three serialization paths, not just model_dump. A field can be absent from one
+        # and present in another when a per-class hook shapes only that one; nothing shapes
+        # these, and that is the claim.
+        wire = to_wire(pkg)
+        paths = {
+            "model_dump": pkg.model_dump(),
+            "model_dump_json": json.loads(pkg.model_dump_json()),
+            "to_wire": wire,
+        }
+        for path_name, payload in paths.items():
+            assert "package_id" in payload, f"package_id missing from {path_name}"
+            for name in internal_names:
+                assert name not in payload, f"internal name '{name}' reached the buyer via {path_name}"
+
+        # And none of them is declared, so there is no exclude=True to rely on.
+        for name in internal_names:
+            assert name not in type(pkg).model_fields, f"'{name}' must not be declared on the wire model"
 
     def test_create_media_buy_asap_start_time(self):
         """Test that CreateMediaBuyRequest accepts 'asap' as start_time per AdCP v1.7.0."""

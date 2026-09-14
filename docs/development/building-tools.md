@@ -88,8 +88,8 @@ order. That proof is why the DTO extends the SDK model rather than being rebuilt
 ### The accepted shape is the declared shape
 
 `SalesAgentBaseModel` in `src/core/schemas/_base.py` sets `extra` from the settings object:
-`forbid` outside production and `ignore` in production. `BuyerRequest` adds a `mode="before"`
-validator, `_accept_only_declared_fields`, that calls `deep_strip_to_schema` in
+`forbid` outside production and `ignore` in production. `BuyerRequest` adds a before-validator,
+`_accept_only_declared_fields`, that calls `deep_strip_to_schema` in
 `src/core/schemas/_accepted_shape.py`. That function is a recursive JSON Schema walk that
 keeps only the fields the DTO declares, at every nesting depth. The following table gives the
 outcome per environment.
@@ -722,16 +722,25 @@ that still carried those keys, once. Every touched row was copied to a backup ta
 the downgrade restores the exact prior document. A validator that reshapes input runs
 on every read forever and hides which rows are legacy; a migration answers the question once.
 
-**No input reshaping on a wire model.** The four `mode="before"` validators that mutated their
-input on `Creative`, `PackageRequest`, `UpdateMediaBuyRequest`, and `Targeting` are deleted,
-because the accepted shape is what the fields declare. The one adopt validator that remains
-is `Creative._adopt_library_provenance`, which rebuilds the library's `Provenance` instance
-into the local subclass from its attributes. Pydantic validates a model-typed field by
-instance, so pydantic refuses the library instance without it, and the rebuild is a
-model-to-model step, never a dump. `Creative.assets` is inherited as the library's typed asset
-map. The stored blob is validated into that map at the one place a row becomes a model,
-`_coerce_blob_assets` in `src/core/tools/creatives/listing.py`. A stored value that does not
-validate is dropped with a warning rather than crashing the whole listing on one bad row.
+**No input reshaping on a wire model.** A model never coerces an older or looser buyer
+spelling on the way in. The before-validators that once did so on `Creative`,
+`PackageRequest`, `UpdateMediaBuyRequest`, and `Targeting` are deleted, and so is the one that
+wrapped a plain string as a `Provenance` tool. An undeclared buyer field follows the accepted
+shape rule under [pattern 7](#the-accepted-shape-is-the-declared-shape): rejected in
+development, dropped in production. A legacy stored shape is migrated once in the rows, as
+migration `f7c3a9d21b64` did for the flat geo keys, never reshaped on read.
+
+The before-validators that remain adopt a sibling generated class, which is a model-to-model
+step and never a dump. Pydantic validates a model-typed slot by instance, so a generated
+instance of the wrong class is refused without one. Each names the split it bridges:
+`Creative._adopt_library_provenance` rebuilds the library `Provenance` into the local
+subclass; `Creative._adopt_sibling_assets` reads the sync input's `Assets` list into the
+listing's; `PushNotificationConfig._narrow_base_block` rebuilds the push subtype of the
+authentication block from the base; and the pricing wrapper revalidates an SDK member into
+the local one. `Creative.assets` is inherited as the library's typed asset map. The stored
+blob is validated into that map at the one place a row becomes a model, `_coerce_blob_assets`
+in `src/core/tools/creatives/listing.py`. A stored value that does not validate is dropped
+with a warning rather than crashing the whole listing on one bad row.
 
 ## Settings
 
