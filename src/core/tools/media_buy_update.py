@@ -126,6 +126,33 @@ def _adcp_status_and_actions(buy: "MediaBuy", today: date | None = None) -> tupl
     return media_buy_status, valid_actions
 
 
+def _applied_instant() -> datetime:
+    """The instant a synchronously-applied update takes effect.
+
+    ``implementation_date`` is "ISO 8601 timestamp when changes take effect (null if
+    pending approval)" — the pinned ``media-buy/update-media-buy-response.json``,
+    ``/oneOf/0/properties/implementation_date`` (optional and nullable on that branch;
+    ``/oneOf/0/required`` is ``["media_buy_id", "revision"]``). So the field names THIS
+    update's effective instant, and the applied branches take it here, once, after their
+    writes and before the response they return.
+
+    It is NOT ``media_buys.updated_at``. That column is the parent ROW's last-modified
+    stamp, and it is this update's instant only when this update actually UPDATEd the
+    parent row. Two shapes do not: a ``packages`` entry carrying only ``package_id`` and
+    ``creative_ids``, and a ``creative_assignments`` entry. Both write
+    ``creative_assignments`` rows and nothing else on an ACTIVE buy — the
+    ``update_status(..., PENDING_CREATIVES)`` those branches can reach is gated on the
+    buy being ``draft`` with ``approved_at`` set — so ``updated_at`` still held an
+    EARLIER update's instant (measured against PostgreSQL: unchanged across such an
+    update, with no trigger on the column) and the buyer was told the change took effect
+    then. A row-derived value is only as good as the row having been written.
+
+    Both success sites call this rather than reading a clock inline, so the field has one
+    meaning and one place that states it.
+    """
+    return datetime.now(UTC)
+
+
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     """Derive the AdCP buyer-action names implied by an update request.
 
@@ -647,6 +674,10 @@ def _update_media_buy_impl(
                     message=f"Media buy {media_buy_id} updated successfully.",
                     revision=_post_action_revision,
                     media_buy_status=_post_action_mbs,  # AdCP 3.1: mirrors `status`
+                    # This branch IS the applied one, so it carries the instant it took
+                    # effect; _applied_instant states what the pinned field means and why
+                    # the row's updated_at is not it.
+                    implementation_date=_applied_instant(),
                     affected_packages=affected_pkgs,
                     valid_actions=_post_action_actions,
                     errors=property_list_unsupported_advisories(req.packages, adapter),
@@ -1198,6 +1229,11 @@ def _update_media_buy_impl(
                 message=f"Media buy {req.media_buy_id or ''} updated successfully.",
                 revision=_final_revision,
                 media_buy_status=_final_mbs,  # AdCP 3.1: mirrors `status`
+                # The applied instant (see _applied_instant). This branch reaches writes
+                # that never touch the parent row — a creative_ids or
+                # creative_assignments entry on an active buy writes assignment rows
+                # only — so the row's updated_at is not this update's instant here.
+                implementation_date=_applied_instant(),
                 affected_packages=affected_packages_list,
                 valid_actions=_final_actions,
                 errors=property_list_unsupported_advisories(req.packages, adapter),

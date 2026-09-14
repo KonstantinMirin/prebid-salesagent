@@ -13,32 +13,23 @@ separately in test_typed_error_wire_codes.py.
 """
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest, Principal
+from src.core.schemas import FormatId, MediaPackage, Principal
 
 
-def _make_request() -> CreateMediaBuyRequest:
-    """A valid create request that passes the mock's GAM-like validation."""
-    start_time = datetime.now(UTC)
-    end_time = start_time + timedelta(days=30)
-    return CreateMediaBuyRequest(
-        account={"account_id": "acct_test"},
-        brand={"domain": "example.com"},
-        idempotency_key="unit-test-key-mockraise-0001",
-        start_time=start_time,
-        end_time=end_time,
-        packages=[
-            PackageRequest(
-                product_id="prod_test",
-                budget=5000.0,
-                pricing_option_id="test_pricing",
-                format_ids=[FormatId(agent_url="https://creative.test", id="display_300x250")],
-            )
-        ],
-    )
+def _make_request() -> AdapterCreateRequest:
+    """What the create path hands an adapter, passing the mock's GAM-like validation.
+
+    The adapters take the carrier, not the buyer's ``CreateMediaBuyRequest``: the DTO
+    this used to build reached the mock's budget check as a null total, because the
+    summing the tool does for the carrier is not a field on a request.
+    """
+    return AdapterCreateRequest(brand={"domain": "example.com"}, total_budget=Decimal("5000.00"))
 
 
 def _make_packages() -> list[MediaPackage]:
@@ -116,9 +107,10 @@ class TestMockBudgetExhaustedRaiseSite:
         Mirrors the inventory-unavailable sibling below: both raises live in the
         same simulation force-error block, with the budget check evaluated first.
         """
+        from src.core.strategy import StrategyContext
+
         from src.core.database.models import Strategy as StrategyModel
         from src.core.exceptions import AdCPBudgetExhaustedError
-        from src.core.strategy import StrategyContext
 
         # In-memory simulation strategy: is_simulation + sim_ prefix + force flag.
         # should_force_error("budget_exceeded") reads config["force_budget_exceeded"].
@@ -160,9 +152,10 @@ class TestMockInventoryUnavailableRaiseSite:
     def test_simulation_force_inventory_unavailable_raises_inventory_error(self):
         """A simulation strategy with ``force_inventory_unavailable`` drives the
         immediate-create raise site."""
+        from src.core.strategy import StrategyContext
+
         from src.core.database.models import Strategy as StrategyModel
         from src.core.exceptions import AdCPProductUnavailableError
-        from src.core.strategy import StrategyContext
 
         # In-memory simulation strategy: is_simulation + sim_ prefix + force flag.
         strategy_model = StrategyModel(

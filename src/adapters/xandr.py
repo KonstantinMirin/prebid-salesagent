@@ -11,13 +11,13 @@ from typing import Any
 from dateutil import parser as dateutil_parser
 from pydantic import JsonValue
 
-from src.adapters.base import AdapterCreateResult, AdapterUpdateResult, AdServerAdapter
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult, AdapterUpdateResult, AdServerAdapter
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
 from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPInternalError
+from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
-    CreateMediaBuyRequest,
     MediaPackage,
     Principal,
     Product,
@@ -494,7 +494,7 @@ class XandrAdapter(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -510,15 +510,15 @@ class XandrAdapter(AdServerAdapter):
             )
 
             return self._build_create_success(
-                request,
                 f"xandr_pending_{task_id}",
                 packages,
                 creative_deadline_days=None,
             )
 
         try:
-            # Calculate total budget from package budgets (AdCP v2.2.0)
-            total_budget = request.get_total_budget()
+            # Already summed by whoever built the carrier (the request's packages, or the
+            # persisted row on an approval replay).
+            total_budget = request.total_budget
             days = (end_time.date() - start_time.date()).days
             if days == 0:
                 days = 1
@@ -527,16 +527,12 @@ class XandrAdapter(AdServerAdapter):
             if not self.advertiser_id:
                 raise AdCPConfigurationError()
 
-            # campaign_name is no longer on CreateMediaBuyRequest per AdCP spec
-            # Use brand domain as fallback
-            campaign_name = None
-            if hasattr(request, "brand") and request.brand:
-                brand = request.brand
-                if hasattr(brand, "domain"):
-                    campaign_name = brand.domain
-                elif isinstance(brand, dict):
-                    campaign_name = brand.get("domain")
-            campaign_name = campaign_name or "AdCP Campaign"
+            # The AdCP request carries no campaign name, so the brand's domain is the
+            # name. Through the canonical accessor: `brand` is the widened union
+            # (BrandReference | dict | str | None), and the four-branch narrowing this
+            # replaces was one of the hand-rolled copies brand_key_parts exists to
+            # delete — it read nothing off the bare-string branch.
+            campaign_name = brand_key_parts(request.brand)[0] or "AdCP Campaign"
 
             io_data = {
                 "insertion-order": {
@@ -590,7 +586,7 @@ class XandrAdapter(AdServerAdapter):
 
                 self._make_request("POST", "/line-item", li_data)
 
-            return self._build_create_success(request, f"xandr_io_{io_id}", packages)
+            return self._build_create_success(f"xandr_io_{io_id}", packages)
 
         except Exception as e:
             logger.error(f"Failed to create Xandr media buy: {e}")
@@ -795,77 +791,12 @@ class XandrAdapter(AdServerAdapter):
             logger.error(f"Failed to get Xandr media buys: {e}")
             return []
 
-    def update_package(self, media_buy_id: str, packages: list[dict[str, Any]]) -> dict[str, Any]:
-        """Update package settings for line items."""
-        if self._requires_manual_approval("update_package"):
-            task_id = self._create_human_task(
-                "update_package", {"media_buy_id": media_buy_id, "packages": packages, "principal": self.principal.name}
-            )
-
-            return {"status": "accepted", "task_id": task_id, "detail": "Package updates require manual approval"}
-
-        try:
-            updated_packages = []
-
-            for package_update in packages:
-                package_id = package_update.get("package_id")
-                if not package_id or not package_id.startswith("xandr_li_"):
-                    continue
-
-                li_id = package_id.replace("xandr_li_", "")
-
-                # Get current line item
-                current = self._make_request("GET", f"/line-item?id={li_id}")
-                li = current["response"]["line-item"]
-
-                # Apply updates
-                if "active" in package_update:
-                    li["state"] = "active" if package_update["active"] else "inactive"
-
-                if "budget" in package_update:
-                    li["lifetime_budget"] = float(package_update["budget"])
-                    # Recalculate daily budget
-                    days = (dateutil_parser.parse(li["end_date"]) - dateutil_parser.parse(li["start_date"])).days
-                    li["daily_budget"] = float(package_update["budget"]) / days if days > 0 else 0
-
-                if "impressions" in package_update:
-                    # Update revenue value based on new impression goal
-                    if package_update.get("budget"):
-                        li["revenue_value"] = package_update["budget"] / package_update["impressions"] * 1000
-
-                if "pacing" in package_update:
-                    # Map pacing to Xandr pacing type
-                    pacing_map = {"even": "even", "asap": "aggressive", "front_loaded": "accelerated"}
-                    li["pacing"] = pacing_map.get(package_update["pacing"], "even")
-
-                # Update line item
-                self._make_request("PUT", f"/line-item?id={li_id}", {"line-item": li})
-
-                # Handle creative updates
-                if "creative_ids" in package_update:
-                    # Remove existing associations
-                    current_creatives = self._make_request("GET", f"/line-item/{li_id}/creative")
-                    for creative in current_creatives.get("response", {}).get("creatives", []):
-                        self._make_request("DELETE", f"/line-item/{li_id}/creative/{creative['id']}")
-
-                    # Add new associations
-                    for creative_id in package_update["creative_ids"]:
-                        if creative_id.startswith("xandr_creative_"):
-                            xandr_creative_id = creative_id.replace("xandr_creative_", "")
-                            self._make_request("POST", f"/line-item/{li_id}/creative/{xandr_creative_id}")
-
-                updated_packages.append({"package_id": package_id, "status": "updated"})
-
-            return {
-                "status": "accepted",
-                "implementation_date": datetime.now(UTC).isoformat(),
-                "detail": f"Updated {len(updated_packages)} packages in Xandr",
-                "affected_packages": [p["package_id"] for p in updated_packages],
-            }
-
-        except Exception as e:
-            logger.error(f"Failed to update Xandr packages: {e}")
-            raise
+    # update_package: deleted. It answered to no caller (nothing in src/, tests/ or
+    # scripts/ named it, and AdServerAdapter declares no such method), and it returned
+    # a hand-built dict — the last place in src/adapters/ where a seller-facing shape,
+    # the update response's effective-date field included, was assembled by an adapter
+    # rather than by the tool off the persisted row. The package path a caller does
+    # reach is update_media_buy.
 
     def resume_media_buy(self, media_buy_id: str) -> bool:
         """Resume paused insertion order in Xandr."""

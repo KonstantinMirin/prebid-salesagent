@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, ClassVar, TypeVar
 
 if TYPE_CHECKING:
     from src.core.schemas import Snapshot, Targeting
 
+from adcp.types import BrandReference
 from adcp.types.aliases import Package as ResponsePackage
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from rich.console import Console
@@ -25,6 +28,7 @@ from src.core.schemas import (
     CreateMediaBuyRequest,
     MediaPackage,
     Principal,
+    PushNotificationConfig,
     ReportingPeriod,
 )
 from src.core.validation_helpers import package_field_path
@@ -170,6 +174,95 @@ class BaseProductConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class AdapterCreateRequest(BaseModel):
+    """What the create path hands an adapter: the buy to place, not the buyer's request.
+
+    The mirror of ``AdapterCreateResult`` on the way in. A ``CreateMediaBuyRequest`` is
+    the ACCEPTED SHAPE OF A REQUEST — it requires ``idempotency_key`` and ``account``
+    because a buyer sending one must supply them. An adapter reads neither, and the
+    approval executor is not a request at all: it replays a buy the seller already
+    accepted, off the row. Handing the DTO to adapters forced that replay to rebuild one
+    and to FABRICATE an idempotency key for rows stored before the field was required —
+    a value no buyer ever sent, in a field whose whole meaning is "what the buyer sent".
+
+    So this carries exactly what the adapters read, and nothing a buyer must send:
+
+    * ``brand`` — the campaign name every adapter derives, through ``brand_key_parts``.
+    * ``po_number`` — the buy's id prefix and the order/campaign name.
+    * ``total_budget`` — one number, already summed. ``CreateMediaBuyRequest`` computes
+      it from its packages (``get_total_budget``); the replay reads the row's column.
+    * ``already_approved`` — the approval executor's replay flag, a declared field
+      instead of the ``setattr(request, "_already_approved", True)`` it replaces.
+    * ``push_notification_config`` — GAM's webhook target for background order approval.
+
+    A field an adapter does not read does not belong here; ``extra="forbid"`` says so.
+
+    There are exactly TWO sources a carrier is ever built from — a buyer's validated
+    request, and the same request as the row persisted it — so there are exactly two
+    constructors, both below, and no caller builds one by hand. That is not a style
+    preference: the approval replay built its own and silently omitted
+    ``push_notification_config``, so a buy approved off the queue never told the buyer
+    its order had been approved. Neither constructor NAMES the buyer-supplied fields;
+    both read ``_buyer_supplied_fields()``, which is derived from the declared fields.
+    A field added to this class therefore reaches both sources with no further edit,
+    which is what keeps the two from disagreeing again.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    brand: BrandReference | dict[str, Any] | str | None = None
+    po_number: str | None = None
+    total_budget: Decimal = Decimal(0)
+    already_approved: bool = False
+    push_notification_config: PushNotificationConfig | None = None
+
+    #: The two fields the SELLER supplies rather than the buyer: ``total_budget`` is
+    #: summed by the caller (from the request's packages, or off the row's column), and
+    #: ``already_approved`` is the replay flag. Everything else comes from the buyer
+    #: under its own name, which is also the key the persisted dump stores it under.
+    _SELLER_SUPPLIED: ClassVar[frozenset[str]] = frozenset({"total_budget", "already_approved"})
+
+    @classmethod
+    def _buyer_supplied_fields(cls) -> tuple[str, ...]:
+        """The declared fields a buyer supplies, in declaration order."""
+        return tuple(name for name in cls.model_fields if name not in cls._SELLER_SUPPLIED)
+
+    @classmethod
+    def from_buyer_request(cls, req: CreateMediaBuyRequest) -> AdapterCreateRequest:
+        """Project a buyer's validated request onto what the adapters read.
+
+        ``already_approved`` is false by definition here: a request arriving from a
+        buyer has not been through the approval queue.
+        """
+        buyer_supplied = {name: getattr(req, name) for name in cls._buyer_supplied_fields()}
+        return cls(total_budget=req.get_total_budget(), **buyer_supplied)
+
+    @classmethod
+    def from_persisted_request(
+        cls,
+        raw_request: Mapping[str, Any],
+        *,
+        total_budget: Decimal,
+    ) -> AdapterCreateRequest:
+        """Project a PERSISTED request — ``media_buys.raw_request`` — onto the same shape.
+
+        For the approval executor, which replays a buy the seller already accepted. It
+        cannot go through ``from_buyer_request``: that takes a ``CreateMediaBuyRequest``,
+        and rebuilding the DTO from a row is exactly what forced the executor to
+        fabricate an ``idempotency_key`` no buyer ever sent. So the replay reads the dump
+        directly — ``raw_request`` is ``CreateMediaBuyRequest.model_dump(mode="json")``
+        as ``MediaBuyRepository.create_from_request`` wrote it, so the keys are the
+        buyer's field names and each value validates back through this model's own
+        annotations.
+
+        ``total_budget`` is passed rather than read from the dump: the row's own budget
+        column is the summed figure, and it is what the seller accepted.
+        ``already_approved`` is true by definition — this buy came through the queue.
+        """
+        buyer_supplied = {name: raw_request.get(name) for name in cls._buyer_supplied_fields()}
+        return cls(total_budget=total_budget, already_approved=True, **buyer_supplied)
+
+
 class AdapterCreateResult(BaseModel):
     """What an adapter's ``create_media_buy`` hands back to the tool.
 
@@ -179,6 +272,11 @@ class AdapterCreateResult(BaseModel):
     line-item ids) without a wire model having to strip it. It carries exactly what the
     tool reads: a workflow step an adapter opens is tracked by the workflow tables, not
     handed back here.
+
+    ``extra="forbid"`` is what makes "exactly what the tool reads" a check rather than a
+    claim: a kwarg no tool reads raises at construction instead of being dropped. One
+    adapter kept passing the update response's effective-date field after the carrier
+    split precisely because nothing refused it.
     """
 
     # A carrier, never on the wire: an unknown keyword is a stale field from a deleted
@@ -198,6 +296,8 @@ class AdapterUpdateResult(BaseModel):
     Read by ``media_buy_update`` after the ad server is changed; the tool builds the
     buyer's ``UpdateMediaBuySuccess`` itself from the re-read row. Never serialized to
     a buyer.
+
+    ``extra="forbid"`` for the same reason as ``AdapterCreateResult``.
     """
 
     # Same reason as AdapterCreateResult: a stale keyword fails loudly.
@@ -322,7 +422,6 @@ class AdServerAdapter(ABC):
 
     def _build_create_success(
         self,
-        request: CreateMediaBuyRequest,
         media_buy_id: str,
         packages: list[MediaPackage],
         *,
@@ -338,8 +437,10 @@ class AdServerAdapter(ABC):
         and package responses. If package_responses is not provided, builds them
         from the packages list.
 
+        Takes no request: the result is built from the ad server's own ids, and the
+        parameter this used to declare was read by nothing.
+
         Args:
-            request: The original create media buy request.
             media_buy_id: The generated media buy ID.
             packages: List of MediaPackage objects from the request.
             paused: Whether packages should be marked as paused.
@@ -408,7 +509,7 @@ class AdServerAdapter(ABC):
 
     def validate_media_buy_request(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -464,7 +565,7 @@ class AdServerAdapter(ABC):
     @abstractmethod
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -473,7 +574,7 @@ class AdServerAdapter(ABC):
         """Creates a new media buy on the ad server from selected packages.
 
         Args:
-            request: Full create media buy request
+            request: The buy to place (never the buyer's DTO — see AdapterCreateRequest)
             packages: Simplified package models for adapter
             start_time: Campaign start time
             end_time: Campaign end time

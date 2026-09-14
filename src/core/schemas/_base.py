@@ -1168,10 +1168,10 @@ class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySucces
     # Pydantic allows subclass override at runtime but mypy doesn't recognize this
     affected_packages: list[AffectedPackage] | None = None
 
-    # SDK 5.7 wrongly declares buyer_ref on the parent (removed from AdCP 3.1
-    # update-media-buy-response; pinned 04f59d2d5). Override to keep it off the
-    # wire. SDK bug: adcontextprotocol/adcp-client-python#950.
-    buyer_ref: str | None = Field(default=None, exclude=True)
+    # buyer_ref: the SDK-5.7 parent wrongly declared it (removed from AdCP 3.1
+    # update-media-buy-response; SDK bug adcontextprotocol/adcp-client-python#950,
+    # excluded here by #1417); adcp 6.6 no longer declares it, so no override needed
+    # — the create side lost its twin in the 6.6 bump and this one was missed.
 
     # Non-fatal advisories — see class docstring for the spec basis.
     errors: list[Error] | None = Field(

@@ -5,16 +5,18 @@ Tests that Kevel, Triton, and Xandr adapters all return packages with package_id
 fixing the "Adapter did not return package_id" error.
 """
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+from decimal import Decimal
 from unittest.mock import Mock, patch
 
 import pytest
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.kevel import Kevel
 from src.adapters.triton_digital import TritonDigital
 from src.adapters.vendor_http import VendorHttpClient
 from src.adapters.xandr import XandrAdapter
-from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage
+from src.core.schemas import FormatId, MediaPackage
 
 
 @pytest.fixture
@@ -28,23 +30,14 @@ def mock_principal():
 
 @pytest.fixture
 def sample_request():
-    """Sample CreateMediaBuyRequest."""
-    from tests.helpers.adcp_factories import create_test_package_request
+    """What the create path hands an adapter.
 
-    start_time = datetime.now(UTC)
-    end_time = start_time + timedelta(days=30)
-    # adcp 3.6.0: brand_manifest → brand (BrandReference with domain field)
-    return CreateMediaBuyRequest(
-        account={"account_id": "acct_test"},
-        brand={"domain": "testbrand.com"},
-        idempotency_key="unit-test-key-adapters-0001",
-        packages=[
-            create_test_package_request(product_id="prod_123"),
-            create_test_package_request(product_id="prod_456"),
-        ],
-        start_time=start_time,
-        end_time=end_time,
-    )
+    The carrier, not a ``CreateMediaBuyRequest``: an adapter takes the buy to place.
+    ``total_budget`` is already summed by the caller (the tool sums the request's
+    packages; the approval replay reads the row's column), so an adapter that divides
+    by it — Xandr's daily-budget split — gets a number rather than a null.
+    """
+    return AdapterCreateRequest(brand={"domain": "testbrand.com"}, total_budget=Decimal("10000.00"))
 
 
 @pytest.fixture

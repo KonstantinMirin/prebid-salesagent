@@ -19,6 +19,7 @@ from typing import Any
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterCreateRequest,
     AdapterCreateResult,
     AdapterUpdateResult,
     AdServerAdapter,
@@ -48,7 +49,6 @@ from src.core.schemas import (
     AffectedPackage,
     AssetStatus,
     CheckMediaBuyStatusResponse,
-    CreateMediaBuyRequest,
     DeliveryTotals,
     MediaPackage,
     Principal,
@@ -276,7 +276,7 @@ class BroadstreetAdapter(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -353,7 +353,7 @@ class BroadstreetAdapter(AdServerAdapter):
                 request=request, packages=packages, start_time=start_time, end_time=end_time, media_buy_id=media_buy_id
             )
 
-            return self._build_create_success(request, media_buy_id, packages, paused=True)
+            return self._build_create_success(media_buy_id, packages, paused=True)
 
         # Build campaign name
         first_product_name = next(iter(products_map.values()), {}).get("name", "Campaign")
@@ -391,7 +391,6 @@ class BroadstreetAdapter(AdServerAdapter):
         # Core layer (media_buy_create.py) stores this as package_config["platform_line_item_id"]
         campaign_id = self._extract_campaign_id(media_buy_id)
         return self._build_create_success(
-            request,
             media_buy_id,
             packages,
             platform_line_item_ids={pkg.package_id: campaign_id for pkg in packages},

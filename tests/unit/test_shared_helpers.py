@@ -156,11 +156,6 @@ def _make_media_package(
     return pkg
 
 
-def _make_create_request() -> MagicMock:
-    """Create a minimal CreateMediaBuyRequest-like object."""
-    return MagicMock()
-
-
 def _make_adapter_instance() -> Any:
     """Instantiate a concrete AdServerAdapter subclass for testing base methods.
 
@@ -227,11 +222,9 @@ class TestBuildCreateSuccess:
     def test_basic_success_response(self):
         """Creates success with media_buy_id, packages, and deadline."""
         adapter = _make_adapter_instance()
-        request = _make_create_request()
         packages = [_make_media_package(package_id="p1")]
 
         result = adapter._build_create_success(
-            request=request,
             media_buy_id="mb-123",
             packages=packages,
         )
@@ -245,7 +238,6 @@ class TestBuildCreateSuccess:
         adapter = _make_adapter_instance()
         before = datetime.now(UTC)
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
         )
@@ -260,7 +252,6 @@ class TestBuildCreateSuccess:
         adapter = _make_adapter_instance()
         before = datetime.now(UTC)
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
             creative_deadline_days=5,
@@ -275,7 +266,6 @@ class TestBuildCreateSuccess:
         """paused=True propagates to generated package responses."""
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
             paused=True,
@@ -290,7 +280,6 @@ class TestBuildCreateSuccess:
         adapter = _make_adapter_instance()
         pre_built = [ResponsePackage(package_id="custom-p1", paused=False)]
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],  # these should be ignored
             package_responses=pre_built,
@@ -308,7 +297,6 @@ class TestBuildCreateSuccess:
         """
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
         )
@@ -324,7 +312,6 @@ class TestBuildCreateSuccess:
 
         adapter = _make_adapter_instance()
         result = adapter._build_create_success(
-            request=_make_create_request(),
             media_buy_id="mb-1",
             packages=[_make_media_package()],
         )

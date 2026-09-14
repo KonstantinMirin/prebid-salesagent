@@ -105,7 +105,7 @@ from enum import StrEnum
 
 from sqlalchemy.exc import SQLAlchemyError
 
-from src.adapters.base import AdapterCreateResult
+from src.adapters.base import AdapterCreateRequest, AdapterCreateResult
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager
 from src.core.database.models import AdapterConfig, CurrencyLimit, MediaBuy, PersistedMediaBuyStatus, Tenant
@@ -547,7 +547,7 @@ def _pre_validate_package_creatives(
 
 
 def _execute_adapter_media_buy_creation(
-    request: CreateMediaBuyRequest,
+    request: AdapterCreateRequest,
     packages: list[MediaPackage],
     start_time: datetime,
     end_time: datetime,
@@ -560,7 +560,10 @@ def _execute_adapter_media_buy_creation(
     to ensure consistent adapter behavior across all adapters (GAM, Mock, Kevel, etc.).
 
     Args:
-        request: The CreateMediaBuyRequest with all campaign details
+        request: The buy to place, as the adapters read it. The buyer's DTO does not
+            come through here: the approval flow replays a row, not a request, and
+            asking it to rebuild a ``CreateMediaBuyRequest`` is what made it fabricate
+            an idempotency key.
         packages: List of Package objects with product/creative configuration
         start_time: Resolved campaign start datetime
         end_time: Resolved campaign end datetime
@@ -906,41 +909,40 @@ def execute_approved_media_buy(
             # detaches when this block commits); the executor acts on it below.
             buy_account_id = media_buy.account_id
 
-            # Reconstruct CreateMediaBuyRequest from raw_request
-            try:
-                # Strip package_id from packages - it was added for UI tracking but isn't
-                # part of the AdCP CreateMediaBuyRequest schema (package_id is assigned by system)
-                raw_request_data = dict(media_buy.raw_request)
-                if "packages" in raw_request_data:
-                    for pkg in raw_request_data["packages"]:
-                        pkg.pop("package_id", None)
+            # ``account`` is resolved from the PERSISTED ROW, never synthesised:
+            # MediaBuy.account_id is what the boundary resolved this buy's reference to,
+            # so it is the same account. A row with no account_id is a seller-side store
+            # defect and is refused (No Quiet Failures), not given a stand-in; the
+            # census of such rows is a ticket question, not a code path.
+            if buy_account_id is None:
+                # The buy's id is a fact, so it rides the declared details class;
+                # nothing here was caught, so there is no cause to chain.
+                raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
 
-                # Buys stored before idempotency_key became required carry none in
-                # raw_request. This is an internal replay of an already-validated
-                # request (the approval path never consults the idempotency cache),
-                # so a synthetic spec-shaped key keeps reconstruction valid.
-                raw_request_data.setdefault("idempotency_key", f"legacy-approval-{media_buy_id}")
-
-                # ``account`` is required since salesagent-prkv.68, so buys stored before it
-                # carry none in raw_request. Read off the PERSISTED ROW, never synthesised:
-                # MediaBuy.account_id is what the boundary resolved this buy's reference to,
-                # so it is the same account. A row with no account_id is a seller-side store
-                # defect and is refused (No Quiet Failures), not given a stand-in; the
-                # census of such rows is a ticket question, not a code path.
-                if buy_account_id is None:
-                    # The buy's id is a fact, so it rides the declared details class;
-                    # nothing here was caught, so there is no cause to chain.
-                    raise AdCPPersistedStateError(details=ConfigurationDetails(media_buy_id=media_buy_id))
-                if not raw_request_data.get("account"):
-                    raw_request_data["account"] = {"account_id": buy_account_id}
-
-                request = CreateMediaBuyRequest(**raw_request_data)
-                # Mark this request as already approved to skip adapter's approval workflow
-                setattr(request, "_already_approved", True)  # noqa: B010
-            except ValidationError as ve:
-                error_msg = f"Failed to reconstruct request: {format_validation_error(ve)}"
-                logger.error(f"[APPROVAL] {error_msg}")
-                return ApprovalResult.failed(error_msg)
+            # What the adapter reads, built from the ROW through the carrier's own
+            # persisted-request constructor. This replay is not a request: it reruns a
+            # buy the seller already accepted, so it builds the adapter carrier and
+            # never a CreateMediaBuyRequest. Rebuilding the DTO forced two inventions
+            # that are gone — a synthetic idempotency key, prefixed to look internal,
+            # for rows stored before the field was required, and an account re-injected
+            # into a copy of raw_request — plus a package_id strip and a ValidationError
+            # branch that existed only to satisfy the DTO.
+            #
+            # It does not hand-build the carrier either. This site once did, and it
+            # omitted push_notification_config: already_approved=True makes GAM skip its
+            # manual-approval branch and create the order itself, and when approve_order
+            # comes back NO_FORECAST_YET, GAM reads that config for the webhook target it
+            # tells the buyer the approval on. With it dropped, a buy approved off the
+            # queue was never told its order had been approved. from_persisted_request
+            # derives the field list from the carrier's declared fields, so this site
+            # cannot omit the next one either.
+            #
+            # ``total_budget`` comes off the row's own column (written from the request's
+            # package sum when the buy was created), not from raw_request.
+            request = AdapterCreateRequest.from_persisted_request(
+                media_buy.raw_request,
+                total_budget=media_buy.budget or Decimal(0),
+            )
 
             # Load packages from media_packages table
             # FIXME(#1119): migrate to uow.media_buys.get_packages()
@@ -3363,10 +3365,16 @@ async def _create_media_buy_impl(
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
         _pre_validate_package_creatives(packages, tenant.tenant_id, principal_id, ctx_manager, step)
 
+        # What the adapters read, projected off the buyer's request ONCE and handed to
+        # both the pre-validation and the creation call — the same type the approval
+        # replay builds from the row, so the two paths cannot give an adapter different
+        # material.
+        adapter_request = AdapterCreateRequest.from_buyer_request(req)
+
         # Pre-validate adapter-specific constraints (pricing models, budget limits)
         # This runs regardless of dry_run so adapter restrictions are always enforced.
         pre_creation_problems: list[ErrorProblem] = adapter.validate_media_buy_request(
-            req, packages, start_time, end_time, package_pricing_info
+            adapter_request, packages, start_time, end_time, package_pricing_info
         )
         if pre_creation_problems:
             logger.error(f"[PRE-VALIDATE] Adapter validation failed: {pre_creation_problems}")
@@ -3385,7 +3393,7 @@ async def _create_media_buy_impl(
         # This uses the same function as manual approval to ensure consistency across adapters
         try:
             response = _execute_adapter_media_buy_creation(
-                req, packages, start_time, end_time, package_pricing_info, identity
+                adapter_request, packages, start_time, end_time, package_pricing_info, identity
             )
         except Exception:
             raise

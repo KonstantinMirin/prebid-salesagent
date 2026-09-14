@@ -7,9 +7,10 @@ Extends BaseWorkflowManager with Broadstreet-specific workflow logic.
 from datetime import datetime
 from typing import Any
 
+from src.adapters.base import AdapterCreateRequest
 from src.adapters.base_workflow import BaseWorkflowManager
 from src.core.helpers.brand_key import brand_key_parts
-from src.core.schemas import CreateMediaBuyRequest, MediaPackage
+from src.core.schemas import MediaPackage
 
 
 class BroadstreetWorkflowManager(BaseWorkflowManager):
@@ -62,7 +63,7 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
 
     def create_manual_campaign_workflow_step(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -92,8 +93,7 @@ class BroadstreetWorkflowManager(BaseWorkflowManager):
         if request.po_number:
             campaign_name = f"AdCP-{request.po_number}"
 
-        # Calculate total budget
-        total_budget = request.get_total_budget()
+        total_budget = request.total_budget
 
         action_details = {
             "action_type": "create_broadstreet_campaign",

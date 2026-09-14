@@ -26,6 +26,7 @@ from flask import Flask
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterCreateRequest,
     AdapterCreateResult,
     AdapterUpdateResult,
     AdServerAdapter,
@@ -82,7 +83,6 @@ from src.core.schemas import (
     AffectedPackage,
     AssetStatus,
     CheckMediaBuyStatusResponse,
-    CreateMediaBuyRequest,
     MediaPackage,
     ReportingPeriod,
 )
@@ -353,7 +353,7 @@ class GoogleAdManager(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -546,7 +546,7 @@ class GoogleAdManager(AdServerAdapter):
         # Check if manual approval is required for media buy creation
         # Skip approval workflow if this media buy was already manually approved
         # (when called from execute_approved_media_buy, we're in "post-approval execution" mode)
-        already_approved = getattr(request, "_already_approved", False)
+        already_approved = request.already_approved
         if self._requires_manual_approval("create_media_buy") and not already_approved:
             self.log("[yellow]Manual approval mode - creating workflow step for human intervention[/yellow]")
 
@@ -565,7 +565,6 @@ class GoogleAdManager(AdServerAdapter):
 
             if step_id:
                 return self._build_create_success(
-                    request,
                     media_buy_id,
                     packages,
                     creative_deadline_days=None,
@@ -620,7 +619,7 @@ class GoogleAdManager(AdServerAdapter):
         order_name = truncate_name_with_suffix(full_order_name, GAM_NAME_LIMITS["max_order_name_length"])
 
         # Calculate total budget from package budgets (AdCP v2.2.0)
-        total_budget_amount = request.get_total_budget()
+        total_budget_amount = request.total_budget
 
         order_id = self.orders_manager.create_order(
             order_name=order_name,
@@ -697,17 +696,13 @@ class GoogleAdManager(AdServerAdapter):
                         f"[yellow]Order {order_id} forecasting not ready - starting background approval task[/yellow]"
                     )
 
-                    # Get webhook URL from push notification config
-                    # Note: push_notification_config is not part of AdCP library's CreateMediaBuyRequest
-                    # Use getattr for backward compatibility with internal extensions
+                    # Get webhook URL from push notification config — a declared field on
+                    # AdapterCreateRequest, so the getattr this replaces (which silently
+                    # returned None for a typo) is gone.
                     webhook_url = None
-                    push_config = getattr(request, "push_notification_config", None)
+                    push_config = request.push_notification_config
                     if push_config:
-                        webhook_url = (
-                            push_config.get("url")
-                            if isinstance(push_config, dict)
-                            else getattr(push_config, "url", None)
-                        )
+                        webhook_url = str(push_config.url)
 
                     # Get principal_id from adapter's principal object
                     principal_id = self.principal.principal_id if hasattr(self.principal, "principal_id") else "unknown"
@@ -758,7 +753,6 @@ class GoogleAdManager(AdServerAdapter):
 
             # media_buy_create.py persists platform_line_item_ids onto the MediaPackage rows
             return self._build_create_success(
-                request,
                 order_id,
                 packages,
                 creative_deadline_days=None,
@@ -767,7 +761,6 @@ class GoogleAdManager(AdServerAdapter):
 
         # media_buy_create.py persists platform_line_item_ids onto the MediaPackage rows
         return self._build_create_success(
-            request,
             order_id,
             packages,
             creative_deadline_days=None,

@@ -19,9 +19,10 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
+from src.adapters.base import AdapterCreateResult
 from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
-from src.core.schemas import CreateMediaBuySuccess, Principal
+from src.core.schemas import Principal
 from src.core.tools.media_buy_create import ApprovalOutcome
 
 # Who approved, and when. Passed in by the caller and written by the same
@@ -48,10 +49,11 @@ def _make_mock_media_buy():
     mb.end_time = datetime.now(UTC) + timedelta(days=8)
     mb.budget = Decimal("5000.00")
     mb.currency = "USD"
-    # The PERSISTED request, which execute_approved_media_buy reconstructs through
-    # CreateMediaBuyRequest. account is spec-required (create-media-buy-request.json
-    # /required), so a stored payload without one no longer reconstructs — which is exactly
-    # what a real pending-approval row written by a conformant request will carry.
+    # The PERSISTED request. execute_approved_media_buy no longer rebuilds a
+    # CreateMediaBuyRequest out of it: it reads the brand and po_number it needs for the
+    # adapter carrier, takes the total off ``budget`` above, and resolves the account
+    # from the row's own account_id. A stored payload is a record, not a request, so the
+    # keys a request must carry (account, idempotency_key) are no longer consulted here.
     mb.raw_request = {
         "brand": {"domain": "testbrand.com"},
         "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
@@ -124,7 +126,7 @@ class TestExecuteApprovedStatusUpdate:
             platform_mappings={},
         )
 
-        adapter_response = CreateMediaBuySuccess.carrier(
+        adapter_response = AdapterCreateResult(
             media_buy_id="mb_test_001",
             packages=[],
         )

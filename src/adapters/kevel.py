@@ -5,7 +5,13 @@ from typing import Any
 
 from pydantic import JsonValue
 
-from src.adapters.base import AdapterCreateResult, AdapterUpdateResult, AdServerAdapter, CreativeEngineAdapter
+from src.adapters.base import (
+    AdapterCreateRequest,
+    AdapterCreateResult,
+    AdapterUpdateResult,
+    AdServerAdapter,
+    CreativeEngineAdapter,
+)
 from src.adapters.constants import require_supported_update_action
 from src.adapters.utils.pricing import resolve_package_rate
 from src.adapters.vendor_http import VendorHttpClient, require_vendor
@@ -176,7 +182,7 @@ class Kevel(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -272,7 +278,7 @@ class Kevel(AdServerAdapter):
         # Use the actual campaign ID from Kevel
         media_buy_id = f"kevel_{campaign_id}"
 
-        return self._build_create_success(request, media_buy_id, packages)
+        return self._build_create_success(media_buy_id, packages)
 
     def add_creative_assets(
         self, media_buy_id: str, assets: list[dict[str, Any]], today: datetime

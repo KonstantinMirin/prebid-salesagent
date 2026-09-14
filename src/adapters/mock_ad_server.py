@@ -10,6 +10,7 @@ from pydantic import Field
 
 from src.adapters.base import (
     AdapterCapabilities,
+    AdapterCreateRequest,
     AdapterCreateResult,
     AdapterUpdateResult,
     AdServerAdapter,
@@ -41,7 +42,6 @@ from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
     AssetStatus,
     CheckMediaBuyStatusResponse,
-    CreateMediaBuyRequest,
     DeliveryTotals,
     MediaPackage,
     ReportingPeriod,
@@ -174,7 +174,7 @@ class MockAdServer(AdServerAdapter):
 
     def validate_media_buy_request(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -229,7 +229,7 @@ class MockAdServer(AdServerAdapter):
                 )
 
         # Budget validation (AdCP v2.2.0: sum package budgets)
-        budget_amount = request.get_total_budget()
+        budget_amount = request.total_budget
         if budget_amount > 0:
             if budget_amount > 1000000:
                 problems.append(
@@ -575,7 +575,7 @@ class MockAdServer(AdServerAdapter):
 
     def create_media_buy(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -731,7 +731,7 @@ class MockAdServer(AdServerAdapter):
 
     def _create_media_buy_async(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -773,7 +773,7 @@ class MockAdServer(AdServerAdapter):
 
     def _create_media_buy_sync_with_delay(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -811,7 +811,7 @@ class MockAdServer(AdServerAdapter):
 
     def _create_media_buy_immediate(
         self,
-        request: CreateMediaBuyRequest,
+        request: AdapterCreateRequest,
         packages: list[MediaPackage],
         start_time: datetime,
         end_time: datetime,
@@ -927,7 +927,6 @@ class MockAdServer(AdServerAdapter):
 
         self.log(f"[DEBUG] MockAdapter: Returning {len(packages)} packages in response")
         return self._build_create_success(
-            request,
             media_buy_id,
             packages,
             include_product_id=True,
