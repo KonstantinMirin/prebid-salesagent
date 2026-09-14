@@ -44,14 +44,20 @@ Available mocks via env.mock:
     "send_notifications"  -- _send_creative_notifications (from _workflow); runs the REAL
                              function by default, so its webhook/approval-mode guard is graded
     "slack_notifier"      -- get_slack_notifier (src.services.slack_notifier), the Slack sender
-                             that function reaches: "was Slack sent" is read off this mock
+                             that function reaches. Read it through
+                             ``env.slack_notified_creatives``, not directly: the accessor is
+                             what answers "was Slack sent, and about what" over e2e_rest too,
+                             where this mock is in the wrong process
     "audit_log"           -- _audit_log_sync (from _workflow)
-    "ai_review_executor"  -- _ai_review_executor (lazy import in _processing.py, ai-powered branch)
+    "ai_review_executor"  -- _ai_review_executor (lazy import in _processing.py, ai-powered
+                             branch). Read it through ``env.ai_reviews_taken_up(awaiting=...)``,
+                             for the same reason.
 """
 
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -119,6 +125,107 @@ class CommittedAIReview:
     #: therefore reads "approved" from a review that actually blew up
     #: -- so the absence of this key is part of the grade.
     error: dict[str, Any] | None = None
+
+
+#: ``event_type`` src/services/slack_notifier.py stamps on every Slack send
+#: (``send_message`` -> ``WebhookDelivery(event_type=...)``).
+_SLACK_EVENT_TYPE = "slack.notification"
+
+#: The operator-visible Creative ID field ``notify_creative_pending`` renders into
+#: the Block Kit payload. Reading the rendered field rather than a substring search
+#: over the whole document keeps "Slack named THIS creative" from being satisfied by
+#: a creative id that happens to appear in a review URL for a different one.
+_SLACK_CREATIVE_ID_FIELD = re.compile(r"\*Creative ID:\*\n`([^`]+)`")
+
+#: How long the e2e AI-review read-back waits for the background reviewer's verdict.
+#: Matches ``await_ai_review``'s bound, which joins the same job in process.
+_AI_REVIEW_WAIT_SECONDS = 30.0
+_AI_REVIEW_POLL_SECONDS = 0.25
+
+
+def _slack_creative_ids(payload: Any) -> list[str]:
+    """Creative ids named in one Slack delivery payload's Block Kit fields."""
+    if not isinstance(payload, dict):
+        return []
+    return [
+        match.group(1)
+        for block in payload.get("blocks", [])
+        if isinstance(block, dict)
+        for field in block.get("fields", [])
+        if isinstance(field, dict)
+        for match in [_SLACK_CREATIVE_ID_FIELD.search(str(field.get("text", "")))]
+        if match is not None
+    ]
+
+
+def _e2e_slack_notified_creatives(self: CreativeSyncEnv) -> list[str]:
+    """Slack sends the SERVER performed, read off ``webhook_deliveries``.
+
+    The mock the in-process branch counts lives in THIS process; the sync runs in
+    the Docker server, so counting it over e2e_rest would report zero on every
+    branch — a negative invariant (INV-2, INV-6) would pass vacuously and a
+    positive one (INV-3) would fail for the wrong reason.
+
+    What the server leaves behind is a row. ``deliver_webhook_with_retry``
+    (src/core/webhook_delivery.py) writes one ``webhook_deliveries`` record per
+    send, BEFORE it dials, whenever the caller supplies a tenant and an event type
+    — and the Slack sender supplies both. So the row exists whether or not
+    ``hooks.slack.test`` was reachable, which is what makes this an observation of
+    the SELLER's behaviour rather than of the test rig's network.
+
+    ``expire_all`` first: the server committed through its own session, so rows it
+    wrote after this session last read are otherwise served from the identity map.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import WebhookDeliveryRecord
+
+    session = self.get_session()
+    session.expire_all()
+    rows = session.scalars(
+        select(WebhookDeliveryRecord)
+        .filter_by(tenant_id=self._tenant_id, event_type=_SLACK_EVENT_TYPE)
+        .order_by(WebhookDeliveryRecord.created_at)
+    ).all()
+    return [creative_id for row in rows for creative_id in _slack_creative_ids(row.payload)]
+
+
+def _e2e_ai_reviews_taken_up(self: CreativeSyncEnv, *, awaiting: list[str]) -> list[str]:
+    """Creatives the SERVER's background reviewer took up, read off the verdict.
+
+    Over e2e_rest the submit happens in the server process, where no mock records
+    it. What the submitted job leaves behind is observable instead: it opens its
+    own unit of work and commits EITHER ``data["ai_review"]`` (a verdict) OR
+    ``data["ai_review_error"]`` (the review raised) onto the creative — both
+    branches of ``_ai_review_creative``, src/admin/blueprints/creatives.py — so
+    exactly one of them appears for every submission, whether or not the server
+    holds a usable Gemini key.
+
+    ``awaiting`` is the WAIT target, not the answer: the loop ends as soon as
+    those ids all carry an outcome, and the answer is then every creative of this
+    tenant and principal that carries one. A submission the scenario did not ask
+    for therefore still shows up, which is what keeps "exactly these creatives
+    were reviewed" a real comparison rather than a membership check.
+
+    Absence after the bound means no job was ever submitted — which is the INV
+    that fails, correctly, rather than a flake.
+    """
+    import time
+
+    deadline = time.monotonic() + _AI_REVIEW_WAIT_SECONDS
+    while True:
+        taken_up = self._committed_ai_review_outcomes()
+        if set(awaiting) <= set(taken_up) or time.monotonic() >= deadline:
+            return taken_up
+        time.sleep(_AI_REVIEW_POLL_SECONDS)
+
+
+def _has_ai_review_outcome(row: Any) -> bool:
+    """True when the background reviewer committed either outcome onto *row*."""
+    data = getattr(row, "data", None)
+    if not isinstance(data, dict):
+        return False
+    return data.get("ai_review") is not None or data.get("ai_review_error") is not None
 
 
 def creative_fingerprint(creative: Any) -> tuple[str, str]:
@@ -455,6 +562,60 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         for future in done:
             future.result()  # re-raise anything the worker thread swallowed
 
+    @property
+    @realize_e2e(_e2e_slack_notified_creatives)
+    def slack_notified_creatives(self) -> list[str]:
+        """The creatives this sync dialled Slack about, oldest first.
+
+        The observable BR-RULE-037 INV-3/INV-6 grade is the SENDER, not the
+        notification step: production enters ``_send_creative_notifications`` for
+        every creative that needs approval and decides inside it — require-human
+        only, webhook configured only — whether Slack is reached. In process the
+        sender is the patched ``get_slack_notifier``; over e2e it runs in the
+        Docker server, where :func:`_e2e_slack_notified_creatives` reads the row
+        the sender leaves behind instead.
+
+        One accessor so the four steps that ask "was Slack sent, and about what"
+        cannot answer the question three different ways — two of them used to read
+        the step's call count and two the sender's, and only the sender's is the
+        invariant.
+        """
+        calls = self.mock["slack_notifier"].return_value.notify_creative_pending.call_args_list
+        return [call.kwargs["creative_id"] for call in calls]
+
+    @realize_e2e(_e2e_ai_reviews_taken_up)
+    def ai_reviews_taken_up(self, *, awaiting: list[str]) -> list[str]:
+        """Every creative the background AI reviewer took up, sorted.
+
+        In process the executor itself is mocked (EXTERNAL_PATCHES
+        ``ai_review_executor``), so the submit IS the observable and "no AI review
+        happened" is a value comparison rather than a race with a thread —
+        ``awaiting`` is unused because a mocked submit has already happened by the
+        time the response is back. Over e2e the real executor runs inside the
+        server, where the submit is invisible and the verdict it commits is what
+        remains; there ``awaiting`` bounds the wait
+        (:func:`_e2e_ai_reviews_taken_up`).
+
+        Sorted on both branches so the two are comparable against one expectation.
+        """
+        return sorted(
+            {call.kwargs["creative_id"] for call in self.mock[self._AI_REVIEW_PATCH_NAME].submit.call_args_list}
+        )
+
+    def _committed_ai_review_outcomes(self) -> list[str]:
+        """Creatives of this tenant+principal carrying either AI-review outcome.
+
+        Read over an INDEPENDENT connection for the same reason
+        :meth:`committed_ai_review` is: the reviewer writes through its own unit of
+        work, so only a connection this test's session does not own can tell a
+        committed verdict from one that was never written.
+        """
+        from src.core.database.repositories.creative import CreativeRepository
+
+        with self._independent_session() as session:
+            rows = CreativeRepository(session, self._tenant_id).list_by_principal(self._principal_id)
+            return sorted(row.creative_id for row in rows if _has_ai_review_outcome(row))
+
     def committed_ai_review(self, creative_id: str) -> CommittedAIReview:
         """The verdict an INDEPENDENT connection can see for *creative_id*.
 
@@ -497,14 +658,25 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         self.mock["send_notifications"].side_effect = self._observe_at_notification
 
     def _observe_at_notification(self, *args: Any, **kwargs: Any) -> None:
-        """Stand in for ``_send_creative_notifications`` and record DB visibility.
+        """Record DB visibility at the notification, then let the notification run.
 
-        Falls off the end -> returns None, which is exactly what the plain
-        ``return_value = None`` mock gave every existing caller, so scenarios
-        that only assert the notification WAS sent read the same value.
+        The two reads happen BEFORE the delegation, which is the whole point: the
+        ordering between an escaping effect and the writes it refers to is only
+        observable AT the effect.
+
+        Then it calls the REAL ``_send_creative_notifications``, which is what
+        ``_configure_mocks`` installs by default. It used to fall off the end
+        instead, which silently disabled the Slack sender for exactly the
+        scenarios that install this observer — so their own stated non-vacuity
+        control ("a Slack notification should be sent immediately") could only
+        ever be graded on the notification STEP having been entered, never on a
+        send. Delegating keeps the recording and puts the sender back.
         """
+        from src.core.tools.creatives._workflow import _send_creative_notifications
+
         self.workflow_rows_at_notification = self._committed_workflow_rows(tenant_id=self._tenant_id)
         self.assignment_count_at_notification = self._committed_assignment_count(tenant_id=self._tenant_id)
+        _send_creative_notifications(*args, **kwargs)
 
     @realize_e2e(
         e2e_unsupported(

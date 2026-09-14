@@ -31,8 +31,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
-from unittest.mock import ANY
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
 
 from pytest_bdd import given, parsers, then, when
 
@@ -59,6 +59,11 @@ from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.creative_sync import creative_fingerprint
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sqlalchemy.orm import Session
 
 # ═══════════════════════════════════════════════════════════════════════
 # E2E format helpers — real creative agent data for Docker transport
@@ -632,6 +637,22 @@ def given_creative_with_name_and_format(ctx: dict, name: str) -> None:
     ctx["creative_format_id"] = format_id
 
 
+#: The three creative approval modes BR-RULE-037 defines. Named once so the two
+#: Given spellings and the writer's own validation cannot disagree about the set.
+_CREATIVE_APPROVAL_MODES = ("auto-approve", "require-human", "ai-powered")
+
+#: What production falls back to when the tenant configures no approval_mode
+#: (BR-RULE-037 INV-1). Stated by the Gherkin's "not configured" / "" rows.
+_DEFAULT_APPROVAL_MODE = "require-human"
+
+#: The Slack endpoint a require-human tenant is configured with. Deliberately a
+#: name that does not resolve: the seller's obligation is to DIAL the configured
+#: webhook, and every observable of that (the in-process sender mock, the
+#: ``webhook_deliveries`` row the live server writes before it dials) is recorded
+#: ahead of the network, so reachability is not part of what is graded.
+_SLACK_WEBHOOK_URL = "https://hooks.slack.test/approval"
+
+
 @given(parsers.parse('the tenant has approval_mode "{mode}"'))
 def given_tenant_has_approval_mode(ctx: dict, mode: str) -> None:
     """Set approval_mode on the tenant (partition scenario)."""
@@ -639,12 +660,17 @@ def given_tenant_has_approval_mode(ctx: dict, mode: str) -> None:
 
 
 @given('the tenant has approval_mode ""')
-def given_tenant_has_empty_approval_mode(ctx: dict) -> None:
-    """Handle the partition 'not_set' row where mode is empty string."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    ctx["tenant"].approval_mode = "require-human"
-    env._commit_factory_data()
+@given("the tenant has no approval_mode configured")
+def given_tenant_no_approval_mode(ctx: dict) -> None:
+    """The tenant configures no approval mode, so production's default applies.
+
+    Two Gherkin spellings of ONE state — the partition outline's empty ``mode``
+    cell and the INV-1 scenario's sentence — so they share one step function
+    rather than two identical bodies (``test_architecture_bdd_no_duplicate_steps``
+    is the guard, and it is making the right point: two bodies could drift into
+    configuring two different things while both sentences claim "not configured").
+    """
+    _set_tenant_approval_mode(ctx, _DEFAULT_APPROVAL_MODE)
 
 
 @given(parsers.re(r"the tenant approval mode is (?P<approval_mode>.+)"))
@@ -654,47 +680,64 @@ def given_tenant_approval_mode_creative(ctx: dict, approval_mode: str) -> None:
     Handles creative approval modes: not configured, "auto-approve",
     "require-human", "ai-powered". Also delegates to the UC-003 step function
     for media buy modes (auto-approval, manual).
+
+    Goes through ``_set_tenant_approval_mode`` — the SAME writer the partition
+    outline's ``the tenant has approval_mode "<mode>"`` uses — rather than
+    assigning ``tenant.approval_mode`` itself. Two spellings of one precondition
+    had drifted into two behaviours: this one set the mode and nothing else, so
+    the boundary outline's require-human row ran with NO slack_webhook_url and its
+    "a review workflow should be created with Slack notification" was unsatisfiable.
+    It passed anyway, because the assertion behind that sentence used to read the
+    notification STEP's call count instead of the sender.
     """
     stripped = approval_mode.strip().strip('"')
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-
     if stripped in ("not configured", "not set"):
-        tenant.approval_mode = "require-human"
-        env._commit_factory_data()
-    elif stripped in ("auto-approve", "require-human", "ai-powered"):
-        tenant.approval_mode = stripped
-        env._commit_factory_data()
+        _set_tenant_approval_mode(ctx, _DEFAULT_APPROVAL_MODE)
+    elif stripped in _CREATIVE_APPROVAL_MODES:
+        _set_tenant_approval_mode(ctx, stripped)
     else:
         from tests.bdd.steps.domain.uc003_update_media_buy import given_tenant_approval_mode
 
         given_tenant_approval_mode(ctx, approval_mode)
-        return
+
+
+def _configure_tenant_field(ctx: dict, field: str, value: object) -> None:
+    """Write one tenant field for BOTH auth paths, through the env's own writer.
+
+    Writing the ORM row is not enough: ``_sync_creatives_impl`` reads the tenant's
+    fields off the RESOLVED IDENTITY's tenant dict (_sync.py logs "Tenant
+    approval_mode field: NOT FOUND" when one is absent) and falls back to its
+    default, so an ORM-only Given silently grades the default instead of what the
+    scenario names. ``configure_tenant_field`` is the env-owned writer that
+    updates the tenant overrides AND the DB column and clears the identity cache.
+
+    One helper because four Given steps in this module needed the same statement
+    and three of them had drifted onto the ORM row.
+    """
+    env = ctx["env"]
+    ensure_tenant_principal(ctx, env)
+    env.configure_tenant_field(field, value)
+    env._commit_factory_data()
 
 
 def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
-    """Shared helper to set approval_mode for BOTH auth paths.
+    """Configure the tenant's approval mode, plus what that mode implies.
 
-    Writing only the ORM row is not enough: ``_sync_creatives_impl`` reads
-    ``approval_mode`` off the resolved identity's tenant dict (_sync.py logs
-    "Tenant approval_mode field: NOT FOUND" when it is absent) and falls back to
-    require-human, so an ORM-only Given silently graded the default mode instead
-    of the one the scenario names. ``configure_tenant_field`` is the env-owned
-    writer that updates the tenant overrides AND the DB column and clears the
-    identity cache.
+    require-human is the one mode whose scenarios also need a Slack endpoint —
+    BR-RULE-037 sends only on that branch, and only with a webhook configured —
+    so the writer that sets the mode sets the endpoint with it. A Given that set
+    the mode alone left the require-human boundary row unable to satisfy its own
+    "with Slack notification" sentence.
     """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
 
-    if mode not in ("auto-approve", "require-human", "ai-powered"):
+    if mode not in _CREATIVE_APPROVAL_MODES:
         raise ValueError(f"Unknown approval mode: {mode}")
 
-    env.configure_tenant_field("approval_mode", mode)
+    _configure_tenant_field(ctx, "approval_mode", mode)
     if mode == "require-human":
-        env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.test/approval")
-
-    env._commit_factory_data()
+        _configure_tenant_field(ctx, "slack_webhook_url", _SLACK_WEBHOOK_URL)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -702,28 +745,28 @@ def _set_tenant_approval_mode(ctx: dict, mode: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
-def _xfail_if_e2e(ctx: dict) -> None:
-    """SKIP under e2e_rest: factory-created creatives are not in Docker's DB.
+@contextmanager
+def _readback(ctx: dict) -> Iterator[Session]:
+    """A session that re-reads rows PRODUCTION wrote, on every transport.
 
-    This is the ONE guard in this module that is not an outcome-keyed excuse, and the
-    distinction is what decides the primitive. ``is_e2e(ctx)`` is known BEFORE dispatch,
-    so it cannot mask a production regression the way `if error is not None: xfail` does —
-    production's behaviour has no influence on which transport is running.
+    ``db_session`` already hands back a session bound to the database the request
+    under test actually writes: the per-test base in process, and the live
+    server's own base over e2e_rest (the env's factories write there, and
+    ``_db_scope_for`` points production's cached engine at the same URL for the
+    scenario duration — ``_production_db_pointed_at``, tests/bdd/conftest.py).
+    A read-back therefore needs no transport branch, which is why the skip this
+    replaced was never the right primitive.
 
-    It is therefore a statement of INAPPLICABILITY, not of expected failure, and skip is
-    the honest primitive: xfail claims "this should fail and does", which is false here —
-    the check simply cannot be performed against a database the fixtures never wrote to.
-    Fixing it means seeding the live server's DB via ``realize_e2e``
-    (tests/harness/_realize.py), at which point this guard is deleted rather than flipped.
+    What it does need is ``expire_all``. Production committed through its OWN
+    session, so any row this one already loaded — every Given-created tenant,
+    media buy or creative — is still served out of its identity map at the value
+    the factory gave it. Over e2e_rest that is the whole difference between
+    reading the media buy's new status and re-reading the fixture's. Same reason
+    ``tests/harness/webhook_registration.py`` expires before its read-backs.
     """
-    if is_e2e(ctx):
-        import pytest
-
-        pytest.skip(
-            "e2e_rest fixture injection gap — factory-created creatives are never written to "
-            "Docker's DB, so a DB-readback assertion has nothing to read. Seed via realize_e2e "
-            "to make these scenarios gradeable on this transport."
-        )
+    with db_session(ctx) as session:
+        session.expire_all()
+        yield session
 
 
 def _get_creative_from_db(ctx: dict) -> object:
@@ -732,10 +775,9 @@ def _get_creative_from_db(ctx: dict) -> object:
 
     from src.core.database.models import Creative
 
-    _xfail_if_e2e(ctx)
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(Creative).filter_by(
                 tenant_id=tenant.tenant_id,
@@ -777,12 +819,44 @@ def _assert_success_response(ctx: dict) -> None:
     assert payload_or_none(ctx) is not None, "Expected a response but got None"
 
 
+def _creative_status_values() -> frozenset[str]:
+    """The pinned CreativeStatus enum, read from the SDK rather than retyped.
+
+    sync-creatives-response.json: "Values come from CreativeStatus only
+    (processing, pending_review, approved, suspended, rejected, archived) — never
+    from CreativeAction."
+    """
+    from adcp.types.generated_poc.enums.creative_status import CreativeStatus
+
+    return frozenset(member.value for member in CreativeStatus)
+
+
+def _assert_creative_status(ctx: dict, status: str, *, why: str) -> None:
+    """The creative sits at *status* after this sync, read off the WIRE.
+
+    The wire is the authoritative observable here, not the ``creatives`` row.
+    sync-creatives-response.json (adcp 3.1.1, creative/sync-creatives-response.json)
+    defines the per-creative ``status`` as the "advisory review-lifecycle state of
+    the creative after this sync", drawn from CreativeStatus — which is exactly
+    what BR-RULE-037's approval modes decide. The row carries the same value as an
+    implementation detail of storing it.
+
+    Reading the row instead would also be unstable on the live stack for one of
+    the four modes: ai-powered hands the creative to a real background reviewer
+    that opens its own unit of work and COMMITS a new ``status`` onto the row
+    (src/admin/blueprints/creatives.py ``_ai_review_creative``), so a row read
+    after the response races that thread. The response cannot be rewritten after
+    it is sent, so the wire grades the sync's own decision and nothing else.
+    """
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("status") == status, f"{why}: expected status {status!r} on the wire, got {entry.get('status')!r}"
+
+
 @then(parsers.parse('the creative status should be "{status}"'))
 def then_creative_status_should_be(ctx: dict, status: str) -> None:
-    """Assert the creative's DB status matches the expected value."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == status, f"Expected creative status '{status}', got '{creative.status}'"
+    """Assert the creative's advisory status matches the expected value."""
+    _assert_creative_status(ctx, status, why="BR-RULE-037")
 
 
 @then(parsers.parse('workflow steps created should be "{workflow}"'))
@@ -800,12 +874,29 @@ def then_workflow_steps_created(ctx: dict, workflow: str) -> None:
 @then("the creative should use require-human as default")
 def then_creative_use_require_human_default(ctx: dict) -> None:
     """Assert that when approval_mode is not configured, require-human is the default (INV-1)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"INV-1: Default approval mode should produce 'pending_review' status, got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "pending_review", why="INV-1: default approval mode")
     _assert_workflow_steps(ctx["env"], expect_present=True)
+
+
+def _assert_slack_notified(ctx: dict, creative_ids: list[str], *, why: str) -> None:
+    """Slack was dialled for exactly *creative_ids* during this sync.
+
+    Read through ``env.slack_notified_creatives``, which is the SENDER on every
+    transport — the in-process mock of ``get_slack_notifier``, and over e2e_rest
+    the ``webhook_deliveries`` row the server's own sender leaves behind. The
+    notification STEP is not the observable: production enters
+    ``_send_creative_notifications`` for every creative needing approval and
+    decides inside it whether Slack is reached.
+
+    Naming the creatives rather than counting calls is what makes the mode
+    attributable. Production dials Slack only on the require-human branch
+    (src/core/tools/creatives/_workflow.py), so "Slack named THIS creative" is
+    already the statement that the branch under test ran, and the empty-list
+    assertions in INV-2/INV-4/INV-6 grade the same accessor.
+    """
+    _assert_success_response(ctx)
+    notified = ctx["env"].slack_notified_creatives
+    assert notified == creative_ids, f"{why}: expected Slack sends for {creative_ids}, got {notified}"
 
 
 @then(parsers.parse('the per-creative result should carry advisory status "{status}"'))
@@ -816,49 +907,27 @@ def then_per_creative_result_carries_status(ctx: dict, status: str) -> None:
     review-lifecycle state of the creative after this sync", drawn from CreativeStatus;
     "sellers with async review return processing or pending_review; sellers with
     synchronous review MAY return a terminal value (approved, rejected)".
+
+    The same claim BR-RULE-037's own sentences make, so the same assertion —
+    ``_assert_creative_status`` carries the reasoning about why the wire and not
+    the row.
     """
-    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
-    assert entry.get("status") == status, (
-        f"Expected advisory status {status!r} on the wire, got {entry.get('status')!r}"
-    )
+    _assert_creative_status(ctx, status, why="the per-creative advisory status")
 
 
 @then("the creative status should be set to approved immediately")
 def then_creative_approved_immediately(ctx: dict) -> None:
     """Assert auto-approve sets status to approved with no workflow (INV-2)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "approved", (
-        f"INV-2: auto-approve should set status to 'approved', got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "approved", why="INV-2: auto-approve")
     _assert_workflow_steps(ctx["env"], expect_present=False)
 
 
 @then("a review workflow should be created with Slack notification")
 def then_review_workflow_with_slack(ctx: dict) -> None:
     """Assert require-human creates workflow + sends Slack notification (INV-3)."""
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"INV-3: require-human should set status to 'pending_review', got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "pending_review", why="INV-3: require-human")
     _assert_workflow_steps(ctx["env"], expect_present=True)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, (
-        "send_notifications mock must be wired in CreativeSyncEnv to verify Slack notification (INV-3)"
-    )
-    mock_notify.assert_called_once_with(
-        creatives_needing_approval=ANY,
-        tenant=ANY,
-        approval_mode="require-human",
-        principal_id=ANY,
-    )
-    creative_id = latest_creative_id(ctx)
-    notified_ids = {c.get("creative_id") for c in mock_notify.call_args.kwargs["creatives_needing_approval"]}
-    assert creative_id in notified_ids, (
-        f"INV-3: Slack notification should reference creative '{creative_id}', "
-        f"but notified creatives were: {notified_ids}"
-    )
+    _assert_slack_notified(ctx, [latest_creative_id(ctx)], why="INV-3: require-human + webhook configured")
 
 
 @then("a review workflow should be created with AI review")
@@ -872,29 +941,23 @@ def then_review_workflow_with_ai(ctx: dict) -> None:
       configured in the Given step produced this workflow, confirming AI review
       was triggered, not just a human publisher-approval flow)
     """
-    _assert_success_response(ctx)
-    creative = _get_creative_from_db(ctx)
-    assert creative.status == "pending_review", (
-        f"INV-4: ai-powered should set status to 'pending_review', got '{creative.status}'"
-    )
+    _assert_creative_status(ctx, "pending_review", why="INV-4: ai-powered")
     steps = _assert_workflow_steps(ctx["env"], expect_present=True)
     # Verify the workflow step references the synced creative
     creative_id = latest_creative_id(ctx)
-    env = ctx["env"]
 
     from sqlalchemy import select
 
     from src.core.database.models import ObjectWorkflowMapping
 
-    session = env.get_session()
-    assert session is not None, "No DB session to verify workflow-creative link"
-    mappings = list(
-        session.scalars(
-            select(ObjectWorkflowMapping).filter_by(
-                step_id=steps[0].step_id,
-            )
-        ).all()
-    )
+    with _readback(ctx) as session:
+        mappings = list(
+            session.scalars(
+                select(ObjectWorkflowMapping).filter_by(
+                    step_id=steps[0].step_id,
+                )
+            ).all()
+        )
     assert mappings, (
         f"INV-4: workflow step {steps[0].step_id} has no object mappings — "
         f"cannot confirm AI review targets creative {creative_id}"
@@ -1769,8 +1832,13 @@ def _get_assignment_from_db(ctx: dict) -> object:
 
     Performs the lookup and existence assertions shared by assignment
     outcome steps: success (no error), the package present in assigned_to,
-    e2e xfail guard, then a tenant/creative/package-scoped DB lookup that is
-    asserted to exist. Callers add their own divergent attribute checks.
+    then a tenant/creative/package-scoped DB lookup that is asserted to exist.
+    Callers add their own divergent attribute checks.
+
+    The row is the only observable for the assignment's own attributes:
+    sync-creatives-response.json puts the package ids in ``assigned_to`` and the
+    per-package failures in ``assignment_errors``, and carries neither ``weight``
+    nor ``placement_ids`` on the wire at all.
     """
     from sqlalchemy import select
 
@@ -1781,10 +1849,9 @@ def _get_assignment_from_db(ctx: dict) -> object:
     expected_pkg = ctx["package"].package_id
     assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
 
-    _xfail_if_e2e(ctx)
     tenant_id = ctx["tenant"].tenant_id
     creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=tenant_id,
@@ -2568,17 +2635,18 @@ def then_response_includes_creative_with_action(ctx: dict, action: str) -> None:
 
 @then("the creative should have a status reflecting the approval workflow")
 def then_creative_has_approval_workflow_status(ctx: dict) -> None:
-    """Assert the creative's status is one of the approval-workflow statuses."""
-    _APPROVAL_STATUSES = {"pending_review", "approved", "rejected", "processing", "adaptation_required"}
-    result = _get_sync_creative_result(ctx)
-    status = getattr(result, "internal_status", None)
-    if status is None:
-        _xfail_if_e2e(ctx)
-        creative = _get_creative_from_db(ctx)
-        status = creative.status
-    assert status in _APPROVAL_STATUSES, (
-        f"Expected approval-workflow status (one of {_APPROVAL_STATUSES}), got '{status}'"
-    )
+    """The per-creative advisory status is drawn from the review lifecycle.
+
+    The values are the pinned CreativeStatus enum
+    (adcp 3.1.1, enums/creative-status.json), which sync-creatives-response.json
+    names as the source for this field. Read off the wire for the reason
+    ``_assert_creative_status`` gives.
+    """
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    status = entry.get("status")
+    allowed = _creative_status_values()
+    assert status in allowed, f"expected a CreativeStatus value (one of {sorted(allowed)}) on the wire, got {status!r}"
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -2660,33 +2728,22 @@ def given_no_product_with_provenance_required(ctx: dict) -> None:
     env._commit_factory_data()
 
 
-@given("the tenant has no approval_mode configured")
-def given_tenant_no_approval_mode(ctx: dict) -> None:
-    """Ensure the tenant has no approval_mode configured (default = require-human)."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    tenant.approval_mode = "require-human"
-    env._commit_factory_data()
-
-
 @given("the tenant has a slack_webhook_url configured")
 def given_tenant_has_slack_webhook(ctx: dict) -> None:
     """Set a slack_webhook_url for both auth paths (see _set_tenant_approval_mode)."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    env.configure_tenant_field("slack_webhook_url", "https://hooks.slack.test/approval")
-    env._commit_factory_data()
+    _configure_tenant_field(ctx, "slack_webhook_url", _SLACK_WEBHOOK_URL)
 
 
 @given("the tenant has no slack_webhook_url configured")
 def given_tenant_no_slack_webhook(ctx: dict) -> None:
-    """Ensure the tenant has no slack_webhook_url."""
-    env = ctx["env"]
-    ensure_tenant_principal(ctx, env)
-    tenant = ctx["tenant"]
-    tenant.slack_webhook_url = None
-    env._commit_factory_data()
+    """Ensure the tenant has no slack_webhook_url.
+
+    Through ``configure_tenant_field`` like every sibling: clearing only the ORM
+    column leaves the resolved identity's tenant dict carrying the old value, so
+    INV-6 ("no Slack without a webhook") would be graded against a tenant
+    production still sees a webhook on.
+    """
+    _configure_tenant_field(ctx, "slack_webhook_url", None)
 
 
 def _setup_product_with_creative_policy(
@@ -2953,14 +3010,20 @@ def when_sync_creative_with_assignments(ctx: dict) -> None:
 
 
 def _get_media_buy_status_from_db(ctx: dict) -> str:
-    """Re-read the media buy status from the DB after sync."""
+    """Re-read the media buy status from the DB after sync.
+
+    The row is the only observable: sync-creatives-response.json describes the
+    creatives it processed and the packages they were assigned to, and says
+    nothing about the media buy's own lifecycle status. BR-RULE-038/040's
+    transition is therefore a persistence obligation, and ``_readback`` expires
+    the fixture's copy of the row first.
+    """
     from sqlalchemy import select
 
     from src.core.database.models import MediaBuy
 
-    _xfail_if_e2e(ctx)
     media_buy = ctx["media_buy"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         mb = session.scalars(
             select(MediaBuy).filter_by(
                 media_buy_id=media_buy.media_buy_id,
@@ -3054,18 +3117,15 @@ def then_workflow_step_should_be_created(ctx: dict) -> None:
 def then_background_ai_review_submitted(ctx: dict) -> None:
     """Assert ai-powered mode submitted a background AI review task (INV-4).
 
-    Production's ai-powered path in _processing.py submits a background task
-    via the task queue. The harness may not expose this directly — xfail if
-    no evidence of AI review submission is available.
+    Production's ai-powered path in _processing.py hands the creative to the
+    background AI-review executor. ``_assert_ai_reviews_taken_up`` names the
+    observable per transport — the submit in process, the committed verdict over
+    e2e_rest.
     """
-    _assert_success_response(ctx)
-    # The seam is the patched background executor (CreativeSyncEnv's ai_review_executor),
-    # the same one the local dry-run features read; this used to look for mocks named
-    # submit_ai_review / ai_review, which no env has ever wired, and parked the scenario.
-    expected = [c["creative_id"] for c in ctx["creatives"]]
-    submitted = _ai_review_submitted_creative_ids(ctx)
-    assert submitted == expected, (
-        f"ai-powered mode must submit one AI review per synced creative ({expected}), got {submitted}"
+    _assert_ai_reviews_taken_up(
+        ctx,
+        _requested_creative_ids(ctx),
+        why="INV-4: ai-powered submits one AI review per synced creative",
     )
 
 
@@ -3080,14 +3140,24 @@ def then_background_ai_review_submitted(ctx: dict) -> None:
 # into a value comparison instead of a race against a background thread.
 
 
-def _ai_review_submitted_creative_ids(ctx: dict) -> list[str]:
-    """creative_ids the sync handed to the background AI-review executor."""
-    executor = ctx["env"].mock.get("ai_review_executor")
-    assert executor is not None, (
-        "CreativeSyncEnv must patch src.admin.blueprints.creatives._ai_review_executor "
-        "for the AI-review submit seam to be observable"
-    )
-    return [call.kwargs.get("creative_id") for call in executor.submit.call_args_list]
+def _requested_creative_ids(ctx: dict) -> list[str]:
+    """The creative_ids this scenario's request named, sorted and deduplicated."""
+    return sorted({c["creative_id"] for c in ctx["creatives"]})
+
+
+def _assert_ai_reviews_taken_up(ctx: dict, expected: list[str], *, why: str) -> None:
+    """The background AI reviewer took up exactly *expected*, and nothing else.
+
+    ``env.ai_reviews_taken_up`` owns the per-transport answer: the mocked
+    executor's submit calls in process, and over e2e_rest a bounded wait on the
+    verdict the real reviewer commits (tests/harness/creative_sync.py). What the
+    step EXPECTS is also the wait target, so the negative sentence ("no AI review
+    is submitted") reads the current state without waiting for one, and the
+    positive sentences wait for the creatives they name.
+    """
+    _assert_success_response(ctx)
+    taken_up = ctx["env"].ai_reviews_taken_up(awaiting=expected)
+    assert taken_up == expected, f"{why}: expected AI reviews for {expected}, got {taken_up}"
 
 
 @when("the Buyer Agent previews the creative with dry_run true")
@@ -3109,22 +3179,23 @@ def then_ai_review_submitted_for_synced_creative(ctx: dict) -> None:
     preview scenario's empty-list assertion non-vacuous: a wrong patch target or a
     dead ai-powered branch fails here first.
     """
-    _assert_success_response(ctx)
-    expected = [c["creative_id"] for c in ctx["creatives"]]
-    assert _ai_review_submitted_creative_ids(ctx) == expected, (
-        f"expected the ai-powered live sync to submit an AI review for {expected}, "
-        f"got {_ai_review_submitted_creative_ids(ctx)}"
+    _assert_ai_reviews_taken_up(
+        ctx,
+        _requested_creative_ids(ctx),
+        why="the ai-powered live sync must submit an AI review for the creative it synced",
     )
 
 
 @then("no AI review is submitted")
 def then_no_ai_review_submitted(ctx: dict) -> None:
     """A preview must not submit a review whose job commits outside its transaction."""
-    _assert_success_response(ctx)
-    submitted = _ai_review_submitted_creative_ids(ctx)
-    assert submitted == [], (
-        f"dry_run submitted AI review(s) for {submitted} — that job opens its own "
-        "AdminCreativeUoW and commits a verdict, which the preview's rollback cannot undo"
+    _assert_ai_reviews_taken_up(
+        ctx,
+        [],
+        why=(
+            "dry_run must submit no AI review — that job opens its own AdminCreativeUoW "
+            "and commits a verdict, which the preview's rollback cannot undo"
+        ),
     )
 
 
@@ -3351,33 +3422,17 @@ def then_slack_notification_deferred(ctx: dict) -> None:
     """Assert Slack notification was NOT sent immediately for ai-powered mode (INV-4).
 
     In ai-powered mode, Slack notification is deferred until AI review completes, so the
-    Slack sender (the env's ``slack_notifier`` seam) must not have been used during the
-    sync. Production enters the notification step for every creative needing approval
-    and decides inside it, so the step being entered is not the observable; the sender is.
+    Slack sender must not have been used during the sync. Production enters the
+    notification step for every creative needing approval and decides inside it, so the
+    step being entered is not the observable; the sender is.
     """
-    _assert_success_response(ctx)
-    notifier = ctx["env"].mock.get("slack_notifier")
-    assert notifier is not None, "Harness must wire the slack_notifier mock to verify Slack deferral"
-    sent = notifier.return_value.notify_creative_pending.call_count
-    assert sent == 0, (
-        f"ai-powered mode must defer Slack notification until AI review completes (INV-4), "
-        f"but the notifier was used {sent} time(s) during sync"
-    )
+    _assert_slack_notified(ctx, [], why="INV-4: ai-powered defers Slack until AI review completes")
     # DEFERRED is not NEVER. Asserting only "nothing was sent" is the body
     # ``then_no_slack_notification`` already has, and it passes just as happily when the
     # notification is never sent at all -- which is a different invariant (INV-2/INV-6) and
     # a bug on this path. What makes this sentence its own claim is that something exists to
     # defer TO, so the review task is asserted here as well.
-    executor = ctx["env"].mock.get("ai_review_executor")
-    assert executor is not None, (
-        "CreativeSyncEnv must patch src.admin.blueprints.creatives._ai_review_executor for "
-        "'deferred until AI review completes' to be distinguishable from 'never sent'"
-    )
-    assert executor.submit.call_count >= 1, (
-        "Slack is DEFERRED UNTIL AI REVIEW COMPLETES, so an AI review must have been "
-        "submitted to defer to; no submit() call means nothing was deferred and the "
-        "notification is simply absent"
-    )
+    then_background_ai_review_submitted(ctx)
 
 
 # --- nbfu: workflow step attributes (BR-RULE-037 INV-5) ---
@@ -3844,32 +3899,14 @@ def then_no_workflow_steps(ctx: dict) -> None:
 
 @then("no Slack notification should be sent")
 def then_no_slack_notification(ctx: dict) -> None:
-    """Assert no Slack notification was sent (INV-2/INV-6).
-
-    Read off the Slack sender itself (the env's ``slack_notifier`` seam), not off the
-    notification step: production enters ``_send_creative_notifications`` for every
-    creative needing approval and decides INSIDE it -- require-human only, webhook
-    configured only -- whether Slack is reached. A missing seam is a harness setup error.
-    """
-    _assert_success_response(ctx)
-    notifier = ctx["env"].mock.get("slack_notifier")
-    assert notifier is not None, "Harness must wire the slack_notifier mock to verify the no-notification invariant"
-    sent = notifier.return_value.notify_creative_pending.call_count
-    assert sent == 0, f"Expected no Slack notification but the notifier was used {sent} time(s). See BR-RULE-037 INV-6."
+    """Assert no Slack notification was sent (INV-2/INV-6)."""
+    _assert_slack_notified(ctx, [], why="BR-RULE-037 INV-6: Slack requires require-human AND a webhook")
 
 
 @then("a Slack notification should be sent immediately")
 def then_slack_notification_sent(ctx: dict) -> None:
     """Assert Slack notification was sent immediately (INV-3: require-human + webhook configured)."""
-    _assert_success_response(ctx)
-    mock_notify = ctx["env"].mock.get("send_notifications")
-    assert mock_notify is not None, (
-        "send_notifications mock must be wired in CreativeSyncEnv to verify Slack notification"
-    )
-    assert mock_notify.call_count == 1, (
-        f"Expected exactly 1 Slack notification call (require-human + webhook configured), "
-        f"got {mock_notify.call_count} call(s)"
-    )
+    _assert_slack_notified(ctx, [latest_creative_id(ctx)], why="INV-3: require-human + webhook configured")
 
 
 @then(parsers.parse('a workflow step should be created with type "{step_type}"'))
@@ -3951,7 +3988,6 @@ def then_existing_creative_updated_by_triple_key(ctx: dict) -> None:
 
     from src.core.database.models import Creative
 
-    _xfail_if_e2e(ctx)
     error = ctx.get("error")
     assert error is None, (
         f"SPEC-PRODUCTION GAP: expected creative update by triple key, but production raised {type(error).__name__}: {error}"
@@ -3961,7 +3997,7 @@ def then_existing_creative_updated_by_triple_key(ctx: dict) -> None:
     creative_id = ctx["pre_existing_creative_id"]
     tenant = ctx["tenant"]
     principal = ctx["principal"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         rows = session.scalars(
             select(Creative).filter_by(
                 tenant_id=tenant.tenant_id,
@@ -4537,7 +4573,8 @@ def then_creative_created_with_trackers_stored(ctx: dict) -> None:
     _assert_success_response(ctx)
     entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
     assert entry.get("action") == "created", f"Expected action 'created', got {entry.get('action')!r}"
-    _xfail_if_e2e(ctx)
+    # The row is the only observable: sync-creatives-response.json's per-creative
+    # entry carries no assets, so "stored as sent" is a persistence obligation.
     assert_assets(_stored_assets_for_last_creative(ctx), *ctx["tracker_specs"])
 
 
@@ -5332,14 +5369,13 @@ def _stored_assets_for_last_creative(ctx: dict) -> dict:
     from src.core.database.models import Creative as CreativeModel
 
     env = ctx["env"]
-    session = env.get_session()
-    assert session is not None, "Harness must provide a DB session for asset verification"
     creative_id = latest_creative_id(ctx)
-    db_creative = session.scalars(
-        select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
-    ).first()
-    assert db_creative is not None, f"Creative {creative_id} not found in DB"
-    return (db_creative.data or {}).get("assets", {})
+    with _readback(ctx) as session:
+        db_creative = session.scalars(
+            select(CreativeModel).filter_by(creative_id=creative_id, tenant_id=env._tenant_id)
+        ).first()
+        assert db_creative is not None, f"Creative {creative_id} not found in DB"
+        return (db_creative.data or {}).get("assets", {})
 
 
 @then("the user-provided assets should be preserved")
@@ -5520,12 +5556,15 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
     """Assert the synced creative's principal_id matches the authenticated principal.
 
     BR-RULE-034 INV-3: new creatives are stamped with the authenticated principal.
+
+    The row is the only observable: the principal is the seller's own attribution
+    of the creative and sync-creatives-response.json carries no principal on the
+    per-creative entry (``account`` is the buying account, a different thing).
     """
     from sqlalchemy import select
 
     from src.core.database.models import Creative as CreativeModel
 
-    _xfail_if_e2e(ctx)
     error = ctx.get("error")
     assert error is None, (
         f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', but production raised {type(error).__name__}: {error}"
@@ -5534,7 +5573,7 @@ def then_creative_associated_with_principal(ctx: dict, principal_id: str) -> Non
 
     creative_id = latest_creative_id(ctx)
     tenant_id = ctx["tenant"].tenant_id
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(CreativeModel).filter_by(
                 creative_id=creative_id,
@@ -5680,7 +5719,6 @@ def then_new_creative_created_for_principal(ctx: dict, principal_id: str) -> Non
 
     from src.core.database.models import Creative as CreativeModel
 
-    _xfail_if_e2e(ctx)
     error = ctx.get("error")
     assert error is None, (
         f"SPEC-PRODUCTION GAP: expected creative created for principal '{principal_id}', but production raised {type(error).__name__}: {error}"
@@ -5723,11 +5761,10 @@ def then_existing_creative_unchanged(ctx: dict, principal_id: str) -> None:
 
     from src.core.database.models import Creative as CreativeModel
 
-    _xfail_if_e2e(ctx)
     pre_existing_id = ctx["pre_existing_creative_id"]
     tenant_id = ctx["tenant"].tenant_id
 
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(CreativeModel).filter_by(
                 creative_id=pre_existing_id,
@@ -6080,11 +6117,12 @@ def then_assignment_created_as_paused_no_delivery(ctx: dict) -> None:
     expected_pkg = ctx["package"].package_id
     assert expected_pkg in assigned, f"Expected {expected_pkg!r} in assigned_to, got {assigned}"
 
-    # Verify the DB row exists
-    _xfail_if_e2e(ctx)
+    # Verify the DB row exists. The weight is nowhere on the wire, so the row is
+    # the only observable for it (sync-creatives-response.json carries assigned_to
+    # and assignment_errors, no per-assignment attributes).
     tenant_id = ctx["tenant"].tenant_id
     creative_id = latest_creative_id(ctx)
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=tenant_id,
@@ -6539,9 +6577,8 @@ def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) 
     action_str = _get_action_str(result)
     assert action_str == "created", f"Expected creative action 'created', got '{action_str}'"
 
-    # Verify the creative was stamped with the correct principal_id in DB
-    _xfail_if_e2e(ctx)
-
+    # Verify the creative was stamped with the correct principal_id in DB — the
+    # principal is the seller's own attribution and is not on the wire.
     from sqlalchemy import select
 
     from src.core.database.models import Creative
@@ -6550,7 +6587,7 @@ def then_new_creative_created_for_principal_scope(ctx: dict, principal_id: str) 
     assert creative_id is not None, "No creative_id found in result or ctx"
 
     env = ctx["env"]
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         creative = session.scalars(
             select(Creative).filter_by(
                 tenant_id=env._tenant_id,
@@ -6637,8 +6674,7 @@ def then_assignment_of_creative_carries_weight(ctx: dict, creative_id: str, pack
     from src.core.database.models import CreativeAssignment
 
     _assert_success_response(ctx)
-    _xfail_if_e2e(ctx)
-    with db_session(ctx) as session:
+    with _readback(ctx) as session:
         assignment = session.scalars(
             select(CreativeAssignment).filter_by(
                 tenant_id=ctx["tenant"].tenant_id,
