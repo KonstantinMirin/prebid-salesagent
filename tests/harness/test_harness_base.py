@@ -820,3 +820,90 @@ class TestHarnessLifecycleRoleDeclaration:
             f"declared lifecycle homes no longer implement the protocol: {missing}. "
             f"The set may shrink -- but shrink it here, deliberately."
         )
+
+
+# ── EXTERNAL_PATCHES declarations ────────────────────────────────────────────
+#
+# Moved here OUT OF A BDD Then. ``then_no_real_api_calls`` in
+# tests/bdd/steps/generic/then_success.py used to assert this, first as
+# ``len(env.EXTERNAL_PATCHES) > 0`` and then as an element-level pair, and both were the
+# test harness grading its own configuration dict: a class attribute fixed at import,
+# identical for every scenario and every run, so no production change could redden it.
+# It is a real invariant -- just the HARNESS's, not a scenario's -- and it belongs
+# wherever it holds for every env class rather than only for the five whose scenarios
+# happened to bind that one step.
+
+
+def _env_classes() -> list[tuple[str, type]]:
+    """Every concrete env class shipped under tests/harness/, by module.
+
+    Keyed on ``obj.__module__ == module`` so a class is graded once, in the module that
+    DEFINES it, rather than once per module that imports it -- and so the test-local
+    doubles defined inside this file's own tests (``_TestEnv``, whose patch target is
+    deliberately ``os.getcwd``) are not swept in. Test modules are skipped for the same
+    reason.
+    """
+    import importlib
+    import inspect
+    from pathlib import Path
+
+    from tests.harness._base import BaseTestEnv
+
+    out: list[tuple[str, type]] = []
+    for path in sorted(Path(__file__).parent.glob("*.py")):
+        if path.name.startswith(("test_", "__")):
+            continue
+        module = f"tests.harness.{path.stem}"
+        mod = importlib.import_module(module)
+        for name, obj in vars(mod).items():
+            if (
+                inspect.isclass(obj)
+                and issubclass(obj, BaseTestEnv)
+                and obj is not BaseTestEnv
+                and obj.__module__ == module
+            ):
+                out.append((f"{path.stem}.{name}", obj))
+    return out
+
+
+_ENV_CLASSES = _env_classes()
+
+
+def test_env_classes_were_enumerated() -> None:
+    """The parametrized test below is only evidence if it was handed some envs.
+
+    A ``_env_classes()`` that silently returned [] would make every row below vanish and
+    the file would still be green -- the dormant-subject failure this repo keeps finding.
+    """
+    assert len(_ENV_CLASSES) >= 25, (
+        f"only {len(_ENV_CLASSES)} env classes enumerated ({[n for n, _ in _ENV_CLASSES]}) -- "
+        "the harness has ~30; a collapsed enumeration would make the per-env assertion vacuous"
+    )
+
+
+@pytest.mark.parametrize(("env_name", "env_cls"), _ENV_CLASSES, ids=[n for n, _ in _ENV_CLASSES])
+def test_external_patch_targets_name_production_seams(env_name: str, env_cls: type) -> None:
+    """Every EXTERNAL_PATCHES target names a production seam under ``src.``.
+
+    A target pointing anywhere else intercepts nothing production calls, so an env
+    declaring one is misconfigured: its scenarios would run against the real collaborator
+    while the harness reports a mock in place.
+
+    ONLY THIS HALF IS ASSERTED, and the omission is measured rather than assumed. The
+    companion clause the BDD step also carried -- "every env declares at least one
+    production seam" -- is FALSE here: seven env classes declare no patches at all
+    (IntegrationEnv, BareIntegrationEnv, MediaBuyAccountEnv, MediaBuyListEnv,
+    OrderApprovalWebhookEnv, ProtocolWebhookEnv, TaskManagementEnv), because they drive a
+    real database and a real wire and have no external collaborator to displace. Asserting
+    it would assert something untrue of a quarter of the envs; it only ever passed in the
+    step because the five envs that step could reach happened to declare something -- and
+    for CreativeListEnv that something was an audit logger, not an ad-platform client.
+    """
+    targets = dict(env_cls.EXTERNAL_PATCHES)
+    outside = sorted(name for name, target in targets.items() if not str(target).startswith("src."))
+    assert outside == [], (
+        f"{env_name} declares EXTERNAL_PATCHES target(s) outside production: "
+        f"{ {n: targets[n] for n in outside} } -- a target that is not a src.* seam "
+        "intercepts nothing production calls, so the env would run against the real "
+        "collaborator while reporting a mock in place"
+    )

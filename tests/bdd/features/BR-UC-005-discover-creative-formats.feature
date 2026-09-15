@@ -1132,7 +1132,6 @@ Feature: BR-UC-005 Discover Creative Formats
     And the response status should be "completed"
     And the response should contain "formats" array
     And the response should include sandbox equals true
-    And no real ad platform API calls should have been made
     # BR-RULE-209 INV-1: inputs validated same as production
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true

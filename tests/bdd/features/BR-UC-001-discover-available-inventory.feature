@@ -1414,7 +1414,6 @@ Feature: BR-UC-001 Discover Available Inventory
     Then the response status should be "completed"
     And the response should contain "products" array
     And the response should include sandbox equals true
-    And no real ad platform API calls should have been made
     And no real billing records should have been created
     # BR-RULE-209 INV-1: inputs validated same as production
     # BR-RULE-209 INV-2: real ad platform calls suppressed

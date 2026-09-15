@@ -748,7 +748,6 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And the response should contain "creatives" array
     And the response should include sandbox equals true
-    And no real ad platform API calls should have been made
     # BR-RULE-209 INV-1: inputs validated same as production
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true

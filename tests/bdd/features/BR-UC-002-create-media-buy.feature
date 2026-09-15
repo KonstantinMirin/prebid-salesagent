@@ -2051,11 +2051,17 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy success spec
     And the response status should be "completed"
     And the response should include sandbox equals true
-    And no real ad platform orders should have been created
     And no real billing records should have been created
     # BR-RULE-209 INV-1: inputs validated same as production
-    # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-3: real billing suppressed
+    #
+    # INV-2 ("real ad platform calls suppressed") is NOT graded here, and the line that
+    # claimed to grade it is gone. "And no real ad platform orders should have been
+    # created" bound then_no_real_orders_created, which asserted require_payload +
+    # sandbox is True -- character for character the same as then_sandbox_true, whose
+    # sentence sits on the line above. Grading INV-2 needs an instrument outside a Then
+    # (a structural guard over what a sandbox-serving tool imports, or an egress
+    # observable the live server also writes); a duplicate sandbox read was not one.
     # BR-RULE-209 INV-4: response includes sandbox: true
 
   @T-UC-002-sandbox-production @invariant @br-rule-209 @sandbox
@@ -2088,7 +2094,6 @@ Feature: BR-UC-002 Create Media Buy
     Then the response is compliant with the create_media_buy spec
     And the reference should resolve to the sandbox account for that brand and operator
     And the response should include sandbox equals true
-    And no real ad platform orders should have been created
     # BR-RULE-209 INV-8 + BR-RULE-080 INV-10: natural-key (brand+operator+sandbox:true) resolves to sandbox account without prior sync_accounts provisioning
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/create-media-buy-request.json
 

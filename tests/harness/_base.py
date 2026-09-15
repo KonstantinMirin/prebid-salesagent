@@ -1499,9 +1499,12 @@ class BaseTestEnv:
         (:func:`_e2e_external_seams_exercised`).
 
         DECLARED ON ``BaseTestEnv``, NOT ``IntegrationEnv``, and that placement is the
-        fix for a near-miss rather than a preference. ``then_no_real_api_calls`` is a
-        GENERIC step -- UC-001, UC-004, UC-005, UC-018 and UC-019 sandbox scenarios all
-        carry it -- so the envs it can reach are not one family. Five env classes in
+        fix for a near-miss rather than a preference. NOTE: the caller that motivated it,
+        the generic ``then_no_real_api_calls`` step, is DELETED -- its obligation has no
+        wire observable and production violates it (see that step's removal note in
+        tests/bdd/steps/generic/then_success.py), so this property currently has no
+        caller. It is kept here, at the base, because the original reasoning holds for
+        any future one: Five env classes in
         ``tests/harness/`` extend ``BaseTestEnv`` directly (the ``*_unit.py`` variants of
         ProductEnv / DeliveryPollEnv / WebhookEnv / CircuitBreakerEnv, plus
         MediaBuyUpdateEnv), and on ``IntegrationEnv`` this property was an

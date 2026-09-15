@@ -1063,6 +1063,12 @@ EXPECTED_ENV_MOCK_REACHES: frozenset[tuple[str, str]] = frozenset(
         # the live server served (the UC-018 sandbox scenario failed on it in
         # innet_150926_0258). It now asks ``env.external_seams_exercised``, a named
         # harness accessor whose e2e branch reads the audit row the server wrote.
+        #
+        # LATER THE SAME DAY: the step itself is gone, sentence and all. The obligation it
+        # bound ("no real ad platform API calls") has no wire observable, is true by
+        # construction inside a mocked harness, and production violates it (GH #2074:
+        # resolve_account() discards the sandbox flag, so a sandbox account reaches the real
+        # ad server). See the note at the foot of tests/bdd/steps/generic/then_success.py.
     }
 )
 

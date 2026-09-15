@@ -1121,13 +1121,17 @@ def then_wire_error_key_absent(ctx: dict, key: str) -> None:
     step cannot be satisfied by "no error happened" -- it needs a real error envelope that
     simply does not carry *key*.
     """
-    from tests.helpers.envelope_assertions import locate_envelope_error
+    from tests.helpers.envelope_assertions import locate_envelope_error, locate_envelope_mirror
 
     envelope = wire_error_dict(ctx)
     error = locate_envelope_error(envelope)
     assert error is not None, f"no errors[0] object in the wire envelope to check for {key!r}: {envelope!r}"
     assert key not in error, f"errors[0] carries a forbidden {key!r}: {error[key]!r} (full entry: {error!r})"
-    mirror = envelope.get("adcp_error") or {}
+    # Both layers through their own LOCATORS, never a direct ``envelope.get("adcp_error")``.
+    # The mirror is a protocol position, so where it lives is the harness's answer to give
+    # once (tests/unit/test_architecture_bdd_wire_discipline.py check (c)); this step only
+    # asks the containment question.
+    mirror = locate_envelope_mirror(envelope)
     assert key not in mirror, f"adcp_error carries a forbidden {key!r}: {mirror[key]!r} (full mirror: {mirror!r})"
 
 

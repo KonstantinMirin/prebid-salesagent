@@ -73,6 +73,37 @@ def locate_envelope_error(target: Any) -> dict[str, Any] | None:
     return errors[0] if errors else None
 
 
+def locate_envelope_mirror(target: Any) -> dict[str, Any]:
+    """The envelope-layer error object (``adcp_error``) — the mirror position.
+
+    The sibling of :func:`locate_envelope_error`, and the reason it exists is that the
+    two layers are not interchangeable: ``errors[0]`` is where error.json defines the
+    per-error fields, and ``adcp_error`` is the envelope-level mirror the buyer reads
+    first. A step whose obligation covers BOTH layers (an absence check — a disclosure
+    that reaches only the mirror is still on the wire) therefore needs a locator for
+    this one too, and before this existed the only way to reach it from a step was
+    ``envelope.get("adcp_error")`` — a second answer to "where does the spec put this?",
+    which is what tests/unit/test_architecture_bdd_wire_discipline.py forbids.
+
+    Returns ``{}`` rather than ``None`` for an absent or non-dict mirror, because every
+    caller so far asks a containment question (``key not in mirror``) and an empty dict
+    answers that correctly without each of them writing its own ``or {}``.
+
+    ``assert_envelope_shape`` below still indexes ``body["adcp_error"]`` directly. That
+    is not an oversight and not a second locator: it asserts the mirror is PRESENT
+    (``assert "adcp_error" in body``) before reading required fields off it, so it needs
+    the KeyError, where this returns a default. Routing it through here would be a
+    worthwhile follow-up only if the presence assertion moved with it.
+    """
+    if target is None:
+        return {}
+    body = target.envelope if hasattr(target, "envelope") else target
+    if not isinstance(body, dict):
+        return {}
+    mirror = body.get("adcp_error")
+    return mirror if isinstance(mirror, dict) else {}
+
+
 def locate_envelope_errors(target: Any) -> list[dict[str, Any]]:
     """Every payload-layer error object, in wire order.
 

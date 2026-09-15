@@ -1620,7 +1620,6 @@ Feature: BR-UC-019 Query Media Buys
     Then the response is compliant with the get_media_buys spec
     And the response should contain "media_buys" array
     And the response should include sandbox equals true
-    And no real ad platform API calls should have been made
     # BR-RULE-209 INV-1: inputs validated same as production
     # BR-RULE-209 INV-2: real ad platform calls suppressed
     # BR-RULE-209 INV-4: response includes sandbox: true
