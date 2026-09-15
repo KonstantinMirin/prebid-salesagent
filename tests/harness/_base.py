@@ -1122,15 +1122,23 @@ class BaseTestEnv:
 
         An env whose tool has no single pinned response model declares no
         ``RESPONSE_MODEL`` and overrides this; the refusal below is what it used to be.
+
+        ``revive`` only when the model HAS one. Some envs name the LIBRARY response type
+        rather than a local subclass of ``AdcpResponse`` — ``CapabilitiesEnv`` does — and a
+        library model carries no context refusal to work around, so plain construction is
+        correct for it. Refusing instead cost 97 UC-010 failures in one run: measured as
+        NEW between two remote runs, every one of them this frame raising
+        NotImplementedError. The client-side twin (tests/harness/client.py
+        ``_parse_pinned_response``) already had this fallback; the two now agree.
         """
         model = self.RESPONSE_MODEL
-        revive = getattr(model, "revive", None)
-        if revive is None:
+        if model is None:
             raise NotImplementedError(
-                f"{type(self).__name__} declares no RESPONSE_MODEL with a revive() and does not "
-                "override parse_rest_response(). Do one or the other to enable Transport.REST."
+                f"{type(self).__name__} declares no RESPONSE_MODEL and does not override "
+                "parse_rest_response(). Do one or the other to enable Transport.REST."
             )
-        return cast("BaseModel", revive(data))
+        revive = getattr(model, "revive", None)
+        return cast("BaseModel", revive(data) if revive is not None else model(**data))
 
     def parse_rest_error_envelope(self, status_code: int, data: dict[str, Any]) -> dict[str, Any] | None:
         """The two-layer envelope from a REST error body, or ``None``.
