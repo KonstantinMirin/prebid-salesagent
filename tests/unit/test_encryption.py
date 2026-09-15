@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from cryptography.fernet import Fernet
 
+from src.core.config import load_settings
 from src.core.utils.encryption import (
     decrypt_api_key,
     encrypt_api_key,
@@ -86,14 +87,21 @@ class TestEncryptDecrypt:
             decrypt_api_key("not-valid-fernet-token")
 
     def test_decrypt_with_wrong_key(self, encryption_key):
-        """Test that decrypting with wrong key fails."""
+        """Test that decrypting with wrong key fails.
+
+        The key is read off the settings object, which is built once and cached
+        (src/core/config.py), so swapping the environment mid-test only takes
+        effect after ``load_settings()`` rebuilds it.
+        """
         # Encrypt with one key
         with patch.dict(os.environ, {"ENCRYPTION_KEY": encryption_key}):
+            load_settings()
             encrypted = encrypt_api_key("test-key")
 
         # Try to decrypt with different key
         wrong_key = Fernet.generate_key().decode()
         with patch.dict(os.environ, {"ENCRYPTION_KEY": wrong_key}):
+            load_settings()
             with pytest.raises(ValueError, match="Invalid encrypted data or wrong encryption key"):
                 decrypt_api_key(encrypted)
 

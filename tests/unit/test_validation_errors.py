@@ -117,7 +117,7 @@ def test_validation_error_formatting():
         )
     except ValidationError as e:
         # Use the shared helper function
-        error_msg = format_validation_error(e, context="test request")
+        error_msg = format_validation_error(e, label="test request")
 
         # Check that we got a helpful error message
         assert "Invalid test request:" in error_msg

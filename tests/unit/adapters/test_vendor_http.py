@@ -9,9 +9,8 @@ site has one — which is the reason to test it here, not a reason to skip it.
 The overlap rule's refusal is graded by CHANNEL, not by sentence. Under ADR-010
 the buyer-facing text is a function of the code, so an assertion on ``str(exc)``
 grades ``CODE_TABLE`` rather than this module: the clashing keys are the
-structured fact and live in ``details.rejected_value``, the authored diagnostic
-lives in the non-wire ``internal_detail``, and the buyer-facing message must
-name NEITHER the keys nor the vendor's dial coordinates — AdCP 3.1.1
+structured fact and live in ``details.rejected_value``, and the buyer-facing
+message must name NEITHER the keys nor the vendor's dial coordinates — AdCP 3.1.1
 ``transport-errors.mdx`` § Security Considerations forbids credentials, tokens
 and internal service names in any client-facing field.
 """
@@ -58,11 +57,6 @@ def _assert_clash_refusal(exc: AdCPConfigurationError, *, clashing_keys: list[st
     # not membership, is what proves a non-clashing key is never blamed.
     assert isinstance(exc.details, ConfigurationDetails)
     assert exc.details.rejected_value == clashing_keys
-
-    # The authored diagnostic: server-side only, and it names what an operator needs.
-    assert isinstance(exc.internal_detail, str)
-    for key in clashing_keys:
-        assert key in exc.internal_detail, f"the operator diagnostic must name {key}"
 
     # Buyer-facing text is a function of the code (ADR-010) — not authored here.
     assert exc.message == CODE_TABLE[exc.error_code].message
@@ -144,7 +138,6 @@ class TestParamsMerge:
         # matching inside "access_token", and graded prose to do it.
         _assert_clash_refusal(exc_info.value, clashing_keys=["access_token", "network"])
         assert "ok" not in exc_info.value.details.rejected_value, "a key that does not clash must not be blamed"
-        assert "'ok'" not in exc_info.value.internal_detail, "the diagnostic must not blame a key that does not clash"
 
 
 class TestImmutability:

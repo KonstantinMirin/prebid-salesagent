@@ -354,6 +354,7 @@ def _make_capabilities_identity(
 def _patch_capabilities_deps(
     adapter=None,
     db_partners=None,
+    products=None,
 ):
     """Return a context manager stack patching common capabilities dependencies.
 
@@ -368,6 +369,13 @@ def _patch_capabilities_deps(
         adapter: Mock adapter CLASS-equivalent to return from
             get_adapter_class_for_tenant (None = adapter resolution raises).
         db_partners: List of mock PublisherPartner objects from DB query.
+        products: List of mock Product rows the tenant's catalog holds. The
+            portfolio's primary_channels are the union of what each product
+            effectively offers (capabilities.py ``_map_portfolio_channels``), so
+            this lookup has to be patched or the unit-test DB guard turns the
+            whole section into a degradation advisory. The default — an empty
+            catalog — is the fallback path where the adapter's own
+            ``default_channels`` decide.
     """
     from contextlib import ExitStack
 
@@ -381,6 +389,16 @@ def _patch_capabilities_deps(
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.tenant_config = mock_repo
     stack.enter_context(patch("src.core.tools.capabilities.TenantConfigUoW", return_value=mock_uow))
+
+    # ProductUoW is imported inside _map_portfolio_channels, so it is patched on
+    # its owning module rather than on capabilities.
+    mock_product_repo = MagicMock()
+    mock_product_repo.list_all.return_value = products or []
+    mock_product_uow = MagicMock()
+    mock_product_uow.__enter__ = MagicMock(return_value=mock_product_uow)
+    mock_product_uow.__exit__ = MagicMock(return_value=False)
+    mock_product_uow.products = mock_product_repo
+    stack.enter_context(patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_product_uow))
 
     # Mock log_tool_activity (no-op)
     stack.enter_context(patch("src.core.tools.capabilities.log_tool_activity"))

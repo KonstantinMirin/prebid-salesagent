@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
-from src.core.schemas import UpdateMediaBuySuccess
+from src.adapters.base import AdapterUpdateResult
 
 
 def test_update_package_budget_persists_to_database():
@@ -74,8 +74,9 @@ def test_update_package_budget_persists_to_database():
         # Verify flag_modified was called
         mock_flag_modified.assert_called_once_with(mock_package, "package_config")
 
-        # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess)
+        # The adapter hands back its own carrier; the tool builds the buyer's
+        # UpdateMediaBuySuccess from the re-read row (src/adapters/base.py).
+        assert isinstance(result, AdapterUpdateResult)
         assert result.media_buy_id == media_buy_id
 
         # Verify database was updated
@@ -203,7 +204,7 @@ def test_pause_resume_package_actions_work():
         mock_adapter.orders_manager.pause_line_item.assert_called_once_with("123456")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "pause_package should return success"
+        assert isinstance(result, AdapterUpdateResult), "pause_package should return success"
         assert result.media_buy_id == media_buy_id
 
         # Reset mocks for next test
@@ -225,7 +226,7 @@ def test_pause_resume_package_actions_work():
         mock_adapter.orders_manager.resume_line_item.assert_called_once_with("123456")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "resume_package should return success"
+        assert isinstance(result, AdapterUpdateResult), "resume_package should return success"
         assert result.media_buy_id == media_buy_id
 
 
@@ -281,7 +282,7 @@ def test_pause_resume_media_buy_actions_work():
         mock_adapter.orders_manager.pause_line_item.assert_any_call("222")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "pause_media_buy should return success"
+        assert isinstance(result, AdapterUpdateResult), "pause_media_buy should return success"
         assert result.media_buy_id == media_buy_id
 
         # Reset mocks for next test
@@ -305,7 +306,7 @@ def test_pause_resume_media_buy_actions_work():
         mock_adapter.orders_manager.resume_line_item.assert_any_call("222")
 
         # Verify success response
-        assert isinstance(result, UpdateMediaBuySuccess), "resume_media_buy should return success"
+        assert isinstance(result, AdapterUpdateResult), "resume_media_buy should return success"
         assert result.media_buy_id == media_buy_id
 
 

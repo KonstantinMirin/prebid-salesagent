@@ -143,12 +143,14 @@ def test_a_non_classification_knob_fails_loudly(monkeypatch: pytest.MonkeyPatch)
     an unmappable knob is a broken test fixture and must say so, not silently pick
     a class.
 
-    "Say so" is graded on the channel that now carries an authored diagnostic.
-    Buyer-facing text is derived from the code under ADR-010, so the refusal
-    speaks through the non-wire ``internal_detail``: it must name the spelling
-    that was rejected, say what is wrong with it, and name the vocabulary an
-    operator should have used. And the rejected spelling — a fixture's free
-    string — must reach no client-facing field.
+    "Say so" is graded on the CLASS, which is the only channel the refusal has
+    left. Buyer-facing text is derived from the code under ADR-010, and
+    ``internal_detail`` is typed ``BaseException | None`` and never takes an
+    authored string, so the refusal carries no sentence naming the rejected
+    spelling. What is gradable is that the knob refuses rather than picking a
+    class, with the classification that says the fault is the deployment's own
+    (CONFIGURATION_ERROR / terminal / 500), and that the rejected spelling — a
+    fixture's free string — reaches no client-facing field.
     """
     adapter = _adapter_with_behavior(monkeypatch, {"fail_on_create": True, "recovery": "retryable"})
 
@@ -160,19 +162,14 @@ def test_a_non_classification_knob_fails_loudly(monkeypatch: pytest.MonkeyPatch)
     # terminal and 5xx are the point of the class, not an incidental detail.
     _assert_pinned_envelope(exc, code=ErrorCode.CONFIGURATION_ERROR)
 
-    # Loud: the operator diagnostic names the offending value, the fault, and the fix.
-    assert isinstance(exc.internal_detail, str)
-    assert "retryable" in exc.internal_detail, "the diagnostic must name the spelling it rejected"
-    assert "not a recovery classification" in exc.internal_detail, "the diagnostic must say what is wrong"
-    for classification in ("transient", "terminal", "correctable"):
-        assert classification in exc.internal_detail, f"the diagnostic must offer {classification!r} as a valid knob"
+    # The refusal is the class itself, carrying no authored sentence about the knob.
+    assert exc.internal_detail is None
 
-    # Server-side only. The rejected spelling is a test fixture's own string; it has
-    # no business on a buyer's wire, and neither does our knob vocabulary.
+    # The rejected spelling is a test fixture's own string; it has no business on a
+    # buyer's wire, and neither does our knob vocabulary.
     wire = _buyer_facing_wire(exc)
     assert "retryable" not in wire, "a rejected fixture knob must never reach the buyer"
     assert "test_behavior" not in wire, "the buyer must not be told about our injection plumbing"
-    assert exc.internal_detail not in wire, "the authored diagnostic is non-wire by construction"
 
 
 def test_the_flag_gates_the_raise(monkeypatch: pytest.MonkeyPatch) -> None:

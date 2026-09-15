@@ -252,15 +252,20 @@ class TestDebugEndpointGate:
         Read off the app that was actually built, in whichever mode this process runs, so
         both directions are graded: routes present when the allowance is on, and no route
         to reach at all when it is off.
+
+        The allowance is read from ``src.app.settings`` -- the object the mount decision
+        was made from -- not from ``get_settings()``. ``src/app.py`` calls
+        ``load_settings()`` at import, and another test module importing the app during
+        collection builds it under the ambient environment rather than this test's, so
+        the live settings object can disagree with the one the app was built from.
         """
-        from src.app import app
-        from src.core.config import get_settings
+        from src.app import app, settings
         from src.routes.health import debug_router
 
         declared = {route.path for route in debug_router.routes}
         mounted = {getattr(route, "path", None) for route in app.routes}
 
-        if get_settings().debug_routes_enabled:
+        if settings.debug_routes_enabled:
             assert declared and declared <= mounted, (
                 f"the allowance is on, so every debug route must be mounted; missing {declared - mounted}"
             )

@@ -305,8 +305,15 @@ class TestBuildCreateSuccess:
         assert "buyer_ref" not in result.model_dump()
         assert "buyer_ref" not in result.model_dump_json()
 
-    def test_result_is_create_media_buy_success_type(self):
-        """Return type is CreateMediaBuySuccess."""
+    def test_result_is_the_adapter_carrier_not_the_wire_model(self):
+        """The helper returns ``AdapterCreateResult``, never the buyer's success model.
+
+        The adapter hands the tool a seller-internal carrier (it holds the
+        per-package ad-server line-item ids); ``media_buy_create`` builds the
+        buyer's ``CreateMediaBuySuccess`` from the persisted row. Asserting the
+        carrier is NOT the wire model is what keeps the two from merging again.
+        """
+        from src.adapters.base import AdapterCreateResult
         from src.core.schemas import CreateMediaBuySuccess
 
         adapter = _make_adapter_instance()
@@ -315,4 +322,5 @@ class TestBuildCreateSuccess:
             packages=[_make_media_package()],
         )
 
-        assert isinstance(result, CreateMediaBuySuccess)
+        assert isinstance(result, AdapterCreateResult)
+        assert not isinstance(result, CreateMediaBuySuccess)

@@ -1,6 +1,8 @@
 """Tests for shared timeout utilities."""
 
+import logging
 import time
+from concurrent import futures
 
 import pytest
 
@@ -106,19 +108,31 @@ class TestTimeoutError:
 
         assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
 
-    def test_diagnostic_is_non_wire(self):
-        """The function name and duration reach the log, never the buyer."""
+    def test_diagnostic_is_non_wire(self, caplog):
+        """The function name and duration reach the log, never the buyer.
+
+        ``internal_detail`` is typed ``BaseException | None`` and never takes an
+        authored string, so the authored diagnostic has exactly one channel left:
+        the log record. The exception it carries is the underlying
+        ``concurrent.futures.TimeoutError`` — non-wire by construction, and the
+        cause the boundary attaches a traceback for.
+        """
 
         @timeout(seconds=1)
         def hangs():
             time.sleep(5)
 
-        with pytest.raises(AdCPServiceUnavailableError) as exc_info:
-            hangs()
+        with caplog.at_level(logging.ERROR, logger="src.adapters.utils.timeout"):
+            with pytest.raises(AdCPServiceUnavailableError) as exc_info:
+                hangs()
 
-        # internal_detail is non-wire by construction and carries the diagnostic.
-        assert "hangs" in str(exc_info.value.internal_detail)
-        assert "timed out after 1 seconds" in str(exc_info.value.internal_detail)
+        diagnostic = "\n".join(record.getMessage() for record in caplog.records)
+        assert "hangs" in diagnostic, "the operator log must name the operation that hung"
+        assert "timed out after 1s" in diagnostic, "the operator log must name the elapsed limit"
+
+        # The non-wire channel carries the cause itself, not a sentence about it.
+        assert isinstance(exc_info.value.internal_detail, futures.TimeoutError)
+        assert "hangs" not in exc_info.value.message, "the buyer-facing sentence must not name our internals"
 
 
 class TestBackwardsCompatibility:
