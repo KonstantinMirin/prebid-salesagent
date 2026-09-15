@@ -3464,6 +3464,57 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated to _UC026_PARTITION_SELECTIVE (x2l0): keyword boundary/partition
             # tags now mostly pass — only REST update dispatch + specific cross-transport
             # validation gaps remain. Selective xfail handles the narrower failure set.
+            #
+            # ── Added 2026-09-15, when UC-026 was connected to the suite at all ──
+            # These tags never reported a verdict before: the use case had no ENV_ROUTES
+            # row and its step module was absent from pytest_plugins, so all 75 scenarios
+            # xfailed at fixture setup. Now that they dispatch, each of these fails on a
+            # response the seller does not produce. Every reason below is the assertion
+            # the scenario actually reports, not a guess -- the misclassification tripwire
+            # above rejects a dormancy or a Given-side error dressed as a production gap,
+            # and these were each cleared through it.
+            #
+            # ONLY tags whose EVERY row fails belong in this set. A tag here xfails all
+            # of its parametrized rows, so listing an outline that fails two rows out of
+            # twelve converts the other ten from passing to xpassed -- grading removed,
+            # not gained. Measured before listing: these four are whole-scenario failures
+            # on a2a, mcp and rest alike. The outlines that fail only some rows are in
+            # _UC026_PARTITION_SELECTIVE below, keyed by the row.
+            #
+            # format_ids: not defaulted to the product's formats when the package omits
+            # them, and absent from the response when the package supplies them. The
+            # pinned 3.1 core/package.json declares the field on the returned package.
+            "T-UC-026-main-required-fields",
+            "T-UC-026-main-explicit-formats",
+            # catalogs accepted but not echoed on the created package.
+            "T-UC-026-inv-089-2",
+            # price_breakdown absent from the create response, so the default
+            # list_price == option rate claim has nothing to read.
+            "T-UC-026-inv-196-3",
+            # Cancellation, now that both scenarios actually dispatch. Neither is
+            # dormant any more -- their Givens realize a canceled package through the
+            # real update path, and their Thens read the wire -- so these two reasons
+            # are production's measured answers:
+            #
+            #   alt-cancel: the update response carries NO packages at all, so the
+            #   canceled=true echo has nothing to be read from. Same family as the
+            #   AffectedPackage-lacks-state note above.
+            "T-UC-026-alt-cancel",
+            #   alt-cancel-irreversible: the seller DOES refuse canceled=false, but the
+            #   envelope names field 'media_buy_id' rather than 'canceled', so the buyer
+            #   is not told which field violated the const. The refusal is right and the
+            #   field pointer is wrong.
+            "T-UC-026-alt-cancel-irreversible",
+            # HARNESS gap, not a production one, and the distinction is the point. The
+            # scenario opens "the Buyer owns a media buy with a package that has already
+            # SETTLED", and nothing reaches that state: settlement is billing-side, no
+            # buyer-facing request performs it, and no seeding path writes one. Its Given
+            # creates the package and stops, so production is handed an ordinary active
+            # package and cancels it instead of refusing with NOT_CANCELLABLE. Production
+            # is not failing here -- it is being asked a different question than the
+            # scenario means to ask. Graduating this needs a way to persist a settled
+            # package, after which the scenario grades the refusal for real.
+            "T-UC-026-ext-j",
         }
         if marker_names & _UC026_XFAIL_TAGS:
             item.add_marker(
@@ -3484,6 +3535,87 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #      creative_assignments/optimization_goals replacement, empty keyword
         #      validation not implemented
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
+            # ── Added 2026-09-15 with the UC-026 wiring. Row-keyed, not tag-keyed,
+            # because each of these outlines fails a MINORITY of its rows and the rest
+            # genuinely pass; xfailing the whole tag would have turned those passes into
+            # xpasses and deleted the coverage the wiring just produced.
+            (
+                "T-UC-026-boundary-format-ids",
+                {"format_id from different product", "one unsupported format_id among valid ones"},
+                "a format_id the product does not carry is accepted instead of refused with "
+                "INVALID_REQUEST — the valid-format rows of this outline pass",
+            ),
+            (
+                "T-UC-026-partition-format-ids",
+                {"unsupported_format"},
+                "a format_id the product does not carry is accepted instead of refused with "
+                "INVALID_REQUEST — the valid-format rows of this outline pass",
+            ),
+            # Keyword / negative-keyword conflict and empty-value validation. Every
+            # failing row is REST-only, which matches the REST update-dispatch note
+            # recorded further down; a2a and mcp pass the same rows.
+            (
+                "T-UC-026-boundary-keyword-add",
+                {"empty keyword string"},
+                "empty keyword value not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-boundary-keyword-remove",
+                {"empty keyword string"},
+                "empty keyword value not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-boundary-kw-add-shared",
+                {"keyword_targets_add WITH targeting_overlay.keyword_targets"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-boundary-kw-remove-shared",
+                {"keyword_targets_remove WITH targeting_overlay.keyword_targets"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-boundary-neg-kw-add",
+                {"negative_keywords_add WITH targeting_overlay.negative_keywords"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-boundary-neg-kw-remove",
+                {"negative_keywords_remove WITH targeting_overlay.negative_keywords"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-partition-kw-add-shared",
+                {"conflict_with_overlay"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-partition-kw-remove-shared",
+                {"conflict_with_overlay"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-partition-neg-kw-add",
+                {"conflict_with_overlay"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            (
+                "T-UC-026-partition-neg-kw-remove",
+                {"conflict_with_overlay"},
+                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+            ),
+            # Replacement semantics: only the targeting_overlay rows fail. The catalogs
+            # and scalar-patch rows of the same outlines pass.
+            (
+                "T-UC-026-boundary-replacement",
+                {"targeting_overlay replacement (full swap)"},
+                "targeting_overlay is not replaced wholesale on update",
+            ),
+            (
+                "T-UC-026-partition-replacement",
+                {"replace_targeting_overlay"},
+                "targeting_overlay is not replaced wholesale on update",
+            ),
             # budget=0 rejected with BUDGET_TOO_LOW — spec says 0 is valid
             (
                 "T-UC-026-partition-required-fields",

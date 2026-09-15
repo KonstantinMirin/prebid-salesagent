@@ -12,7 +12,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import payload_or_none, require_payload
+from tests.bdd.steps._outcome_helpers import assert_wire_rejection, payload_or_none, require_payload
 from tests.bdd.steps.generic._table import as_bool
 from tests.bdd.steps.generic.given_media_buy import _ensure_request_defaults
 
@@ -44,6 +44,30 @@ def _resolve_pricing_id(ctx: dict, label: str) -> str:
     """
     mapping = ctx.get("pricing_option_map", {})
     return mapping.get(label, label)
+
+
+def _resolve_product_id(ctx: dict, label: str) -> str:
+    """Map a feature-file product label to the seeded product's real ``product_id``.
+
+    The exact counterpart of :func:`_resolve_pricing_id`, and missing for the same
+    reason that one exists: the feature writes a readable label (``prod-1``) while the
+    seeded row carries the harness's own id (``prod_1``). ``pricing_option_id`` was
+    resolved through a map and ``product_id`` was passed through verbatim, so a package
+    built from a data table named a product that does not exist and production answered
+    PRODUCT_NOT_FOUND -- a rejection the scenario never intended to grade.
+
+    ONLY the label the scenario actually declared is resolved -- the one its Background
+    named, recorded by :func:`_scenario_product`. Any other string passes through
+    verbatim, so a scenario that deliberately names a product the seller does not have
+    still reaches production with that name and still gets its refusal. Rewriting every
+    product_id to the seeded row would have silently disarmed exactly those scenarios.
+    """
+    product = ctx.get("default_product")
+    declared = ctx.get("uc026_product_label")
+    if product is None or declared is None or label != declared:
+        return label
+    seeded = getattr(product, "product_id", None)
+    return str(seeded) if seeded else label
 
 
 def _pkg_field(pkg: Any, field: str) -> Any:
@@ -426,28 +450,22 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
 # --- Package table request construction ---
 
 
-def _build_package_request(ctx: dict, datatable: list[list[str]], transport: str) -> None:
-    """Shared: build request kwargs with a package from data table."""
-    kwargs = _ensure_request_defaults(ctx)
-    _apply_package_table(kwargs, datatable, ctx)
-
-
-@given(parsers.parse("a valid create_media_buy MCP tool request with packages array containing:"))
-def given_mcp_request_with_packages(ctx: dict, datatable: list[list[str]]) -> None:
-    """Build create request with a single package from data table (MCP)."""
-    _build_package_request(ctx, datatable, "mcp")
-
-
-@given(parsers.parse("a valid create_media_buy A2A task request with packages array containing:"))
-def given_a2a_request_with_packages(ctx: dict, datatable: list[list[str]]) -> None:
-    """Build create request with a single package from data table (A2A)."""
-    _build_package_request(ctx, datatable, "a2a")
+# The MCP- and A2A-named variants of the Given below are deleted with the two
+# scenarios that bound them. Package creation is transport-independent, so a Given
+# that names a transport asserts nothing about the seller, and the tags those
+# scenarios carried opted them out of parametrization entirely — see the note in
+# BR-UC-026-package-media-buy.feature where the pair stood.
+#
+# The shared ``_build_package_request`` helper went with them: it took a
+# ``transport`` argument that no branch ever read — the three Givens differed only
+# in the string they passed — which is the same claim the scenarios made and could
+# not keep. One caller and two statements do not need a helper.
 
 
 @given(parsers.parse("a valid create_media_buy request with a package containing:"))
 def given_request_with_package(ctx: dict, datatable: list[list[str]]) -> None:
-    """Build create request with a single package from data table (generic)."""
-    _build_package_request(ctx, datatable, "impl")
+    """Build create request with a single package from the data table."""
+    _apply_package_table(_ensure_request_defaults(ctx), datatable, ctx)
 
 
 def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | None = None) -> None:
@@ -459,7 +477,7 @@ def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | N
     for row in datatable:
         field, value = row[0].strip(), row[1].strip()
         if field == "product_id":
-            pkg["product_id"] = value
+            pkg["product_id"] = _resolve_product_id(ctx or {}, value)
         elif field == "budget":
             pkg["budget"] = float(value)
         elif field == "pricing_option_id":
@@ -591,13 +609,7 @@ def given_product_not_exists(ctx: dict, product_id: str) -> None:
 @given(parsers.parse('the pricing_option_id "{option}" is not in product "{product_id}" pricing_options'))
 def given_pricing_not_in_product(ctx: dict, option: str, product_id: str) -> None:
     """Assert that a pricing option is not offered by the product."""
-    product = ctx.get("default_product")
-    assert product is not None, (
-        f"No default_product in ctx — cannot verify pricing option '{option}' is absent from product '{product_id}'"
-    )
-    assert product.product_id == product_id, (
-        f"default_product has product_id '{product.product_id}', but step references '{product_id}'"
-    )
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None) or []
     actual_ids = set()
     for opt in actual_options:
@@ -649,9 +661,7 @@ def given_format_not_supported(ctx: dict, format_id: str, product_id: str) -> No
 @given(parsers.parse('the product "{product_id}" has pricing_option "{option}" in its pricing_options array'))
 def given_product_has_pricing_option(ctx: dict, product_id: str, option: str) -> None:
     """Verify product has the specified pricing option."""
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx"
-    assert product.product_id == product_id
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None)
     assert actual_options and len(actual_options) > 0, "Product has no pricing_options"
     resolved = _resolve_pricing_id(ctx, option)
@@ -667,13 +677,7 @@ def given_product_has_pricing_option(ctx: dict, product_id: str, option: str) ->
 @given(parsers.parse('the product "{product_id}" does not have pricing_option "{option}"'))
 def given_product_lacks_pricing_option(ctx: dict, product_id: str, option: str) -> None:
     """Verify the product does not have the specified pricing option."""
-    product = ctx.get("default_product")
-    assert product is not None, (
-        f"No default_product in ctx — cannot verify pricing option '{option}' is absent from product '{product_id}'"
-    )
-    assert product.product_id == product_id, (
-        f"default_product has product_id '{product.product_id}', but step references '{product_id}'"
-    )
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None) or []
     actual_ids = set()
     for opt in actual_options:
@@ -739,8 +743,17 @@ def given_buyer_owns_pkg_with_budget(ctx: dict, pkg_id: str, amount: int) -> Non
 
 
 @given(parsers.parse('the Buyer owns a media buy with an active package "{pkg_id}" (paused=false)'))
+@given(parsers.parse('the Buyer owns a media buy with an active package "{pkg_id}"'))
 def given_buyer_owns_active_pkg(ctx: dict, pkg_id: str) -> None:
-    """Create a media buy with an active (not paused) package."""
+    """Create a media buy with an active (not paused) package.
+
+    TWO sentences, ONE body, stacked on one function rather than copied into a second.
+    The feature spells this precondition both with and without the explicit
+    ``(paused=false)``, and the bare spelling had no binding at all, so every scenario
+    opening with it graded NOTHING -- the whole cancel flow among them. A second
+    function with an identical body would say the two sentences mean different things
+    while making them mean the same, which is what the duplicate-step guard refuses.
+    """
     _create_media_buy_for_update(ctx, paused=False)
 
 
@@ -748,6 +761,87 @@ def given_buyer_owns_active_pkg(ctx: dict, pkg_id: str) -> None:
 def given_buyer_owns_paused_pkg(ctx: dict, pkg_id: str) -> None:
     """Create a media buy with a paused package."""
     _create_media_buy_for_update(ctx, paused=True)
+
+
+@given(parsers.parse('the Buyer owns a media buy with a canceled package "{pkg_id}"'))
+def given_buyer_owns_canceled_pkg(ctx: dict, pkg_id: str) -> None:
+    """Create a package and then CANCEL it through the real update path.
+
+    Realized rather than asserted: cancellation is a buyer-facing operation, so the
+    precondition "owns a canceled package" is reachable by performing it. The package
+    is created, then updated with ``canceled=true`` over the same transport the
+    scenario runs on, which is what leaves a genuinely canceled package behind for the
+    When step to attempt un-cancelling.
+
+    Stashing a flag and handing the scenario an ACTIVE package would have been the
+    other option, and it is the one ``_own_pkg_with_metadata``'s docstring warns
+    against: the Then would then grade an un-cancellation of something never canceled
+    and report coverage for a transition nothing exercised.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    _create_media_buy_for_update(ctx, paused=False)
+    existing = ctx.get("existing_media_buy")
+    media_buy_id = _pkg_field(existing, "media_buy_id") if existing is not None else None
+    package_id = _pkg_field(ctx.get("existing_package"), "package_id")
+    dispatch_request(
+        ctx,
+        media_buy_id=media_buy_id,
+        account={"account_id": "acct_test"},
+        idempotency_key="uc026-cancel-precondition",
+        packages=[{"package_id": package_id, "canceled": True}],
+    )
+
+
+@when(
+    parsers.parse('the Buyer Agent attempts to send an update_media_buy request setting canceled=false on "{pkg_id}"')
+)
+def when_attempt_uncancel(ctx: dict, pkg_id: str) -> None:
+    """Dispatch a RAW update body carrying ``canceled: false``.
+
+    Raw on purpose. ``canceled`` is ``const: true`` in the pinned PackageUpdate, so
+    building ``UpdateMediaBuyRequest`` here would raise inside the step and the
+    rejection would never cross a wire — the scenario would grade the harness's own
+    exception instead of the envelope production emits. This is the same reasoning the
+    generic update dispatch above records.
+    """
+    from tests.bdd.steps.generic._dispatch import dispatch_request
+
+    existing = ctx.get("existing_media_buy")
+    media_buy_id = _pkg_field(existing, "media_buy_id") if existing is not None else None
+    package_id = _pkg_field(ctx.get("existing_package"), "package_id") or pkg_id
+    dispatch_request(
+        ctx,
+        media_buy_id=media_buy_id,
+        account={"account_id": "acct_test"},
+        idempotency_key="uc026-uncancel-attempt",
+        packages=[{"package_id": package_id, "canceled": False}],
+    )
+
+
+@given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" that has already settled'))
+def given_buyer_owns_settled_pkg(ctx: dict, pkg_id: str) -> None:
+    """Create a package. SETTLEMENT IS NOT REALIZED -- no surface reaches that state.
+
+    Settlement is a billing-side lifecycle the buyer-facing tools do not expose: there
+    is no request that settles a package, and no seeding path here writes one. So this
+    step establishes everything it honestly can and stops.
+
+    The scenario that opens with it (@T-UC-026-ext-j) therefore grades a package that
+    is NOT settled, and production cancels it rather than refusing with
+    NOT_CANCELLABLE. That failure is a HARNESS gap, and it is recorded as one at its
+    xfail in conftest rather than as a production defect -- production is not being
+    asked the question the scenario means to ask.
+
+    Defined rather than left missing on purpose. An unbound sentence makes the whole
+    scenario dormant, which reads as ordinary xfail volume; a bound one that cannot
+    reach the state fails visibly and carries a reason naming what is missing.
+
+    Routed through ``_own_pkg_with_metadata`` because that helper exists for exactly
+    this: a sentence whose claim cannot be applied keeps the claim VISIBLE at its call
+    site, where whoever wires settlement will find it.
+    """
+    _own_pkg_with_metadata(ctx, pkg_id, settled=True)
 
 
 def _own_pkg_with_metadata(ctx: dict, pkg_id: str, **metadata: Any) -> None:
@@ -825,12 +919,19 @@ def given_buyer_owns_pkg_no_neg_keyword(ctx: dict, pkg_id: str, keyword: str, ma
 def given_buyer_owns_pkg_with_product(ctx: dict, pkg_id: str, prod_id: str) -> None:
     """Create a media buy with a package linked to specific product."""
     _own_pkg_with_metadata(ctx, pkg_id, expected_product_id=prod_id)
-    # Verify the created package references the correct product
+    # Verify the created package references the product this scenario named. The
+    # comparison resolves the feature's LABEL to the seeded row's id first, the same
+    # way the package builder does -- comparing the raw label against a persisted
+    # product_id asserts a naming coincidence, and this Given is a precondition, so a
+    # failure here reads as a spec-production gap that nobody has.
     existing_pkg = ctx.get("existing_package")
     if existing_pkg is not None:
         actual_prod = _pkg_field(existing_pkg, "product_id")
+        expected_prod = _resolve_product_id(ctx, prod_id)
         if actual_prod is not None:
-            assert actual_prod == prod_id, f"Package created with product_id '{actual_prod}', expected '{prod_id}'"
+            assert actual_prod == expected_prod, (
+                f"Package created with product_id '{actual_prod}', expected '{expected_prod}'"
+            )
 
 
 @given(parsers.parse('the Buyer owns a media buy with a package "{pkg_id}" with format_ids {fmt_ids}'))
@@ -1987,6 +2088,35 @@ def then_pkg_paused_value(ctx: dict, paused: str) -> None:
     actual = _pkg_field(pkg, "paused")
     expected = as_bool(paused)
     assert actual == expected, f"Expected paused={expected}, got {actual}"
+
+
+@then(parsers.parse("the response should contain the package with canceled={canceled}"))
+def then_pkg_canceled_value(ctx: dict, canceled: str) -> None:
+    """Assert the returned package carries the expected ``canceled`` value.
+
+    The twin of the ``paused`` step above, and it had no binding at all, so the
+    cancel scenario reached its outcome and graded nothing.
+    """
+    packages = _get_packages(ctx)
+    assert packages, "No packages in response"
+    actual = _pkg_field(packages[0], "canceled")
+    expected = as_bool(canceled)
+    assert actual == expected, f"Expected canceled={expected}, got {actual}"
+
+
+@then("the request should be rejected as schema-invalid because canceled accepts only the constant true")
+def then_uncancel_rejected(ctx: dict) -> None:
+    """The wire refuses ``canceled: false``.
+
+    ``canceled`` is ``const: true`` in the pinned PackageUpdate, so un-cancellation
+    cannot be expressed on the wire at all -- the refusal is schema-level, which the
+    pin codes INVALID_REQUEST ("malformed, missing required fields, or violates schema
+    constraints") with a correctable recovery, naming the offending field.
+
+    Asserted through the shared helper on the REAL envelope, so a seller that quietly
+    accepted the un-cancellation, or refused it with some other code, fails here.
+    """
+    assert_wire_rejection(ctx, "INVALID_REQUEST", recovery="correctable", field="canceled")
 
 
 @then("the package should not deliver impressions")

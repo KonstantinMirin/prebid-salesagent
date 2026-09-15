@@ -26,14 +26,29 @@ Feature: BR-UC-026 Package Media Buy
 
 
 
-  @T-UC-026-main-mcp @main-flow @mcp @post-s1 @post-s2 @post-s3 @post-s4 @post-s5
-  Scenario: Create package via MCP -- all required fields provided
-    Given a valid create_media_buy MCP tool request with packages array containing:
+  # ONE scenario, parametrized over every transport, replacing the former
+  # "Create package via MCP" and "Create package via REST" pair.
+  #
+  # Those two graded the same behaviour and differed only in an arbitrary budget
+  # (5000 vs 10000) and in which transport their sentences named -- and the second
+  # did not even agree with itself: titled REST, its Given and When said "A2A
+  # task". Package creation is transport-independent, so naming a transport in a
+  # scenario states nothing about the seller.
+  #
+  # Naming one also broke them. The @mcp / @rest tags put a scenario in
+  # _TRANSPORT_SPECIFIC_TAGS, which SKIPS transport parametrization and hands the
+  # steps an empty ctx on the premise that "When steps handle dispatch explicitly".
+  # UC-026's When steps do not -- they go through the shared dispatch_request,
+  # which refuses an unset transport. So the pair could not run on any transport at
+  # all, while the untagged scenarios around them ran on three.
+  @T-UC-026-main-required-fields @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5
+  Scenario: Create package -- all required fields provided
+    Given a valid create_media_buy request with a package containing:
     | field              | value         |
     | product_id         | prod-1        |
     | budget             | 5000          |
     | pricing_option_id  | cpm-standard  |
-    When the Buyer Agent invokes the create_media_buy MCP tool
+    When the Buyer Agent sends the request
     Then the response is compliant with the create_media_buy success spec
     And the response should contain a package with a seller-assigned package_id
     And the package should contain budget 5000
@@ -43,27 +58,6 @@ Feature: BR-UC-026 Package Media Buy
     And the package should contain format_ids_to_provide listing formats needing creative assets
     # POST-S1: Buyer knows seller-assigned package_id
     # POST-S2: Complete package state returned (budget, pricing, targeting)
-    # POST-S3: format_ids echoed (defaulted to all product formats)
-    # POST-S4: paused state returned (defaults to false)
-    # POST-S5: format_ids_to_provide lists formats needing creatives
-
-  @T-UC-026-main-rest @main-flow @rest @post-s1 @post-s2 @post-s3 @post-s4 @post-s5
-  Scenario: Create package via REST -- all required fields provided
-    Given a valid create_media_buy A2A task request with packages array containing:
-    | field              | value         |
-    | product_id         | prod-1        |
-    | budget             | 10000         |
-    | pricing_option_id  | cpm-standard  |
-    When the Buyer Agent sends the create_media_buy A2A task
-    Then the response is compliant with the create_media_buy success spec
-    And the response should contain a package with a seller-assigned package_id
-    And the package should contain budget 10000
-    And the package should contain pricing_option_id "cpm-standard"
-    And the package should contain format_ids defaulting to all product formats
-    And the package should contain paused as false
-    And the package should contain format_ids_to_provide listing formats needing creative assets
-    # POST-S1: Buyer knows seller-assigned package_id
-    # POST-S2: Complete package state returned
     # POST-S3: format_ids echoed (defaulted to all product formats)
     # POST-S4: paused state returned (defaults to false)
     # POST-S5: format_ids_to_provide lists formats needing creatives

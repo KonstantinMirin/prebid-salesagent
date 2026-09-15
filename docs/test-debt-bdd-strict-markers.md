@@ -401,3 +401,95 @@ Severity distribution: 3× P1 (security/correctness), 6× P2, 9× P3.
 If filed as one umbrella GH issue with a checklist, this fits comfortably
 in a single tracking issue. If filed individually, only the 3 P1s warrant
 separate issues; the rest can stay in this doc as the canonical reference.
+
+---
+
+## 2026-09-15 — UC-026 connected to the suite, and what it now admits
+
+UC-026 (package media buy) had never graded anything. Its 75 scenarios, its
+2784-line step module and its own xfail tag set were all written and maintained,
+while every node xfailed at fixture setup with `No harness wired for UC-026` —
+728 in-process nodes and 242 over `e2e_rest` in run `innet_150926_0531`, none of
+them passing. Nothing flagged it, because the use case is absent from
+`dormant_scenarios.txt` too, so it read as ordinary xfail volume.
+
+The harness was never the missing piece. `MediaBuyDualEnv`'s first line says it
+is "a composite environment for UC-026 and UC-003 BDD scenarios"; it was built
+for this and left unreferenced. UC-026 was disconnected in two independent
+places, either of which alone was fatal:
+
+1. no row in `_UC_BUCKET_ROUTES`, so no environment was ever built;
+2. `tests.bdd.steps.domain.uc026_package_media_buy` absent from
+   `pytest_plugins`, so no sentence had a binding.
+
+### Where it stands after wiring
+
+| | before | after |
+|---|---|---|
+| passing | 0 | 420 |
+| xpassed | 0 | 114 |
+| xfailed | 728 (all dormant) | 186 |
+| failed | 0 | 0 |
+
+Read the "before" column as 728 nodes reporting nothing. Read the "after"
+xfailed column as 186 nodes that now say precisely what is missing.
+
+### Read this before trusting an xfail here
+
+**Whole-tag xfail is a coverage decision, not a bookkeeping one.** A tag in
+`_UC026_XFAIL_TAGS` xfails every parametrized row it carries. Listing an outline
+that fails two rows out of twelve converts the other ten from passing to
+xpassed, which removes grading rather than adding it. That mistake was made and
+measured here: routing the keyword, replacement and format-id outlines by tag
+dropped the passing count from 420 to 176. They are keyed by ROW in
+`_UC026_PARTITION_SELECTIVE` instead. Only four tags fail wholesale on a2a, mcp
+and rest alike, and only those four are in the set.
+
+**Every reason is the assertion the scenario actually reports.** The
+misclassification tripwire in `conftest.py` rejects a dormancy or a Given-side
+error dressed as a production gap, and each entry below was cleared through it.
+
+### Production is not ready — graded, not assumed
+
+| Gap | Tag / rows |
+|---|---|
+| `format_ids` neither defaulted to the product's formats when omitted nor echoed when supplied, though pinned 3.1 `core/package.json` declares the field on the returned package | `main-required-fields`, `main-explicit-formats` |
+| a `format_id` the product does not carry is accepted instead of refused | `boundary-format-ids`, `partition-format-ids` (unsupported rows only) |
+| `catalogs` accepted but not echoed on the created package | `inv-089-2` |
+| `price_breakdown` absent from the create response, so the default `list_price == option rate` claim has nothing to read | `inv-196-3` |
+| keyword / negative-keyword conflict and empty-value validation missing on the REST update path (a2a and mcp pass the same rows) | the eight `kw` / `neg-kw` row entries |
+| `targeting_overlay` not replaced wholesale on update | `boundary-replacement`, `partition-replacement` (overlay rows only) |
+
+### The harness is not ready — one scenario, stated as such
+
+`@T-UC-026-ext-j` opens "the Buyer owns a media buy with a package that has
+already **settled**". Nothing reaches that state: settlement is billing-side, no
+buyer-facing request performs it, and no seeding path writes one. Its Given
+creates the package and stops, so production is handed an ordinary active
+package and cancels it rather than refusing with `NOT_CANCELLABLE`.
+
+**Production is not failing there.** It is being asked a different question than
+the scenario means to ask, and the xfail says so rather than blaming the seller.
+Graduating it needs a way to persist a settled package, after which the scenario
+grades the refusal for real.
+
+The sibling precondition — an already-**canceled** package — is realized rather
+than asserted: the Given creates the package and then cancels it through the real
+update path, which is a buyer-facing operation. That scenario grades for real.
+
+### Two defects this exposed, both fixed here
+
+* **A label mistaken for a key.** The feature names its product `prod-1` while
+  the shared seed creates `prod_1`, and five steps asserted the two matched.
+  Requests are built from the seeded row's own id, so the feature's spelling
+  never reached the wire and the two were never required to agree. The package
+  builder now resolves the label the same way `pricing_option_id` already did,
+  and only for the label the scenario declared — so a scenario deliberately
+  naming an absent product still gets its refusal.
+* **Two scenarios that could not run on any transport.** "Create package via
+  MCP" and "Create package via REST" graded identical behaviour, differed only
+  in an arbitrary budget, and the second contradicted its own title (it said
+  "A2A task"). Their `@mcp` / `@rest` tags put them in
+  `_TRANSPORT_SPECIFIC_TAGS`, which skips parametrization on the premise that
+  the When steps dispatch explicitly — UC-026's do not. They are one
+  transport-independent scenario now, running on all three.

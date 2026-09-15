@@ -249,7 +249,12 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
-    ctx["mock_today"] = today_str
+
+    # ``ctx["mock_today"]`` used to be written here and read by the two seeding Givens,
+    # which anchored their flight windows on it. Both now anchor on the REAL clock so
+    # their scenarios grade identically on a server running in its own container, which
+    # left this key with no reader. A ctx key nothing reads is a claim that cannot be
+    # wrong, so it is deleted rather than kept for symmetry.
 
     # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)

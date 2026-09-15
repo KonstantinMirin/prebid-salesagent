@@ -54,10 +54,7 @@
 # (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
 # twins were waiting for, so all four date-range rows are off the ledger.
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]
 
 # --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---
 # Was: valid account rows referenced acc_acme_001 / acme-corp.com and no uc004
