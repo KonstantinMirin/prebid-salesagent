@@ -63,6 +63,11 @@ from tests.helpers.ledger import load_ledger_nodeids
 # comparison.
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
+        # salesagent-3cs7o.54 — asset-level provenance absent from the stored
+        # creative over e2e_rest only (passes on a2a/mcp/rest). The pin mandates
+        # it and every source-readable hop is cleared by measurement; the next
+        # step is a live-stack probe, so it is ledgered rather than guessed at.
+        "tests/bdd/test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_creativelevel_entirely[e2e_rest]",
         # All four date-range invalid rows graduated: boundary rows 2026-07-09
         # (#1270 tripwires fired on the first in-network CI run — live server
         # validates start>=end now), partition twins at the origin/pr-1417 merge

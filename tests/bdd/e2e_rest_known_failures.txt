@@ -272,3 +272,13 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_cat
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_absent no nested sub-properties declared-no nested sub-properties true-geo_metros and geo_postal_areas absent from targeting]
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_populated native postal map and metros-geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]-geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"]
 tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-postal_areas_native DE/CH/AT via native country-keyed map-geo_postal_areas DE=["plz"] CH=["plz"] AT=["plz"]-geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}]
+
+# salesagent-3cs7o.54 — asset-level provenance is absent from the stored creative over
+# e2e_rest only; the same scenario passes on a2a, mcp and rest. The pin mandates the
+# behaviour (core/creative-asset.json /properties/provenance: an asset with its own
+# provenance "replaces this object entirely (no field-level merging)"), and production
+# carries it on every hop readable from the source — the DTO, deep_strip_to_schema,
+# _build_creative_data, the JSONType serializer, the generative overwrite, the update
+# merge and _validation — each eliminated by direct measurement and listed on the ticket.
+# The remaining step is a live-stack probe, so this is ledgered rather than guessed at.
+tests/bdd/test_uc006_sync_creatives.py::test_inv5__assetlevel_provenance_replaces_creativelevel_entirely[e2e_rest]
