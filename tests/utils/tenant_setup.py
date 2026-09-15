@@ -26,7 +26,60 @@ from __future__ import annotations
 
 from typing import Any
 
-from tests.utils.database_helpers import bind_factories_to_session
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
+
+
+def seed_gam_tenant(
+    session: Any,
+    *,
+    tenant_id: str,
+    name: str,
+    subdomain: str,
+    trafficker_id: str,
+    network_code: str = "123456",
+) -> Any:
+    """Create a set-up GAM tenant and return it, flushed.
+
+    Seeds the three rows a GAM create_media_buy test cannot do without and never varies:
+    the ``Tenant`` itself with ``human_review_required=False`` (so validation runs
+    immediately instead of parking the buy in an approval workflow), the setup-checklist
+    rows the gate grades, and an ``AdapterConfig``.
+
+    ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE: it builds its
+    credentials in ``__init__`` and refuses a config carrying no
+    key_file/service_account_json/refresh_token (``google_ad_manager.py:176``). It used to
+    skip that whenever the caller set the testing context's ``dry_run``, and that channel
+    is gone (a1b79d22d). Nothing authenticates -- the callers stub the client manager --
+    so the value only has to be present.
+
+    The caller still owns what it varies: the currency limit's ceiling, the property tags,
+    the principal, and the products.
+    """
+    from src.core.database.models import AdapterConfig
+
+    tenant = create_tenant_with_timestamps(
+        tenant_id=tenant_id,
+        name=name,
+        subdomain=subdomain,
+        ad_server="google_ad_manager",
+        human_review_required=False,
+        # Half of the setup checklist's "SSO configured" task; the other half is the
+        # TenantAuthConfig row seed_setup_checklist_rows writes.
+        auth_setup_mode=False,
+    )
+    session.add(tenant)
+    session.flush()
+    seed_setup_checklist_rows(session, tenant)
+    session.add(
+        AdapterConfig(
+            tenant_id=tenant_id,
+            adapter_type="google_ad_manager",
+            gam_network_code=network_code,
+            gam_trafficker_id=trafficker_id,
+            gam_refresh_token="test_refresh_token",
+        )
+    )
+    return tenant
 
 
 def seed_setup_checklist_rows(session: Any, tenant: Any) -> None:

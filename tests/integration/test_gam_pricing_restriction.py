@@ -49,8 +49,8 @@ from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.gam_client import stub_gam_client_manager
 from tests.integration.media_buy_helpers import assert_created, make_media_buy_identity
-from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
-from tests.utils.tenant_setup import seed_setup_checklist_rows
+from tests.utils.database_helpers import bind_factories_to_session
+from tests.utils.tenant_setup import seed_gam_tenant
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -108,41 +108,13 @@ def _stub_gam_client():
 def setup_gam_tenant_with_non_cpm_product(integration_db):
     """Create a GAM tenant with a product offering non-CPM pricing."""
     with get_db_session() as session:
-        # Create GAM tenant
-        # Note: human_review_required=False ensures media buy validation runs immediately
-        # rather than going to approval workflow (needed for pricing validation tests)
-        tenant = create_tenant_with_timestamps(
+        tenant = seed_gam_tenant(
+            session,
             tenant_id="test_gam_tenant",
             name="GAM Test Publisher",
             subdomain="gam-test",
-            ad_server="google_ad_manager",
-            human_review_required=False,
-            # Half of the setup checklist's "SSO configured" task; the other half is the
-            # TenantAuthConfig row seed_setup_checklist_rows writes below.
-            auth_setup_mode=False,
+            trafficker_id="987654",
         )
-        session.add(tenant)
-        session.flush()
-
-        # create_media_buy validates the setup checklist for every caller now (the
-        # testing context that used to skip it is gone), so this tenant has to really be
-        # set up.
-        seed_setup_checklist_rows(session, tenant)
-
-        # Add adapter config. The refresh token is what makes the adapter CONSTRUCTIBLE:
-        # it builds its credentials in __init__ and refuses a config with no
-        # key_file/service_account_json/refresh_token (google_ad_manager.py:176). It used
-        # to skip that whenever the caller set the testing context's dry_run, and that
-        # channel is gone (a1b79d22d). Nothing authenticates -- _stub_gam_client below
-        # replaces the client manager -- so the value only has to be present.
-        adapter_config = AdapterConfig(
-            tenant_id="test_gam_tenant",
-            adapter_type="google_ad_manager",
-            gam_network_code="123456",
-            gam_trafficker_id="987654",
-            gam_refresh_token="test_refresh_token",
-        )
-        session.add(adapter_config)
 
         # Add currency limit
         currency_limit = CurrencyLimit(
