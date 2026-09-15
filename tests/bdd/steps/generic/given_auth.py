@@ -1,15 +1,20 @@
-"""Given steps for authentication and tenant context.
+"""Authentication steps: what credential a scenario presents, and what it dispatches with.
 
 These steps set up the authentication state in ``ctx`` that When/Then steps
 rely on. They are generic across all use cases — any scenario that needs
 an authenticated buyer, a missing tenant, or a sandbox account can reuse them.
+
+The one ``@when`` here belongs with them rather than in a use case's own module: it
+presents no credential and nothing else, which is tool-agnostic because the tool is the
+env's declaration. Two use cases had written that body separately.
 """
 
 from __future__ import annotations
 
-from pytest_bdd import given, parsers
+from pytest_bdd import given, parsers, when
 
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
+from tests.bdd.steps.generic._dispatch import dispatch_request
 
 # ── Authenticated / tenant-present paths ────────────────────────────
 
@@ -42,6 +47,28 @@ def given_buyer_no_auth(ctx: dict) -> None:
     """
     ctx["has_auth"] = False
     ctx["credential"] = ctx["env"].credential(token=None)
+
+
+@when("the Buyer Agent sends a delivery metrics request without authentication")
+@when("the Buyer Agent sends a list_accounts request without an authentication token")
+def when_dispatch_without_credential(ctx: dict) -> None:
+    """Dispatch this scenario's tool presenting the env's tenant and NO token.
+
+    One body, two sentences, for the reason ``given_buyer_no_auth`` above has four: the
+    tool is the ENV's declaration, selected by the scenario's routing tag, so a step that
+    presents no credential is tool-agnostic and the sentences differ only in what they
+    name. They were two functions, in uc004_delivery and uc011_accounts, with
+    byte-identical bodies.
+
+    The tenant is addressed so the request reaches a known seller, and nothing is
+    presented for it to verify, which is 3.1.1's AUTH_MISSING state ("no Authorization
+    header was included in the request"). The refusal comes from the real resolver.
+
+    A scenario whose Given already established a credential needs no such When: the
+    dispatcher presents ``ctx["credential"]`` itself. This step is for the scenarios whose
+    only statement about auth is the When.
+    """
+    dispatch_request(ctx, credential=ctx["env"].credential(token=None))
 
 
 @given("a presented credential that resolves to no principal")

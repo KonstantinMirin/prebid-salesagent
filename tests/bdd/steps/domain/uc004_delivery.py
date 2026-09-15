@@ -1112,15 +1112,10 @@ def when_request_delivery_default(ctx: dict) -> None:
     dispatch_request(ctx, **kwargs)
 
 
-@when("the Buyer Agent sends a delivery metrics request without authentication")
-def when_request_no_auth(ctx: dict) -> None:
-    """Request delivery metrics presenting the env's tenant and no token.
-
-    The tenant is addressed so the request reaches a known seller, and nothing is
-    presented for it to verify, which is the pin's AUTH_MISSING state ("no Authorization
-    header was included in the request"). The refusal comes from the real resolver.
-    """
-    dispatch_request(ctx, credential=ctx["env"].credential(token=None))
+# "the Buyer Agent sends a delivery metrics request without authentication" is bound by
+# steps/generic/given_auth.py::when_dispatch_without_credential, together with UC-011's
+# list_accounts spelling. Both were functions here and there with byte-identical bodies:
+# presenting no credential is tool-agnostic, because the tool is the env's declaration.
 
 
 # ── Webhook When steps ─────────────────────────────────────────────

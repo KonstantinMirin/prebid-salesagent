@@ -634,10 +634,9 @@ def when_list_accounts_status_filter(ctx: dict, status: str) -> None:
     _list_raw(ctx, status=status)
 
 
-@when("the Buyer Agent sends a list_accounts request without an authentication token")
-def when_list_accounts_no_auth(ctx: dict) -> None:
-    """Send list_accounts without authentication."""
-    dispatch_request(ctx, credential=ctx["env"].credential(token=None))
+# "the Buyer Agent sends a list_accounts request without an authentication token" is bound
+# by steps/generic/given_auth.py::when_dispatch_without_credential, together with UC-004's
+# delivery-metrics spelling. Both were separate functions with byte-identical bodies.
 
 
 @when("the Buyer Agent sends a list_accounts skill request via A2A with the token")
