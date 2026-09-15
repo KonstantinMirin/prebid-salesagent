@@ -1452,45 +1452,101 @@ Feature: BR-UC-011 Manage Accounts
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/UNSUPPORTED_FEATURE
     # POST-F1: no real or sandbox account created on failure
 
-  @T-UC-011-v31-error-account-setup-required @v3-1 @error-details @post-f1 @post-f2 @post-f3
-  Scenario: ACCOUNT_SETUP_REQUIRED carries v3.1 details shape (setup_url + setup_steps)
-    Given the Buyer is authenticated
-    And the tenant's account onboarding is incomplete (no billing entity attached)
-    When the Buyer Agent sends a sync_accounts request
-    Then the response is compliant with the sync_accounts error spec
-    And the operation should fail
-    And the error code should be "ACCOUNT_SETUP_REQUIRED"
-    And the error "details" object should include "setup_url" matching a URI format
-    And the error "details" object should include "setup_steps" as a non-empty array of strings
-    # @bva status + setup (approval workflow): ACCOUNT_SETUP_REQUIRED details with setup_url + setup_steps
-    # v3.1: setup_url + setup_steps enable operator-side completion without re-querying
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/list-accounts-request.json
+  # DELETED: "ACCOUNT_SETUP_REQUIRED carries v3.1 details shape (setup_url + setup_steps)".
+  # THE CODE DOES NOT BELONG ON sync_accounts, and the shape it demanded is a MAY.
+  #
+  # 1. WRONG TOOL. ACCOUNT_SETUP_REQUIRED answers an account REFERENCE that resolved to an
+  #    account needing setup -- enums/error-code.json @3.1 enumDescriptions:
+  #    "Natural key resolved but the account needs setup before use", and
+  #    L2/accounts-and-agents.mdx § Error codes: "Natural key resolved but account needs
+  #    setup | Check details.setup for URL/message". account/sync-accounts-request.json
+  #    declares NO top-level `account` (its properties are idempotency_key, accounts,
+  #    delete_missing, dry_run, push_notification_config, context, ext), so sync_accounts
+  #    never resolves one and has no reference to refuse. Production agrees by
+  #    construction: the raise lives in the account-reference resolver
+  #    (src/core/database/repositories/account_lookup.py::_check_status, reached only from
+  #    resolved_identity._load_account for a request's top-level account).
+  # 2. sync_accounts ALREADY HAS a pinned carrier for "this account needs setup", and it is
+  #    on the SUCCESS path: per-account `status: pending_approval` plus the `setup` object
+  #    (core/account.json @3.1 /properties/setup -- "Present when status is
+  #    'pending_approval'. Contains next steps"). Production implements it
+  #    (accounts.py::_build_setup_for_approval) and @T-UC-011-ext-d-pending-url /
+  #    @T-UC-011-ext-d-pending-message grade it live. An operation-level refusal would be
+  #    the seller declining to provision on the ground that provisioning is needed.
+  # 3. OVER-SPECIFIED even where the code does belong: error-details/
+  #    account-setup-required.json @3.1 declares NO `required` array, so setup_url and
+  #    setup_steps are both MAY. "should include setup_url matching a URI format" grades an
+  #    obligation the pin does not impose.
+  # 4. NOT LOST: the details-shape obligation is graded on a tool that DOES resolve an
+  #    account reference -- BR-UC-002 @T-UC-002-ext-s ("Account requires setup before use",
+  #    create_media_buy against a pending_approval account), live and passing.
 
-  @T-UC-011-v31-error-conflict-version @v3-1 @error-details @concurrency @post-f1 @post-f2 @post-f3
-  Scenario: CONFLICT on sync_accounts carries v3.1 details shape (resource_id + expected/current version)
-    Given the Buyer is authenticated
-    And account "acct-001" is at version 12
-    And the Buyer Agent's last-read version of "acct-001" is 9
-    When the Buyer Agent sends a sync_accounts request updating "acct-001"
-    Then the response is compliant with the sync_accounts error spec
-    And the operation should fail
-    And the error code should be "CONFLICT"
-    And the error "details" object should include "resource_id" with value "acct-001"
-    And the error "details" object should include "expected_version" with value 9
-    And the error "details" object should include "current_version" with value 12
-    # v3.1: CONFLICT details enable optimistic-concurrency retry on batch account sync
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/account/list-accounts-request.json
+  # DELETED: "CONFLICT on sync_accounts carries v3.1 details shape (resource_id +
+  # expected/current version)".
+  # AdCP 3.1 DEFINES NO VERSIONING FOR AN ACCOUNT, so the scenario's preconditions have no
+  # wire carrier in either direction:
+  #   - core/account.json declares no version and no etag field, so a seller has no
+  #     "version 12" to report and a buyer has no version to have last read;
+  #   - account/sync-accounts-request.json declares no if_match / expected_version, so the
+  #     Given "the Buyer Agent's last-read version of acct-001 is 9" cannot be expressed as
+  #     a request. (core/version-envelope.json, the one `version` this request composes, is
+  #     PROTOCOL-version negotiation -- adcp_version / adcp_major_version -- not resource
+  #     versioning.)
+  # error-details/conflict.json is a "Recommended details shape for CONFLICT errors" for
+  # sellers that HAVE versions; declaring the key names does not create an
+  # optimistic-concurrency protocol on a surface with no version field.
+  # And sync_accounts is upsert-by-natural-key by definition -- sync-accounts-request.json
+  # describes the mode as "The seller provisions or links accounts via upsert" -- so a
+  # concurrent writer on the same natural key is resolved to the winner, not refused
+  # (accounts.py, the NaturalKeyConflict branch: "the only difference between this entry and
+  # one that arrived a microsecond later is timing, and timing must not change the answer").
+  # That is the spec's upsert semantics, not a missing CONFLICT.
+  # ADJACENT, NOT FIXED HERE: BR-UC-003 @T-UC-003-v31-error-conflict-version is the same
+  # generated template on update_media_buy, where a revision DOES exist; it is parked behind
+  # that file's xfail set and will meet the same wiring question when the park is lifted.
 
-  @T-UC-011-v31-error-idempotency-conflict @v3-1 @error-details @idempotency @ext-h @post-f1 @post-f2 @post-f3
-  Scenario: IDEMPOTENCY_CONFLICT on sync_accounts carries v3.1 details shape with ETag versions
-    Given idempotency_key "sync-acct-20260521-001" was previously used with a different accounts array
-    And the recorded ETag for that key is "W/\"etag-zzz\""
-    When the Buyer Agent re-sends sync_accounts with idempotency_key "sync-acct-20260521-001" but a modified accounts array
+  @T-UC-011-v31-error-idempotency-conflict @v3-1 @idempotency @ext-h @post-f1 @post-f2 @post-f3
+  Scenario: Re-sending one idempotency_key with a different accounts array is refused, and leaks nothing
+    Given the Buyer is authenticated
+    And idempotency_key "sync-acct-20260521-001" was already spent syncing brand domain "first-payload.example"
+    When the Buyer Agent re-sends sync_accounts with idempotency_key "sync-acct-20260521-001" and brand domain "second-payload.example"
     Then the response is compliant with the sync_accounts error spec
     And the operation should fail
     And the error code should be "IDEMPOTENCY_CONFLICT"
-    And the error "details" object should include "current_version" with value "W/\"etag-zzz\""
+    And the error recovery should be "correctable"
     And the error should include "suggestion" field with remediation guidance
+    And the wire envelope should not carry the marker "first-payload.example"
+    And the wire error object carries no "field" key
+    And the wire error object carries no "details" key
+    And the seller holds an account for brand domain "first-payload.example" and none for "second-payload.example"
     # @bva idempotency_key: same key reused with a different accounts payload
-    # v3.1: ETag string form supported by current_version
-    # POST-F3: recovery suggestion (use a fresh idempotency_key or re-read current state) accompanies the conflict
+    #
+    # CORRECTED @3.1: this scenario used to demand
+    #   And the error "details" object should include "current_version" with value "W/\"etag-zzz\""
+    # off a Given that recorded an ETag for the spent key. That is behavior the pinned spec
+    # FORBIDS, not behavior it declares. L1/security.mdx § "IDEMPOTENCY_CONFLICT response
+    # shape": the body "MUST include code ... and a human-readable message" and "MUST NOT
+    # include the cached response, the original payload, a canonical-form diff, or any
+    # fingerprint derived from them" -- it refuses even a `field` pointer, because "a field
+    # json-pointer hint seems harmless but reveals schema shape", and closes with "The error
+    # body exposes only the code." An ETag of the first payload's state is exactly such a
+    # fingerprint: "Leaking cached state turns key-reuse into a read oracle." The graded
+    # conformance artifact says the same thing as an invariant rather than prose --
+    # dist/compliance/3.1.1/universal/idempotency.yaml declares
+    # `idempotency.conflict_no_payload_leak`, which "catches the stolen-key read oracle the
+    # key-reuse phase calls out". There is also no ETag anywhere on this surface to record:
+    # core/account.json declares none. So the details assertion is replaced by the
+    # obligations the pin does state, and the leak it invited is now GRADED as an absence.
+    #
+    # The refusal itself is security.mdx#idempotency rule 5: "Same key, different canonical
+    # hash within the replay window MUST be rejected with IDEMPOTENCY_CONFLICT. Sellers MUST
+    # NOT silently apply the second request." The last Then is that second sentence: the
+    # first payload's account is on the seller and the second payload's is not. It names both
+    # domains on purpose -- an assertion that only checked the absence would also pass if the
+    # Given had never run.
+    # POST-F3: recovery suggestion (use a fresh idempotency_key or re-read current state)
+    # accompanies the conflict; recovery=correctable per enums/error-code.json enumMetadata.
+    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/by-layer/L1/security.mdx pointer=#idempotency-conflict-response-shape
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/idempotency.yaml pointer=/invariants
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/idempotency_key
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/IDEMPOTENCY_CONFLICT

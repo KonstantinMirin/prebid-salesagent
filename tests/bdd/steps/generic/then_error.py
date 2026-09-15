@@ -1099,6 +1099,38 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
         assert str(actual) == value, f"expected errors[0].details[{key!r}] == {value!r}, got {actual!r}"
 
 
+@then(parsers.parse('the wire error object carries no "{key}" key'))
+def then_wire_error_key_absent(ctx: dict, key: str) -> None:
+    """Assert *key* is absent from BOTH layers of the wire error object.
+
+    The complement of the marker scan, and it catches what a marker scan CANNOT. A marker
+    scan finds a leak of a VALUE the caller can name in advance; some forbidden disclosures
+    carry no such value. AdCP 3.1.1 L1/security.mdx, on the IDEMPOTENCY_CONFLICT body: "A
+    ``field`` json-pointer hint seems harmless but reveals schema shape (e.g.,
+    ``/packages/0/budget`` tells an attacker the victim's payload had a budget in the first
+    package). Sellers MUST NOT emit one." A bare pointer like ``accounts[0].brand.domain``
+    echoes nothing the buyer sent, so it slips a value-marker scan while still being the
+    disclosure the spec refuses -- measured, not reasoned: production emitting exactly that
+    left this scenario GREEN until this step existed.
+
+    Both layers, for the reason ``assert_envelope_shape`` checks ``recovery`` on both: a
+    disclosure that reaches only ``adcp_error`` is still on the wire the buyer reads.
+
+    ``wire_error_dict`` is the LOUD accessor: a dispatch that captured no envelope raises
+    with that diagnosis rather than handing this check a ``None`` to pass against. So the
+    step cannot be satisfied by "no error happened" -- it needs a real error envelope that
+    simply does not carry *key*.
+    """
+    from tests.helpers.envelope_assertions import locate_envelope_error
+
+    envelope = wire_error_dict(ctx)
+    error = locate_envelope_error(envelope)
+    assert error is not None, f"no errors[0] object in the wire envelope to check for {key!r}: {envelope!r}"
+    assert key not in error, f"errors[0] carries a forbidden {key!r}: {error[key]!r} (full entry: {error!r})"
+    mirror = envelope.get("adcp_error") or {}
+    assert key not in mirror, f"adcp_error carries a forbidden {key!r}: {mirror[key]!r} (full mirror: {mirror!r})"
+
+
 @then(parsers.parse('the wire envelope should not carry the marker "{marker}"'))
 def then_wire_envelope_marker_absent(ctx: dict, marker: str) -> None:
     """Assert ``marker`` appears NOWHERE in the wire error envelope.
