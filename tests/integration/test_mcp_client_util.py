@@ -38,13 +38,13 @@ from src.core.utils.mcp_client import (
     call_mcp_tool,
 )
 from tests.helpers import assert_backoff_schedule, assert_envelope_shape
-from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
 from tests.helpers.envelope_assertions import envelope_for
+from tests.helpers.settings_injection import inject_limits
 
 # Reused rather than restated (precedent: tests/integration/test_vendor_egress.py):
 # the jitter pin, the escape-hatch setter and the backoff-base knob name are the
 # seam suite's own helpers — copying any of them here is how one copy drifts.
-from tests.integration.test_outbound_http import BACKOFF_BASE_ENV, pin_jitter, set_flags
+from tests.integration.test_outbound_http import pin_jitter, set_backoff_base, set_flags
 
 # A cloud-metadata address: refused by the egress seam unconditionally, escape
 # hatches or not. Spelled as an MCP endpoint because that is the shape a
@@ -142,7 +142,7 @@ class TestCreateMCPClient:
 
     async def test_respects_max_retries(self, monkeypatch, recorded_retry_sleeps):
         """Connection failures respect max_attempts parameter."""
-        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "true")
+        inject_limits(monkeypatch, adcp_outbound_allow_private=True)
         # A loopback port with nothing listening: resolves, fails fast, and the retry
         # budget is what is graded. It needs the private-range hatch because policy
         # refuses loopback addresses by default (https is required unconditionally now
@@ -213,7 +213,7 @@ class TestErrorHandling:
     async def test_timeout_handling(self, monkeypatch):
         """Connection timeout is respected."""
         # Use a URL that will timeout (assuming nothing on port 9999)
-        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "true")
+        inject_limits(monkeypatch, adcp_outbound_allow_private=True)
         # Unchanged target: a loopback port with nothing listening, which fails fast.
         # It needs the private-range hatch because policy refuses loopback
         # addresses by default (https is required unconditionally now regardless of
@@ -282,15 +282,19 @@ def recorded_retry_sleeps(monkeypatch):
 
 @pytest.fixture
 def egress_hatches_closed(monkeypatch):
-    """Close the private-range escape hatch explicitly, as the literal ``"false"``.
+    """Close the private-range escape hatch explicitly, on the object the seam reads.
 
     Not optional and not a default: ``run_all_tests_host.sh`` and the e2e compose
     files export ``ADCP_OUTBOUND_ALLOW_PRIVATE`` for the creative-agent stack,
     so a test that merely assumed it unset would grade nothing on exactly the
-    machines this suite runs on. There is no scheme hatch to close anymore
+    machines this suite runs on. Injected rather than written into the environ,
+    because the seam reads ``get_settings().limits.adcp_outbound_allow_private``
+    and the settings object is cached: a ``setenv`` closed the hatch only while
+    nothing had built the settings yet, so this fixture's guarantee depended on
+    fixture order. There is no scheme hatch to close anymore
     (salesagent-e6h0 deleted it) — https is required unconditionally.
     """
-    monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
+    inject_limits(monkeypatch, adcp_outbound_allow_private=False)
 
 
 @pytest.mark.asyncio
@@ -372,11 +376,11 @@ class TestConnectionRetryBackoffSchedule:
         (patches ``egress.attempts.random.uniform`` — the one home of the draw),
         turning the grade exact: 1.25s then 2.25s. A schedule computed anywhere
         other than the seam never reaches that draw and shows up here as the
-        bare bases. The base knob is ``delenv``'d so an ambient test-speed
-        value cannot turn this into an assertion about something else.
+        bare bases. The base is injected as the shipped default so an ambient
+        test-speed value cannot turn this into an assertion about something else.
         """
         set_flags(monkeypatch, private=True)
-        monkeypatch.delenv(BACKOFF_BASE_ENV, raising=False)
+        set_backoff_base(monkeypatch)
         pin_jitter(monkeypatch, 0.25)
         # A loopback port with nothing listening: resolves, fails fast, and the
         # sleeps between attempts are what is graded (the private-range hatch is open
@@ -594,9 +598,11 @@ def hatch_closes_between_precheck_and_dial(monkeypatch):
     two verdicts differ only when the DNS answer changes between them — a
     rebind, which is exactly the case where retrying a refused destination is
     worst. That window cannot be opened from a test by waiting for DNS, so it is
-    opened through the OTHER input both resolutions read at CALL time
-    (``_env_flag(ADCP_OUTBOUND_ALLOW_PRIVATE)``): the hatch is open when the
-    pre-check reads it and closed when the dial reads it.
+    opened through the OTHER input both resolutions read at CALL time — the
+    private-range hatch, read as
+    ``get_settings().limits.adcp_outbound_allow_private`` (the ``_env_flag`` this
+    docstring used to name is gone, critical pattern #7): the hatch is open when
+    the pre-check reads it and closed when the dial reads it.
 
     Nothing here fabricates the refusal. The wrapper delegates to the real
     ``guarded_client_factory``, so the ``OutboundRequestBlocked`` the client
@@ -621,7 +627,13 @@ def hatch_closes_between_precheck_and_dial(monkeypatch):
 
         # Closed HERE — after ``validate_url`` has already returned its verdict
         # above the loop, and before the factory resolves the same URL again.
-        monkeypatch.setenv(ALLOW_PRIVATE_ENV, "false")
+        # INJECTED, not written into the environ: the seam reads the hatch off
+        # ``get_settings().limits.adcp_outbound_allow_private``, and the settings object
+        # is built once per process and cached, so a bare ``setenv`` here closed
+        # nothing — the dial was ADMITTED, the origin answered, and the three dials this
+        # fixture then reported were an ordinary connection retry rather than the
+        # retried refusal it exists to catch.
+        inject_limits(monkeypatch, adcp_outbound_allow_private=False)
         return factory
 
     monkeypatch.setattr(mcp_client_module, "guarded_client_factory", building)
@@ -699,11 +711,15 @@ class TestDialTimeRefusalIsNotRetriedOrLaundered:
             "CONFIGURATION_ERROR",
             recovery=expected_recovery,
         )
-        # Same move as the exhausted-failure case: the refusal sentence names the
-        # configured endpoint, so ``raise_mapped_outbound_error`` puts it in
-        # ``internal_detail`` ("Names the endpoint, so server log only") and no
-        # serializer emits it. Graded where it lives, plus the absence on the wire.
-        assert "is not reachable under this deployment's egress policy" in str(exc_info.value.internal_detail)
+        # ``internal_detail`` carries the CAUSING EXCEPTION, not a sentence: the
+        # parameter is typed ``BaseException | None`` and
+        # ``.ast-grep/rules/internal-detail-is-an-exception.yml`` refuses an authored
+        # string in any spelling, so the substring this used to look for cannot exist.
+        # The operator still learns what happened — the boundary writes one record per
+        # failure with the cause attached — and the type is the durable oracle for it.
+        assert isinstance(exc_info.value.internal_detail, OutboundRequestBlocked), (
+            f"the egress refusal did not reach the operator's record: {exc_info.value.internal_detail!r}"
+        )
         assert "stub-signals-agent" not in str(envelope), (
             f"the endpoint's name leaked onto the buyer's wire: {envelope}"
         )
