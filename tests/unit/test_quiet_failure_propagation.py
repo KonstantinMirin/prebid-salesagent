@@ -13,20 +13,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.schemas import GetProductsRequest
-from tests.factories.principal import PrincipalFactory
+from tests.helpers.unit_identity import fabricated_identity
 
 
-def _make_identity(tenant_id="test-tenant"):
-    return PrincipalFactory.make_identity(
+def _make_identity(tenant_id="test-tenant", **tenant_fields):
+    """The caller ``_get_products_impl`` runs as. Mocked DB (``_mock_uow_with_products``).
+
+    The tenant facts are stated rather than loaded because there is no row to load in this
+    module: the UoW is a MagicMock. ``_get_products_impl`` reads each of them off
+    ``identity.tenant`` in production too — the resolver puts the row's values there — so
+    the fabrication stands in for the row rather than contradicting one.
+    """
+    return fabricated_identity(
         principal_id="user-1",
         tenant_id=tenant_id,
-        tenant={
-            "tenant_id": tenant_id,
-            "name": "Test",
-            "subdomain": "test",
-            "ad_server": "mock",
-            "advertising_policy": None,
-        },
+        name="Test",
+        subdomain="test",
+        ad_server="mock",
+        advertising_policy=None,
+        **tenant_fields,
     )
 
 
@@ -230,18 +235,7 @@ class TestAIRankingExceptionPropagation:
         mock_uow = _mock_uow_with_products([product])
 
         # Need tenant with product_ranking_prompt to trigger AI ranking path
-        identity = PrincipalFactory.make_identity(
-            principal_id="user-1",
-            tenant_id="test-tenant",
-            tenant={
-                "tenant_id": "test-tenant",
-                "name": "Test",
-                "subdomain": "test",
-                "ad_server": "mock",
-                "advertising_policy": None,
-                "product_ranking_prompt": "Rank by relevance",
-            },
-        )
+        identity = _make_identity(product_ranking_prompt="Rank by relevance")
 
         mock_factory = MagicMock()
         mock_factory.is_ai_enabled.return_value = True

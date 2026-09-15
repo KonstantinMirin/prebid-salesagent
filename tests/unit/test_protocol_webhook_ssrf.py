@@ -36,7 +36,7 @@ from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.models import PushNotificationConfig
 from src.core.exceptions import AdCPUrlNotAllowedError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.security import outbound_http
 from src.core.tools.creatives._sync import _sync_creatives_impl
@@ -44,13 +44,13 @@ from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url
 from src.services.protocol_webhook_service import ProtocolWebhookService
 from tests.factories import WebhookTaskContextFactory
-from tests.factories.principal import PrincipalFactory
 from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
 from tests.helpers.creative_test_helpers import sync_creatives_request
 from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
+from tests.helpers.unit_identity import fabricated_account_identity
 
 # No WEBHOOK_SSRF_SUGGESTION* import: origin/main narrowed the two dev/strict
 # wordings to one constant, and the merged webhook_validator exports NEITHER --
@@ -153,24 +153,26 @@ def _reporting_webhook(url: str) -> ReportingWebhook:
     return ReportingWebhook.model_validate(valid_reporting_webhook(url))
 
 
-def _identity() -> ResolvedIdentity:
+def _identity() -> AccountIdentity:
     """The authenticated caller these cases dispatch as.
 
-    ``human_review_required=False`` is the only tenant fact the SSRF cases depend on: a
-    seller that queues for review never reaches the adapter, so the refusal under test
-    would be graded against the wrong branch. It is passed as a tenant OVERRIDE because
-    the identity refuses a dict tenant at construction. The three other arguments this
-    call carried are gone with their subjects: ``protocol`` and ``testing_context``
-    (commit a1b79d22d removed the testing-hook channel and took the transport off the
-    identity — a request carries no testing headers and the identity names no protocol)
-    and ``auto_create_media_buys``, which stopped being a tenant field when the tenant
-    became typed (f3c46a970) and was silently ignored here from then on.
+    An ``AccountIdentity``, which is what ``_create_media_buy_impl`` declares: its DTO puts
+    ``account`` in ``/required``, so the boundary always resolves one, and the
+    ``account=None`` identity a bare ``make_identity()`` returns is a caller the controller
+    can never receive.
+
+    The database is mocked in this module, so the caller is fabricated and the one tenant
+    fact these cases depend on stands in for the row: ``human_review_required=False``,
+    because a seller that queues for review never reaches the adapter and the refusal under
+    test would be graded against the wrong branch. The impl reads that field off
+    ``identity.tenant`` in production too.
+
+    The three other arguments this call once carried are gone with their subjects:
+    ``protocol`` and ``testing_context`` (commit a1b79d22d removed the testing-hook channel
+    and took the transport off the identity) and ``auto_create_media_buys``, which stopped
+    being a tenant field when the tenant became typed (f3c46a970).
     """
-    return PrincipalFactory.make_identity(
-        principal_id="principal_1",
-        tenant_id="test_tenant",
-        human_review_required=False,
-    )
+    return fabricated_account_identity(principal_id="principal_1", human_review_required=False)
 
 
 def _minimal_create_request(**overrides):

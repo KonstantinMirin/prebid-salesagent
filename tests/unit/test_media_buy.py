@@ -65,6 +65,7 @@ from tests.factories.media_buy import (
 )
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import PricingOptionFactory
+from tests.helpers.unit_identity import fabricated_account_identity
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -393,15 +394,13 @@ class TestCreateMediaBuyValidation:
             ]
         )
 
-        # human_review_required=False is the one tenant fact this case depends on, passed
-        # as a tenant override (the identity refuses a dict tenant). The other arguments
-        # are gone with their subjects: protocol and testing_context (a1b79d22d) and
-        # auto_create_media_buys, which stopped being a tenant field in f3c46a970.
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1",
-            tenant_id="test_tenant",
-            human_review_required=False,
-        )
+        # An AccountIdentity, which is what _create_media_buy_impl DECLARES: its DTO puts
+        # ``account`` in /required, so the boundary always resolves one and the identity a
+        # bare make_identity() returns -- ``account=None`` -- is a caller the controller
+        # can never receive. The database here is mocked, so the caller is fabricated and
+        # ``human_review_required=False`` (the one tenant fact this case depends on) stands
+        # in for the row: the impl reads it off ``identity.tenant`` in production too.
+        identity = fabricated_account_identity(principal_id="principal_1", human_review_required=False)
 
         # Build a mock UoW that provides session via context manager
         session = MagicMock()
@@ -466,15 +465,13 @@ class TestCreateMediaBuyValidation:
         cl.max_daily_package_spend = Decimal("500")
         cl.min_package_budget = None
 
-        # human_review_required=False is the one tenant fact this case depends on, passed
-        # as a tenant override (the identity refuses a dict tenant). The other arguments
-        # are gone with their subjects: protocol and testing_context (a1b79d22d) and
-        # auto_create_media_buys, which stopped being a tenant field in f3c46a970.
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1",
-            tenant_id="test_tenant",
-            human_review_required=False,
-        )
+        # An AccountIdentity, which is what _create_media_buy_impl DECLARES: its DTO puts
+        # ``account`` in /required, so the boundary always resolves one and the identity a
+        # bare make_identity() returns -- ``account=None`` -- is a caller the controller
+        # can never receive. The database here is mocked, so the caller is fabricated and
+        # ``human_review_required=False`` (the one tenant fact this case depends on) stands
+        # in for the row: the impl reads it off ``identity.tenant`` in production too.
+        identity = fabricated_account_identity(principal_id="principal_1", human_review_required=False)
 
         # Build a mock UoW that provides session via context manager
         session = MagicMock()

@@ -11,7 +11,6 @@ import pytest
 from src.core.errors.details import AdapterFailureDetails
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.principal import PrincipalFactory
 from tests.helpers.creative_test_helpers import (
     make_creative_dict,
     make_format_spec,
@@ -21,6 +20,7 @@ from tests.helpers.creative_test_helpers import (
 from tests.helpers.creative_test_helpers import (
     make_creative_uow as _make_creative_uow_shared,
 )
+from tests.helpers.unit_identity import fabricated_account_identity
 
 
 def _make_creative_uow():
@@ -32,11 +32,12 @@ class TestSyncCreativesFormatValidation:
 
     @pytest.fixture
     def identity(self):
-        """ResolvedIdentity for tests."""
-        return PrincipalFactory.make_identity(
+        """The AccountIdentity ``_sync_creatives_impl`` declares. Mocked DB, so fabricated."""
+        return fabricated_account_identity(
             principal_id="principal_123",
             tenant_id="tenant_123",
-            tenant={"tenant_id": "tenant_123", "approval_mode": "auto-approve", "slack_webhook_url": None},
+            approval_mode="auto-approve",
+            slack_webhook_url=None,
         )
 
     @pytest.fixture

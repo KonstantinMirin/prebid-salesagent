@@ -16,9 +16,9 @@ from adcp.types import FormatId
 from src.core.tools.creatives._sync import _sync_creatives_impl
 from src.core.validation_helpers import run_async_in_sync_context
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
-from tests.factories.principal import PrincipalFactory
 from tests.harness import make_mock_uow
 from tests.helpers.creative_test_helpers import sync_creatives_request
+from tests.helpers.unit_identity import fabricated_account_identity
 
 
 class TestRunAsyncInSyncContext:
@@ -132,11 +132,7 @@ class TestSyncCreativesErrorHandling:
         mock_creative_repo.savepoint.return_value.__enter__.return_value = None
         mock_creative_repo.savepoint.return_value.__exit__.return_value = None
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-        )
+        identity = fabricated_account_identity(approval_mode="auto-approve")
 
         # Creative with NO URL anywhere - this should fail when preview returns no previews.
         # ``assets`` is spec-REQUIRED (core/creative-asset.json), so the slot map cannot
@@ -213,11 +209,7 @@ class TestSyncCreativesAsyncScenario:
         mock_creative_repo.savepoint.return_value.__enter__.return_value = None
         mock_creative_repo.savepoint.return_value.__exit__.return_value = None
 
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-        )
+        identity = fabricated_account_identity(approval_mode="auto-approve")
 
         creative = {
             "creative_id": "test_creative_789",

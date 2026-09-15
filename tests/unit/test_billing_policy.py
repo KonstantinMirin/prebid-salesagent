@@ -15,7 +15,8 @@ Pins the #1521 / #1592 billing-policy contract (BR-RULE-059):
 """
 
 from src.core.tools.accounts import _check_billing_policy
-from tests.factories import PrincipalFactory, TenantFactory
+from tests.factories import TenantFactory
+from tests.helpers.unit_identity import fabricated_identity
 
 
 class TestResolveSupportedBilling:
@@ -63,7 +64,7 @@ class TestBillingGateOmittedBilling:
 
     def test_omitted_billing_passes_gate_unconfigured_tenant(self):
         """Unconfigured tenant: omitted billing is accepted (no error list)."""
-        identity = PrincipalFactory.make_identity(tenant_id="gate_unset")
+        identity = fabricated_identity(tenant_id="gate_unset")
 
         assert _check_billing_policy(None, identity) is None
 
@@ -71,7 +72,10 @@ class TestBillingGateOmittedBilling:
         """Configured restrictive tenant (supported_billing=['agent']): omitted
         billing is still accepted — restricting SUPPORTED models must not turn
         an omitted optional field into a BILLING_NOT_SUPPORTED rejection."""
-        identity = PrincipalFactory.make_identity(
+        # No row, and none is wanted: the subject is the pure predicate
+        # ``_check_billing_policy``, which reads ``supported_billing`` straight off the
+        # TenantContext the identity carries. The fabrication IS the input under test.
+        identity = fabricated_identity(
             tenant_id="gate_agent_only",
             supported_billing=["agent"],
         )

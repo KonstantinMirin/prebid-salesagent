@@ -68,8 +68,8 @@ from src.core.schemas import (
     PricingOption,
 )
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.principal import PrincipalFactory
 from tests.harness.media_buy_create import MediaBuyCreateEnv
+from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -88,10 +88,22 @@ _PRINCIPAL_ID = "behavioralprincipal"
 
 
 def _env(**overrides: Any) -> MediaBuyCreateEnv:
-    """Build the harness with a hyphen-safe tenant and explicit approval flags."""
+    """Build the harness with a hyphen-safe tenant. Names NO tenant policy fact.
+
+    ``human_review_required`` used to be set here and at fourteen call sites, and it
+    decided nothing: a constructor kwarg lands in the env's in-memory tenant overrides,
+    while ``MediaBuyCreateEnv.call_impl`` dispatches at ``invoke_tool`` -- so the REAL
+    resolver loads the tenant from its ROW, where ``TenantFactory`` leaves the column
+    ``False``. Every ``human_review_required=True`` site therefore ran the auto-approve
+    path and read production's correct answer as a defect.
+
+    The fact is a COLUMN, so it is stated where the row is written:
+    ``env.setup_default_data(human_review_required=True)`` (the base forwards tenant
+    kwargs to ``TenantFactory`` on create and applies them to the row on get -- its
+    docstring names this exact field).
+    """
     overrides.setdefault("tenant_id", _TENANT_ID)
     overrides.setdefault("principal_id", _PRINCIPAL_ID)
-    overrides.setdefault("human_review_required", False)
     return MediaBuyCreateEnv(**overrides)
 
 
@@ -483,8 +495,8 @@ class TestInlineCreativesProcessedBeforeApproval:
             ]
         )
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
 
@@ -739,8 +751,8 @@ class TestManualApprovalPathCreativeValidation:
             ]
         )
 
-        with _env(human_review_required=True) as env:
-            tenant, principal = env.setup_default_data()
+        with _env() as env:
+            tenant, principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             CreativeFactory(
@@ -786,8 +798,8 @@ class TestManualApprovalPathCreativeValidation:
             ]
         )
 
-        with _env(human_review_required=True) as env:
-            tenant, principal = env.setup_default_data()
+        with _env() as env:
+            tenant, principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             # Product accepts display_300x250; this creative carries video_640x480.
@@ -893,8 +905,7 @@ class TestMainFlowObligations:
     #
     # Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
-    @pytest.mark.asyncio
-    async def test_tenant_setup_validation(self):
+    def test_tenant_setup_validation(self, integration_db):
         """Tenant setup completion is checked before processing, and an incomplete
         seller setup is a CONFIGURATION_ERROR, not a VALIDATION_ERROR.
 
@@ -905,45 +916,45 @@ class TestMainFlowObligations:
 
         Covers: UC-002-MAIN-04
         """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        # Use a non-test identity (no test_session_id) so setup validation runs
-        identity = PrincipalFactory.make_identity(
-            principal_id="principal_1",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "human_review_required": False},
-        )
-
-        req = _make_request()
-
+        from src.core.tools._wire import to_wire
         from src.services.setup_checklist_service import SetupIncompleteError
 
-        # Only the setup gate is stubbed: the principal comes off the identity, so the
-        # second lookup this also patched has no call site left.
-        with patch("src.core.tools.media_buy_create.validate_setup_complete") as mock_validate:
-            mock_validate.side_effect = SetupIncompleteError(
+        # No hand-built identity. This used to construct one from a tenant DICT for a
+        # tenant_id no row backed, which the real resolver can never produce -- and it
+        # handed a bare ResolvedIdentity to an implementation declaring AccountIdentity,
+        # so ``identity.account`` was simply absent. The env seeds the tenant, principal
+        # and account ROWS and ``call_impl`` dispatches at ``invoke_tool``, so the
+        # resolver builds the caller exactly as it does for a buyer.
+        #
+        # The setup gate is the env's own mock ("setup_check"), not a hand-rolled patch of
+        # the same target.
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=False)
+            env.setup_product_chain(tenant)
+            env.mock["setup_check"].side_effect = SetupIncompleteError(
                 "Setup incomplete", missing_tasks=[{"name": "Configure Products", "description": "Add products"}]
             )
 
-            with pytest.raises(AdCPConfigurationError) as exc_info:
-                await _create_media_buy_impl(req=req, identity=identity)
+            with raises_adcp(AdCPConfigurationError) as exc_info:
+                env.call_impl(req=_make_request())
 
-            # Incomplete tenant setup is a SELLER configuration fault: the buyer
-            # cannot resolve it by resending, so the pinned-terminal
-            # CONFIGURATION_ERROR carries the verdict rather than a correctable
-            # VALIDATION_ERROR with a hand-typed terminal recovery.
-            exc = exc_info.value
-            assert exc.error_code == "CONFIGURATION_ERROR"
-            assert exc.recovery == "terminal"
-            # This assertion used to be spelled `pytest.raises(..., match="Setup
-            # incomplete")`. `message` is now a read-only CODE_TABLE sentence
-            # ("Configuration error") and `__init__` takes no message parameter, so no
-            # free text reaches the buyer to match on. The obligation that match was
-            # grading -- the error says WHICH seller setup step is missing -- now lives
-            # in the structured details the boundary builds, and is graded there by
-            # exact value rather than by substring.
-            assert exc.details is not None
-            assert exc.details.missing_tasks == ["Configure Products"]
+        # Incomplete tenant setup is a SELLER configuration fault: the buyer cannot
+        # resolve it by resending, so the pinned-terminal CONFIGURATION_ERROR carries the
+        # verdict rather than a correctable VALIDATION_ERROR with a hand-typed terminal
+        # recovery. Graded on the wire body the boundary built -- the buyer-facing
+        # contract -- rather than on the typed exception, which no longer reaches a caller
+        # through the boundary (tests/CLAUDE.md § Error verification policy).
+        #
+        # ``details.missing_tasks`` replaced an older `match="Setup incomplete"`: the
+        # message is a read-only CODE_TABLE sentence, so no free text reaches the buyer.
+        # The obligation that match graded -- the error says WHICH seller setup step is
+        # missing -- lives in the structured details, checked by exact value.
+        assert_envelope_shape(
+            to_wire(exc_info.value.response),
+            "CONFIGURATION_ERROR",
+            recovery="terminal",
+            details={"missing_tasks": ["Configure Products"]},
+        )
 
     @pytest.mark.asyncio
     async def test_ordering_mode_detection_package_based(self):
@@ -1021,8 +1032,8 @@ class TestMainFlowObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=False) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=False)
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
 
@@ -1136,8 +1147,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1154,8 +1165,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=False) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=False)
             env.setup_product_chain(tenant)
             # Adapter (not tenant) requires manual approval.
             mock_adapter = env.mock["adapter"].return_value
@@ -1173,8 +1184,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1198,8 +1209,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1217,8 +1228,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1237,8 +1248,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1258,8 +1269,8 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1294,8 +1305,8 @@ class TestInlineCreativeObligations:
             ]
         )
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
 
@@ -1465,8 +1476,8 @@ class TestCrossCuttingObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
@@ -1495,8 +1506,8 @@ class TestCrossCuttingObligations:
         """
         req = _make_request()
 
-        with _env(human_review_required=True) as env:
-            tenant, _principal = env.setup_default_data()
+        with _env() as env:
+            tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
             result = env.call_impl(req=req)
