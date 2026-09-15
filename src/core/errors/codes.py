@@ -12,19 +12,22 @@ block the spec marks normative ("SDKs MUST consume this block instead of parsing
 file it came from, so it needs no guard checking that it hasn't. A transcribed
 one would.
 
-``recovery`` and ``suggestion`` come from that file and nowhere else. A message
-comes from the first of three sources that has one: authored below, then the
-SDK's ``STANDARD_ERROR_CODES``, then the file's own ``enumDescriptions`` prose.
-The middle source is the one thing here not read from the pin, and it is
-deliberate rather than tidy: the SDK carries a message for 37 published codes and
-those 37 are what this seller sends today, so dropping it would rewrite 37 live
-buyer-facing strings. The cost is that an ``adcp`` bump can change those 37
-without the pinned schema changing. Everywhere else in this codebase the SDK is
-treated as a cross-check rather than the authority: the pinned enumMetadata says
-"SDKs MUST consume this block ... the recovery classification embedded in that prose
-is normative and MUST match the value here", and where the shipped SDK values
-disagreed with the pin it was the SDK that was drifting. So if the two ever disagree
-about a message, the file wins and the SDK entry is the bug.
+``recovery``, ``suggestion`` AND ``message`` all come from that file and nowhere
+else. A message is the first of two sources that has one: authored below, then
+the file's own ``enumDescriptions`` prose.
+
+There used to be a third source between them -- the SDK's
+``STANDARD_ERROR_CODES`` -- and it was the one thing here not read from the pin.
+It carried a message for 37 of the 92 published codes, so it shadowed published
+text for those 37 while adding nothing for the other 55, and its coverage did
+not grow with the enum. An ``adcp`` bump could therefore rewrite 37 live
+buyer-facing strings with the pinned schema unchanged. Everywhere else in this
+codebase the SDK is treated as a cross-check rather than the authority: the
+pinned enumMetadata says "SDKs MUST consume this block ... the recovery
+classification embedded in that prose is normative and MUST match the value
+here", and where the shipped SDK values disagreed with the pin it was the SDK
+that was drifting. Message was the last field that still disagreed on which of
+the two wins, so it now answers the same way the other three do.
 
 The platform codes in :class:`AppErrorCode` are this seller's own. The spec's
 vocabulary is open by design -- ``core/error.json`` (AdCP 3.1.1): ``error.code``
@@ -54,7 +57,6 @@ from types import MappingProxyType
 from typing import Final
 
 from adcp import get_adcp_spec_version
-from adcp.server.helpers import STANDARD_ERROR_CODES
 from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
@@ -307,21 +309,32 @@ def _message_from_prose(description: str) -> str:
 #: suggestion for these come from the pinned schema, which is authoritative for
 #: them.
 #:
-#: These seven are the published codes that resolve to no buyer-shippable text on
-#: their own. The SDK's ``STANDARD_ERROR_CODES`` carries no message for any of
-#: them, and the pinned schema's prose for them is normative implementer text
-#: rather than a sentence for a buyer: the shortest of the seven is 195
-#: characters and the longest, ``PERMISSION_DENIED``'s, is over 2000, all of it
-#: MUST/SHOULD referencing other codes and error-details JSON paths. So they are authored here, and each one deletes itself the moment
-#: the pin ships a message for it.
+#: These nine are the published codes that resolve to no buyer-shippable text on
+#: their own: the pinned schema's prose for them is normative implementer text
+#: rather than a sentence for a buyer. Seven of them say nothing about the
+#: failure without also saying MUST/SHOULD about other codes and
+#: ``error-details/*.json`` paths -- the shortest is 195 characters and
+#: ``PERMISSION_DENIED``'s is over 2000. ``AUTH_REQUIRED``'s prose is not about
+#: its failure at all ("**Deprecated** -- use ``AUTH_MISSING`` ... retained as a
+#: backward-compatible alias"), and ``AUTHORIZATION_REQUIRED``'s states the
+#: failure in its first clause and then spends 700 more characters on "Typical
+#: use", "Distinct from", and which ``error-details`` document a seller SHOULD
+#: populate. So all nine are authored here, and each one deletes itself the
+#: moment the pin ships prose that reduces to a buyer sentence on its own.
 #:
 #: There were eight until ``CREATIVE_NOT_FOUND`` was removed: the pinned prose
 #: resolves it to one clean sentence unaided, which is strictly better than a
-#: hand-written override that can drift from the file it duplicates.
+#: hand-written override that can drift from the file it duplicates. That is the
+#: bar the other 83 published codes clear too: dropping the SDK message step
+#: routed 37 codes onto their pinned prose, and ``AUTH_REQUIRED`` and
+#: ``AUTHORIZATION_REQUIRED`` are the only two of the 37 whose prose does not
+#: reduce to a sentence, so they are authored and the other 35 are not.
 _AUTHORED_SPEC_MESSAGES: Final[Mapping[ErrorCode, str]] = MappingProxyType(
     {
+        ErrorCode.AUTHORIZATION_REQUIRED: "Downstream authorization is required before this action can complete",
         ErrorCode.AUTH_INVALID: "Credentials were presented but rejected",
         ErrorCode.AUTH_MISSING: "No credentials were presented",
+        ErrorCode.AUTH_REQUIRED: "Authentication is required",
         ErrorCode.BILLING_NOT_SUPPORTED: "Billing model is not supported by this seller",
         ErrorCode.CONFIGURATION_ERROR: "Configuration error",
         ErrorCode.PERMISSION_DENIED: "Not authorized for this action",
@@ -414,41 +427,19 @@ def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
     """Assemble the published codes and this platform's own into one table.
 
     A message comes from the first source that has one: authored here, then the
-    SDK's ``STANDARD_ERROR_CODES``, then the pinned schema's own prose. Every
-    code resolves to text, so no code can reach a buyer with an empty message.
-    A status comes from ``_HTTP_STATUS`` or, for the published codes this seller
-    never raises, from ``_UNCLASSIFIED_STATUS``.
+    pinned schema's own prose. Every code resolves to text, so no code can reach
+    a buyer with an empty message. A status comes from ``_HTTP_STATUS`` or, for
+    the published codes this seller never raises, from ``_UNCLASSIFIED_STATUS``.
     """
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
-
-    # An authored override exists ONLY while neither downstream source ships a
-    # buyer-usable message for its code ("each one deletes itself the moment the
-    # pin ships a message for it" -- the block comment above). Enforced here, at
-    # the one place the sources meet, rather than promised in prose: an adcp
-    # bump that adds an SDK message for an overridden code fails the import,
-    # forcing the override's deletion instead of leaving a silent divergence
-    # between the override and the message the SDK now carries.
-    stale_overrides = sorted(
-        code.value for code in _AUTHORED_SPEC_MESSAGES if STANDARD_ERROR_CODES.get(code.value, {}).get("message")
-    )
-    if stale_overrides:
-        raise RuntimeError(
-            f"_AUTHORED_SPEC_MESSAGES overrides {stale_overrides}, but the installed adcp SDK now "
-            "ships a message for them. Delete the stale override(s) -- or, if the SDK's sentence is "
-            "wrong for buyers, record why the override stays."
-        )
 
     for code in ErrorCode:
         spec = published[code.value]
         table[code] = CodeEntry(
             recovery=spec.recovery,
             suggestion=spec.suggestion,
-            message=(
-                _AUTHORED_SPEC_MESSAGES.get(code)
-                or STANDARD_ERROR_CODES.get(code.value, {}).get("message")
-                or _message_from_prose(spec.description)
-            ),
+            message=(_AUTHORED_SPEC_MESSAGES.get(code) or _message_from_prose(spec.description)),
             status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
         )
 

@@ -52,8 +52,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # There is ONE classifier: ``CODE_TABLE`` in src/core/errors/codes.py, loaded from
 # the pinned enums/error-code.json (92 published codes) plus this platform's own
-# ``AppErrorCode`` members. The SDK's ``STANDARD_ERROR_CODES`` is a
-# cross-check, never the authority, and is consulted only as a message fallback.
+# ``AppErrorCode`` members. Message, recovery, suggestion and status all come
+# from that file. The SDK's ``STANDARD_ERROR_CODES`` is consulted for NONE of
+# them: it was the message fallback until it was measured to shadow published
+# text for 37 of the 92 codes while adding nothing for the other 55, so it is
+# now only a cross-check a reader may consult, never an input.
 #
 # Every code a raise site declares reaches the buyer VERBATIM: the AdCP error
 # vocabulary is OPEN, so there is no translation at the transport boundary and no
@@ -930,9 +933,8 @@ class AdCPCapabilityNotSupportedError(AdCPSalesAgentError[CapabilityRefusalDetai
 
         Only the adcp SDK's ``STANDARD_ERROR_CODES`` table classifies it
         ``terminal``; the SDK is not authoritative (the pinned spec enum is),
-        so its table diverges from the spec here. If the SDK runtime ever
-        starts enforcing ``terminal`` at the wire (rejecting our spec-correct
-        ``correctable`` hint), reconcile with the SDK then.
+        so its table diverges from the spec here. Nothing here reads that
+        table, so the divergence cannot reach the wire.
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.UNSUPPORTED_FEATURE
@@ -945,10 +947,9 @@ class AdCPIdempotencyConflictError(AdCPConflictError):
     ORIGINAL bytes under the same key, or mint a fresh idempotency_key for the
     new payload. This matches the AdCP 3.0.1 prose example envelope and the
     conformance storyboard's stated expectation. The SDK's
-    ``STANDARD_ERROR_CODES`` table classifies the code ``terminal``, but that
-    table is only a default applied when no recovery is supplied — an explicit
-    recovery always wins, and nothing in the SDK or the storyboard's machine
-    validations grades the value.
+    ``STANDARD_ERROR_CODES`` table classifies the code ``terminal`` and is
+    simply wrong about it: nothing here reads that table, and ``recovery`` is
+    loaded from the pinned ``enumMetadata``, which says ``correctable``.
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_CONFLICT
@@ -971,9 +972,9 @@ class AdCPIdempotencyExpiredError(AdCPConflictError):
     description classifies the code ``correctable`` (that buyer-recovery path),
     and the recovery taxonomy reserves ``terminal`` for conditions requiring
     HUMAN action (account suspended, payment required) — not an agent-resolvable
-    retry. The SDK's ``STANDARD_ERROR_CODES`` default table lists it ``terminal``,
-    but that default applies only when no recovery is supplied; an explicit
-    recovery wins, exactly as for ``IDEMPOTENCY_CONFLICT``.
+    retry. The SDK's ``STANDARD_ERROR_CODES`` table lists it ``terminal`` and is
+    wrong about it, exactly as for ``IDEMPOTENCY_CONFLICT``: nothing here reads
+    that table, and the value emitted is the pinned one.
     """
 
     _code: ClassVar[ErrorCodeT] = ErrorCode.IDEMPOTENCY_EXPIRED

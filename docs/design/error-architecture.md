@@ -35,12 +35,14 @@ the file it came from. The other 8 are this platform's own: `AppErrorCode`
 declaring a code and declaring what it means are one act — a member with no entry is a
 `TypeError` at class creation.
 
-`recovery` and `suggestion` come from the pinned `enumMetadata` and nowhere else. A
-message resolves from the first of three sources that has one: an authored override for
-the seven published codes whose pinned text is implementer-facing
-(`_AUTHORED_SPEC_MESSAGES`, `src/core/errors/codes.py:321`), then the SDK's
-`STANDARD_ERROR_CODES`, then the pinned `enumDescriptions` with the trailing
-`Recovery: …` clause stripped.
+`recovery`, `suggestion` and `message` come from the pinned file and nowhere else. A
+message resolves from the first of two sources that has one: an authored override for
+the nine published codes whose pinned text is implementer-facing
+(`_AUTHORED_SPEC_MESSAGES` in `src/core/errors/codes.py`), then the pinned
+`enumDescriptions` with the trailing `Recovery: …` clause stripped. The SDK's
+`STANDARD_ERROR_CODES` used to sit between them; it shadowed published text for 37 of
+the 92 codes and covered none of the other 55, so it is gone and the SDK is a
+cross-check here as it is everywhere else.
 
 `CodeEntry` refuses an empty suggestion or message, and a status outside 100..599, at
 construction (`src/core/errors/codes.py:108`). That check runs at the one place that

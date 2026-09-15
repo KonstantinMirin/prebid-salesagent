@@ -911,28 +911,35 @@ class AdcpErrorResponse(AdcpResponse):
         """Build the failure response for one typed exception.
 
         Carries the SAME error object at both levels the wire expects -- ``adcp_error`` on the
-        envelope and ``errors[0]`` -- because a receiver is free to read either. ``issues`` is
-        attached after the SDK helper runs: ``adcp_error()`` has no ``issues`` parameter and
-        its ``details`` is typed flat-scalars-only, so the array fits through neither.
+        envelope and ``errors[0]`` -- because a receiver is free to read either.
+
+        The dict is assembled HERE and validated through the SDK type, so the shape stays the
+        SDK's and only the assembly is ours. ``adcp.server.helpers.adcp_error()`` used to do the
+        assembling, and every value it could have contributed was already being passed to it
+        explicitly: its ``message or STANDARD_ERROR_CODES[code]["message"]`` and
+        ``recovery or std.get("recovery", "terminal")`` fallbacks were both dead on this path,
+        because ``message`` and ``recovery`` are properties of the code resolved from
+        ``CODE_TABLE``. What remained was "omit the key when the value is None", five times --
+        written out below -- and one hazard: the helper's recovery default disagrees with the
+        pinned ``enumMetadata`` on 56 of the 92 published codes, so deleting the
+        ``recovery=exc.recovery`` keyword during any future refactor would have silently
+        emitted ``terminal`` for every error. It also had no ``issues`` parameter and typed
+        ``details`` flat-scalars-only, so neither fitted through it.
 
         What the BOUNDARY owns -- ``context`` and ``adcp_version`` -- is stamped by the
         boundary (``_boundary._served``), on a failure exactly as on a success.
         """
-        from adcp.server.helpers import adcp_error
-
         from src.core.exceptions import _details_to_wire
 
         error = _LibraryError.model_validate(
             {
-                **adcp_error(
-                    exc.error_code,
-                    exc.message,
-                    recovery=exc.recovery,
-                    field=exc.field,
-                    suggestion=exc.suggestion,
-                    retry_after=exc.retry_after,
-                    details=_details_to_wire(exc.details),
-                )["errors"][0],
+                "code": exc.error_code,
+                "message": exc.message,
+                "recovery": exc.recovery,
+                **({"field": exc.field} if exc.field is not None else {}),
+                **({"suggestion": exc.suggestion} if exc.suggestion is not None else {}),
+                **({"retry_after": exc.retry_after} if exc.retry_after is not None else {}),
+                **({"details": d} if (d := _details_to_wire(exc.details)) is not None else {}),
                 **({"issues": [issue.to_wire() for issue in exc.issues]} if exc.issues else {}),
             }
         )

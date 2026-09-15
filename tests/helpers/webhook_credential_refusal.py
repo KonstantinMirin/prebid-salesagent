@@ -87,8 +87,8 @@ def assert_admin_flash_refuses_the_credential(
     STRING, requiring it to contain ``authentication.credentials``. Under ADR-010
     that is unsatisfiable: the operator-facing sentence is a read-only property
     resolved from ``CODE_TABLE`` by error code and by nothing else, so the flash
-    renders "Error registering webhook: Invalid request parameters" and the field
-    name reaches no rendered surface. The field did not disappear, it changed
+    renders "Error registering webhook: " plus that code's pinned sentence, and
+    the field name reaches no rendered surface. The field did not disappear, it changed
     channel — the route hands the whole typed refusal to
     ``record_admin_action_failure`` — so it is read off *declared* (the refusals
     the route declared, captured by the ``declared_refusals`` spy) rather than
