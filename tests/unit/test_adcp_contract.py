@@ -470,6 +470,15 @@ class TestAdCPContract:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },  # Required per AdCP spec
+            # Required per AdCP 3.1.1 and carries no default, as in the sibling above.
+            "reporting_capabilities": {
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
         }
 
         schema = ProductSchema(**model_dict)
