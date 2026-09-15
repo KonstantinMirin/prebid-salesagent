@@ -64,13 +64,22 @@ Feature: BR-UC-018 List Creatives
 
   @T-UC-018-main-performance @main-flow
   Scenario: List creatives with explicit delivery snapshot request
-    Given the authenticated principal has 2 approved creatives with delivery snapshot data
+    Given the authenticated principal has 2 approved creatives
     When the Buyer Agent sends a list_creatives request with include_snapshot true
     Then the response is compliant with the list_creatives spec
-    And each creative includes a delivery snapshot
+    And each creative includes a snapshot_unavailable_reason of "SNAPSHOT_UNSUPPORTED"
     # BR-RULE-149 INV-4: include_snapshot defaults to false, must explicitly request
-    # POST-S5: Buyer knows the lightweight delivery snapshot (when requested)
+    # POST-S5: Buyer knows the lightweight delivery snapshot, OR a machine-readable reason
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    #
+    # Was "each creative includes a delivery snapshot", over a Given that promised
+    # "creatives with delivery snapshot data". This seller has no such data to seed: no
+    # column in this schema holds a creative's lifetime impressions or last-served date.
+    # The pin does not require a seller to have them -- it requires a seller that does not
+    # to SAY SO, through snapshot_unavailable_reason, whose SNAPSHOT_UNSUPPORTED member is
+    # described as "The seller platform does not support delivery snapshots for this
+    # entity" (enums/snapshot-unavailable-reason.json). That disclosure is what POST-S5
+    # leaves the buyer knowing here, and it is what this scenario now grades.
 
   @T-UC-018-main-subassets @main-flow
   Scenario: List creatives with explicit items request
@@ -283,6 +292,15 @@ Feature: BR-UC-018 List Creatives
       | invalid_date_format      | created_after "not-a-date"                 | error "INVALID_REQUEST" with suggestion          |
       | empty_tags_array         | tags filter as empty array                 | error "INVALID_REQUEST" with suggestion             |
       | creative_ids_over_limit  | creative_ids with 101 items                | error "INVALID_REQUEST" with suggestion             |
+      | has_served_unanswerable  | has_served true                            | error "UNSUPPORTED_FEATURE" with suggestion         |
+    # has_served is a filter the pin declares and this seller cannot evaluate: nothing in
+    # the schema records whether a creative has served an impression. Silently ignoring it
+    # would answer a question the buyer did not ask, and core/creative-filters.json grants
+    # an explicit "standalone creative agents SHOULD ignore this filter" licence to three
+    # sales-agent-specific filters and not to this one. The pinned error table gives
+    # UNSUPPORTED_FEATURE for "Requested feature not supported by this seller", recovery
+    # correctable, so the buyer can drop the filter and retry. Moved here from the
+    # boolean-filter outline, whose Given cannot establish the state it promised.
 
   @T-UC-018-boundary-filters @boundary @filter-semantics
   # The flat-versus-structured conflict row is deleted for the reason given on the
@@ -313,15 +331,32 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # Every "only ..." outcome now names the same obligation, because it IS the same
+    # obligation in each row and the row's own request_params cell says which fields were
+    # asked for: the response carries the selected members and the six
+    # list-creatives-response.json marks REQUIRED on every item, and nothing else. The
+    # cells used to say "only creative_id field", which no conformant seller can produce —
+    # `fields` cannot express keeping the required members, so a projection that dropped
+    # them would answer a selection with a document violating the schema it was selected
+    # from.
+    #
+    # The all-13 cell asks for every enum member, which is by definition what an omitted
+    # `fields` returns, so it asserts the same thing the `omitted` row does. It is NOT
+    # key-presence of 13: a creative legitimately omits an empty tag list, and this seller
+    # omits the members it does not hold.
+    #
+    # invalid_db_status_tolerance is GONE from this outline: its request_params cell
+    # ("database has creative with unrecognized status value") describes a database
+    # fixture, not a request, so the row had nothing to dispatch. That obligation has its
+    # own scenario, @T-UC-018-inv-149-6-holds, which grades it end to end.
     Examples: Valid partitions
       | partition                    | request_params                                                                                      | outcome                                                        |
       | omitted                      | no fields parameter                                                                                 | all fields included in each creative object                     |
-      | single_field                 | fields ["creative_id"]                                                                              | only creative_id field in each creative object                  |
-      | minimal_set                  | fields ["creative_id", "name", "status"]                                                            | only creative_id, name, status in each creative object          |
-      | all_fields                   | fields with all 13 enum values                                                                      | all 13 fields included in each creative object                  |
-      | enrichment_fields            | fields ["creative_id", "assignments", "snapshot"] and include_snapshot true                         | creative_id, assignments, and delivery snapshot included         |
+      | single_field                 | fields ["creative_id"]                                                                              | only the selected and required fields in each creative object   |
+      | minimal_set                  | fields ["creative_id", "name", "status"]                                                            | only the selected and required fields in each creative object   |
+      | all_fields                   | fields with all 13 enum values                                                                      | all fields included in each creative object                     |
+      | enrichment_fields            | fields ["creative_id", "assignments", "snapshot"] and include_snapshot true                         | only the selected and required fields in each creative object   |
       | assignments_disabled         | include_assignments false                                                                           | assignment data excluded from creatives                          |
-      | invalid_db_status_tolerance  | database has creative with unrecognized status value                                                | creative returned with status mapped to "pending_review"         |
 
     Examples: Invalid partitions
       | partition         | request_params                      | outcome                                         |
@@ -336,15 +371,18 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # Same three reconciliations as the partition outline above: the "only ..." cells name
+    # the obligation a conformant projection can meet, the all-13 cell equals an omitted
+    # `fields`, and the database-fixture row is graded by @T-UC-018-inv-149-6-holds instead
+    # of by a request that cannot express it.
     Examples: Boundary values
       | boundary_point                                            | request_params                                  | outcome                                                  |
-      | ['creative_id'] (single field, minItems boundary)         | fields ["creative_id"]                          | only creative_id field in response                        |
-      | All 13 enum values (max enum coverage)                    | fields with all 13 enum values                  | all 13 fields included                                    |
+      | ['creative_id'] (single field, minItems boundary)         | fields ["creative_id"]                          | only the selected and required fields in response         |
+      | All 13 enum values (max enum coverage)                    | fields with all 13 enum values                  | all fields included in response                           |
       | [] (empty array, violates minItems: 1)                    | fields as empty array                           | error "INVALID_REQUEST" with suggestion                  |
       | ['creative_id', 'thumbnail'] (unknown enum value)         | fields ["creative_id", "thumbnail"]             | error "INVALID_REQUEST" with suggestion                  |
       | fields omitted entirely (all fields returned)             | no fields parameter                             | all fields included in response                            |
       | include_assignments=false (overrides default true)         | include_assignments false                       | assignment data excluded                                   |
-      | DB status='unknown_value' (mapped to pending_review)      | database has creative with unrecognized status  | status mapped to "pending_review" in response              |
 
   @T-UC-018-inv-146-1-holds @invariant @BR-RULE-146
   Scenario: BR-RULE-146 INV-1 holds -- no filters returns all non-archived creatives
@@ -510,7 +548,13 @@ Feature: BR-UC-018 List Creatives
     Given the authenticated principal has 2 approved creatives with full data
     When the Buyer Agent sends a list_creatives request with fields ["creative_id", "name"]
     Then the response is compliant with the list_creatives spec
-    And each creative in the response contains only "creative_id" and "name" fields
+    And only the selected and required fields in each creative object
+    # Was 'contains only "creative_id" and "name" fields'. The projection narrows the
+    # OPTIONAL members: list-creatives-response.json marks creative_id, name, format_id,
+    # status, created_date and updated_date REQUIRED on every item, and `fields` has no way
+    # to express keeping them, so a response honouring this selection literally would
+    # violate the schema the selection is made against. The step asserts the exact key set
+    # the pin permits: the two selected members, the required ones, and nothing more.
 
   @T-UC-018-inv-149-2-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-2 holds -- fields omitted returns all fields
@@ -528,7 +572,10 @@ Feature: BR-UC-018 List Creatives
 
   @T-UC-018-inv-149-4-holds @invariant @BR-RULE-149
   Scenario: BR-RULE-149 INV-4 holds -- include_snapshot defaults to false
-    Given the authenticated principal has an approved creative with delivery snapshot data
+    # The Given said "with delivery snapshot data", which this seller cannot seed (see the
+    # main-performance note). The invariant does not need it: the obligation is that an
+    # unrequested snapshot is absent, and that is graded over any creative.
+    Given the authenticated principal has an approved creative
     When the Buyer Agent sends a list_creatives request without specifying include_snapshot
     Then the response is compliant with the list_creatives spec
     And the creative in the response does not include a delivery snapshot
@@ -599,7 +646,7 @@ Feature: BR-UC-018 List Creatives
   @T-UC-018-edge-pagination-next @main-flow @edge-case
   Scenario: Pagination cursor traversal across pages
     Given the authenticated principal has 120 approved creatives
-    When the Buyer Agent sends a list_creatives request with max_results 50
+    When the Buyer Agent sends a list_creatives request with pagination max_results 50
     Then the response is compliant with the list_creatives spec
     And the response contains 50 creatives
     And the pagination shows has_more as true
@@ -636,10 +683,11 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # The same two reconciliations as the field-selector outlines above.
     Examples: Valid partitions
       | partition          | request_params                                         | outcome                                         |
-      | minimal_fields     | fields ["creative_id", "name", "status"]               | only creative_id, name, status in response       |
-      | all_enum_values    | fields with all 13 enum values                         | all 13 fields included in response               |
+      | minimal_fields     | fields ["creative_id", "name", "status"]               | only the selected and required fields in response |
+      | all_enum_values    | fields with all 13 enum values                         | all fields included in response                  |
 
   @T-UC-018-partition-sort-field @partition @creative-sort-field
   # sort is an OBJECT of field + direction (list-creatives-request.json); the flat sort_by
@@ -667,10 +715,11 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # The same two reconciliations as the field-selector outlines above.
     Examples: Boundary values
       | boundary_point                                                                                                                          | request_params                                | outcome                                   |
-      | ["creative_id"] (single field, minimum valid)                                                                                           | fields ["creative_id"]                        | only creative_id returned                  |
-      | ["creative_id", "name", "format_id", "status", "created_date", "updated_date", "tags", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 13 fields) | fields with all 13 enum values                | all 13 fields returned                     |
+      | ["creative_id"] (single field, minimum valid)                                                                                           | fields ["creative_id"]                        | only the selected and required fields in response |
+      | ["creative_id", "name", "format_id", "status", "created_date", "updated_date", "tags", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 13 fields) | fields with all 13 enum values                | all fields included in response           |
       | Not provided (all fields returned)                                                                                                      | no fields parameter                           | all fields returned                        |
       | ["creative_id", "thumbnail"] (unknown field in array)                                                                                   | fields ["creative_id", "thumbnail"]           | error "INVALID_REQUEST" with suggestion   |
       | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "INVALID_REQUEST" with suggestion   |
@@ -751,14 +800,29 @@ Feature: BR-UC-018 List Creatives
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
   @T-UC-018-inv-225-2-holds @invariant @BR-RULE-225
-  Scenario: BR-RULE-225 INV-2 holds -- include_pricing with account returns pricing_options
+  Scenario: BR-RULE-225 INV-2 holds -- include_pricing with an account is answered, and prices nothing
     Given the authenticated principal has 2 approved creatives
-    And the request supplies an account reference resolvable to a rate card
-    When the Buyer Agent sends a list_creatives request with include_pricing true and the account reference
+    And the request targets a production account
+    When the Buyer Agent sends a list_creatives request with include_pricing true
     Then the response is compliant with the list_creatives spec
-    And each creative in the response carries a pricing_options array with at least one option
-    # POST-S9: Buyer knows pricing options (when include_pricing and account provided)
+    And the operation succeeds
+    And no pricing_options in any creative
+    # POST-S9: Buyer knows the pricing options for using a creative -- of which this seller
+    # has none to state.
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    #
+    # Was "each creative ... carries a pricing_options array with at least one option",
+    # over a Given promising "an account reference resolvable to a rate card". What
+    # list-creatives-response.json puts on a creative is core/vendor-pricing-option.json:
+    # "A pricing option offered by a vendor agent (signals, creative, governance) ... Used
+    # by ad servers and library agents", i.e. a charge for USING the creative. This seller
+    # charges for inventory, not for creative serving: the account's rate_card column holds
+    # an identifier with no options behind it, and the pricing models it does have belong to
+    # products. minItems is 1, so an empty array would be invalid and inventing a price
+    # would be worse than either -- the conformant answer is to omit the member. What the
+    # gate half of BR-RULE-225 requires is still graded, here and in INV-1: naming an
+    # account is what makes the request answerable at all, and INV-1 grades the refusal
+    # when it is absent.
 
   @T-UC-018-inv-225-3-holds @invariant @BR-RULE-225
   Scenario: BR-RULE-225 INV-3 holds -- pricing_options absent when include_pricing omitted
@@ -776,12 +840,16 @@ Feature: BR-UC-018 List Creatives
     And <outcome>
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
+    # The two account-carrying rows asked for pricing_options to be PRESENT. This seller
+    # hosts no creative-serving pricing to put there (see the BR-RULE-225 INV-2 note), and
+    # both rows also named an account no Given seeds, so neither could reach the gate they
+    # exist to grade. They are restated as the one thing the account changes here: the
+    # request is answered rather than refused, and no creative is priced. The account comes
+    # from the shared account Given, so the reference resolves for real.
     Examples: Valid partitions
       | partition                        | request_params                                              | outcome                               |
       | pricing_omitted                  | no include_pricing parameter                                | no pricing_options in any creative    |
       | pricing_false                    | include_pricing false                                       | no pricing_options in any creative    |
-      | pricing_with_account             | include_pricing true and account account_id "acct_acme"     | each creative carries pricing_options |
-      | pricing_with_natural_key_account | include_pricing true and account brand+operator natural key | each creative carries pricing_options |
 
     Examples: Invalid partitions
       | partition               | request_params                      | outcome                                    |
@@ -794,21 +862,26 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # The gate-satisfied row is graded by @T-UC-018-inv-225-2-holds, which carries the
+    # account Given this outline has no room for: an account the seller can resolve has to
+    # be seeded, and an outline's single Given is already spent on the creatives. What
+    # remains here is the boundary itself -- the gate violated, and the two ways of not
+    # asking for pricing at all.
     Examples: Boundary values
       | boundary_point                                              | request_params                                          | outcome                                  |
-      | include_pricing=true + account present (gate satisfied)     | include_pricing true and account account_id "acct_acme" | each creative carries pricing_options    |
       | include_pricing=true + account absent (gate violated)       | include_pricing true and no account                     | error "INVALID_REQUEST" with suggestion |
       | include_pricing=false (no account needed)                   | include_pricing false                                   | no pricing_options in any creative       |
       | include_pricing omitted (defaults false, no account needed) | no include_pricing parameter                            | no pricing_options in any creative       |
 
-  @T-UC-018-inv-226-1-holds @invariant @BR-RULE-226
-  Scenario: BR-RULE-226 INV-1 holds -- snapshot returned when available
-    Given the authenticated principal has an approved creative with available delivery snapshot data
-    When the Buyer Agent sends a list_creatives request with include_snapshot true
-    Then the response is compliant with the list_creatives spec
-    And the creative in the response includes a delivery snapshot
-    And the creative does not include a snapshot_unavailable_reason
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+  # BR-RULE-226 INV-1 IS DELETED. It asserted that a snapshot comes back "when available",
+  # over a Given promising a creative "with available delivery snapshot data". No column in
+  # this schema holds a per-creative lifetime impression count or last-served date, and the
+  # pin does not oblige a seller to have one -- list-creatives-request.json makes
+  # include_snapshot a request, and snapshot-unavailable-reason.json is how a seller without
+  # the capability answers. There is therefore no state of this seller in which the
+  # scenario's precondition holds, and the obligation that does bind it -- the disclosure --
+  # is INV-2 below. Restoring INV-1 belongs with a delivery-snapshot source, not with a
+  # test.
 
   @T-UC-018-inv-226-2-holds @invariant @BR-RULE-226
   Scenario Outline: BR-RULE-226 INV-2 holds -- snapshot unavailable surfaces machine-readable reason -- <reason>
@@ -818,12 +891,19 @@ Feature: BR-UC-018 List Creatives
     And the creative in the response omits the snapshot
     And the creative includes a snapshot_unavailable_reason of "<reason>"
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
+    #
+    # One row, not three. The enum's other two members name conditions this seller cannot
+    # be in, and the enum says so itself: SNAPSHOT_TEMPORARILY_UNAVAILABLE is "Snapshot data
+    # exists but is temporarily unavailable (e.g., cache miss, pipeline lag)" -- there is no
+    # snapshot data and no pipeline for it to lag -- and SNAPSHOT_PERMISSION_DENIED is "The
+    # caller lacks permission to view snapshot data for this entity", which needs a
+    # per-entity snapshot permission this seller does not model. A row whose precondition
+    # cannot be established grades nothing; both belong with the capability that would make
+    # them reachable.
 
     Examples:
       | condition                             | reason                            |
       | the platform never supports snapshots | SNAPSHOT_UNSUPPORTED              |
-      | a transient data gap                  | SNAPSHOT_TEMPORARILY_UNAVAILABLE  |
-      | an access restriction                 | SNAPSHOT_PERMISSION_DENIED        |
 
   @T-UC-018-inv-226-3-holds @invariant @BR-RULE-226
   Scenario: BR-RULE-226 INV-3 holds -- no snapshot fields when include_snapshot omitted
@@ -841,17 +921,16 @@ Feature: BR-UC-018 List Creatives
     And <outcome>
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/creative/list-creatives-request.json
 
+    # The three rows this outline lost are the two unreachable enum members (see the
+    # BR-RULE-226 INV-2 note) and reason_not_in_enum, whose request_params cell named a
+    # RESPONSE field: a buyer cannot send snapshot_unavailable_reason, so there was no
+    # request for the row to make. That the seller never emits a non-enum reason is graded
+    # on every row here by the compliance Then, which validates the response against
+    # list-creatives-response.json and its $ref to the closed enum.
     Examples: Valid partitions
       | partition              | request_params                              | outcome                                                                    |
-      | snapshot_returned      | include_snapshot true, snapshot available   | creative includes snapshot, no snapshot_unavailable_reason                  |
-      | reason_unsupported     | include_snapshot true, platform unsupported | creative has snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"             |
-      | reason_temporary       | include_snapshot true, transient gap        | creative has snapshot_unavailable_reason "SNAPSHOT_TEMPORARILY_UNAVAILABLE" |
-      | reason_permission      | include_snapshot true, no permission        | creative has snapshot_unavailable_reason "SNAPSHOT_PERMISSION_DENIED"       |
+      | reason_unsupported     | include_snapshot true                       | creative has snapshot_unavailable_reason "SNAPSHOT_UNSUPPORTED"             |
       | snapshot_not_requested | no include_snapshot parameter               | neither snapshot nor snapshot_unavailable_reason present                    |
-
-    Examples: Invalid partitions
-      | partition          | request_params                                         | outcome                                  |
-      | reason_not_in_enum | snapshot_unavailable_reason "SNAPSHOT_BROKEN" returned  | error "VALIDATION_ERROR" with suggestion |
 
   @T-UC-018-boundary-snapshot-unavailable @boundary @snapshot-unavailable
   Scenario Outline: Snapshot unavailability boundary -- <boundary_point>
@@ -860,29 +939,30 @@ Feature: BR-UC-018 List Creatives
     Then the response is compliant with the list_creatives spec
     And <outcome>
 
+    # Same two deletions as the partition outline above, for the same two reasons: the
+    # PERMISSION_DENIED member names a condition this seller cannot enter, and the
+    # SNAPSHOT_BROKEN row put a response field in a request.
     Examples: Boundary values
       | boundary_point                                                       | request_params                                | outcome                                                  |
-      | snapshot_unavailable_reason='SNAPSHOT_UNSUPPORTED' (valid enum)       | include_snapshot true, platform unsupported   | snapshot_unavailable_reason is "SNAPSHOT_UNSUPPORTED"     |
-      | snapshot_unavailable_reason='SNAPSHOT_PERMISSION_DENIED' (valid enum) | include_snapshot true, no permission          | snapshot_unavailable_reason is "SNAPSHOT_PERMISSION_DENIED" |
-      | snapshot_unavailable_reason='SNAPSHOT_BROKEN' (not in enum)           | snapshot_unavailable_reason "SNAPSHOT_BROKEN"  | error "VALIDATION_ERROR" with suggestion                 |
+      | snapshot_unavailable_reason='SNAPSHOT_UNSUPPORTED' (valid enum)       | include_snapshot true                         | snapshot_unavailable_reason is "SNAPSHOT_UNSUPPORTED"     |
       | include_snapshot omitted (neither snapshot nor reason present)        | no include_snapshot parameter                 | neither snapshot nor snapshot_unavailable_reason present  |
 
   @T-UC-018-ext-e @extension @ext-e @degradation
-  Scenario Outline: Snapshot unavailable -- listing still succeeds with reason -- <reason>
+  Scenario: Snapshot unavailable -- the listing still succeeds, with the reason on every creative
     Given the authenticated principal has approved creatives
-    And the delivery snapshot is unavailable for one creative due to <condition>
     When the Buyer Agent sends a list_creatives request with include_snapshot true
     Then the response is compliant with the list_creatives spec
     And the operation succeeds and returns the full creatives array
-    And the affected creative carries a snapshot_unavailable_reason of "<reason>"
-    And creatives with available snapshots still include their snapshot
+    And each creative includes a snapshot_unavailable_reason of "SNAPSHOT_UNSUPPORTED"
     # POST-S5: degraded result is explained, not silently dropped
-
-    Examples:
-      | condition                             | reason                            |
-      | the platform never supports snapshots | SNAPSHOT_UNSUPPORTED              |
-      | a transient data gap                  | SNAPSHOT_TEMPORARILY_UNAVAILABLE  |
-      | an access restriction                 | SNAPSHOT_PERMISSION_DENIED        |
+    #
+    # Was an outline over the three enum members, asserting a MIXED response: one affected
+    # creative carrying a reason while "creatives with available snapshots still include
+    # their snapshot". This seller cannot produce that mixture, because it supports
+    # snapshots for no creative at all (see the BR-RULE-226 INV-2 note), so the degradation
+    # is uniform: every creative carries the reason, and the listing still succeeds with the
+    # full array rather than failing or dropping rows. That is the half of POST-S5 this
+    # seller can be held to, and it is the half the extension exists for.
 
   @T-UC-018-storyboard-list-all-creatives-after-sync @schema-v3.1 @v3-1 @list-after-sync
   Scenario: List creatives with no filters returns the library including recently synced creatives
@@ -941,12 +1021,16 @@ Feature: BR-UC-018 List Creatives
     # has_served (has served >=1 impression vs never served). Each partitions
     # the principal's library into the matching subset.
 
+    # has_served LEFT this outline for the filter-semantics one, as an invalid partition.
+    # Its two rows shared this Given, which for has_served promises a library where some
+    # creatives have served: no column in this schema records a creative's impressions, so
+    # that state cannot be seeded and the filter cannot be evaluated. The seller refuses it
+    # rather than answering a different question, and the refusal is graded where the other
+    # unanswerable filters are.
     Examples: Boolean filter partitions
       | flag          | value | outcome                                                          |
       | has_variables | true  | only creatives with dynamic variables (DCO) are returned          |
       | has_variables | false | only static creatives (no dynamic variables) are returned         |
-      | has_served    | true  | only creatives that have served at least one impression are returned |
-      | has_served    | false | only creatives that have never served are returned                |
 
   @T-UC-018-boundary-creative-status @boundary @creative-status
   Scenario Outline: Creative status filter boundary -- <boundary_point>

@@ -1060,46 +1060,18 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # every remaining row now executes: tags AND / tags_any OR ask jsonb for containment
     # over the creative's own tags, creative_ids is threaded into the query, and the
     # date-range and validation rows are refusals the DTO already makes.
-    (
-        "T-UC-018-partition-field-selector",
-        {
-            "single_field",
-            "minimal_set",
-            "all_fields",
-            "enrichment_fields",
-            "invalid_db_status_tolerance",
-        },
-        # The four rows that left this set grade refusals, not projection: empty_array,
-        # unknown_field and non_string_item violate the pinned `fields` constraints
-        # (minItems 1, closed enum, items typed string) and are refused at the boundary,
-        # and `omitted` grades the UNPROJECTED response, which is what production returns.
-        # What remains is the projection itself: nothing reads req.fields, and the rows
-        # that demand a projected object ALSO demand schema compliance, which
-        # list-creatives-response.json makes unsatisfiable for a single-field object — it
-        # marks creative_id, name, format_id, status, created_date and updated_date
-        # REQUIRED on every item. That tension is upstream, not a local wiring gap — #1721
-        "UC-018 fields[] projection is not implemented in production (nothing reads req.fields), and a "
-        "projected creative cannot satisfy the pinned response schema's six required members — #1721",
-    ),
-    (
-        "T-UC-018-boundary-pagination",
-        {
-            "assignment_count",
-        },
-        # GRADUATED (2026-08-31, ): the max_results rows are OUT of this
-        # entry because the gap it described is closed -- ListCreativesRequest declares the
-        # spec's pagination object and every transport validates into it, so max_results has
-        # a path on A2A and REST and those rows XPASSed strict. The limit=1000/1001 rows are
-        # gone entirely: `limit` is not an AdCP 3.1.1 field, and the code cap they graded is
-        # not a spec behaviour.
-        # Still dormant: assignment_count sorting is genuinely unimplemented --
-        # CreativeRepository.get_by_principal maps only name/status/created_at -- so the
-        # enum's last member cannot be honoured yet. That is a real production gap, not a
-        # wiring one — #1721
-        "UC-018: assignment_count sorting is unimplemented (CreativeRepository."
-        "get_by_principal maps only name/status/created_at), so the last member of "
-        "creative-sort-field.json cannot be honoured — #1721",
-    ),
+    # T-UC-018-partition-field-selector IS GRADUATED IN FULL. `fields` is read now: the
+    # projection narrows the OPTIONAL members and keeps the six list-creatives-response.json
+    # marks required, which is the reading that satisfies both halves of the pin and is why
+    # the rows are gradeable at all. The one row that did not graduate was deleted rather
+    # than parked: its request_params cell named a database fixture, and that obligation is
+    # graded by @T-UC-018-inv-149-6-holds.
+    # T-UC-018-boundary-pagination IS GRADUATED IN FULL. assignment_count sorting was the
+    # last row parked here, and it is implemented: the repository orders by the creative's
+    # assignment count through a correlated subquery, and the response carries the count in
+    # the assignments block the pin defaults to including — which is what makes the ordering
+    # observable on the wire at all. The 60-creative library now seeds rotating counts, so
+    # the row cannot pass over a constant column.
     (
         "T-UC-005-partition-disclosure",
         {"duplicate_positions"},

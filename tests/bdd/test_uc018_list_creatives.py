@@ -102,6 +102,7 @@ from tests.bdd.steps._outcome_helpers import error_envelope_or_none, require_pay
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.helpers.envelope_assertions import assert_envelope_shape
+from tests.helpers.pinned_schema import validator_for
 
 # Three genuinely-different formats (display / video / audio) for the "three
 # different formats" precondition. All three are in the standard format registry:
@@ -633,7 +634,16 @@ def given_n_approved_creatives(ctx: dict, count: int) -> None:
     _seed_library(
         ctx,
         [
-            _Spec(label=f"paged creative {index:03d}", created_at=_ANCHOR - timedelta(minutes=index))
+            _Spec(
+                label=f"paged creative {index:03d}",
+                created_at=_ANCHOR - timedelta(minutes=index),
+                # Rotating assignment counts, so the library can also answer the
+                # assignment_count sort field: over creatives that all carry the same count,
+                # an ordering assertion compares a constant list to itself and passes even
+                # when the sort field is ignored. The counts do not disturb the created_at
+                # ordering the pagination rows assert.
+                assignment_count=index % 3,
+            )
             for index in range(count)
         ],
     )
@@ -687,6 +697,24 @@ def _max_results(raw: str) -> object:
         return int(stripped)
     except ValueError:
         return stripped
+
+
+def _every_selectable_field(expected_count: int) -> list[str]:
+    """The whole ``fields`` enum, READ OFF the pinned request schema.
+
+    A row that says "all 13 enum values" is asking for every member there is, so the list
+    comes from list-creatives-request.json rather than being copied into the feature file
+    or into this module — two places that would then have to be updated when the enum
+    grows, and would silently under-select until someone did. The count the row states is
+    asserted against the enum's real size, so a spec bump reddens the row instead of
+    quietly changing what it means.
+    """
+    members = validator_for("creative/list-creatives-request.json").schema["properties"]["fields"]["items"]["enum"]
+    assert len(members) == expected_count, (
+        f"the scenario says {expected_count} fields members; list-creatives-request.json declares "
+        f"{len(members)}: {members}"
+    )
+    return list(members)
 
 
 def _creative_ids_of_length(ctx: dict, count: int) -> list[str]:
@@ -770,6 +798,14 @@ _REQUEST_PHRASES: tuple[tuple[str, Callable[[re.Match[str], dict], dict[str, Any
     (r"include_pricing true and no account(?: reference)?", lambda match, ctx: {"include_pricing": True}),
     # fields — the array itself is pin-declared (minItems 1, closed enum of 13 values).
     (r"fields as empty array", lambda match, ctx: {"fields": []}),
+    (
+        r"fields with all (\d+) enum values",
+        lambda match, ctx: {"fields": _every_selectable_field(int(match.group(1)))},
+    ),
+    (
+        r"fields \[(.*)\] and include_snapshot true",
+        lambda match, ctx: {"fields": _quoted(match.group(1)), "include_snapshot": True},
+    ),
     (r"fields \[(.*)\]", lambda match, ctx: {"fields": _quoted(match.group(1))}),
     (r'fields containing "([^"]*)"', lambda match, ctx: {"fields": ["creative_id", match.group(1)]}),
     (r"fields containing integer (\d+)", lambda match, ctx: {"fields": [int(match.group(1))]}),
@@ -2097,3 +2133,337 @@ def given_creatives_in_an_account(ctx: dict) -> None:
     assertions are made over a non-empty response.
     """
     _seed_library(ctx, _APPROVED_SPECS)
+
+
+# ── The delivery snapshot: a capability this seller declines, in the pin's own words ──
+#
+# enums/snapshot-unavailable-reason.json describes SNAPSHOT_UNSUPPORTED as "The seller
+# platform does not support delivery snapshots for this entity", and that is this seller:
+# no column holds a creative's lifetime impressions or last-served date. So every Given
+# below seeds a plain creative — "whose snapshot is unavailable" is a state it is always in
+# — and the Thens grade the DISCLOSURE, which is what the pin asks of a seller in that
+# state. The rows that asserted a snapshot's presence, or one of the two enum members whose
+# conditions this seller cannot enter, were corrected or deleted in the feature file, each
+# with its citation there.
+
+
+@given("the authenticated principal has an approved creative")
+@given("the authenticated principal has an approved creative whose snapshot is unavailable")
+@given(
+    parsers.re(
+        r"the authenticated principal has an approved creative whose snapshot is unavailable due to "
+        r"the platform never supports snapshots"
+    )
+)
+def given_one_approved_creative(ctx: dict) -> None:
+    """Seed one approved creative, the subject of the snapshot-disclosure scenarios."""
+    _seed_library(ctx, [_Spec(label="approved creative", created_at=_ANCHOR)])
+
+
+@then(
+    parsers.re(
+        r"(?:each creative includes|the creative includes) a snapshot_unavailable_reason of "
+        r'"(?P<reason>[A-Z_]+)"'
+    )
+)
+@then(parsers.re(r'creative has snapshot_unavailable_reason "(?P<reason>[A-Z_]+)"'))
+@then(parsers.re(r'snapshot_unavailable_reason is "(?P<reason>[A-Z_]+)"'))
+def then_snapshot_unavailable_reason(ctx: dict, reason: str) -> None:
+    """Every returned creative carries that machine-readable reason, and no snapshot.
+
+    Both halves matter: the pin permits the reason "only when include_snapshot was true and
+    snapshot data is unavailable for this creative", so a response carrying a reason AND a
+    snapshot would be self-contradicting.
+    """
+    creatives = _wire_creatives(ctx)
+    assert creatives, "no creatives on the wire to inspect"
+    for entry in creatives:
+        assert entry.get("snapshot_unavailable_reason") == reason, (
+            f"creative {entry['creative_id']!r} should decline the snapshot with {reason!r}, "
+            f"the wire says {entry.get('snapshot_unavailable_reason')!r}"
+        )
+        assert entry.get("snapshot") is None, (
+            f"creative {entry['creative_id']!r} carries both a snapshot and a reason for not having one: {entry}"
+        )
+
+
+@then("the creative in the response omits the snapshot")
+def then_creative_omits_snapshot(ctx: dict) -> None:
+    """The snapshot itself is absent — the reason is what stands in its place."""
+    creatives = _wire_creatives(ctx)
+    assert creatives, "no creatives on the wire to inspect"
+    carrying = [entry["creative_id"] for entry in creatives if entry.get("snapshot") is not None]
+    assert not carrying, f"a snapshot came back from a seller that does not support them: {carrying}"
+
+
+@then("the operation succeeds and returns the full creatives array")
+def then_operation_succeeds_with_full_array(ctx: dict) -> None:
+    """A declined enrichment degrades the response, never the listing.
+
+    Exactly the seeded library comes back: the buyer asked for a snapshot the seller cannot
+    give, and the answer is still every creative it asked about.
+    """
+    result = ctx.get("result")
+    assert result is not None, "no TransportResult on the context — the When step did not dispatch"
+    assert result.is_success, f"the listing failed instead of degrading: {error_envelope_or_none(ctx)!r}"
+    _assert_returned_exactly(ctx, {record.creative_id for record in _library(ctx)}, "the whole seeded library")
+
+
+# ── The fields projection ────────────────────────────────────────────
+#
+# The six members list-creatives-response.json marks REQUIRED on every creative item.
+# They are on the wire whatever the buyer selected, because `fields` cannot express keeping
+# them and a projection that dropped one would violate the schema the selection was made
+# against. Read off the pinned schema rather than typed out here, so a future required
+# member is picked up by both sides at once.
+_REQUIRED_CREATIVE_FIELDS = frozenset(
+    validator_for("creative/list-creatives-response.json").schema["properties"]["creatives"]["items"]["required"]
+)
+
+#: The two `fields` members that name more than one response member. The request schema
+#: states the first ("The 'concept' value returns both concept_id and concept_name"); the
+#: second is one answer in two shapes, the snapshot or the reason it is absent.
+_FIELD_SELECTS_ON_THE_WIRE = {
+    "concept": ("concept_id", "concept_name"),
+    "snapshot": ("snapshot", "snapshot_unavailable_reason"),
+}
+
+#: Response members the `fields` enum cannot name — `assets` today. Read as the difference
+#: between the two pinned schemas rather than listed, so an upstream change to either side
+#: moves this set instead of silently contradicting it.
+_UNSELECTABLE_WIRE_FIELDS = frozenset(
+    validator_for("creative/list-creatives-response.json").schema["properties"]["creatives"]["items"]["properties"]
+) - {
+    wire_field
+    for member in validator_for("creative/list-creatives-request.json").schema["properties"]["fields"]["items"]["enum"]
+    for wire_field in _FIELD_SELECTS_ON_THE_WIRE.get(member, (member,))
+}
+
+
+@then(parsers.re(r"only the selected and required fields in (?:each creative object|response)"))
+def then_only_selected_and_required_fields(ctx: dict) -> None:
+    """The projected creative carries the selected members, the required ones, nothing else.
+
+    The selection is read from the REQUEST this row sent, so the outline's rows each grade
+    their own `fields` array through one sentence, and an extra member the seller failed to
+    drop fails here as loudly as a missing one.
+    """
+    selected = ctx["request"].get("fields")
+    assert selected, "this Then belongs on a row whose request carries a fields selection"
+    # The required members, the selected ones, and the members the `fields` vocabulary
+    # cannot name: a buyer with no way to ask for `assets` had no way to decline it either,
+    # so a projection that dropped it would answer a selection the buyer never made.
+    permitted = set(_REQUIRED_CREATIVE_FIELDS) | _UNSELECTABLE_WIRE_FIELDS
+    for field in selected:
+        permitted.update(_FIELD_SELECTS_ON_THE_WIRE.get(field, (field,)))
+
+    creatives = _wire_creatives(ctx)
+    assert creatives, "no creatives on the wire to inspect"
+    for entry in creatives:
+        unselected = sorted(set(entry) - permitted)
+        assert not unselected, (
+            f"creative {entry['creative_id']!r} carries members the buyer did not select: {unselected}"
+        )
+        missing = sorted(_REQUIRED_CREATIVE_FIELDS - set(entry))
+        assert not missing, f"creative {entry['creative_id']!r} is missing required members: {missing}"
+
+
+# ── The v3.1 boolean filters, and the enrichments read off the creative platform ──
+#
+# core/creative-variable.json sources a creative's variables from the creative platform
+# ("variable_id: Variable identifier on the creative platform"), and AdCP standardizes no
+# variables input on sync_creatives — the same position concept_id is in, so the same
+# carrier: the creative's data blob. `has_variables` then asks whether that value is a
+# non-empty array, which is a question the seller can answer from what it stores.
+
+#: One dynamic-content variable, in the pinned shape. A single required text slot, so the
+#: creative is unambiguously a DCO creative and the seeded value survives validation.
+_DCO_VARIABLE = {
+    "variable_id": "headline_text",
+    "name": "Headline",
+    "variable_type": "text",
+    "default_value": "Summer Sale",
+    "required": True,
+}
+
+
+def _seed_creative_with_variables(ctx: dict, *, label: str) -> Any:
+    """Seed one approved creative carrying a dynamic-content variable on its data blob."""
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    from tests.factories import CreativeFactory
+    from tests.factories.creative_asset import build_assets, image_spec
+
+    creative = CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        approved=True,
+        name=label,
+        created_at=_ANCHOR,
+        data={"assets": build_assets(image_spec("banner")), "variables": [_DCO_VARIABLE]},
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    return creative
+
+
+@given(
+    parsers.re(r"the authenticated principal has (?:an approved creative|a creative) with dynamic-content variables")
+)
+def given_creative_with_variables(ctx: dict) -> None:
+    """Seed the DCO creative the include_variables scenarios read."""
+    creative = _seed_creative_with_variables(ctx, label="dco creative")
+    ctx["library"] = [_Seeded(creative.creative_id, "dco creative", "approved", (), _ANCHOR)]
+
+
+@given("the authenticated principal has both creatives matching and not matching has_variables")
+def given_dco_and_static_creatives(ctx: dict) -> None:
+    """Seed one DCO creative and one static one, so either value of the filter partitions.
+
+    Both halves are needed for either row to be falsifiable: a filter that was dropped
+    returns both, and each row asserts exactly one of them.
+    """
+    dco = _seed_creative_with_variables(ctx, label="dco creative")
+    static = _seed_creative(
+        ctx["tenant"], ctx["principal"], name="static creative", created_at=_ANCHOR - timedelta(minutes=1)
+    )
+    ctx["library"] = [
+        _Seeded(dco.creative_id, "dco creative", "approved", (), _ANCHOR),
+        _Seeded(static.creative_id, "static creative", "approved", (), _ANCHOR - timedelta(minutes=1)),
+    ]
+
+
+@then(parsers.re(r"only creatives with dynamic variables \(DCO\) are returned"))
+def then_only_dco_creatives(ctx: dict) -> None:
+    """has_variables=true returns the DCO creative and not the static one."""
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, "dco creative"), "the creative carrying variables")
+
+
+@then(parsers.re(r"only static creatives \(no dynamic variables\) are returned"))
+def then_only_static_creatives(ctx: dict) -> None:
+    """has_variables=false returns the static creative and not the DCO one."""
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, "static creative"), "the creative carrying no variables")
+
+
+@given("the authenticated principal has a multi-asset creative with items")
+def given_multi_asset_creative(ctx: dict) -> None:
+    """Seed one creative whose assets are several distinct elements.
+
+    That IS a multi-asset creative: core/creative-item.json calls an item an "Item within a
+    multi-asset creative format ... composed of multiple distinct elements", and the
+    elements this seller holds are the assets the buyer synced. A headline text asset plus
+    two images gives the projection both of the discriminated shapes to produce.
+    """
+    from tests.factories.creative_asset import build_assets, image_spec, text_spec
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    from tests.factories import CreativeFactory
+
+    creative = CreativeFactory(
+        tenant=tenant,
+        principal=principal,
+        approved=True,
+        name="carousel creative",
+        created_at=_ANCHOR,
+        data={
+            "assets": build_assets(
+                image_spec("product_one"),
+                image_spec("product_two"),
+                text_spec("headline", content="Summer Sale"),
+            )
+        },
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [_Seeded(creative.creative_id, "carousel creative", "approved", (), _ANCHOR)]
+    ctx["expected_item_asset_ids"] = {"product_one", "product_two", "headline"}
+
+
+@then("the creative includes items data")
+def then_creative_includes_items(ctx: dict) -> None:
+    """The items array names every element of the multi-asset creative.
+
+    Asserted by ASSET ID rather than by length: an items array of the right size built from
+    the wrong assets would pass a count, and the ids are what a buyer uses to match an item
+    to the asset it came from.
+    """
+    creatives = _wire_creatives(ctx)
+    assert len(creatives) == 1, f"expected the one seeded creative, got {len(creatives)}"
+    items = creatives[0].get("items")
+    assert items, f"include_items was requested but no items came back: {creatives[0]}"
+    assert {item["asset_id"] for item in items} == ctx["expected_item_asset_ids"], (
+        f"expected items for {sorted(ctx['expected_item_asset_ids'])}, got {sorted(i['asset_id'] for i in items)}"
+    )
+    for item in items:
+        assert item["asset_kind"] in ("media", "text"), f"item carries no valid asset_kind: {item}"
+        assert item.get("content_uri") or item.get("content"), f"item carries neither content_uri nor content: {item}"
+
+
+@then("the creative includes variables data")
+def then_creative_includes_variables(ctx: dict) -> None:
+    """The variables array carries the seeded DCO slot, by id and by type."""
+    creatives = _wire_creatives(ctx)
+    assert len(creatives) == 1, f"expected the one seeded creative, got {len(creatives)}"
+    variables = creatives[0].get("variables")
+    assert variables, f"include_variables was requested but no variables came back: {creatives[0]}"
+    assert [variable["variable_id"] for variable in variables] == [_DCO_VARIABLE["variable_id"]], (
+        f"expected the seeded variable, got {variables}"
+    )
+    assert variables[0]["variable_type"] == _DCO_VARIABLE["variable_type"]
+
+
+# ── Cursor traversal ─────────────────────────────────────────────────
+#
+# core/pagination-request.json takes an "Opaque cursor from a previous response to fetch
+# the next page", and core/pagination-response.json returns one "Only present when has_more
+# is true". Opaque means the scenario never builds a cursor: it carries back whatever the
+# previous response handed it, which is the only thing a buyer can do with one.
+
+_FIRST_PAGE_IDS_KEY = "first_page_creative_ids"
+
+
+@when("the Buyer Agent sends a list_creatives request with the cursor from the previous response")
+def when_list_creatives_with_cursor(ctx: dict) -> None:
+    """Fetch the next page with the cursor the last response carried.
+
+    The first page's creative_ids are recorded before dispatching, because the dispatch
+    replaces the result this scenario's later Thens read — and "do not overlap with the
+    first page" is a claim about two responses, so one of them has to be kept.
+    """
+    ctx[_FIRST_PAGE_IDS_KEY] = _wire_creative_ids(ctx)
+    cursor = (wire_dict(ctx).get("pagination") or {}).get("cursor")
+    assert cursor, "the previous response carried no cursor, so there is nothing to page with"
+    kwargs = {"pagination": {"max_results": len(ctx[_FIRST_PAGE_IDS_KEY]), "cursor": cursor}}
+    ctx["request"] = kwargs
+    dispatch_request(ctx, **kwargs)
+
+
+@then("the pagination includes a cursor for the next page")
+def then_pagination_includes_cursor(ctx: dict) -> None:
+    """A page with more behind it carries the cursor that reaches the rest."""
+    pagination = wire_dict(ctx).get("pagination") or {}
+    assert pagination.get("has_more") is True, (
+        f"this Then belongs on a page that has more behind it; pagination says {pagination}"
+    )
+    assert pagination.get("cursor"), f"has_more is true but no cursor came back: {pagination}"
+
+
+@then(parsers.re(r"the response contains (?P<count>\d+) creatives from the second page"))
+def then_second_page_contains_n(ctx: dict, count: str) -> None:
+    """The second page is the next slice of the seeded order, not a repeat of the first."""
+    expected = _ids_by_created_at(ctx, newest_first=True)[
+        len(ctx[_FIRST_PAGE_IDS_KEY]) : len(ctx[_FIRST_PAGE_IDS_KEY]) + int(count)
+    ]
+    assert _wire_creative_ids(ctx) == expected, (
+        f"expected the {count} creatives following the first page, in the same order, got a different slice"
+    )
+
+
+@then("the creatives do not overlap with the first page results")
+def then_pages_do_not_overlap(ctx: dict) -> None:
+    """The counter-example: a cursor that restarted would return page one again."""
+    first_page = set(ctx[_FIRST_PAGE_IDS_KEY])
+    assert first_page, "no first page was recorded, so overlap cannot be judged"
+    repeated = first_page & set(_wire_creative_ids(ctx))
+    assert not repeated, f"the second page repeated creatives from the first: {sorted(repeated)}"

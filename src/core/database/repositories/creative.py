@@ -12,7 +12,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, NamedTuple, cast
 
-from sqlalchemy import SQLColumnExpression, and_, func, or_, select
+from sqlalchemy import SQLColumnExpression, and_, case, func, or_, select
 from sqlalchemy.orm import Session, attributes
 
 from src.core.database.models import (
@@ -128,6 +128,7 @@ class CreativeRepository(SessionEffectsMixin):
         format: str | None = None,
         tags: list[str] | None = None,
         tags_any: list[str] | None = None,
+        has_variables: bool | None = None,
         creative_ids: list[str] | None = None,
         format_ids: list[tuple[str, str]] | None = None,
         created_after: datetime | None = None,
@@ -230,6 +231,25 @@ class CreativeRepository(SessionEffectsMixin):
 
         if tags_any:
             stmt = stmt.where(or_(*[func.jsonb_exists(Creative.data["tags"], tag) for tag in tags_any]))
+
+        if has_variables is not None:
+            # core/creative-filters.json: "When true, return only creatives with dynamic
+            # variables (DCO). When false, return only static creatives." The variables
+            # live on the same JSON blob the listing reads them back from, so the question
+            # is whether that key holds a non-empty array.
+            #
+            # Written as a CASE rather than a conjunction, because both of the shortcuts
+            # are wrong on real rows: jsonb_array_length raises on a value that is not an
+            # array, and a NOT over a predicate that is NULL for an absent key is NULL, so
+            # `has_variables: false` would return no static creative at all. The CASE gives
+            # every row a number — zero when the key is absent or not an array — and both
+            # directions of the filter then compare against it.
+            variables_value = Creative.data["variables"]
+            variable_count = case(
+                (func.jsonb_typeof(variables_value) == "array", func.jsonb_array_length(variables_value)),
+                else_=0,
+            )
+            stmt = stmt.where(variable_count > 0 if has_variables else variable_count == 0)
 
         if created_after:
             stmt = stmt.where(Creative.created_at >= created_after)

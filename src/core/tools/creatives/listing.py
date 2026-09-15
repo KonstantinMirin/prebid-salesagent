@@ -3,16 +3,21 @@
 import logging
 import time
 from datetime import UTC, datetime
-from typing import Any, cast
+from typing import Any, cast, get_args
 
-from adcp.types import AssignedPackage, Assignments
-from pydantic import ValidationError
+from adcp.types import AssignedPackage, Assignments, SnapshotUnavailableReason
+from adcp.types.generated_poc.core.creative_item import CreativeItem
+from adcp.types.generated_poc.core.creative_item import CreativeItem1 as MediaItem
+from adcp.types.generated_poc.core.creative_item import CreativeItem2 as TextItem
+from adcp.types.generated_poc.core.creative_variable import CreativeVariable
+from pydantic import TypeAdapter, ValidationError
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.models import CreativeAssignment as DBCreativeAssignment
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import EntityRefDetails
+from src.core.errors.details import CapabilityRefusalDetails, EntityRefDetails, ValidationDetails
+from src.core.exceptions import AdCPCapabilityNotSupportedError, AdCPInvalidRequestError
 from src.core.helpers import enum_value, log_tool_activity
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
@@ -26,6 +31,45 @@ from src.core.schemas import (
 from src.core.tools.creatives._assets import ASSET_MAP
 
 logger = logging.getLogger(__name__)
+
+#: The typed variables list the pin declares, as a validator. The stored value comes from
+#: the untyped data blob, so it is checked here on the row-to-model read — the same
+#: treatment ``ASSET_MAP`` gives the asset map.
+VARIABLE_LIST: TypeAdapter[list[CreativeVariable]] = TypeAdapter(list[CreativeVariable])
+
+#: core/pagination-request.json's own default for ``max_results``, applied when the buyer
+#: sends no pagination object at all.
+_DEFAULT_MAX_RESULTS = 50
+
+#: What this seller's opaque pagination cursor carries, and nothing else. The buyer never
+#: parses a cursor — core/pagination-request.json calls it "Opaque" — so the encoding is
+#: the seller's business; prefixing it means a value from somewhere else is recognisably
+#: not ours instead of being read as an offset by coincidence.
+_CURSOR_PREFIX = "off:"
+
+
+def _cursor_for_offset(offset: int) -> str:
+    """The opaque cursor naming where the next page starts."""
+    return f"{_CURSOR_PREFIX}{offset}"
+
+
+def _offset_from_cursor(cursor: str | None) -> int:
+    """Where the requested page starts: 0 for no cursor, otherwise the cursor's offset.
+
+    A cursor this seller did not mint is REFUSED rather than treated as the first page.
+    Silently restarting would answer a paging request with page one, which a buyer walking
+    pages cannot distinguish from a genuine page and would read as a duplicate of results
+    it already has. INVALID_REQUEST is the pinned code for a malformed request value.
+    """
+    if cursor is None:
+        return 0
+    remainder = cursor.removeprefix(_CURSOR_PREFIX) if cursor.startswith(_CURSOR_PREFIX) else None
+    if remainder is None or not remainder.isdigit():
+        raise AdCPInvalidRequestError(
+            field="pagination.cursor",
+            details=ValidationDetails(rejected_value=cursor),
+        )
+    return int(remainder)
 
 
 def _log_blob_drop(shape: str, field_label: str, log_context: str, *, value_type: str | None = None) -> None:
@@ -139,6 +183,72 @@ def _coerce_blob_str_list(value: Any, field_label: str, *, log_context: str = ""
     return coerced
 
 
+def _coerce_blob_variables(value: Any, log_context: str = "") -> list[CreativeVariable] | None:
+    """Validate the stored dynamic-content variables into the typed list the pin declares.
+
+    ``variables`` is "Dynamic content variables (DCO slots) for this creative", and
+    core/creative-variable.json sources them from the creative platform — ``variable_id`` is
+    "Variable identifier on the creative platform". Like ``concept_id``, AdCP standardizes
+    no variables INPUT on sync_creatives, so the value is populated out-of-band into the
+    data blob and read back here. The blob is untyped, so a value that does not validate is
+    corrupt and dropped with a warning rather than failing the whole listing — the same
+    treatment tags, assets and the concept fields get.
+    """
+    if value is None:
+        return None
+    try:
+        return VARIABLE_LIST.validate_python(value)
+    except ValidationError:
+        _log_blob_drop("invalid-variables", "variables", log_context, value_type=type(value).__name__)
+        return None
+
+
+def _items_from_assets(assets: Any) -> list[CreativeItem] | None:
+    """Project the creative's assets onto the pin's multi-asset ``items`` array.
+
+    core/creative-item.json is an "Item within a multi-asset creative format ... for
+    carousel products, native ad components, and other formats composed of multiple
+    distinct elements", discriminated by ``asset_kind``: a ``media`` item carries
+    ``content_uri``, a ``text`` item carries ``content``. Those elements are exactly what
+    this seller already holds — the assets the buyer synced, keyed by asset_id — so items
+    are DERIVED from them rather than stored a second time. An asset that fits neither
+    branch (no url and no text content) contributes no item.
+    """
+    if not assets:
+        return None
+    items: list[CreativeItem] = []
+    for asset_id, asset in assets.items():
+        # A slot declaring min/max > 1 stores a LIST, and each member is its own item.
+        candidates = asset if isinstance(asset, list) else [asset]
+        for candidate in candidates:
+            asset_type = str(getattr(candidate, "asset_type", None) or "media")
+            url_value = getattr(candidate, "url", None)
+            content = getattr(candidate, "content", None)
+            if url_value is not None:
+                items.append(
+                    CreativeItem(
+                        root=MediaItem(
+                            asset_kind="media",
+                            asset_type=asset_type,
+                            asset_id=asset_id,
+                            content_uri=str(url_value),
+                        )
+                    )
+                )
+            elif content is not None:
+                items.append(
+                    CreativeItem(
+                        root=TextItem(
+                            asset_kind="text",
+                            asset_type=asset_type,
+                            asset_id=asset_id,
+                            content=content,
+                        )
+                    )
+                )
+    return items or None
+
+
 def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignment]], creative_id: str) -> Assignments:
     """The creative's package assignments in the shape the response schema declares.
 
@@ -153,6 +263,60 @@ def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignm
         assignment_count=len(rows),
         assigned_packages=[AssignedPackage(package_id=row.package_id, assigned_date=row.created_at) for row in rows],
     )
+
+
+#: The six members list-creatives-response.json marks REQUIRED on every creative item.
+#: They survive every projection: a response that dropped one would not validate, whatever
+#: the buyer selected.
+_ALWAYS_ON_THE_WIRE = frozenset({"creative_id", "name", "format_id", "status", "created_date", "updated_date"})
+
+#: The two `fields` members that do not name one response field. list-creatives-request.json
+#: says so for the first: "The 'concept' value returns both concept_id and concept_name";
+#: and a snapshot is either the object or the machine-readable reason it is absent, so
+#: selecting it selects both halves of that answer.
+_FIELD_SELECTS = {
+    "concept": ("concept_id", "concept_name"),
+    "snapshot": ("snapshot", "snapshot_unavailable_reason"),
+}
+
+#: Every response member the `fields` vocabulary can NAME, derived from the enum on
+#: ListCreativesRequest.fields. A projection may only drop these: a member the buyer has no
+#: way to ask for is one they had no way to decline either, so `assets` -- which the pinned
+#: enum does not list, though the response schema declares it -- survives a projection
+#: rather than being silently dropped from a creative whose content it is.
+_SELECTABLE_WIRE_FIELDS = frozenset(
+    wire_field
+    # list[Field1] | None -> list[Field1] -> Field1, the generated enum of the pinned
+    # `fields` members; iterating the enum is what keeps this list from being hand-copied.
+    for member in get_args(get_args(ListCreativesRequest.model_fields["fields"].annotation)[0])[0]
+    for wire_field in _FIELD_SELECTS.get(member.value, (member.value,))
+)
+
+
+def _project_to_fields(creative: Creative, fields: list[Any] | None) -> Creative:
+    """Narrow a creative to the ``fields`` the buyer selected, per list-creatives-request.json.
+
+    ``fields`` is "Specific fields to include in response (omit for all fields)" over a
+    closed 13-member enum, so an absent list means the whole creative and a present one
+    means those members ONLY.
+
+    Only the OPTIONAL members are narrowed. The same pinned response schema marks six
+    members required on every item, so a projection that dropped them would answer the
+    buyer's selection with a document that violates the contract it was selected from —
+    and `fields` cannot express keeping them, since all six are enum members a buyer may
+    omit. Keeping them is the reading that satisfies both halves of the pin.
+
+    A member is dropped by being set to None, which ``exclude_none`` then omits — the same
+    mechanism that omits an absent tag list, rather than a second way of shaping the wire.
+    """
+    if not fields:
+        return creative
+    keep = set(_ALWAYS_ON_THE_WIRE)
+    for field in fields:
+        name = enum_value(field)
+        keep.update(_FIELD_SELECTS.get(name, (name,)))
+    dropped = dict.fromkeys(_SELECTABLE_WIRE_FIELDS - keep)
+    return creative.model_copy(update=dropped)
 
 
 def _blob_log_context(creative_id: str, tenant_id: str, principal_id: str) -> str:
@@ -198,9 +362,13 @@ def _list_creatives_impl(
     # Internal fields, read off the request like every other value it carries. They were
     # ``_impl`` PARAMETERS until this was fixed, which meant a caller could hand the reader
     # a page or a format the request it was answering did not describe.
-    # Always 1: nothing in src/ ever set the internal knob this replaced. Buyers page
-    # through the spec's ``pagination``.
-    page = 1
+    # Where this page starts, read from the buyer's cursor. core/pagination-request.json
+    # types ``cursor`` as an "Opaque cursor from a previous response to fetch the next
+    # page", and core/pagination-response.json returns one "Only present when has_more is
+    # true" -- so a cursor is the seller's own bookmark handed back, and this seller's
+    # bookmark is the offset the next page starts at. Opaque to the buyer, who never parses
+    # it; a cursor that is not one this seller minted is refused rather than guessed at.
+    offset = _offset_from_cursor(req.pagination.cursor if req.pagination else None)
     # This status string is matched against the RAW persisted `creatives.status` column
     # (CreativeRepository.get_by_principal), while the value rendered on the wire is
     # derived from it below — and for a row whose stored status is not a CreativeStatus
@@ -219,6 +387,23 @@ def _list_creatives_impl(
     statuses = [enum_value(s) for s in req_filters.statuses] if req_filters and req_filters.statuses else None
     tags = req_filters.tags if req_filters else None
     tags_any = req_filters.tags_any if req_filters else None
+    has_variables = req_filters.has_variables if req_filters else None
+    # has_served asks which creatives have served at least one impression. This seller
+    # holds no per-creative delivery: no column in the schema records a creative's
+    # impressions or last-served date. Answering the filter would mean guessing, and
+    # IGNORING it would answer a different question than the buyer asked -- so it is
+    # refused. core/creative-filters.json grants an explicit "SHOULD ignore" licence to
+    # three sales-agent-specific filters and NOT to this one, and the pinned error table
+    # gives UNSUPPORTED_FEATURE for "Requested feature not supported by this seller", with
+    # recovery=correctable: the buyer drops the filter and retries.
+    if req_filters is not None and req_filters.has_served is not None:
+        raise AdCPCapabilityNotSupportedError(
+            details=CapabilityRefusalDetails(
+                capability="filters.has_served",
+                rejected_value=str(req_filters.has_served).lower(),
+            ),
+            field="filters.has_served",
+        )
     creative_ids = req_filters.creative_ids if req_filters else None
     # format_id is an object (core/format-id.json); the repository matches both members, and
     # the agent_url half goes through the ONE canonicalization the spec makes a MUST before
@@ -248,10 +433,10 @@ def _list_creatives_impl(
         enum_value(req.sort.direction) if req.sort and req.sort.direction else "desc",
     )
 
-    effective_limit = min(req.pagination.max_results, 1000) if req.pagination and req.pagination.max_results else 50
-    # Page is out-of-band (cursor-based pagination has no page index); preserve offset math.
-    limit = effective_limit
-    offset = (page - 1) * effective_limit
+    # core/pagination-request.json defaults max_results to 50 and caps it at 100, and the
+    # DTO refuses anything outside 1..100 before this runs, so the value needs no clamping
+    # here -- only the default when the buyer sent no pagination object at all.
+    limit = req.pagination.max_results if req.pagination and req.pagination.max_results else _DEFAULT_MAX_RESULTS
 
     start_time = time.time()
 
@@ -276,6 +461,7 @@ def _list_creatives_impl(
             format=None,
             tags=tags,
             tags_any=tags_any,
+            has_variables=has_variables,
             creative_ids=creative_ids,
             format_ids=format_ids,
             created_after=created_after_dt,
@@ -286,7 +472,7 @@ def _list_creatives_impl(
             sort_by=sort_by,
             sort_order=valid_sort_order,
             offset=offset,
-            limit=effective_limit,
+            limit=limit,
         )
         db_creatives = result.creatives
         total_count = result.total_count
@@ -429,14 +615,18 @@ def _list_creatives_impl(
                 principal_id=db_creative.principal_id,
             )
 
+            # assets is read from the same untyped blob and validated into the typed map
+            # here; a stored value that does not validate is dropped with a log rather than
+            # crashing the whole listing (#1508). Bound before the model because ``items``
+            # is projected from the SAME validated map -- validating it twice would let the
+            # two answers disagree about one stored value.
+            coerced_assets = _coerce_blob_assets(assets_dict, "assets", log_context=row_log_context)
+
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
                 format_id=format_obj,
-                # assets is read from the same untyped blob and validated into the typed
-                # map here; a stored value that does not validate is dropped with a log
-                # rather than crashing the whole listing (#1508).
-                assets=_coerce_blob_assets(assets_dict, "assets", log_context=row_log_context),
+                assets=coerced_assets,
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
                 # [1, 2]) that would fail Creative validation and crash the whole
@@ -454,14 +644,38 @@ def _list_creatives_impl(
                 assignments=_assignments_block(assignments_by_creative, db_creative.creative_id)
                 if req.include_assignments is not False
                 else None,
+                # A requested snapshot is DECLINED, with the machine-readable reason the pin
+                # provides for exactly this seller: enums/snapshot-unavailable-reason.json
+                # describes SNAPSHOT_UNSUPPORTED as "The seller platform does not support
+                # delivery snapshots for this entity". Nothing in this schema stores
+                # per-creative lifetime impressions or a last-served date -- the only
+                # impression columns are GAM line-item stats and format-level metrics,
+                # neither of which is per creative -- so there is no snapshot to compute and
+                # none to cache. Declining is what the pin asks of such a seller; inventing
+                # an impression count would be worse than saying nothing, and saying nothing
+                # at all would leave the buyer unable to tell a zero from an absence.
+                snapshot_unavailable_reason=(
+                    SnapshotUnavailableReason.SNAPSHOT_UNSUPPORTED if req.include_snapshot else None
+                ),
+                # Both default to FALSE on the request (list-creatives-request.json), so
+                # each member is built only when the buyer asked for it.
+                variables=(
+                    _coerce_blob_variables(data_blob.get("variables"), row_log_context)
+                    if req.include_variables
+                    else None
+                ),
+                items=_items_from_assets(coerced_assets) if req.include_items else None,
                 # Internal field (our extension)
                 principal_id=db_creative.principal_id,
             )
-            creatives.append(creative)
+            creatives.append(_project_to_fields(creative, req.fields))
 
-    # Calculate pagination info (page and limit have defaults from factory function)
-    has_more = (page * limit) < total_count
-    total_pages = (total_count + limit - 1) // limit if limit > 0 else 0
+    # Where the NEXT page would start, and therefore whether there is one. Computed from
+    # the offset this page began at, not from a page index: with a cursor there is no page
+    # number, and the old `page * limit` arithmetic answered "is there more after the FIRST
+    # page" whatever cursor the buyer sent.
+    next_offset = offset + len(creatives)
+    has_more = next_offset < total_count
 
     # Build filters_applied list from structured filters (typed CreativeFilters model)
     filters_applied: list[str] = []
@@ -506,19 +720,12 @@ def _list_creatives_impl(
         details={
             "result_count": len(creatives),
             "total_count": total_count,
-            "page": page,
+            "offset": offset,
             "filters_applied": filters_applied if filters_applied else None,
         },
     )
 
     log_tool_activity(identity, "list_creatives", start_time)
-
-    message = f"Found {len(creatives)} creatives"
-    if total_count > len(creatives):
-        message += f" (page {page} of {total_pages} total)"
-
-    # Calculate offset for pagination
-    offset_calc = (page - 1) * limit
 
     # Import required schema classes
     from src.core.schemas import Pagination as SchemaPagination
@@ -533,6 +740,9 @@ def _list_creatives_impl(
         ),
         pagination=SchemaPagination(
             has_more=has_more,
+            # "Only present when has_more is true" (core/pagination-response.json): a
+            # cursor to nowhere would invite a request for a page that does not exist.
+            cursor=_cursor_for_offset(next_offset) if has_more else None,
             total_count=total_count,
         ),
         creatives=creatives,

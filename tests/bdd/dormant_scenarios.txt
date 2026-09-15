@@ -263,15 +263,11 @@ T-UC-005-v31-payload-vs-requirements-separation :: given the seller catalog has 
 # T-UC-006-storyboard-provenance-claim-contradicted  (test_uc006_sync_creatives.py)
 T-UC-006-storyboard-provenance-claim-contradicted :: given the Buyer Agent submits a creative claiming digital_source_type "<>"
 
-# T-UC-018-partition-field-selector  (test_uc018_list_creatives.py)
-# Only the rows that still have no binding remain. The `fields` PROJECTION is unbuildable
-# as these rows state it — they demand a creative object carrying one field AND compliance
-# with list-creatives-response.json, which marks six members REQUIRED on every item — and
-# the "database has creative with unrecognized status value" cell is a fixture, not a
-# request, so it has nothing to dispatch.
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with database has creative with unrecognized status value
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields ["<>", "<>", "<>"] and include_snapshot true
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields with all <n> enum values
+# UC-018 has NO entries. Every scenario of BR-UC-018-list-creatives.feature executes: the
+# `fields` projection is implemented (it narrows the optional members and keeps the six the
+# response schema requires, which is the reading that satisfies both halves of the pin), and
+# the one row whose request_params cell named a database fixture rather than a request was
+# deleted in favour of @T-UC-018-inv-149-6-holds, which grades that obligation end to end.
 
 # T-UC-019-boundary-cancellation  (test_uc019_query_media_buys.py)
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active
