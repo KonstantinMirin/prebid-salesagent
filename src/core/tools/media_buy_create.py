@@ -133,6 +133,7 @@ from src.core.schemas import (
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
     FormatId,
+    FormatIdentity,
     MediaPackage,
     Package,
     PackageRequest,
@@ -3195,7 +3196,7 @@ async def _create_media_buy_impl(
                 # This handles the case where buyer specifies a format but not dimensions.
                 # Keyed on the same federation identity the support check above compares on,
                 # so a format that PASSED that check cannot then miss its own dimensions.
-                product_format_dimensions: dict[tuple[str, str], tuple[int | None, int | None, float | None]]
+                product_format_dimensions: dict[FormatIdentity, tuple[int | None, int | None, float | None]]
                 product_format_dimensions = {}
                 for fmt in pkg_product.format_ids or []:
                     fmt_identity = format_identity_or_none(fmt)

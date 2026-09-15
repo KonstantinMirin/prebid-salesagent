@@ -72,6 +72,12 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc003_update_media_buy",
     "tests.bdd.steps.domain.uc003_ext_error_scenarios",
     "tests.bdd.steps.domain.uc003_storyboard_generic_client",
+    # UC-026 was disconnected in TWO places, and this was the second: the module
+    # holding its 119 step definitions was never registered, so pytest-bdd saw no
+    # binding for any of its sentences. Together with the missing ENV_ROUTES row
+    # (see "UC-026" in _UC_BUCKET_ROUTES) that is why all 75 scenarios graded
+    # nothing while the file kept being maintained.
+    "tests.bdd.steps.domain.uc026_package_media_buy",
     "tests.bdd.steps.domain.uc006_sync_creatives",
     "tests.bdd.steps.domain.uc006_storyboard_creative_sync",
     "tests.bdd.steps.domain.uc006_dry_run_parity",
@@ -1647,12 +1653,17 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-004-webhook-circuit-recovery",
             # #1873: retry observability — assert on the requests the endpoint
             # received. -retry-success and -sequence graduated off this note (see
-            # above); these three still assert on things the capture service does not
-            # expose (the seam's process-local retry SCHEDULE via env.mock["sleep"],
-            # and a connection that is refused before any request exists to record).
-            "T-UC-004-webhook-retry-5xx",
+            # above); this one still asserts on a connection that is REFUSED, so no
+            # request ever exists for the capture service to record.
             "T-UC-004-webhook-retry-network",
-            "T-UC-004-webhook-no-retry-4xx",
+            # Graduated 2026-09-15 (XPASS in-network, innet_150926_0531):
+            # -retry-5xx and -no-retry-4xx. The note above put them here for a reason
+            # that does not hold. The webhook SENDER runs in the test process on every
+            # transport, e2e_rest included — it is not the deployed server's poller —
+            # so the process-local sleep patch observes the real retry schedule there
+            # exactly as it does on a2a/mcp/rest, and the POST count is a real readback
+            # of the compose capture service, which records a 5xx- or 401-answered
+            # request before answering it. Neither scenario reads CircuitBreaker state.
         }
         if is_e2e_rest and (marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS):
             item.add_marker(
@@ -2502,62 +2513,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 "AdCPSalesAgentError at the _impl boundary for this row. "
                 "See docs/test-debt-bdd-strict-markers.md items C1/C2/C4.",
             ),
-            # sampling: sampling_method is NOT a
-            # GetMediaBuyDeliveryRequest field — the artifact-sampling feature
-            # is entirely unimplemented. Only (omitted)/not_provided genuinely
-            # pass; rest silently drops the unknown param so its named-method
-            # rows accidentally "pass" (must NOT be marked). impl/a2a/mcp
-            # named-method + every unknown_value/systematic row fails.
-            (
-                "T-UC-004-partition-sampling",
-                {
-                    "impl-random-random",
-                    "impl-stratified",
-                    "impl-recent",
-                    "impl-failures_only",
-                    "impl-unknown_value-systematic",
-                    "a2a-random-random",
-                    "a2a-stratified",
-                    "a2a-recent",
-                    "a2a-failures_only",
-                    # Graduated: a2a-unknown_value-systematic. An unknown sampling_method
-                    # value now rejects on a2a with a typed error on the wire. The set keeps
-                    # its other rows, so it stays non-empty -- emptying it would xfail every
-                    # row carrying this tag (see the account entry above).
-                    "mcp-random-random",
-                    "mcp-stratified",
-                    "mcp-recent",
-                    "mcp-failures_only",
-                    "[rest-unknown_value-systematic",
-                },
-                "sampling_method is unimplemented in get_media_buy_delivery (no schema "
-                "field); ValidationError not AdCPSalesAgentError (rest silently drops it). "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
-            (
-                "T-UC-004-boundary-sampling",
-                {
-                    "impl-random (first enum value)",
-                    "impl-failures_only (last enum value)",
-                    "a2a-random (first enum value)",
-                    "a2a-failures_only (last enum value)",
-                    # a2a now rejects the unknown sampling_method value via extra=forbid
-                    # -> AdCPSalesAgentError (wire-drop confirmed XPASS, #1417) — removed.
-                    "mcp-random (first enum value)",
-                    "mcp-failures_only (last enum value)",
-                    # GRADUATED (#1534 merge): mcp-Unknown-string — the unknown
-                    # sampling_method now rejects on the MCP wire with the AdCP
-                    # envelope (extra=forbid rejection normalized by
-                    # RequestCompatMiddleware, same class as the a2a graduation
-                    # above); deterministic strict XPASS on the box slice —
-                    # removed. rest still silently drops the unknown param
-                    # (row kept).
-                    "[rest-Unknown string not in enum",
-                },
-                "sampling_method is unimplemented in get_media_buy_delivery (no schema "
-                "field); ValidationError not AdCPSalesAgentError (rest silently drops it). "
-                "See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            # The two sampling entries are DELETED with their scenarios (2026-09-15).
+            # Their own first line said it: sampling_method is not a
+            # GetMediaBuyDeliveryRequest field. It is not an AdCP 3.1.1 field either --
+            # zero hits across the pinned schemas -- so the outlines demanded this seller
+            # accept an invented field and refuse an invented enum value, and the rows
+            # that "passed" were collecting the undeclared-field rejection instead. The
+            # feature file carries the full reasoning where the scenarios stood; the real
+            # pinned concept (failures_only, a boolean on get_media_buy_artifacts) is
+            # graded in BR-UC-024.
             # resolution (#1545): GRADUATED on all transports. The
             # Examples now name error "VALIDATION_ERROR" with suggestion, and the empty
             # media_buy_ids=[] hits the SDK min_length=1 constraint, surfacing as
@@ -2712,45 +2676,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # src/app.py; not a raw 500/empty body), so the wire-envelope assertion
             # handles them.
 
-        # Graduated: T-UC-004-boundary-sampling — "Not provided" passes everywhere;
-        # "random"/"failures_only" pass on rest only; "Unknown string" passes on impl only.
-        if "T-UC-004-boundary-sampling" in marker_names:
-            _samp_not_rest_fail = (
-                not is_rest
-                and not is_e2e_rest
-                and any(s in nodeid for s in ("random (first enum", "failures_only (last enum"))
-            )
-            # a2a now rejects the unknown value via extra=forbid -> AdCPSalesAgentError (wire-drop
-            # confirmed XPASS, #1417); mcp still fails the type check.
-            _samp_not_impl_fail = (
-                not is_impl and not is_a2a and not is_e2e_rest and "Unknown string not in enum" in nodeid
-            )
-            if _samp_not_rest_fail or _samp_not_impl_fail:
-                # mcp's xpass here is VACUOUS. `sampling_method` is not a real
-                # get_media_buy_delivery request field (does not exist in the
-                # pinned v3.1.1 schema at all -- it belongs to content-standards
-                # native-creative sampling, a different domain).
-                # when_boundary_sampling sends it as a raw kwarg, which FastMCP's
-                # TypeAdapter rejects as unrecognized before
-                # _get_media_buy_delivery_impl runs -- coincidentally matching
-                # `invalid` for ANY value, valid or not, so this scenario cannot
-                # distinguish "enum rejected" from "field doesn't exist". See
-                # docs/test-debt-bdd-strict-markers.md item B4 -- the documented fix
-                # is to relocate/delete this scenario family, not graduate rows.
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="sampling_method boundary: not implemented on this transport", strict=False
-                    )
-                )
-            # FIXME(#1270): e2e_rest: Docker doesn't validate sampling_method —
-            # invalid enum value succeeds instead of failing.
-            if is_e2e_rest and "Unknown string not in enum" in nodeid:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: Docker does not validate sampling_method — invalid value succeeds",
-                        strict=True,
-                    )
-                )
+        # The T-UC-004-boundary-sampling branch is DELETED with its scenario
+        # (2026-09-15). This block already carried the answer in its own comment --
+        # "sampling_method is not a real get_media_buy_delivery request field (does not
+        # exist in the pinned v3.1.1 schema at all) ... this scenario cannot distinguish
+        # 'enum rejected' from 'field doesn't exist' ... the documented fix is to
+        # relocate/delete this scenario family, not graduate rows" (debt item B4). The
+        # family is deleted; the feature file records why where the scenarios stood.
 
         # Graduated: T-UC-004-boundary-date-range. a2a/mcp/rest all accept a valid
         # start_date<end_date pair and omitted dates without error — the shared
@@ -2906,16 +2838,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # artifact rather than a defect.
 
         # e2e_rest: sort_by_metric_not_available — the spend-fallback needs injected
-        # by_placement data, but the injector (_inject_placement_data) is in-process
-        # mock state invisible to the live server, so the fallback is untestable over
-        # e2e_rest (the buyer-facing assertions pass without exercising it). strict=False
-        # tolerates the hollow pass; wiring the injector so a2a/mcp/rest genuinely test
-        # it is the follow-up.
+        # CORRECTED 2026-09-15. The reason this route used to carry blamed
+        # _inject_placement_data for being in-process-only. That function has ZERO
+        # callers (its definition in uc004_delivery.py is the only occurrence in the
+        # file) and could not run if it had any -- it passes by_placement= to
+        # set_adapter_response, which declares no such parameter. So no placement data
+        # is ever injected on ANY transport, and the scenario always takes production's
+        # synthesized split.
+        #
+        # That split is where the real gap is: _build_placement_breakdown weights the
+        # three rows 0.5 / 0.3 / 0.2 and derives impressions, spend AND clicks from the
+        # same weight, so the list already descends by every metric before any sort
+        # runs. A fallback that sorted by the wrong metric, or did not sort at all,
+        # produces byte-identical output. The scenario is therefore ungraded on a2a,
+        # mcp and rest too -- they report a plain PASS, which reads as coverage and is
+        # strictly more misleading than this XPASS.
+        #
+        # The fix is discriminating data, and the fixture for it already exists unused:
+        # _DEFAULT_PLACEMENT_DATA orders A>B>C by impressions, B>A>C by spend and
+        # C>A>B by clicks. Using it needs by_placement threaded through
+        # set_adapter_response and its _persist_simulation_config realization so the
+        # live server sees it too. Filed; the route stays until then because the
+        # scenario grades nothing, not because e2e_rest is special.
         if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="e2e_rest: by_placement injection is in-process-only (invisible to live server) — "
-                    "sort_by spend-fallback untestable over e2e_rest",
+                    reason="sort_by spend-fallback is ungraded on EVERY transport: the synthesized "
+                    "placement split descends identically for spend, impressions and clicks, so a "
+                    "broken fallback sorts the same as a working one",
                     strict=False,
                 )
             )
@@ -3054,21 +3004,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # AdCP reporting_webhook Authentication at the create_media_buy boundary
         # (scheme enum + credentials min_length=32), so all rows pass on all transports.
 
-        # Graduated: T-UC-004-partition-sampling — "not_provided" passes all transports;
-        # valid named methods (random, stratified, recent, failures_only) pass on REST only.
-        # Non-REST + named method → still fails; unknown_value → fails on all transports.
-        if "T-UC-004-partition-sampling" in marker_names and "not_provided" not in nodeid:
-            _samp_named = {"random", "stratified", "recent", "failures_only"}
-            _samp_is_named = any(s in nodeid for s in _samp_named)
-            if _samp_is_named and (is_rest or is_e2e_rest):
-                pass  # REST/e2e_rest + named method → passes, no xfail
-            else:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="sampling_method not implemented in delivery _impl or transport wrappers",
-                        strict=False,
-                    )
-                )
+        # The T-UC-004-partition-sampling branch is DELETED with its scenario
+        # (2026-09-15), for the reason recorded at its boundary twin above: the outline
+        # graded a request field AdCP 3.1.1 does not define. Its "passes on REST only"
+        # clause was itself an artifact -- the REST body builder whitelists known fields
+        # and silently dropped the unknown kwarg, so those rows graded a request that
+        # never carried the field at all.
 
         # FIXME: catalog distinct type partition/boundary
         # Production accepts catalogs but never validates duplicate types or catalog_id
@@ -3258,16 +3199,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # carry a different one. Verified xpassing on rest
         # once UC-019 regained REST parametrization.
         #
-        # e2e_rest STAYS routed: it dispatches real HTTP to the live stack, which
-        # this local run cannot exercise, so graduating it here would be a claim
-        # I have not tested. Narrowed rather than removed.
-        if is_e2e_rest and "T-UC-019-ext-a" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="HTTP transport: auth error suggestion says 'authenticate' not 'authentication' — spec-production gap",
-                    strict=False,
-                )
-            )
+        # Graduated 2026-09-15 (XPASS in-network, innet_150926_0531): the e2e_rest
+        # branch for T-UC-019-ext-a. The reason it carried — a REST-only suggestion
+        # saying "authenticate" rather than "authentication" — is structurally
+        # impossible now: every transport reads the suggestion from the pin through
+        # CODE_TABLE, so no transport can carry a different one, which is what the
+        # paragraph above already says. A token-less get_media_buys over real HTTP is
+        # refused by the shared resolver with AUTH_MISSING / correctable and the pinned
+        # suggestion on both envelope layers, and the scenario's Thens hard-fail when no
+        # real wire envelope was captured.
         if (is_rest or is_e2e_rest) and "T-UC-019-partition-principal-invalid" in marker_names:
             if "identity_missing" in nodeid:
                 item.add_marker(
@@ -3345,44 +3285,65 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # (folded into the existing UC-019 e2e_rest block below rather than
         # opening a second one on the same condition -- one guard, several
         # reasons, and no new entry in EXPECTED_XFAIL_ROUTES.)
+        # Graduated 2026-09-15 (XPASS in-network, innet_150926_0531): T-UC-019-inv-150-11.
+        # The set's stated reason does not hold for it, and on inspection does not hold
+        # for this tree at all: over e2e_rest the conftest points production AND the
+        # factories at the live server's own database, so a Given that seeds through
+        # MediaBuyFactory is seeding the database the server reads. That scenario refuses
+        # an unmapped persisted status with CONFIGURATION_ERROR / terminal naming the row,
+        # which is production behaviour reached before any flight refinement and so
+        # independent of the clock. The three tags that remain here are NOT covered by
+        # that correction -- each still needs its own audit, and the reason string below
+        # is known to be wrong for them too.
+        # 2026-09-15: the two status-filter tags left this set with the clock rewrite.
+        # Their seed ("owns media buys in various statuses") now anchors its three
+        # windows on the REAL date instead of on ctx["mock_today"], and their scenarios
+        # pin no clock, so the buys hold their intended statuses on the live server as
+        # well as in-process. Under the old shape every window sat months in the past
+        # over e2e_rest and all three buys read "completed" -- which is what made the
+        # "completed" and "all seven" rows xpass while the rows that discriminate
+        # between statuses failed.
         _UC019_E2E_SUITE_DB_SEED_TAGS: set[str] = {
-            "T-UC-019-partition-status-filter",
-            "T-UC-019-boundary-status-filter",
             "T-UC-019-inv-150-1",
-            "T-UC-019-inv-150-11",
         }
 
         # --- UC-019: e2e_rest xfails for datetime-mock-dependent tests ---
         # These scenarios use `And today is "<date>"` which patches datetime
         # in-process. The patch has no effect on Docker — real datetime.now()
         # is used, so status assertions fail.
+        #
+        # THE FIX IS THE SCENARIO, not this route. 2026-09-15: the three tags below
+        # that carried the whole status-refinement contract were rewritten to state
+        # their flight windows as offsets from the run date and to pin no clock at
+        # all, so each boundary is now graded identically on a2a, mcp, rest and
+        # e2e_rest. They are gone from this set. What that removed was not coverage
+        # but a false reading: under the old shape the rows expecting "completed"
+        # xpassed merely because the real calendar had drifted past a fixed 2026-03
+        # window, so a production that ignored the flight window entirely would have
+        # passed them, while the rows naming every other boundary could not run here
+        # at all. The three tags that REMAIN genuinely need a clock they cannot set
+        # (they pin start_time / end_time precedence against a fixed date) and are
+        # the real remainder of this gap.
         if is_e2e_rest and any(t.startswith("T-UC-019") for t in marker_names):
             _UC019_E2E_DATETIME_TAGS: set[str] = {
-                "T-UC-019-partition-status",
-                "T-UC-019-boundary-status",
                 "T-UC-019-inv-150-2",
                 "T-UC-019-inv-150-4",
                 "T-UC-019-inv-150-5",
-                # Default filter test creates flight dates relative to mock_today
-                # (default 2026-03-15), making both buys "completed" on real date.
-                "T-UC-019-inv-151-1",
             }
             _UC019_E2E_MOCK_TAGS: set[str] = {
                 # Adapter mock (get_adapter patch) has no effect in Docker.
                 "T-UC-019-partition-snapshot",
                 "T-UC-019-boundary-snapshot",
             }
-            # Graduated e2e_rest examples that pass despite datetime/mock concern:
-            # These variants have expected status=completed, which matches the
-            # real date (all flight dates are in the past).
-            _UC019_E2E_DT_GRADUATED = {
-                ("T-UC-019-partition-status", "post_flight"),
-                ("T-UC-019-boundary-status", "day after end_date"),
-                ("T-UC-019-boundary-status", "start_date equals end_date and today is day after"),
-            }
-            _dt_graduated = any(tag in marker_names and substr in nodeid for tag, substr in _UC019_E2E_DT_GRADUATED)
+            # The per-example exemption that used to sit here is deleted with the tags
+            # it exempted. It had also silently stopped matching: it keyed on nodeid
+            # substrings ("day after end_date", "post_flight") that a feature
+            # regeneration had renamed, which is why those rows reported XPASS rather
+            # than PASS. A substring exemption that decays into a no-op the moment
+            # someone rewords an Examples cell is the wrong mechanism; the scenario
+            # rewrite removes the need for one.
             _inv150_5_graduated = "T-UC-019-inv-150-5" in marker_names  # all examples pass
-            if marker_names & _UC019_E2E_DATETIME_TAGS and not _dt_graduated and not _inv150_5_graduated:
+            if marker_names & _UC019_E2E_DATETIME_TAGS and not _inv150_5_graduated:
                 item.add_marker(
                     pytest.mark.xfail(
                         reason="e2e_rest: datetime.now() mock has no effect in Docker — status computed from real date",
@@ -3418,16 +3379,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=False,
                     )
                 )
-            # Un-graduated: T-UC-019-inv-154-tenant returns empty response on e2e_rest
-            # because in-process fixture data doesn't populate Docker DB.
-            if "T-UC-019-inv-154-tenant" in marker_names:
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason="e2e_rest: cross-principal isolation test returns empty set — "
-                        "in-process fixtures don't populate Docker DB",
-                        strict=False,
-                    )
-                )
+            # Graduated 2026-09-15 (XPASS in-network, innet_150926_0531):
+            # T-UC-019-inv-154-tenant. Its reason -- "in-process fixtures don't populate
+            # Docker DB" -- has not been true since the harness bound its factories to
+            # e2e_config.postgres_url: in e2e mode the factories write the live server's
+            # own Postgres and the ctx fixture wipes that database before each scenario,
+            # so the seeded buys ARE visible and the wire-strict "include mb-001" Then
+            # grades the real HTTP response. Production's tenant-and-principal WHERE
+            # explains the pass.
+            #
+            # A real gap this graduation does NOT close, filed separately: the scenario
+            # names INV-1 (database scoped to tenant) but seeds both principals inside
+            # ONE tenant, so the tenant half of the isolation is unexercised on every
+            # transport. Keeping a false-reason xfail here neither graded it nor made it
+            # visible; a cross-tenant example is what will.
             # Graduated: T-UC-019-inv-152-1/2/5 (: creative approval data seeded)
             # — only in-process transports graduated; e2e_rest still fails (below).
 
@@ -5074,6 +5039,26 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     # scenario running two different worlds.
     "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_default_data),
     "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_tenant_and_principal),
+    # UC-026 was WRITTEN but never routed: 75 scenarios, a 2784-line step module and
+    # its own xfail tag set, and every node xfailing at fixture setup with "No harness
+    # wired for UC-026" -- 728 in-process nodes and 242 over e2e_rest in
+    # innet_150926_0531, none of them passing. Nothing flagged it, because the use case
+    # is absent from dormant_scenarios.txt too, so it read as ordinary xfail volume.
+    #
+    # The harness was never the missing piece. MediaBuyDualEnv's own first line says it
+    # is "a composite environment for UC-026 and UC-003 BDD scenarios" and its class
+    # docstring names UC-026 again; it was built for this and left unreferenced. UC-026
+    # needs exactly what it provides, because its scenarios drive BOTH tools -- the
+    # feature calls create_media_buy 94 times and update_media_buy 121 -- and
+    # _is_update_request routes each dispatch to the right wrappers.
+    #
+    # _seed_media_buy_chain matches the Background sentence for sentence: a tenant, an
+    # authenticated buyer, and a product with pricing options.
+    "UC-026": EnvRoute(
+        tag="UC-026",
+        env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
+        seed=_seed_media_buy_chain,
+    ),
 }
 
 # Tag sets the routing predicates below key on. They were inline `if` conditions

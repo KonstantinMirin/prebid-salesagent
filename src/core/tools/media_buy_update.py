@@ -293,7 +293,7 @@ def _validate_creatives_for_assignment(
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:
-        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats, key=lambda p: p[1]))
+        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats, key=lambda p: p.id))
         # A format outside the product's declared set is a BUSINESS-RULE violation, which
         # adcp 3.1.1's enums/error-code.json codes as VALIDATION_ERROR ("violates business
         # rules beyond schema validation"). It is not CREATIVE_REJECTED: that enum entry

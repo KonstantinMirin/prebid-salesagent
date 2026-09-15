@@ -8,6 +8,7 @@ import copy
 import re
 import warnings
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -400,8 +401,40 @@ def canonical_agent_url(agent_url: object) -> str:
     return canonical
 
 
-def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
-    """Return the federation identity of a FormatId: the ``(canonical agent_url, id)`` pair.
+@dataclass(frozen=True, slots=True, order=True)
+class FormatIdentity:
+    """The federation identity of a ``format_id``: its canonical ``agent_url`` and its ``id``.
+
+    A DISTINCT TYPE rather than a ``tuple[str, str]``, and that is the whole point of
+    the class. The canonicalization in ``canonical_agent_url`` is a spec MUST, so a
+    comparison key built any other way is wrong -- but when the key was a bare tuple
+    nothing could say so, because a hand-built tuple has the identical static type and
+    differs only in VALUE. ``mypy.ini`` already sets ``strict_equality = True`` and it
+    does not help there: comparing a raw ``tuple[str, str]`` against a
+    ``set[tuple[str, str]]`` type-checks clean.
+
+    It does help here. Against a ``set[FormatIdentity]`` the same mistake is
+    ``Non-overlapping container check ... [comparison-overlap]`` at type-check time,
+    so the rule is REFUSED rather than merely documented.
+
+    This is not hypothetical. A UC-005 BDD scenario compared
+    ``(SELLER_AGENT_URL, fid.id)`` -- the raw constant, un-canonicalized -- against a
+    set of identities, and that assertion was the only one separating ``(agent_url,
+    id)`` matching from ``id``-alone matching. Canonicalization appends the spec's
+    step-5 trailing slash, so the two could never be equal and the assertion held
+    whatever the seller returned. An id-only filter regression would have passed on
+    every transport.
+
+    Frozen and slotted so it hashes, lives in a set, and cannot be mutated after the
+    canonical form is computed.
+    """
+
+    agent_url: str
+    id: str
+
+
+def format_id_identity(format_id: LibraryFormatId) -> FormatIdentity:
+    """Return the federation identity of a FormatId: its canonical ``agent_url`` and ``id``.
 
     AdCP v3.1 makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
     ``id`` (``core/format-id.json`` requires ``[agent_url, id]``; the ``list_formats``
@@ -413,13 +446,18 @@ def format_id_identity(format_id: LibraryFormatId) -> tuple[str, str]:
     host. Works on both the library ``FormatId`` and our subclass (duck-typed on
     ``agent_url``/``id``).
 
+    THE ONLY way to build a comparison key. ``FormatIdentity`` is constructible
+    directly, but every caller should come through here: this is where the spec's
+    canonicalization is applied, and a key that skipped it is the bug the type exists
+    to refuse.
+
     Args:
         format_id: Any FormatId-like object exposing ``agent_url`` and ``id``.
 
     Returns:
-        ``(canonical_agent_url, id)`` — the comparison key for federation identity.
+        The ``FormatIdentity`` comparison key for federation identity.
     """
-    return (canonical_agent_url(format_id.agent_url), format_id.id)
+    return FormatIdentity(canonical_agent_url(format_id.agent_url), format_id.id)
 
 
 class WireSerializerMixin:

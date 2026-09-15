@@ -24,13 +24,13 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from src.core.schemas import ListCreativeFormatsResponse
+from src.core.schemas import FormatIdentity, ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
 from tests.harness.transport import DeliverResult
 
 
-def _format_identity_key(fmt: Any) -> tuple[str, str]:
+def _format_identity_key(fmt: Any) -> FormatIdentity:
     """Federation identity ``(canonical agent_url, id)`` of a Format / FormatId / bare id.
 
     Delegates to ``src.core.format_resolver.format_identity``, which is the ONE
@@ -83,7 +83,7 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
     requested_ids = {_format_identity_key(f) for f in formats}
     missing = requested_ids - reference_ids
     if missing:
-        named = sorted(f"{format_id} @ {agent_url}" for agent_url, format_id in missing)
+        named = sorted(f"{identity.id} @ {identity.agent_url}" for identity in missing)
         raise E2EUnsupportedSetup(
             f"requested formats not in the reference catalog: {named}. "
             "Register them in the creative agent registry and refresh the fixture "

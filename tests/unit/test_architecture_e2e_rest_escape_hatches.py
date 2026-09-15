@@ -97,23 +97,27 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # ResolvedIdentity, on which the principal is not optional, so that state is
     # unconstructible -- and the surviving row presents a credential the resolver really
     # rejects (AUTH_INVALID, terminal) rather than injecting a null identity.
-    # NARROWED from "(is_rest or is_e2e_rest)" to e2e_rest only (#1762).
+    # REMOVED 2026-09-15: "is_e2e_rest and 'T-UC-019-ext-a' in marker_names".
+    # #1762 narrowed this route from "(is_rest or is_e2e_rest)" to e2e_rest only and
+    # kept the last transport on the ground that the local run could not exercise the
+    # live stack. The in-network run innet_150926_0531 exercised it: the node XPASSED.
     # The route's reason was a REST-only auth suggestion string ("authenticate" vs
-    # "authentication"), which cannot exist any more: suggestions derive from
+    # "authentication"), which cannot exist any more -- suggestions derive from
     # CODE_TABLE[code], one source shared by every transport, so no transport can
-    # carry a different one (salesagent-3dawm.14). Verified xpassing on `rest`
-    # once UC-019 regained REST parametrization. e2e_rest stays routed because it
-    # needs the live stack, which the local run cannot exercise -- graduating it
-    # here would be an untested claim. This SHRINKS the escape hatch by one
-    # transport; it does not add one.
-    "is_e2e_rest and 'T-UC-019-ext-a' in marker_names",
+    # carry a different one (salesagent-3dawm.14). The hatch is now closed entirely.
     "(is_rest or is_e2e_rest) and 'T-UC-019-partition-principal-invalid' in marker_names",
-    "_samp_is_named and (is_rest or is_e2e_rest)",
+    # REMOVED 2026-09-15 with the sampling scenario family: the route gated
+    # T-UC-004-partition-sampling, whose outline graded `sampling_method` -- a field
+    # AdCP 3.1.1 does not define anywhere. Scenario and route deleted together.
     "is_e2e_rest",
     "is_e2e_rest and 'T-UC-002-nfr-001-enforcement' in marker_names",
     "is_e2e_rest and 'T-UC-004-daterange-end-only' in marker_names",
     "is_e2e_rest and 'T-UC-005-empty-catalog' in marker_names",
-    "is_e2e_rest and 'Unknown string not in enum' in nodeid",
+    # REMOVED 2026-09-15 with the sampling scenario family:
+    # "is_e2e_rest and 'Unknown string not in enum' in nodeid" -- a strict xfail whose
+    # reason was "Docker does not validate sampling_method". Nothing was owed:
+    # sampling_method is not an AdCP 3.1.1 field, so there was no obligation for the
+    # live server to validate and no scenario left to route.
     "is_e2e_rest and any((t.startswith('T-UC-019') for t in marker_names))",
     "is_e2e_rest and marker_names & _UC004_E2E_WEBHOOK_INTERNAL_TAGS",
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
@@ -124,6 +128,7 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # env seeded its seller only in e2e mode, so an exclusion assertion passed trivially.
     # With the seller seeded on every transport the filter is implemented (3.1.1
     # list-creative-formats-request.json declares it) and the rows grade for real.
+    #
     "not is_e2e_rest",
 )
 

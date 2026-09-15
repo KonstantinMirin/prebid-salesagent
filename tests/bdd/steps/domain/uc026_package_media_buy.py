@@ -311,6 +311,34 @@ def _ensure_update_kwargs(ctx: dict) -> dict[str, Any]:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def _scenario_product(ctx: dict, product_id: str) -> Any:
+    """The seeded product a scenario refers to by *product_id*, whatever the row is called.
+
+    The name in the feature is a LABEL for "the product this scenario is about", not the
+    persisted primary key. Requests are built from the seeded row's own id
+    (``_ensure_request_defaults`` reads ``default_product.product_id``), so the feature's
+    spelling never reaches the wire and the two were never required to agree.
+
+    Both Givens used to assert they DID agree, which bound the scenario to whatever the
+    shared ``setup_media_buy_data`` happened to name its product. That is a naming
+    coincidence, not a precondition: the harness seeds ``prod_1`` and the Background says
+    ``prod-1``, so every one of the 75 scenarios failed in its Background the moment the
+    use case was finally routed.
+
+    What IS worth refusing is a scenario that names two DIFFERENT products while only one
+    is seeded — there the label stops identifying anything and the later Given would
+    silently reconfigure the earlier one's product.
+    """
+    product = ctx.get("default_product")
+    assert product is not None, "No default_product in ctx — conftest must seed one"
+    claimed = ctx.setdefault("uc026_product_label", product_id)
+    assert claimed == product_id, (
+        f"scenario names two products ({claimed!r} then {product_id!r}) but only one is seeded; "
+        "seed the second one before referring to it, or the later Given silently reconfigures the first"
+    )
+    return product
+
+
 @given(parsers.parse('the seller has a product "{product_id}" in inventory with pricing_options {options}'))
 def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None:
     """Establish a product with specified pricing_options in the database.
@@ -322,9 +350,7 @@ def given_product_with_pricing(ctx: dict, product_id: str, options: str) -> None
     from tests.factories import PricingOptionFactory
 
     env = ctx["env"]
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx — conftest must seed one"
-    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    product = _scenario_product(ctx, product_id)
 
     # Parse the option labels from the feature file (e.g. ["cpm-standard", "cpm-auction"])
     try:
@@ -385,9 +411,7 @@ def given_product_format_ids(ctx: dict, product_id: str, format_ids: str) -> Non
     rather than merely asserting they already match.
     """
     env = ctx["env"]
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx — conftest must seed one"
-    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    product = _scenario_product(ctx, product_id)
 
     try:
         expected = json.loads(format_ids)
@@ -664,9 +688,7 @@ def given_product_lacks_pricing_option(ctx: dict, product_id: str, option: str) 
 @given(parsers.parse('the product "{product_id}" has pricing_option "{option}" with max_bid={max_bid}'))
 def given_pricing_option_max_bid(ctx: dict, product_id: str, option: str, max_bid: str) -> None:
     """Verify product has the pricing option and record max_bid semantics."""
-    product = ctx.get("default_product")
-    assert product is not None, "No default_product in ctx"
-    assert product.product_id == product_id, f"Expected product '{product_id}', got '{product.product_id}'"
+    product = _scenario_product(ctx, product_id)
     actual_options = getattr(product, "pricing_options", None)
     assert actual_options and len(actual_options) > 0, f"Product '{product_id}' has no pricing_options"
     # Record max_bid semantics for downstream assertions

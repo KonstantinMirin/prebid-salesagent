@@ -1119,39 +1119,28 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | principal matches owner               | the response should include delivery data for "mb-001"                       |
       | principal differs from owner          | the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-001" |
 
-  @T-UC-004-partition-sampling @partition @sampling_method
-  Scenario Outline: Sampling method partition - <partition>
-    Given a media buy "mb-001" owned by "buyer-001" with status "active"
-    When the Buyer Agent queries delivery artifacts with sampling method "<partition_value>"
-    Then the response is compliant with the get_media_buy_delivery spec
-    And the sampling method handling should result in <expected>
-
-    Examples: Valid partitions
-      | partition | partition_value | expected |
-      | random | random | valid |
-      | stratified | stratified | valid |
-      | recent | recent | valid |
-      | failures_only | failures_only | valid |
-      | not_provided | (omitted) | valid |
-
-    Examples: Invalid partitions
-      | partition | partition_value | expected |
-      | unknown_value | systematic | error "INVALID_REQUEST" with suggestion |
-
-  @T-UC-004-boundary-sampling @boundary @sampling_method
-  Scenario Outline: Sampling method boundary - <boundary_point>
-    Given a media buy "mb-001" owned by "buyer-001" with status "active"
-    When the Buyer Agent queries delivery artifacts at sampling boundary "<boundary_value>"
-    Then the response is compliant with the get_media_buy_delivery spec
-    And the sampling handling should be <expected>
-
-    Examples: Boundary values
-      | boundary_point | boundary_value | expected |
-      | random (first enum value) | random | valid |
-      | failures_only (last enum value) | failures_only | valid |
-      | Not provided (server default) | (omitted) | valid |
-      | Unknown string not in enum | systematic | invalid |
-
+  # RETIRED 2026-09-15: @T-UC-004-partition-sampling and @T-UC-004-boundary-sampling,
+  # "Sampling method partition/boundary". Both graded a request field that AdCP 3.1.1
+  # does not have. `sampling_method` appears NOWHERE in the pinned schemas (zero hits
+  # across _schemas/3.1/), get-media-buy-delivery-request.json declares twelve
+  # properties and none of them is it, and no pinned enum anywhere carries
+  # random / stratified / recent / systematic. So the outlines' own "valid" rows
+  # demanded this seller ACCEPT an invented field, and their "invalid" row demanded a
+  # refusal the spec never asks for.
+  #
+  # They passed anyway, for a reason that hid the defect: the DTO declares no
+  # `sampling_method`, so the accepted-shape strip rejects it as an UNDECLARED field
+  # with INVALID_REQUEST (CLAUDE.md pattern 7, a repo policy rather than a spec
+  # obligation). That is the identical rejection the four "valid" rows received, so
+  # the Then could not tell "this enum value is refused" from "this field does not
+  # exist" -- and the emitted issue says so literally, keyword `additionalProperties`
+  # on pointer `/sampling_method`.
+  #
+  # Deleted rather than corrected, because there is no pinned obligation to correct
+  # them toward. The one real sampling concept in the pin is `failures_only`, a
+  # BOOLEAN filter on content-standards/get-media-buy-artifacts-request.json -- a
+  # different tool -- and it is already graded at BR-UC-024-content-compliance.feature
+  # (BR-RULE-185 INV-3 and the partition rows beneath it). No coverage is lost here.
   @T-UC-004-sandbox-happy @invariant @br-rule-209 @sandbox
   Scenario: Sandbox account receives simulated delivery metrics with sandbox flag
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
