@@ -16,19 +16,22 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.exceptions import AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import (
     CollectionListReference,
     CreateMediaBuyError,
     CreateMediaBuyRequest,
     UpdateMediaBuyRequest,
 )
+from src.core.schemas.account import Account
+from src.core.tenant_context import TenantContext
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories import PrincipalFactory
+from tests.factories import AccountFactory, PrincipalFactory
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.utils.database_helpers import (
     add_targeting_test_product,
+    bind_factories_to_session,
     future_iso_date_range,
     seed_media_buy_with_package,
     seed_targeting_test_tenant,
@@ -37,13 +40,22 @@ from tests.utils.database_helpers import (
 pytestmark = pytest.mark.requires_db
 
 TENANT_ID = "test_property_targeting_allowed"
+ACCOUNT_ID = "acct_test"
 
 
-def _make_identity() -> ResolvedIdentity:
-    return PrincipalFactory.make_identity(
-        principal_id="test_adv",
-        tenant_id=TENANT_ID,
-        dry_run=True,
+def _make_identity() -> AccountIdentity:
+    """The caller both media-buy implementations take: the identity with the account inside.
+
+    ``create-media-buy-request.json`` and ``update-media-buy-request.json`` both
+    require ``account``, so both implementations are annotated ``AccountIdentity``
+    and read ``identity.account.account_id`` directly. The tenant is the committed
+    ROW, which is what the resolver would have loaded.
+    """
+    tenant = TenantContext.load(TENANT_ID)
+    assert tenant is not None, "the property_targeting_tenant fixture must have committed the tenant row"
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(principal_id="test_adv", tenant_id=TENANT_ID, tenant=tenant),
+        Account(account_id=ACCOUNT_ID, name="Test Account", status="active"),
     )
 
 
@@ -72,6 +84,11 @@ def property_targeting_tenant(integration_db):
             name="Display Ads (property targeting allowed)",
             property_targeting_allowed=True,
         )
+        # The account the requests name. The boundary resolves it onto the identity in
+        # production; a direct _impl call hands it over through make_account_identity,
+        # and the row has to exist because the created buy carries its account_id.
+        with bind_factories_to_session(session):
+            AccountFactory(tenant_id=TENANT_ID, account_id=ACCOUNT_ID)
         session.commit()
 
     yield TENANT_ID

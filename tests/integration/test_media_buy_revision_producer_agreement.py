@@ -58,7 +58,7 @@ from typing import Any
 import pytest
 
 from src.core.database.repositories.media_buy import MediaBuyRepository
-from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuySuccess
+from src.core.schemas import UpdateMediaBuyRequest
 from src.core.schemas._base import GetMediaBuysRequest
 from tests.factories.request import fresh_idempotency_key
 from tests.harness.media_buy_create_update_list import MediaBuyCreateUpdateListEnv
@@ -296,71 +296,6 @@ def test_create_response_reports_the_persisted_confirmed_at_and_revision(integra
         f"{transport}: create reported revision={create_body['revision']!r} while get_media_buys "
         f"reports {listed_buy['revision']!r}. The pin names the two as interchangeable sources of "
         f"one optimistic-concurrency token"
-    )
-
-
-def test_dry_run_update_reports_the_current_revision_and_moves_nothing(integration_db):
-    """A simulated update reports the token the buy has NOW, not a bump.
-
-    dry_run applies nothing, so the buy's concurrency token is unchanged by
-    definition — reporting a bumped value would hand the buyer a token the seller
-    will reject, and reporting the schema default would hand them one that is wrong
-    in the other direction. Both errors are invisible today because the field is a
-    constant.
-
-    Seeded at a distinctive revision precisely so the assertion discriminates all
-    three answers: the default (1), a bump (``_SEEDED_REVISION + 1``) and the
-    correct current value.
-
-    Graded by a DIRECT ``_impl`` call, not through a transport, and the reason is
-    a property of the hook rather than a shortcut: ``dry_run`` is not a spec
-    request field, it is a testing-context flag the harness injects through the
-    env's identity (``BaseTestEnv(dry_run=True)`` -> ``make_identity(dry_run=True)``
-    -> ``testing_context.dry_run``). The A2A and MCP dispatches resolve identity
-    from the token/headers through the real pipeline, so the env's flag never
-    reaches them — measured: the same call on those transports applies an ordinary
-    update and bumps the token to ``_SEEDED_REVISION + 1``. Grading it there would
-    grade the harness, not the branch. There is no wire to assert on here and none
-    is claimed: ``env.call_impl`` returns the ``_impl`` DTO, and that DTO is the
-    oracle. Serialized through ``model_dump(mode="json")`` — the production
-    serializer every transport emits, which is where the constant surfaces.
-    """
-    from tests.factories import MediaBuyFactory
-
-    with MediaBuyCreateUpdateListEnv(dry_run=True) as env:
-        tenant, principal, _product, _pricing = env.setup_media_buy_data()
-        buy = MediaBuyFactory(tenant=tenant, principal=principal, status="active", revision=_SEEDED_REVISION)
-        env._commit_factory_data()  # noqa: SLF001 — the harness's factory/session flush seam
-
-        simulated = env.call_impl(
-            req=UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key=fresh_idempotency_key(),
-                media_buy_id=buy.media_buy_id,
-                end_time="2026-12-01T00:00:00Z",
-            )
-        )
-        listed = env.call_impl(req=GetMediaBuysRequest(media_buy_ids=[buy.media_buy_id]))
-
-        # A failed update returns UpdateMediaBuyError in the same envelope, which
-        # carries no `revision` — assert the success branch explicitly so a refusal
-        # fails as a refusal rather than as a KeyError three lines down.
-        assert isinstance(simulated, UpdateMediaBuySuccess), f"dry-run update did not succeed: {simulated!r}"
-        reported = simulated.model_dump(mode="json")["revision"]
-        persisted = listed.model_dump(mode="json")["media_buys"][0]["revision"]
-
-    # Asserted FIRST because it doubles as the branch proof: the non-dry-run path
-    # writes, and a write bumps the token. An unmoved token is what tells us the
-    # dry-run early return actually ran, so the reported-value assertion below is
-    # not silently grading the ordinary update path.
-    assert persisted == _SEEDED_REVISION, (
-        f"the dry run MOVED the persisted token to {persisted} — it applied a write instead of "
-        f"previewing one (or the dry-run branch was never entered)"
-    )
-    assert reported == _SEEDED_REVISION, (
-        f"the dry-run preview reported revision {reported}, expected the buy's current "
-        f"{_SEEDED_REVISION} — a simulation applies nothing, so it must report neither a bump "
-        f"({_SEEDED_REVISION + 1}) nor the UpdateMediaBuySuccess schema default (1)"
     )
 
 

@@ -198,7 +198,17 @@ def seed_targeting_test_tenant(
     max_daily_package_spend: Decimal = Decimal("50000.00"),
     currency_code: str = "USD",
 ) -> None:
-    """Seed the canonical targeting-test tenant: Tenant + PropertyTag + CurrencyLimit + Principal.
+    """Seed the canonical targeting-test tenant, SET UP as the checklist defines it.
+
+    Tenant + PropertyTag + CurrencyLimit + Principal, plus the two rows
+    ``validate_setup_complete`` grades: an AuthorizedProperty, and an SSO config
+    with setup mode off (single-tenant mode makes ``sso_configuration`` a
+    critical task — see SetupChecklistService._check_critical_tasks).
+
+    ``_create_media_buy_impl`` calls ``validate_setup_complete`` unconditionally.
+    It used to be skipped for a caller that set the testing context's ``dry_run``;
+    that channel is gone (a1b79d22d), so a tenant a create_media_buy test drives
+    needs the real rows rather than a flag that bypassed the gate.
 
     Uses factory-boy factories per tests/CLAUDE.md (Pattern #8). Binds the passed
     session to factories for the duration of the call so callers outside the
@@ -206,9 +216,11 @@ def seed_targeting_test_tenant(
     Caller is responsible for adding products, pricing options, and committing.
     """
     from tests.factories import (
+        AuthorizedPropertyFactory,
         CurrencyLimitFactory,
         PrincipalFactory,
         PropertyTagFactory,
+        TenantAuthConfigFactory,
         TenantFactory,
     )
 
@@ -221,6 +233,7 @@ def seed_targeting_test_tenant(
             name=tenant_name,
             subdomain=subdomain,
             ad_server="mock",
+            auth_setup_mode=False,
         )
         session.flush()
 
@@ -251,6 +264,8 @@ def seed_targeting_test_tenant(
             name=principal_name,
             platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
         )
+        AuthorizedPropertyFactory(tenant=tenant, tenant_id=tenant_id)
+        TenantAuthConfigFactory(tenant=tenant, tenant_id=tenant_id, oidc_enabled=True)
 
 
 def add_targeting_test_product(

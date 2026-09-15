@@ -113,7 +113,7 @@ def _seed(env, tenant_id: str, principal_id: str) -> str:
 
     context = build_context(session, tenant_id=tenant_id, principal_id=principal_id)
     step = WorkflowRepository(session, tenant_id).create_step(
-        context=context,
+        persistent_context=context,
         step_type="tool_call",
         owner="principal",
         status="requires_approval",

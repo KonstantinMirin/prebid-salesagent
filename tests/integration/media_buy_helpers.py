@@ -64,6 +64,50 @@ def _single_creative_request(creative_id: str, **overrides: Any) -> CreateMediaB
     )
 
 
+def make_media_buy_identity(principal_id: str, tenant_id: str, **tenant_overrides: Any) -> Any:
+    """The caller ``_create_media_buy_impl`` / ``_update_media_buy_impl`` take.
+
+    Principal, tenant and the ACCOUNT. ``create-media-buy-request.json`` and
+    ``update-media-buy-request.json`` both list ``account`` in /required, so both
+    implementations are annotated ``AccountIdentity`` and read
+    ``identity.account.account_id`` directly. A plain ``ResolvedIdentity`` leaves that
+    None, which surfaces as ``AttributeError: 'NoneType' object has no attribute
+    'account_id'`` -- swallowed by the create path's catch-all and re-raised as
+    ``AdCPAdapterError``, so the wrong identity TYPE reads as "the ad server is down".
+
+    The account is ``DEFAULT_TEST_ACCOUNT_ID``, which is what
+    ``create_test_media_buy_request`` and ``_make_create_request`` name in the payload;
+    the fixture still has to seed the ROW and the access grant
+    (``seed_default_account``), because the boundary resolves the reference for real.
+
+    The tenant is LOADED FROM ITS ROW by default -- ``TenantContext.load``, which is what
+    the resolver calls -- so the fixture's own columns govern, as they do in production. A
+    hand-built ``tenant={"tenant_id": ...}`` instead takes every other field from
+    TenantContext's defaults, and ``human_review_required`` defaults to True there: the
+    create then answers ``submitted`` however the seeded row is configured. Pass
+    ``tenant=`` explicitly only to state something the row does not.
+    """
+    from src.core.schemas.account import Account
+    from src.core.tenant_context import TenantContext
+    from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+    from tests.factories.principal import PrincipalFactory
+
+    if "tenant" not in tenant_overrides:
+        loaded = TenantContext.load(tenant_id)
+        if loaded is None:
+            raise ValueError(f"Tenant {tenant_id} not found: seed it before building an identity for it")
+        tenant_overrides["tenant"] = loaded
+
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            **tenant_overrides,
+        ),
+        Account(account_id=DEFAULT_TEST_ACCOUNT_ID, name="Test Account", status="active"),
+    )
+
+
 def _get_tenant_dict(tenant_id: str) -> dict[str, Any]:
     """Load full tenant dict from DB (matches resolve_identity output)."""
     from src.core.database.models import Tenant as TenantModel
