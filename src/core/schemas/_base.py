@@ -2528,7 +2528,7 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     and ``_update_media_buy_impl`` read it as ``req.today or date.today()``. Nothing set
     it -- no transport could (the marker kept it off all three announced shapes) and no
     caller in src or tests passed it -- so that read already always yielded
-    ``date.today()``, which is now what it says. See docs/design/one-tool-registry.md,
+    ``date.today()``, which is now what it says. See docs/development/building-tools.md,
     "Decisions this forces, and the answers".
     """
 

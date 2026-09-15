@@ -4,7 +4,7 @@ A tool used to be declared between three and four times -- ``_register_tool`` in
 ``src/core/main.py``, an ``AgentSkill`` literal plus a ``skill_handlers`` row in the A2A
 server, and a ``@router.post``/``@router.put`` decorator in ``src/routes/api_v1.py`` -- and
 each declaration could disagree with the others. :data:`TOOLS` is the single declaration all
-of them are now derived from; ``docs/design/one-tool-registry.md`` is the design.
+of them are now derived from; ``docs/development/building-tools.md`` is the design.
 
 These rows are hand-written and therefore capable of being wrong. What makes them right is
 that the transports are GENERATED from them: MCP registration loops this mapping, the A2A

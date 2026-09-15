@@ -198,7 +198,7 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
     ``_get_products_impl`` is typed to the SDK's own request model, which never declared
     it -- so nothing could set it and nothing could read it. Deleted rather than moved to
     an extended model, because there is no caller for such a model to serve. See
-    docs/design/one-tool-registry.md, "Decisions this forces, and the answers".
+    docs/development/building-tools.md.
 
     push_notification_config is inherited from the adcp library parent (added in the
     6.6 SDK / spec 3.1.1); no local redeclaration.

@@ -34,7 +34,7 @@ It has been removed. A field we genuinely need is either ``exclude=True`` (inter
 announced) or DECLARED ON THE SUBCLASS, which is itself the statement that we carry it: the
 field is typed and greppable in the file the reader is already looking at, and the set is
 derivable exactly as ``set(model.model_fields) - library_declared_fields(model)``. There is
-no second list to keep, and no citation ClassVar -- see docs/design/one-tool-registry.md.
+no second list to keep, and no citation ClassVar -- see docs/development/building-tools.md.
 
 A parameter the DTO does not declare is DROPPED from the announcement -- that is what
 retires a legacy flat name such as ``list_creatives(status=...)``: FastMCP never passes what

@@ -99,7 +99,7 @@ class TestMCPToolRoundtripMinimal:
         This started as the regression for a datetime.combine() bug where ``req.today``
         was accessed and did not exist on the schema. The field was later declared, and is
         now deleted again -- nothing ever set it, so the read always fell through to
-        ``date.today()``, which is what the impl says (docs/design/one-tool-registry.md).
+        ``date.today()``, which is what the impl says (docs/development/building-tools.md).
         The roundtrip is still worth grading: a minimal update must survive the wire.
         """
         # Create a media buy first

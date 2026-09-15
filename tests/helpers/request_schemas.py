@@ -33,7 +33,7 @@ whose tool set comes from the LIVE MCP registry.
 
 The other half is GONE. A tool that resolves NO ref is simply absent from that dict,
 and the test that made such a tool prove the pinned tree holds no request schema for it
-lived in the alignment suite, deleted whole (docs/design/one-tool-registry.md). Nothing
+lived in the alignment suite, deleted whole (docs/development/building-tools.md). Nothing
 replaces it here: a tool whose binding is dropped now falls out of the grading silently.
 Its helper — a token-subset candidate search that found ``get-task-status-status-request.json``
 for ``get_task_status``, where an exact-filename probe would have reported "no schema exists" —

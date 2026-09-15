@@ -45,7 +45,7 @@ async def test_schema_validator_initialization():
 # test_get_products_request_validation below) and by tests/unit/test_adcp_contract.py
 # (the production-model contract check). The schema-derived request generator it should
 # have reused instead of hand-rolling lived in the alignment suite, deleted with it
-# (docs/design/one-tool-registry.md). Had zero external references (no CI job,
+# (docs/development/building-tools.md). Had zero external references (no CI job,
 # Makefile target, or doc link) — deleted rather than repaired.
 
 

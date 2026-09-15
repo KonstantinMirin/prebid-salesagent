@@ -53,7 +53,7 @@ class TestSyncResponseAccountFields:
 
     # Required-field enforcement (brand/operator/action/status per pinned schema
     # 04f59d2d5) was verified generically by the alignment suite, which is deleted
-    # (docs/design/one-tool-registry.md). The model inherits the library type, so what it
+    # (docs/development/building-tools.md). The model inherits the library type, so what it
     # requires is the library's; the tests in this class grade the behaviour on top.
 
     def test_optional_fields_remain_optional(self):

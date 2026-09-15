@@ -28,10 +28,10 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 
 **DRY is a correctness requirement, equivalent to type safety or test integrity — not "premature optimization," and not "refactoring beyond what was asked."**
 
-- If you write a block of logic that is structurally similar to an existing block (same pattern, different variables), you **MUST** extract a shared helper function
+- If you write a block of logic that is structurally similar to a block already in the codebase (same pattern, different variables), you **MUST** extract a shared helper function
 - If you are asked to refactor duplicated code, that is a **bug fix**, not an "improvement"
 - **NEVER** cite "avoid over-engineering" or "keep it simple" to justify leaving duplicated logic in place
-- Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy. This is not theoretical — it has caused real bugs in this codebase
+- Duplicated code is a defect. It means the next person who fixes a bug in one copy misses the other copy, and it has caused real bugs in this codebase
 - **Enforced by:** `check_code_duplication.py` in `make quality` (pylint R0801, ratcheting baseline in `.duplication-baseline`)
 
 **What DRY is NOT:**
@@ -43,7 +43,7 @@ This guide surfaces the repository-specific rules for the Prebid Sales Agent cod
 ### Structural guards (automated architecture enforcement)
 AST-scanning tests enforce architecture invariants on every `make quality` run. New violations fail the build immediately.
 
-**The following table is a representative subset, not the full set.** There are over 140 guard tests (149 `tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py`); for the complete list, run `ls tests/unit/test_architecture_*.py`. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
+**The following table is a representative subset, not the full set.** There are over 150 guard tests (`tests/unit/test_architecture_*.py`, plus a handful of boundary guards like `test_transport_agnostic_impl.py`); `ls tests/unit/test_architecture_*.py` prints the current set, which is the only count that cannot go stale. See [docs/development/structural-guards.md](docs/development/structural-guards.md) for design rationale (its written inventory covers only a subset).
 
 | Guard | Enforces | Test file |
 |-------|----------|-----------|
@@ -51,9 +51,9 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | No ToolError anywhere but the edge | Business logic raises AdCPSalesAgentError; ToolError is minted only on the way out | `ruff-boundary.toml` (TID251 over `src/` + `scripts/`, in `make quality`) + `test_ruff_boundary_bans.py` |
 | Transport-agnostic _impl | `_impl` has zero transport imports | `test_transport_agnostic_impl.py` |
 | `_impl` signature | Every implementation is exactly `(req: <DTO>, identity: ResolvedIdentity)` for a protected tool, `identity: AccountIdentity` when the DTO requires `account`, or `identity: PublicIdentity` for a public one; the DTO matches the registry row, and the identity annotation IS the row's credential policy (`ToolSpec.requires_credential` derives it; the registry refuses `AccountIdentity` on a DTO whose `account` is optional) | `ToolImpl` protocol on `ToolSpec.impl` (mypy) + `.ast-grep/rules/impl-signature-is-request-and-identity.yml` |
-| One identity constructor | `ResolvedIdentity(...)` / `AccountIdentity(...)` / `PublicIdentity(...)` only in the resolver and `PrincipalFactory`; the resolver builds the identity once, account inside, and nothing `model_copy`s one | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
+| One identity constructor | `ResolvedIdentity(...)` / `AccountIdentity(...)` / `PublicIdentity(...)` only in the resolver and `PrincipalFactory`; the resolver builds the identity once, account inside, and nothing calls `model_copy` on one | `.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml` |
 | Principal rows are repository-private | `src.core.database.models.Principal` is importable only by the four repository modules that query it; a tool reads `identity.principal`, an admin view uses `PrincipalRepository` | `ruff-boundary.toml` (TID251) |
-| Principal and account obtained from the identity alone | `repositories.principal`, `repositories.principal_lookup`, `auth_utils`, `repositories.account` and `uow.AccountUoW` are importable only by the resolver, the repositories, the admin UI, the setup scripts and the two account-management tools; a tool reads `identity.principal` / `identity.account` | `ruff-ownership.toml` (TID251) |
+| Principal and account obtained from the identity alone | `repositories.principal`, `repositories.principal_lookup`, `auth_utils`, `repositories.account`, and `uow.AccountUoW` are importable only by the resolver, the repositories, the admin UI, the setup scripts, and the two account-management tools; a tool reads `identity.principal` / `identity.account` | `ruff-ownership.toml` (TID251) |
 | Auth refusals minted by the resolver alone | `AdCPAuthRequiredError` / `AdCPAuthenticationError` raised only by the resolver; a protected tool's `ResolvedIdentity` carries principal and tenant by type, so nothing downstream re-checks (a seller's `require_auth` brand policy is asked by the resolver through `requires_credential(tenant)`) | `ruff-boundary.toml` (TID251) |
 | Account resolved by the resolver alone | `src.core.database.repositories.account_lookup` is importable only by the resolver, which builds the identity with the request's account inside; tools read `identity.account` | `ruff-boundary.toml` (TID251) |
 | Context written by the boundary alone | No `context=` keyword and no `ContextObject` import outside the boundary and the schemas; `AdcpResponse` refuses the field on construction and assignment | `ruff-boundary.toml` (TID251) + `.ast-grep/rules/context-is-written-by-the-boundary-alone.yml` + `test_response_context_is_boundary_owned.py` |
@@ -100,11 +100,11 @@ fails on pin drift.
 
 ### Spec-grounding gate (MANDATORY before implementing protocol behavior)
 
-**Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before code is written, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
+**Any change to AdCP/protocol BEHAVIOR** — a tool's request/response contract, error emission, idempotency, governance, or capabilities — **must cite, before you write the code, the authoritative spec section + version that mandates it, plus the conformance storyboard step that grades it** (or note "ungraded"). Record the citation in the PR description and/or the planning note.
 
-- **Which version is authoritative:** the version the repo currently PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
-- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): prose at `dist/docs/<version>/building/by-layer/L<0-4>/*.mdx` (idempotency, auth and error taxonomy are in `L1/security.mdx`); the graded, executable contract under `dist/compliance/<version>/`. The prose is NOT vendored — the venv carries only `_schemas/` — so read it with `gh api repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L1/security.mdx --jq '.content' | base64 -d`, which returns the literal text. `WebFetch` on the `raw.githubusercontent.com` URL is the fallback when the gh rate limit is spent, but it summarizes: trust its verbatim quotes, not its interpretation. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec, and does (see #2215).
-- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the spec prose + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
+- **Which version is authoritative:** the version the repo PINS — *unless* there is active work to comply with a different target version (a bump/migration in flight), in which case that TARGET version is the pin. Confirm which applies first.
+- **Where the spec lives** (`github.com/adcontextprotocol/adcp`): the written spec at `dist/docs/<version>/building/by-layer/L<0-4>/*.mdx` (idempotency, auth and error taxonomy are in `L1/security.mdx`); the graded, executable contract under `dist/compliance/<version>/`. That writing is NOT vendored — the venv carries only `_schemas/` — so read it with `gh api repos/adcontextprotocol/adcp/contents/docs/building/by-layer/L1/security.mdx --jq '.content' | base64 -d`, which returns the literal text. `WebFetch` on the `raw.githubusercontent.com` URL is the fallback when the gh rate limit is spent, but it summarizes: trust its verbatim quotes, not its interpretation. The installed `adcp` SDK — codes, types, even reference implementations such as `adcp.server.idempotency` — is a CROSS-CHECK, **not** the authority; it can diverge from the spec, and does (see #2215).
+- **Why:** grounding protocol behavior in downstream artifacts (an internal contract item, or the mere existence of an SDK error code) instead of the written spec + storyboard has produced an entire feature built inverse to the spec. The spec is the contract; everything else is derived.
 - **Enforcement:** reviewers reject protocol-behavior changes that don't cite the spec; this complements the pin-drift guard above. Background: [docs/adcp-spec-version.md](docs/adcp-spec-version.md).
 
 ---
@@ -131,12 +131,13 @@ class Product(LibraryProduct):
 - **Enforced by:** `tests/unit/test_architecture_schema_inheritance.py`, which grades
   redeclarations against the library parent. There is deliberately no suite comparing a
   model's field set to the pinned schema: the DTO IS the pinned model minus a declared
-  omission, so what it declares is inherited and a comparison would assert that Python
+  omission, so what it declares is inherited and a comparison only asserts that Python
   inheritance works. See
-  [docs/design/one-tool-registry.md](docs/design/one-tool-registry.md).
+  [docs/development/building-tools.md](docs/development/building-tools.md) § What a tool
+  declares: the DTO.
 - The inheritance guard was once deleted on the ground that such a guard "has to
   enumerate how this repo spells its imports — every spelling it does not know is a
-  silent hole." The premise was true of the old implementation and is no longer true of
+  silent hole." The premise was true of the previous implementation and is no longer true of
   this one: the REDEFINITION rule decides membership by walking the live MRO and testing
   `__module__`, so it consults no import spelling and has no spelling to miss. The
   companion `test_all_library_types_have_local_subclass` is still alias-keyed, and is the
@@ -152,7 +153,7 @@ class Product(LibraryProduct):
 ### 2. Flask: prevent route conflicts
 **Pre-commit hook detects duplicate routes** — run it manually: `uv run python .pre-commit-hooks/check_route_conflicts.py`
 
-When adding routes: search existing first (`grep -r "@.*route.*your/path"`), and deprecate properly with early return, not comments.
+When you add a route, search for conflicts first (`grep -r "@.*route.*your/path"`), and deprecate properly with early return, not comments.
 
 ### 3. Database: repository pattern + ORM-first
 The database is PostgreSQL, in every environment including tests.
@@ -205,7 +206,7 @@ class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSucc
     creatives: list[SyncCreativeResult]   # a local subclass: re-dumped through its own serializer
 ```
 
-There is one serializer seat, `WireSerializerMixin` (`src/core/schemas/_base.py`), and it
+`WireSerializerMixin` (`src/core/schemas/_base.py`) is the one serializer, and it
 carries exactly two concerns: `NestedModelSerializerMixin` re-serializes children by their
 INSTANCE rather than the declared (library) type, which is what keeps a local subclass's
 extra fields on the wire; and required-nullable retention keeps a required field whose
@@ -224,9 +225,11 @@ agent or a webhook target (the agent registries, the webhook services, the regis
 gate), the idempotency payload hash (`src/core/idempotency_canonical.py`), the persistence
 edge, the admin UI's JSON responses (`src/admin/blueprints`), a wire that `to_wire` does
 not own, the two error helpers that project issues and details to their wire shape
-(`src/core/errors/issues.py`, `src/core/errors/details.py`), and the two schema modules that
-re-dump a nested child inside the one serializer seat (`src/core/schemas/_base.py`) or
-coerce a library `RootModel` (`src/core/schemas/pricing.py`). The persistence edge is
+(`src/core/errors/issues.py`, `src/core/errors/details.py`), and the one schema module that
+re-dumps a nested child inside the one serializer (`src/core/schemas/_base.py`). The
+edge list itself lives in `ruff-serialization.toml` and
+`.ast-grep/rules/serialize-only-at-the-edges.yml`; read it there rather than counting from
+here. The persistence edge is
 precisely: the engine's JSON serializer registered in
 `src/core/database/database_session.py` behind the `JSONType` column (hand the model to
 the column and it serializes through that serializer; a tool never calls anything), the
@@ -278,7 +281,7 @@ exactly those.
 
 **Controller and service.** An `_impl` is a CONTROLLER: it establishes who is calling and
 then delegates. The work itself belongs in a service function that takes an already-resolved
-caller and asks nothing about transports, auth or idempotency:
+caller and asks nothing about transports, auth, or idempotency:
 
 ```python
 def _sync_creatives_impl(req, identity: ResolvedIdentity):   # controller
@@ -297,18 +300,18 @@ derives `requires_credential()` from that annotation, so there is no `auth=` lit
 row and no `require_principal` helper to call.
 
 **A controller never calls another controller.** When one tool needs another tool's work --
-`create_media_buy` and `update_media_buy` upload a package's inline creatives -- it calls the
-SERVICE. Calling the other `_impl` re-runs an auth check that already passed and drags the
-outer request's `idempotency_key` into a function with no business seeing it. Today
+`update_media_buy` uploads a package's inline creatives (`media_buy_update.py:945`) -- it
+calls the SERVICE. Calling the other `_impl` re-runs an auth check that already passed,
+and drags the outer request's `idempotency_key` into a function with no business seeing it.
 `sync_creatives` is the extracted one; extract the next service when a second tool needs it,
 not before.
 
 **Rules for `_impl` functions:**
-- Accept `ResolvedIdentity` (protected) or `PublicIdentity` (public), never `Context`, raw headers or a token
+- Accept `ResolvedIdentity` (protected), `AccountIdentity` (protected, and the DTO requires `account`), or `PublicIdentity` (public), never `Context`, raw headers, or a token
 - Raise `AdCPSalesAgentError` subclasses, never `ToolError` (that's transport-specific)
 - Zero imports from `fastmcp`, `a2a`, `starlette`, or `fastapi`
-- No auth extraction, tenant resolution, account resolution, idempotency or context echo — the boundary's job
-- Declare exactly `(req: <DTO>, identity: ResolvedIdentity)` or `(req: <DTO>, identity: PublicIdentity)`: nothing else can be supplied, and the annotation is the credential policy
+- No auth extraction, tenant resolution, account resolution, idempotency, or context echo — the boundary's job
+- Declare exactly `(req: <DTO>, identity: <one of those three>)`: nothing else can be supplied, and the annotation is the credential policy
 
 **Rules for transports:**
 - Hand the raw payload and the request headers to `serve(tool_name, payload, headers, protocol)` — never resolve an identity, never call an implementation directly
@@ -352,19 +355,19 @@ all three are correct:
 {"properties": {"a": {}}}                                 # -> rejects "/x"
 ```
 
-We accept **only** parameters explicitly defined in the DTO, because that is what keeps the
-internal models predictable. A pinned schema saying `additionalProperties: true` is the SPEC
-permitting a sender to add fields; it is not an instruction to this seller to carry them
-inward. The dev/prod split is deliberate and is the whole mechanism: in dev an undeclared
-field is a HARD REJECTION so a spec field we have not implemented is loud, and in production
-it is silently dropped so a newer buyer is served rather than refused.
+This seller accepts **only** parameters explicitly defined in the DTO, because that is what
+keeps the internal models predictable. A pinned schema saying `additionalProperties: true` is
+the SPEC permitting a sender to add fields; it is not an instruction to this seller to carry
+them inward. The dev/prod split is deliberate and is the whole mechanism: in dev an
+undeclared field is a HARD REJECTION so a spec field this seller has not implemented is loud,
+and in production it is silently dropped so a newer buyer is served rather than refused.
 
 **Do not "fix" this.** It has been mistaken for a bug at least twice. The tells are a scenario
 that sends a pin-permitted-but-undeclared field and fails with `INVALID_REQUEST` in dev, or a
 storyboard `known_failures.txt` entry for a tolerance check. Neither is a defect in the strip:
 
-- if we SHOULD accept the field, declare it on the DTO — that is the only mechanism;
-- if we should NOT, the scenario is wrong and gets fixed or deleted.
+- if you SHOULD accept the field, declare it on the DTO — that is the only mechanism;
+- if you should NOT, the scenario is wrong and gets fixed or deleted.
 
 Declaring a field only to satisfy a tolerance obligation is its own defect — it invents a spec
 field. `ListAccountsRequest.idempotency_key` was added that way once and removed again:
@@ -425,7 +428,7 @@ The Prebid Sales Agent is a Python application with the following components:
 
 ## Common operations
 
-### Running locally
+### Run locally
 Migrations run automatically on container startup. The local-run walkthrough, access points, and
 test login are in [docs/quickstart.md](docs/quickstart.md); MCP client usage and the
 `uvx adcp ... list_tools` smoke test are in `.claude/rules/patterns/mcp-patterns.md`.
@@ -466,7 +469,7 @@ docker compose exec admin-ui python scripts/ops/migrate.py
   second revision to clean up after a first one you wrote this week is two migrations where the
   problem needed zero.
 - **Check before you decide which case you are in:** `git cat-file -e main:alembic/versions/<file>`
-  says whether main has it. If a revision you would edit has children on the branch, re-point
+  says whether main has it. If a revision you are editing has children on the branch, re-point
   the child's `down_revision` in the same change.
 - **A migration that has shipped is immutable.** Then, and only then, a new revision is correct.
 
@@ -511,7 +514,7 @@ Bug fix = root cause, not symptom: a report names a symptom. Grep every caller o
 
 Follow these rules:
 
-- No abstractions that weren't explicitly requested. Caveat: allow shared helpers and existing architecture abstractions.
+- No abstractions that weren't explicitly requested. Caveat: allow shared helpers and the architecture abstractions already in this codebase.
 - No new dependency if it can be avoided.
 - No boilerplate nobody asked for.
 - Deletion over addition. Boring over clever. Fewest files possible.
@@ -533,10 +536,10 @@ Follow these rules:
 
 ## Configuration
 
-Local secrets live in `.env.secrets` (required for a working stack: Gemini, Google OAuth, GAM OAuth,
-super-admin emails, Approximated). Every variable is documented in
-[docs/deployment/environment-variables.md](docs/deployment/environment-variables.md) — read it before
-touching credentials or auth configuration.
+Local secrets live in `.env.secrets` (required for a working stack: Gemini, Google OAuth,
+GAM OAuth, super-admin emails, Approximated).
+[docs/deployment/environment-variables.md](docs/deployment/environment-variables.md) documents
+every variable — read it before touching credentials or auth configuration.
 
 ### Database schema
 - **Core**: tenants, principals, products, media_buys, creatives, audit_logs
@@ -560,7 +563,7 @@ The Broadstreet integration lives at `src/adapters/broadstreet/`.
 
 ### Mock adapter
 **Supported**: all AdCP pricing models (CPM, VCPM, CPCV, CPP, CPC, CPV, FLAT_RATE) and all
-currencies, with simulated metrics. Used for testing and development.
+currencies, with simulated metrics. Use it for testing and development.
 
 ## Documentation
 
@@ -576,6 +579,7 @@ Detailed documentation lives in `/docs`:
 - `development/architecture-principles.md` — the governing principles behind the layering
 - `development/architecture.md` — system architecture
 - `development/request-lifecycle.md` — how a request reaches business logic
+- `development/building-tools.md` — adding or changing a tool: the registry row, the DTO, the identity type, what the boundary does once, and how each transport is derived
 - `development/patterns-reference.md` — repository, Unit of Work, harness, and boundary patterns in full
 - `development/structural-guards.md` — structural-guard design and inventory
 - `development/GETTING_STARTED.md` — initial setup guide
@@ -585,6 +589,9 @@ Detailed documentation lives in `/docs`:
 - `development/troubleshooting.md` — common issues
 - `security.md` — security guidelines
 - `security/outbound-egress.md` — outbound HTTP and SSRF
+- `design/error-architecture.md` — the one code table, the raised and advisory lanes, and why neither authors text
+- `design/bdd-harness-architecture.md` — one scenario on every transport: what a scenario names and what the harness derives
+- `design/webhook-testing-architecture.md` — the local HTTP and MCP origins, the shared TLS material, the delivery envs, and the e2e capture service
 - `quickstart.md` — local run walkthrough
 - `deployment/` — deployment guides (including `environment-variables.md`)
 - `adapters/` — adapter-specific documentation

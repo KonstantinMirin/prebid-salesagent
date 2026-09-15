@@ -1,8 +1,9 @@
-# MCP & A2A Patterns
+# MCP and A2A patterns
 
-Reference patterns for working with MCP tools and A2A integration. Read this when adding or modifying tools.
+These are the reference patterns for MCP tools and A2A integration. Read them before you add
+or modify a tool.
 
-## MCP Client Usage
+## MCP client usage
 ```python
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
@@ -16,7 +17,7 @@ async with client:
     result = await client.tools.create_media_buy(product_ids=["prod_1"], ...)
 ```
 
-## CLI Testing
+## CLI testing
 ```bash
 # List available tools
 uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
@@ -25,7 +26,7 @@ uvx adcp http://localhost:8000/mcp/ --auth test-token list_tools
 uvx adcp http://localhost:8000/mcp/ --auth <real-token> get_products '{"brief":"video"}'
 ```
 
-## Transport Boundary: One Path to Every Implementation (Critical Pattern #5)
+## Transport boundary: one path to every implementation (critical pattern #5)
 
 A transport parses a request and writes a response. Between it and the business logic sits
 ONE seam, `src/core/tools/_boundary.py`. There are no per-tool wrappers.
@@ -44,20 +45,22 @@ async def _create_media_buy_impl(
 response = await serve("create_media_buy", payload, headers, TransportProtocol.A2A)
 ```
 
-`serve` validates the payload into the registry row's DTO, resolves the identity once
-(the resolver is private to the boundary), resolves the account the request names, honours
-its `idempotency_key`, and stamps the buyer's `context` onto the response — once, for every
-transport.
+`serve` validates the payload into the registry row's DTO, resolves the identity once (the
+resolver is private to the boundary), and resolves the account the request names. It honors
+the request's `idempotency_key` and stamps the buyer's `context` onto the response. Each of
+those happens once, for every transport.
 
 **`_impl` rules:** Accept `ResolvedIdentity` (protected tool: principal and tenant are not
-optional, read them directly) or `PublicIdentity` (public tool: branch on
+optional, read them directly), `AccountIdentity` (protected, and the DTO requires `account`:
+the account is there too), or `PublicIdentity` (public tool: branch on
 `identity.principal is None`), never a Context. Raise `AdCPSalesAgentError` (not ToolError).
-Zero imports from fastmcp/a2a/starlette/fastapi. No account resolution, no idempotency, no
-context echo. Declare exactly `(req: <DTO>, identity: <one of the two>)`; the registry derives
-the tool's credential policy from that annotation.
+Import nothing from fastmcp, a2a, starlette, or fastapi. No account resolution, no
+idempotency, no context echo. Declare exactly `(req: <DTO>, identity: <one of those three>)`.
+The registry derives the tool's credential policy from that annotation, and refuses a row
+whose annotation disagrees with its DTO.
 
-**Transport rules:** Hand over the headers, call `serve`, catch `AdcpFailure`, serialize
-its response with `to_wire`, add only the transport's own failure marker.
+**Transport rules:** Hand over the headers, call `serve`, catch `AdcpFailure`, serialize its
+response with `to_wire`, and add only the transport's own failure marker.
 
 **Substituting an implementation in a test** patches the registry ROW — `TOOLS` holds the
 function object, so patching a module attribute renames something nothing consults. Use
@@ -65,7 +68,7 @@ function object, so patching a module attribute renames something nothing consul
 
 **Enforced by 4 structural guards** — see `docs/development/structural-guards.md`.
 
-## Access Points (via nginx at http://localhost:8000)
+## Access points (through nginx at `http://localhost:8000`)
 - Admin UI: `/admin/` or `/tenant/default`
-- MCP Server: `/mcp/`
-- A2A Server: `/a2a`
+- MCP server: `/mcp/`
+- A2A server: `/a2a`

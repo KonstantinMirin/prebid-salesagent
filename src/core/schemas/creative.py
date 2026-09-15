@@ -685,7 +685,7 @@ class ListCreativesRequest(BuyerRequest, LibraryListCreativesRequest):
 
     No internal field is declared here. ``format`` and ``page`` were, under
     ``exclude=True``; they live on :class:`ListCreativesRequest` below. See
-    docs/design/one-tool-registry.md, "Decisions this forces, and the answers".
+    docs/development/building-tools.md.
     """
 
     TAGS: ClassVar[tuple[str, ...]] = (

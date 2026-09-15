@@ -178,7 +178,7 @@ under a different alias goes unexamined by it.
 This guard is the only grader of redeclarations. The alignment suite that
 used to be the backstop — `test_pydantic_schema_alignment.py`, which graded
 declared fields and `model_dump` survival against the pinned schema — was
-deleted in full ([one tool registry](../design/one-tool-registry.md)),
+deleted in full ([Building a tool](building-tools.md)),
 because a design in which the DTO IS the pinned model minus a declared
 omission leaves it nothing to compare.
 

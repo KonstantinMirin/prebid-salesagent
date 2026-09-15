@@ -1,7 +1,7 @@
 # Troubleshooting guide
 
 This guide is a symptom lookup for the local Docker stack and its test
-tooling. Every service is reached through the nginx proxy at
+tooling. You reach every service through the nginx proxy at
 `http://localhost:8000`. Each entry gives the symptom, the immediate fix, and
 a link to the document that explains the mechanism. Find your symptom in the
 contents, apply the fix, and follow the link if the fix isn't enough.
@@ -102,7 +102,7 @@ flowchart TD
 
 ### Container does not start
 
-Read the logs first, then rebuild if the error is not specific:
+Read the logs first. Rebuild if the error is vague:
 
 ```bash
 # Check logs
@@ -119,7 +119,7 @@ Migrations run automatically at startup: the `db-init` service runs
 `python scripts/ops/migrate.py` and `adcp-server` waits for it to complete.
 A migration error therefore appears in `docker compose logs db-init`.
 
-### Import errors after docker compose up
+### Import errors after `docker compose up`
 
 **Symptoms**: `ModuleNotFoundError: No module named 'flask'` or
 `ImportError: cannot import name ... from 'adcp...'` when running
@@ -218,7 +218,8 @@ crashes at startup or a deployment fails.
 2. Identify the last known good revision: `uv run alembic current`.
 3. Reset to it: `uv run alembic stamp [good_revision]`.
 4. Create a new migration with the correct `down_revision`.
-5. Test locally, then deploy the migration fix before any code changes.
+5. Test the fix locally.
+6. Deploy the migration fix before any code change.
 
 Never modify a committed migration file — create a new one.
 
@@ -231,7 +232,7 @@ the column's type in the database doesn't match what the ORM model declares.
 Find the failing query in the logs, compare the column's type in the model
 (`src/core/database/models.py`) against the live schema, and write a
 migration that aligns them. The `test_architecture_query_type_safety.py`
-guard catches new queries whose filter types don't match the column
+guard catches queries you add whose filter types don't match the column
 definitions — see [Structural guards](structural-guards.md).
 
 ### PostgreSQL connection failed
@@ -261,9 +262,10 @@ not by hand — a hand-created index exists only in that one database.
 ## Authentication issues
 
 Three entry points authenticate differently. The following decision tree
-routes an authentication failure by where the request came in; the
+routes an authentication failure by where the request came in. The
 [request lifecycle](request-lifecycle.md) document explains how
-`resolve_identity` and the middleware order make this work.
+`_resolve_identity` — one function, private to the boundary — and the
+middleware order make this work.
 
 ```mermaid
 flowchart TD
@@ -290,9 +292,9 @@ echo $GOOGLE_CLIENT_SECRET
 ```
 
 The Google account you log in with must match `SUPER_ADMIN_EMAILS` (or a
-domain in `SUPER_ADMIN_DOMAINS`), or be a tenant user. OAuth setup, including
-the exact redirect URIs per environment, is documented in the
-[security guide](../security.md).
+domain in `SUPER_ADMIN_DOMAINS`), or be a tenant user. The
+[security guide](../security.md) documents OAuth setup, including the exact
+redirect URIs per environment.
 
 ### OAuth callback 404
 
@@ -315,11 +317,11 @@ echo $FLASK_SECRET_KEY
 ```
 
 When `FLASK_SECRET_KEY` is unset, the app generates a random key at startup,
-which invalidates every existing session cookie on each restart.
+which invalidates every session cookie on each restart.
 
 ### Rejected with a valid token
 
-**Symptoms**: the token is correct, but requests are still rejected.
+**Symptoms**: the token is correct, but the server still rejects the request.
 
 ```bash
 # Verify the tenant is active
@@ -327,19 +329,20 @@ docker compose exec postgres psql -U adcp_user adcp -c \
   "SELECT is_active FROM tenants WHERE tenant_id='your_tenant_id';"
 ```
 
-The credential is read from `Authorization: Bearer` only; `x-adcp-auth` is not
-recognized, so a request sending only the alias presents nothing and is
-answered `AUTH_MISSING`. The tenant is identified from the host before the
-token is looked up, and the token is looked up only inside that tenant, so a
-token issued for one tenant is `AUTH_INVALID` on another. The
-[request lifecycle](request-lifecycle.md) document describes the exact order.
+The server reads the credential from `Authorization: Bearer` only. It does not
+recognize `x-adcp-auth`, so a request that sends only the alias presents
+nothing and gets `AUTH_MISSING`. The server identifies the tenant from the
+host before it looks the token up, and it looks the token up only inside that
+tenant. A token issued for one tenant is therefore `AUTH_INVALID` on another.
+The [request lifecycle](request-lifecycle.md) document describes the exact
+order.
 
 ### Invalid token for the MCP API
 
-Get the token from the Admin UI: open the **Advertisers** tab and copy the
-API token. The database holds only a hash of each token (`principals.token_hash`), so a
-lost token cannot be read back; rotate it from the advertiser's row in the admin UI and
-copy the new one when it is shown.
+Get the token from the Admin UI: open the **Advertisers** tab and copy the API
+token. The database holds only a hash of each token
+(`principals.token_hash`), so you cannot read a lost token back. Rotate it
+from the advertiser's row in the Admin UI and copy the token it shows.
 
 ### A2A authentication failed
 
@@ -374,7 +377,7 @@ the MCP wrapper to the `_impl` function.
 
 ### MCP returns an empty products array
 
-Products are tenant-specific and must be created for each tenant:
+Products are tenant-specific: create them for each tenant.
 
 ```bash
 # Check whether products exist for the tenant
@@ -406,10 +409,10 @@ scripts/run-test.sh tests/integration/test_mcp_contract_validation.py
 pre-commit run adcp-contract-tests --all-files
 ```
 
-Schemas extend the `adcp` library types by inheritance, and redeclarations
-are graded against the library parent — see the schema inheritance guard in
-[Structural guards](structural-guards.md) and the repository `CLAUDE.md`
-before changing a request model.
+Schemas extend the `adcp` library types by inheritance, and the schema
+inheritance guard grades redeclarations against the library parent. Read
+that guard's entry in [Structural guards](structural-guards.md) and the
+repository `CLAUDE.md` before you change a request model.
 
 ## A2A protocol issues
 
@@ -426,7 +429,7 @@ curl http://localhost:8000/.well-known/agent-card.json
 docker compose logs adcp-server | grep -i a2a
 ```
 
-### Invalid messageId errors
+### Invalid `messageId` errors
 
 The A2A specification requires string identifiers. Send `id` and `messageId`
 as strings, not numbers:
@@ -456,12 +459,13 @@ services:
 
 ### Activity feed not updating
 
-The activity feed uses Server-Sent Events (SSE). Check the following:
+The activity feed uses Server-Sent Events (SSE). Check the following three
+things:
 
-1. The SSE endpoint responds:
-   `http://localhost:8000/admin/tenant/{tenant_id}/events`.
-2. The `audit_logs` table is being populated.
-3. No browser extension is blocking the SSE connection.
+- The SSE endpoint responds at
+  `http://localhost:8000/admin/tenant/{tenant_id}/events`.
+- Rows arrive in the `audit_logs` table.
+- No browser extension blocks the SSE connection.
 
 ### Slack notifications not arriving
 
@@ -476,6 +480,8 @@ The activity feed uses Server-Sent Events (SSE). Check the following:
    ```
 
 ## GAM integration issues
+
+These entries cover the Google Ad Manager (GAM) adapter.
 
 ### Could not determine client ID from request
 
@@ -514,19 +520,21 @@ authentication.
    docker compose exec adcp-server python scripts/gam_prerequisites_check.py
    ```
 
-**Alternative**: use service account authentication instead, which needs no
-OAuth setup. Configure it in the Admin UI under Service Account Integration.
+**Alternative**: use service account authentication, which needs no OAuth
+setup. In the Admin UI, configure it under Service Account Integration.
 
 ### OAuth compared with service account
+
+The following table compares the two GAM authentication methods.
 
 | Feature | OAuth (refresh token) | Service account |
 |---------|----------------------|-----------------|
 | Setup complexity | Higher — requires OAuth credentials | Lower — upload a JSON key |
 | Token expiration | Tokens can expire | Never expires |
-| Use case | Quick local testing | Production deployments |
+| Use case | Local testing | Production deployments |
 | Security | Tied to a user account | Isolated service identity |
 
-Use a service account for production and OAuth for quick testing only.
+Use a service account for production, and OAuth for local testing only.
 
 ### OAuth token invalid
 
@@ -586,8 +594,8 @@ A sync that still runs long is stuck in GAM API calls — check
 
 ## Outbound request refused
 
-**Symptoms**: an outbound HTTP call fails with an egress error, or a webhook
-or creative-agent URL is rejected at save time.
+**Symptoms**: an outbound HTTP call fails with an egress error, or the app
+rejects a webhook or creative-agent URL at save time.
 
 Every outbound request goes through the single gateway in
 `src/core/security/outbound_http.py`, which refuses private, loopback, and
@@ -595,11 +603,11 @@ metadata addresses. This is intended behavior, not a network fault — don't
 add a bypass or a hand-rolled IP check at the call site.
 [Outbound egress](../security/outbound-egress.md) documents what the gateway
 refuses, what it never refuses, how tests exercise egress through the TLS
-terminator, and how to add a new outbound call.
+terminator, and how to add an outbound call.
 
 ## Testing and quality-gate issues
 
-### A make quality run fails
+### A `make quality` run fails
 
 `make quality` runs formatting, linting, the egress import ban, type
 checking, ratchet checks, and the unit suite in that order. The following
@@ -621,12 +629,12 @@ flowchart TD
 ### A structural guard fails
 
 A failing `tests/unit/test_architecture_*.py` test means your change violates
-an enforced architecture invariant — a new raw `select()` outside a
-repository, a transport import in an `_impl` function, a weakened schema
-redeclaration. The fix is to change your code to satisfy the invariant, not
-to grow the guard's allowlist: allowlists only shrink.
+an enforced architecture invariant: a raw `select()` outside a repository, a
+transport import in an `_impl` function, a weakened schema redeclaration. Fix
+it by changing your code to satisfy the invariant, not by growing the guard's
+allowlist — allowlists only shrink.
 [Structural guards](structural-guards.md) documents every guard, what it
-catches, and why it exists;
+catches, and why it exists.
 [Architecture principles](architecture-principles.md) and the
 [patterns reference](patterns-reference.md) explain the layering rules the
 guards enforce.
@@ -651,9 +659,9 @@ real database with:
 scripts/run-test.sh tests/integration/test_foo.py -x
 ```
 
-For the full containerized suite, its databases, and its failure modes, see
-[End-to-end testing](e2e-testing.md) — in particular the
-"Failure modes and what they mean" section before you re-run anything.
+For the full containerized suite, its databases, and its failure modes, read
+[End-to-end testing](e2e-testing.md). Read its "Failure modes and what they
+mean" section before you re-run anything.
 
 ### Async test failures
 
@@ -661,7 +669,7 @@ Mark async tests with `@pytest.mark.asyncio` and mock async dependencies with
 `AsyncMock`. Use `async with` for async context managers and `await` every
 async call — a bare coroutine assertion passes vacuously.
 
-### AttributeError on model fields
+### `AttributeError` on model fields
 
 **Symptoms**: `AttributeError: 'Creative' object has no attribute
 'format_id'` — often after a schema change, or passing locally but failing
@@ -733,8 +741,8 @@ docker compose logs -f adcp-server
 docker compose logs db-init
 ```
 
-Every operation is also written to the `audit_logs` table — operation type,
-timestamp, principal and tenant IDs, success or failure, and security
+The app also writes every operation to the `audit_logs` table — operation
+type, timestamp, principal and tenant IDs, success or failure, and security
 violations. The Admin UI Operations dashboard reads from it.
 
 Test runs persist JSON reports in `test-results/<ddmmyy_HHmm>/` — read those
@@ -747,7 +755,7 @@ Check these sources in order:
 1. The `/docs` directory — start with the
    [architecture principles](architecture-principles.md) and the
    [request lifecycle](request-lifecycle.md).
-2. Existing GitHub issues.
+2. The GitHub issue tracker.
 3. The tests — `tests/` is the largest set of working examples.
 
 When reporting an issue, include the full stack trace, your environment

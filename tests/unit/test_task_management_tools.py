@@ -254,7 +254,7 @@ class TestGetTaskSpecFlags:
 
     These are behaviour tests, not declaration tests, and there is deliberately no
     declaration test to point at: the DTO is the SDK's model minus a declared omission, so
-    what it declares is inherited rather than compared (docs/design/one-tool-registry.md).
+    what it declares is inherited rather than compared (docs/development/building-tools.md).
     Declaring a flag without honouring it is the accept-and-ignore this class exists to
     prevent, and only a behaviour test can see it.
     """
