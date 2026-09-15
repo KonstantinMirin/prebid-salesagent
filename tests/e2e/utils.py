@@ -10,6 +10,7 @@ from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 from sqlalchemy import select
 
+from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN
 from tests.helpers.credentials import credential_headers
 
 
@@ -17,7 +18,7 @@ def make_mcp_client(
     live_server: dict,
     *,
     token: str | None = None,
-    tenant: str | None = "ci-test",
+    tenant: str | None = CI_TEST_SUBDOMAIN,
     dry_run: bool = False,
     session_id: str | None = None,
     host: str | None = None,
@@ -110,7 +111,7 @@ def live_db_env(live_server: dict):
         engine.dispose()
 
 
-def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = "ci-test", **behavior):
+def set_live_adapter_behavior(live_server: dict, *, tenant_subdomain: str = CI_TEST_SUBDOMAIN, **behavior):
     """Upsert adapter test-behavior on the live e2e DB via the shared factory helper.
 
     Single e2e entry point for what used to be five copy-pasted psycopg2

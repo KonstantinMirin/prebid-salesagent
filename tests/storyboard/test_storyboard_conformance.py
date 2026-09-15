@@ -41,6 +41,7 @@ from typing import Any
 import pytest
 
 from scripts.audit import ledger, storyboard_spec
+from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN
 from tests.storyboard import collected
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -113,6 +114,35 @@ _DEFAULT_AGENT_URLS: dict[str, str] = {
 _AUTH_TOKEN_ENV = "STORYBOARD_AUTH_TOKEN"
 _COMPLIANCE_DIR_ENV = "STORYBOARD_COMPLIANCE_DIR"
 _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
+
+# WHICH SELLER the credential belongs to, as the `-H KEY=VALUE` the runner sends on every
+# request. Without it the credential is rejected: a token is only ever verified INSIDE the
+# tenant the request addresses, and nothing at this origin addresses one. `_detect_tenant`
+# (src/core/resolved_identity.py) tries the Host as a virtual_host and then its first label
+# as a subdomain; the stack seeds neither a virtual_host nor a `storyboard` subdomain
+# (scripts/setup/init_database_ci.py seeds `ci-test` and `iso-test`), and the
+# localhost-to-"default" fallback does not apply to a dotted alias. So no tenant was
+# identified, the token was looked up in none, and every credentialed step answered
+# AUTH_INVALID -> 401: 26 checks on run innet_140926_2318. (The A2A axis reports the same 26
+# steps failing one layer earlier, in the runner's own SSRF guard, so it is blocked on
+# something else as well; this is the whole of the MCP axis's credential failure.)
+#
+# The value is the seeded SUBDOMAIN, not the tenant_id: the seeder mints the id as a fresh
+# uuid4 per database, so the subdomain is the only stable spelling, and `_detect_tenant`
+# tries the hint as a subdomain before taking it as an id. It is IMPORTED from the seeding
+# script rather than spelled again here -- that script is what makes the value true in the
+# database, and a second literal of it is a silent 401 the day either one moves. It names
+# the tenant whose principal holds `ci-test-token` above, the same tenant every other
+# in-network suite addresses (tests/e2e/utils.py, through tests/helpers/credentials.py).
+#
+# NOT a change of origin, and not a second seeded tenant. The pinned runner SDK carries this
+# for exactly this case: `-H, --header K=V  Extra HTTP header on every request ... Common
+# use: -H x-adcp-tenant=<id> for tenant routing behind a reverse proxy` (bin/adcp.js), and
+# its storyboard options type documents the header as "Forwarded into `AgentConfig.headers`,
+# so MCP and A2A transports both see them" — one spelling, both graded axes, one origin. It
+# softens no graded check: the pinned compliance tree says nothing about tenant routing, so
+# no storyboard step grades how a buyer selects a seller.
+_TENANT_ROUTING_HEADER = f"x-adcp-tenant={CI_TEST_SUBDOMAIN}"
 
 # Where each lives INSIDE the extracted bundle. The bundle root comes from
 # storyboard_spec.adcp_home(); only the leaf differs, so neither the version nor
@@ -442,6 +472,8 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         protocol,
         "--auth",
         auth_token,
+        "-H",
+        _TENANT_ROUTING_HEADER,
         "--allow-http",
         "--compliance-version",
         storyboard_spec.pinned_version(_REPO_ROOT),

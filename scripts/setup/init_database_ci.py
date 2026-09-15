@@ -13,6 +13,16 @@ sys.path.insert(0, str(project_root))
 #: the E2E builders send this id and this script is what makes it resolvable.
 CI_TEST_ACCOUNT_ID = "ci-test-account"
 
+#: The subdomain the CI tenant is reachable at, and the value a caller puts in
+#: ``x-adcp-tenant`` to address it. Owned HERE, and imported by every test that names it
+#: (tests/e2e/utils.py, tests/integration/conftest_ci_seed.py,
+#: tests/storyboard/test_storyboard_conformance.py), because this script is what makes it
+#: true in the database: the tenant_id is a fresh uuid4 per seed, so the subdomain is the
+#: only stable spelling of "the CI tenant" and a second literal of it is a silent 401 the
+#: day one of them changes. The dependency runs tests -> scripts only; a script cannot
+#: import from tests/ (see scripts/ci/migration_helpers.py).
+CI_TEST_SUBDOMAIN = "ci-test"
+
 
 def init_db_ci():
     """Initialize database with migrations only for CI testing."""
@@ -51,7 +61,7 @@ def init_db_ci():
         with get_db_session() as session:
             # First, check if CI test tenant already exists
             # Note: In Docker Compose, both adcp-server and admin-ui may run this simultaneously
-            stmt = select(Tenant).filter_by(subdomain="ci-test")
+            stmt = select(Tenant).filter_by(subdomain=CI_TEST_SUBDOMAIN)
             existing_tenant = session.scalars(stmt).first()
 
             if existing_tenant:
@@ -136,7 +146,7 @@ def init_db_ci():
                 tenant = Tenant(
                     tenant_id=tenant_id,
                     name="CI Test Tenant",
-                    subdomain="ci-test",
+                    subdomain=CI_TEST_SUBDOMAIN,
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=True,
@@ -194,7 +204,7 @@ def init_db_ci():
                     # Handle race: another container created tenant already
                     session.rollback()
                     print(f"⚠️  Tenant already exists (race condition): {e}")
-                    stmt_tenant = select(Tenant).filter_by(subdomain="ci-test")
+                    stmt_tenant = select(Tenant).filter_by(subdomain=CI_TEST_SUBDOMAIN)
                     existing_tenant = session.scalars(stmt_tenant).first()
                     if existing_tenant:
                         tenant_id = existing_tenant.tenant_id

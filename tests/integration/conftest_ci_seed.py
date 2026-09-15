@@ -27,12 +27,18 @@ from dataclasses import dataclass
 
 import pytest
 
+from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN
+
 #: The credential the storyboard runner, the e2e clients and the CLI examples all
 #: present. Kept identical to ``scripts/setup/init_database_ci.py`` so the Docker stack
 #: and a local integration run answer the same token; the two seeds have different
 #: mechanisms but must not have different identities.
 CI_TEST_TOKEN = "ci-test-token"
-CI_TEST_SUBDOMAIN = "ci-test"
+
+#: The subdomain is NOT restated here: ``CI_TEST_SUBDOMAIN`` is imported from the seeding
+#: script above, which owns it, so "the CI tenant" has one spelling across the Docker
+#: stack, the e2e clients and the storyboard runner. (The token is still a second literal
+#: of the script's own; the same argument applies to it.)
 
 
 @dataclass(frozen=True)
