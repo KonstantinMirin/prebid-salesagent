@@ -97,7 +97,10 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "login"),
     ("src/admin/blueprints/auth.py", "logout"),
     ("src/admin/blueprints/auth.py", "tenant_login"),
-    ("src/admin/blueprints/auth.py", "test_auth"),
+    # Moved file, same violation: test_auth left auth.py for its own module, so the
+    # entry follows the code rather than being deleted as "fixed". The raw select is
+    # still there (src/admin/blueprints/test_auth.py:47).
+    ("src/admin/blueprints/test_auth.py", "test_auth"),
     ("src/admin/blueprints/authorized_properties.py", "_construct_agent_url"),
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),

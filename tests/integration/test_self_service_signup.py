@@ -21,6 +21,7 @@ from src.core.credentials import hash_token
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
 from src.core.database.repositories.principal import PrincipalRepository
+from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -409,9 +410,11 @@ class TestSelfServiceSignupFlow:
         revealed = found[0]
 
         # Genuine credential: the stored row keeps only a hash, so this resolves only if
-        # the revealed value is the one that authenticates.
-        with get_db_session() as db_session:
-            principal = PrincipalRepository(db_session, tenant_id).find_by_token_hash(hash_token(revealed))
+        # the revealed value is the one that authenticates. Through the harness's own
+        # session rather than get_db_session() in a test body — the surrounding file is
+        # allowlisted for that, and a new test does not inherit the exemption.
+        with IntegrationEnv() as env:
+            principal = PrincipalRepository(env.get_session(), tenant_id).find_by_token_hash(hash_token(revealed))
             assert principal is not None, "the revealed token does not hash to any stored principal"
             assert principal.principal_id == f"{tenant_id}_default"
 
@@ -428,12 +431,13 @@ class TestSelfServiceSignupFlow:
         for name, value in response.headers.items():
             assert revealed not in value, f"the plaintext token leaked in the {name} header"
 
-        # Cleanup
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        # Cleanup through the harness's session, for the same reason as the read-back.
+        with IntegrationEnv() as env:
+            session = env.get_session()
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
             if tenant:
-                db_session.delete(tenant)
-                db_session.commit()
+                session.delete(tenant)
+                session.commit()
 
     def test_session_cleanup_after_provisioning(self, integration_db, client):
         """Test that signup session flags are cleared after provisioning."""
