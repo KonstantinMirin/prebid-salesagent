@@ -28,7 +28,7 @@ from src.core.exceptions import AdCPCreativeRejectedError
 
 @pytest.fixture
 def manager() -> GAMCreativesManager:
-    return GAMCreativesManager(client_manager=None, advertiser_id="adv-1", dry_run=True)
+    return GAMCreativesManager(client_manager=None, advertiser_id="adv-1")
 
 
 class TestCreativeAssetRejectionIsTyped:

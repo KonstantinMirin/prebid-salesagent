@@ -97,7 +97,6 @@ def _build_gam_adapter(mock_principal):
             network_code="123456",
             advertiser_id="789",
             trafficker_id="456",
-            dry_run=False,
             tenant_id="tenant_123",
         )
 
@@ -157,7 +156,6 @@ class TestGAMManualApprovalPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
@@ -209,7 +207,6 @@ class TestGAMManualApprovalPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
@@ -263,7 +260,6 @@ class TestGAMActivationWorkflowPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 
@@ -353,7 +349,6 @@ class TestGAMSuccessPath:
                 network_code="123456",
                 advertiser_id="789",
                 trafficker_id="456",
-                dry_run=False,
                 tenant_id="tenant_123",
             )
 

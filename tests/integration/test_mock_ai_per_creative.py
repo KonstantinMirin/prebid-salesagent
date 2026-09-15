@@ -46,7 +46,6 @@ def mock_adapter(integration_db):
         adapter = MockAdServer(
             principal=principal,
             config=config,
-            dry_run=False,
             tenant_id=tenant.tenant_id,
         )
 

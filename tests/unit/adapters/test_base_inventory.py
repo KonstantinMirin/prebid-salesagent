@@ -55,7 +55,6 @@ class TestBaseInventoryManager:
         return ConcreteInventoryManager(
             client=None,
             identifier="test_network",
-            dry_run=True,
         )
 
     def test_init(self, manager):
@@ -164,7 +163,6 @@ class TestBaseInventoryManager:
         manager = ConcreteInventoryManager(
             client=None,
             identifier="test",
-            dry_run=True,
             log_func=capture_log,
         )
 
@@ -176,7 +174,6 @@ class TestBaseInventoryManager:
         manager = ConcreteInventoryManager(
             client=None,
             identifier="test",
-            dry_run=True,
             cache_timeout=timedelta(minutes=5),
         )
 

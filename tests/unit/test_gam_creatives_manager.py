@@ -14,7 +14,7 @@ def test_1x1_placeholder_accepts_any_creative_size_native_template():
     """1x1 placeholder with template_id should accept any creative size."""
     # Setup manager
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     # Mock asset with native creative dimensions
     asset = {
@@ -44,7 +44,7 @@ def test_1x1_placeholder_accepts_any_creative_size_native_template():
 def test_1x1_placeholder_accepts_any_creative_size_programmatic():
     """1x1 placeholder without template_id should accept any creative size (programmatic)."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     # Mock asset with standard display dimensions
     asset = {
@@ -74,7 +74,7 @@ def test_1x1_placeholder_accepts_any_creative_size_programmatic():
 def test_standard_placeholder_requires_exact_match():
     """Non-1x1 placeholders should require exact dimension match."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     # Mock asset with wrong dimensions
     asset = {
@@ -106,7 +106,7 @@ def test_standard_placeholder_requires_exact_match():
 def test_standard_placeholder_accepts_exact_match():
     """Non-1x1 placeholders should accept exact dimension match."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     # Mock asset with correct dimensions
     asset = {
@@ -136,7 +136,7 @@ def test_standard_placeholder_accepts_exact_match():
 def test_1x1_takes_priority_over_other_sizes():
     """When multiple placeholders exist, 1x1 should match first."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     # Mock asset that doesn't match 300x250 but should match 1x1
     asset = {
@@ -207,7 +207,7 @@ def test_extract_product_id_from_package_empty_string():
 def test_line_item_matching_exact_match():
     """Line item name exactly equals product_id (default template)."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     # Asset with package assignment
     asset = {
@@ -236,7 +236,7 @@ def test_line_item_matching_exact_match():
 def test_line_item_matching_ends_with_product_id():
     """Line item name ends with ' - {product_id}' (custom template)."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     asset = {
         "creative_id": "creative_456",
@@ -260,7 +260,7 @@ def test_line_item_matching_ends_with_product_id():
 def test_line_item_matching_starts_with_product_id():
     """Line item name starts with '{product_id} ' (alternative template)."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     asset = {
         "creative_id": "creative_789",
@@ -284,7 +284,7 @@ def test_line_item_matching_starts_with_product_id():
 def test_line_item_matching_no_match_logs_warning():
     """When no line item matches, a warning should be logged."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     asset = {
         "creative_id": "creative_999",
@@ -316,7 +316,7 @@ def test_line_item_matching_no_match_logs_warning():
 def test_line_item_matching_multiple_packages():
     """Test matching with multiple package assignments."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     asset = {
         "creative_id": "creative_multi",
@@ -344,7 +344,7 @@ def test_line_item_matching_multiple_packages():
 def test_line_item_matching_priority_ends_with_first():
     """When multiple strategies could match, 'ends with' should be checked first."""
     client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123", dry_run=True)
+    manager = GAMCreativesManager(client_manager, "advertiser_123")
 
     asset = {
         "creative_id": "creative_priority",

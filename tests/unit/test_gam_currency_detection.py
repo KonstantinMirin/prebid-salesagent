@@ -25,7 +25,6 @@ class TestGAMOrderCurrency:
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=True,  # Use dry-run to avoid actual API calls
         )
         return manager
 
@@ -57,7 +56,6 @@ class TestGAMOrderCurrency:
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=False,
         )
 
         order_id = manager.create_order(
@@ -90,7 +88,6 @@ class TestGAMOrderCurrency:
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=False,
         )
 
         currencies_to_test = ["USD", "EUR", "GBP", "JPY", "CAD"]

@@ -52,7 +52,6 @@ class TestAdapterTenantIdValidation:
                 config={"service_account_json": "{}"},
                 principal=_make_principal(),
                 network_code="12345",
-                dry_run=True,
                 tenant_id=None,
             )
 
@@ -65,7 +64,6 @@ class TestAdapterTenantIdValidation:
                 config={"service_account_json": "{}"},
                 principal=_make_principal(),
                 network_code="12345",
-                dry_run=True,
                 tenant_id="",
             )
 
@@ -99,7 +97,6 @@ class TestAdapterTenantIdValidation:
             config={"service_account_json": "{}"},
             principal=_make_principal(),
             network_code="12345",
-            dry_run=True,
             tenant_id="valid_tenant",
         )
         assert adapter.tenant_id == "valid_tenant"

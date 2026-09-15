@@ -126,7 +126,6 @@ def _kevel(origin: LocalOrigin):
     adapter = Kevel(
         config={"network_id": "456", "api_key": "test-key"},
         principal=_principal("kevel"),
-        dry_run=False,
         tenant_id="test_tenant",
     )
     real_headers = require_vendor(adapter._vendor, vendor="Kevel").headers
@@ -138,14 +137,14 @@ def _dry_run_kevel():
     """A dry-run Kevel adapter — constructed with no credentials at all."""
     from src.adapters.kevel import Kevel
 
-    return Kevel(config={}, principal=_principal("kevel"), dry_run=True, tenant_id="test_tenant")
+    return Kevel(config={}, principal=_principal("kevel"), tenant_id="test_tenant")
 
 
 def _dry_run_triton():
     """A dry-run Triton adapter — constructed with no credentials at all."""
     from src.adapters.triton_digital import TritonDigital
 
-    return TritonDigital(config={}, principal=_principal("triton"), dry_run=True, tenant_id="test_tenant")
+    return TritonDigital(config={}, principal=_principal("triton"), tenant_id="test_tenant")
 
 
 def _triton(origin: LocalOrigin):
@@ -154,7 +153,6 @@ def _triton(origin: LocalOrigin):
     return TritonDigital(
         config={"base_url": origin.base_url, "auth_token": "test-token"},
         principal=_principal("triton"),
-        dry_run=False,
         tenant_id="test_tenant",
     )
 
@@ -231,7 +229,7 @@ def _mock_ad_server(origin: LocalOrigin):
             }
         },
     )
-    return MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
+    return MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
 
 
 def _broadstreet(origin: LocalOrigin):

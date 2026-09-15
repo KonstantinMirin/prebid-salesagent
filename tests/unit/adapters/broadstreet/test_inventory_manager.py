@@ -64,7 +64,6 @@ class TestBroadstreetInventoryManager:
         return BroadstreetInventoryManager(
             client=None,
             network_id="net_123",
-            dry_run=True,
         )
 
     def test_fetch_zones_dry_run(self, manager):
@@ -220,7 +219,6 @@ class TestBroadstreetInventoryManager:
         manager = BroadstreetInventoryManager(
             client=None,
             network_id="net_123",
-            dry_run=False,  # Not dry run but no client
         )
 
         zones = manager.fetch_zones()
@@ -236,7 +234,6 @@ class TestBaseInventoryManagerInterface:
         return BroadstreetInventoryManager(
             client=None,
             network_id="net_123",
-            dry_run=True,
         )
 
     def test_discover_inventory(self, manager):
@@ -313,7 +310,6 @@ class TestInventoryManagerWithMockedClient:
         manager = BroadstreetInventoryManager(
             client=mock_client,
             network_id="net_123",
-            dry_run=False,
         )
 
         zones = manager.fetch_zones()
@@ -334,7 +330,6 @@ class TestInventoryManagerWithMockedClient:
         manager = BroadstreetInventoryManager(
             client=mock_client,
             network_id="net_123",
-            dry_run=False,
         )
 
         zones = manager.fetch_zones()

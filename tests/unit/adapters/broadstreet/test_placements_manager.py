@@ -62,7 +62,6 @@ class TestBroadstreetPlacementManager:
         return BroadstreetPlacementManager(
             client=None,
             advertiser_id="adv_123",
-            dry_run=True,
         )
 
     def test_register_package(self, manager):

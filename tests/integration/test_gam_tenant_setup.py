@@ -258,7 +258,6 @@ class TestGAMTenantSetup:
             adapter = GoogleAdManager(
                 config=config,
                 principal=principal,
-                dry_run=True,  # Use dry_run to avoid actual API calls
             )
 
         # Verify the error mentions the missing parameters

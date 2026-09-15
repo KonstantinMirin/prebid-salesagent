@@ -266,7 +266,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -329,7 +328,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 
@@ -389,7 +387,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 
@@ -448,7 +445,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 
@@ -511,7 +507,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -581,7 +576,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -649,7 +643,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -721,7 +714,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,  # REAL GAM CALLS
             tenant_id=self.test_tenant_id,
         )
 
@@ -812,7 +804,6 @@ class GAMAutomationTester:
             network_code=self.network_code,
             advertiser_id=self.advertiser_id,
             trafficker_id=self.trafficker_id,
-            dry_run=False,
             tenant_id=self.test_tenant_id,
         )
 

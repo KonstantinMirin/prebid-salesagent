@@ -77,7 +77,6 @@ class TestKevelAdapterPackages:
         adapter = Kevel(
             config=config,
             principal=mock_principal,
-            dry_run=True,  # Use dry_run to avoid API calls
             tenant_id="tenant_123",
         )
 
@@ -119,7 +118,6 @@ class TestKevelAdapterPackages:
         adapter = Kevel(
             config=config,
             principal=mock_principal,
-            dry_run=False,  # Live mode
             tenant_id="tenant_123",
         )
 
@@ -176,7 +174,6 @@ class TestTritonAdapterPackages:
         adapter = TritonDigital(
             config=config,
             principal=mock_principal,
-            dry_run=True,  # Use dry_run to avoid API calls
             tenant_id="tenant_123",
         )
 
@@ -218,7 +215,6 @@ class TestTritonAdapterPackages:
         adapter = TritonDigital(
             config=config,
             principal=mock_principal,
-            dry_run=False,  # Live mode
             tenant_id="tenant_123",
         )
 

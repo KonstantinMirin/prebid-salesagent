@@ -170,7 +170,6 @@ def _make_adapter_instance() -> Any:
     return MockAdServer(
         config={"enabled": True},
         principal=principal,
-        dry_run=False,
         tenant_id="test-tenant",
     )
 

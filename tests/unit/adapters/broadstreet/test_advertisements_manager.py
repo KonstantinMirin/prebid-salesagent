@@ -93,7 +93,6 @@ class TestBroadstreetAdvertisementManager:
         return BroadstreetAdvertisementManager(
             client=None,
             advertiser_id="adv_123",
-            dry_run=True,
         )
 
     def test_get_ad_type_from_format(self, manager):
@@ -412,7 +411,6 @@ class TestTemplateAdvertisements:
         return BroadstreetAdvertisementManager(
             client=None,
             advertiser_id="test_advertiser",
-            dry_run=True,
             log_func=lambda msg: None,
         )
 

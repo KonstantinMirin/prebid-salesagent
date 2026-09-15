@@ -373,7 +373,6 @@ class TestTargetingNameOnLICA:
         manager = GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="123",
-            dry_run=True,
         )
 
         # Test asset with placement_ids
@@ -411,7 +410,6 @@ class TestTargetingNameOnLICA:
         manager = GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="123",
-            dry_run=True,
         )
 
         # Asset without placement_ids
@@ -441,7 +439,6 @@ class TestTargetingNameOnLICA:
         manager = GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="123",
-            dry_run=True,
         )
 
         # Asset with multiple placement_ids

@@ -115,7 +115,6 @@ class TestCreativeRotationLogic:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=True,  # Use dry run for unit tests
         )
 
     def test_all_default_weights_keeps_even_rotation(self, creatives_manager, caplog):
@@ -225,7 +224,6 @@ class TestLICACreationWithWeights:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=True,
         )
 
     def test_lica_dry_run_logs_weight(self, creatives_manager, caplog):
@@ -291,7 +289,6 @@ class TestLICACreationActualPayload:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=False,
         )
 
     def test_lica_payload_includes_weight_when_non_default(self, creatives_manager_non_dry_run, mock_lica_service):
@@ -367,7 +364,6 @@ class TestBackwardCompatibility:
         return GAMCreativesManager(
             client_manager=mock_client_manager,
             advertiser_id="12345",
-            dry_run=True,
         )
 
     def test_string_assignments_work(self, creatives_manager, caplog):

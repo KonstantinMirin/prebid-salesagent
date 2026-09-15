@@ -41,7 +41,6 @@ class TestGetAdvertisers:
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=False,
         )
         return manager
 
@@ -214,7 +213,6 @@ class TestGetAdvertisers:
             client_manager=mock_client_manager,
             advertiser_id="test_advertiser",
             trafficker_id="test_trafficker",
-            dry_run=True,
         )
 
         # Call method (should not call GAM API)

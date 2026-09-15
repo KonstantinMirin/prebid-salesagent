@@ -25,7 +25,7 @@ class TestInventoryAdapterRestrictions:
         )
 
         # Create mock adapter
-        adapter = MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
+        adapter = MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
 
         # Get available inventory
         import asyncio
@@ -64,7 +64,7 @@ class TestInventoryAdapterRestrictions:
             name="Test Advertiser",
             platform_mappings={},
         )
-        adapter = MockAdServer(config={}, principal=principal, dry_run=False, tenant_id="test_tenant")
+        adapter = MockAdServer(config={}, principal=principal, tenant_id="test_tenant")
 
         start_time = datetime.now(UTC) + timedelta(days=1)
         end_time = start_time + timedelta(days=7)

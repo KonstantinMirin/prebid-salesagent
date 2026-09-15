@@ -38,7 +38,6 @@ class TestBroadstreetAdapterInit:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -52,7 +51,6 @@ class TestBroadstreetAdapterInit:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -69,7 +67,6 @@ class TestBroadstreetAdapterInit:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -88,7 +85,7 @@ class TestBroadstreetAdapterInit:
         config = {"network_id": "net_123", "api_key": "test_key"}
 
         with pytest.raises(AdCPConfigurationError) as exc_info:
-            BroadstreetAdapter(config=config, principal=principal, dry_run=False, tenant_id="test_tenant")
+            BroadstreetAdapter(config=config, principal=principal, tenant_id="test_tenant")
 
 
 class TestBroadstreetAdapterCapabilities:
@@ -99,7 +96,6 @@ class TestBroadstreetAdapterCapabilities:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -113,7 +109,6 @@ class TestBroadstreetAdapterCapabilities:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -129,7 +124,6 @@ class TestBroadstreetAdapterCapabilities:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -144,7 +138,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -184,7 +177,6 @@ class TestBroadstreetAdapterCreateMediaBuy:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -224,7 +216,6 @@ class TestBroadstreetAdapterCreatives:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -252,7 +243,6 @@ class TestBroadstreetAdapterCreatives:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -299,7 +289,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -325,7 +314,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -351,7 +339,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -373,7 +360,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -399,7 +385,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -420,7 +405,6 @@ class TestBroadstreetAdapterUpdates:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -458,7 +442,6 @@ class TestBroadstreetAdapterBulkUpdateRaiseSites:
             adapter = BroadstreetAdapter(
                 config=mock_config,
                 principal=mock_principal,
-                dry_run=False,
                 tenant_id="test_tenant",
             )
         return adapter
@@ -512,7 +495,6 @@ class TestBroadstreetAdapterDelivery:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -544,7 +526,6 @@ class TestBroadstreetAdapterInventory:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -563,7 +544,6 @@ class TestBroadstreetAdapterCreativeFormats:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -588,7 +568,6 @@ class TestBroadstreetAdapterCreativeFormats:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 
@@ -607,7 +586,6 @@ class TestBroadstreetAdapterCreativeFormats:
         adapter = BroadstreetAdapter(
             config=mock_config,
             principal=mock_principal,
-            dry_run=True,
             tenant_id="test_tenant",
         )
 

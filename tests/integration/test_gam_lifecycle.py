@@ -80,7 +80,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             assert regular_adapter._is_admin_principal() is False
@@ -92,7 +91,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             assert gam_admin_adapter._is_admin_principal() is True
@@ -104,7 +102,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["is_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             assert is_admin_adapter._is_admin_principal() is True
@@ -125,7 +122,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
 
@@ -161,7 +157,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["gam_admin"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
             with pytest.raises(AdCPCapabilityNotSupportedError):
@@ -217,7 +212,6 @@ class TestGAMOrderLifecycleIntegration:
                 network_code=gam_config["network_code"],
                 advertiser_id=test_principals["regular"].platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=gam_config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test",
             )
 

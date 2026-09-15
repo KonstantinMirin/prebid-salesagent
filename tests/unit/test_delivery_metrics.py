@@ -34,7 +34,6 @@ def gam_adapter(mock_principal):
         network_code="123456",
         advertiser_id="789",
         trafficker_id="101112",
-        dry_run=True,  # Use dry-run mode for testing
         tenant_id="test_tenant",
     )
 
@@ -121,7 +120,6 @@ def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class,
             network_code="123456",
             advertiser_id="789",
             trafficker_id="101112",
-            dry_run=False,
             tenant_id="test_tenant",
         )
         adapter.client = mock_client

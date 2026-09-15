@@ -44,7 +44,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -61,7 +60,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -97,7 +95,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -143,7 +140,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -183,7 +179,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -220,7 +215,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -265,7 +259,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -297,7 +290,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -327,7 +319,6 @@ class TestGAMValidationIntegration:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -373,7 +364,6 @@ class TestGAMValidationIntegration:
                     network_code=self.config["network_code"],
                     advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                     trafficker_id=self.config["trafficker_id"],
-                    dry_run=True,
                     tenant_id="test_tenant",
                 )
 
@@ -417,7 +407,6 @@ class TestGAMValidationPerformance:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 
@@ -462,7 +451,6 @@ class TestGAMValidationPerformance:
                 network_code=self.config["network_code"],
                 advertiser_id=self.principal.platform_mappings["google_ad_manager"]["advertiser_id"],
                 trafficker_id=self.config["trafficker_id"],
-                dry_run=True,
                 tenant_id="test_tenant",
             )
 

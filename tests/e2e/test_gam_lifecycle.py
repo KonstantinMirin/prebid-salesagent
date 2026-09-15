@@ -360,7 +360,6 @@ def gam_adapter(gam_lifecycle_db, gam_service_account_json):
         principal=principal,
         network_code=GAM_TEST_NETWORK_CODE,
         advertiser_id=GAM_TEST_ADVERTISER_ID,
-        dry_run=False,
         tenant_id=GAM_LIFECYCLE_TENANT_ID,
     )
 

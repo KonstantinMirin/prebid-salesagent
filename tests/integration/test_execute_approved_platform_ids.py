@@ -467,7 +467,6 @@ class TestExecuteApprovedEnrichesSellerConcept:
                 network_code=config["network_code"],
                 advertiser_id="123",
                 trafficker_id=config["trafficker_id"],
-                dry_run=True,
                 tenant_id=tenant_id,
             )
         # "test_package" is a placeholder the dry-run GAM manager knows, so the producer's

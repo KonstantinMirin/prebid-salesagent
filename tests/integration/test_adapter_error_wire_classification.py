@@ -140,7 +140,6 @@ class TestRawFaultIsClassified:
             client_manager=client_manager,
             advertiser_id="12345",
             trafficker_id="67890",
-            dry_run=False,
         )
 
         with pytest.raises(expected_class):
