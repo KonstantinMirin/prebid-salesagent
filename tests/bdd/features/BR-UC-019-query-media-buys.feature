@@ -1280,40 +1280,90 @@ Feature: BR-UC-019 Query Media Buys
     # of THIS scenario (the logging and "suggestion" obligations it also states) is a
     # separate graduation, deliberately out of zkde1.6's scope.
 
-  @T-UC-019-inv-294-5 @invariant @BR-RULE-294 @schema-v3.1
+  # ISOLATION IS THE OBLIGATION, and it was ungraded. The degradation of ONE corrupt
+  # package_config cell is graded by @T-UC-019-blob-degraded-package-field below, but
+  # that outline seeds one buy with one package, so neither half of the isolation
+  # claim — a sibling PACKAGE in the same buy (INV-5), a sibling BUY in the same
+  # listing (INV-6) — was covered anywhere. Production could start failing a whole
+  # listing over one corrupt sibling and nothing would go red.
+  #
+  # CODE CORRECTED: these two scenarios demanded a `TARGETING_REHYDRATION_FAILED`
+  # advisory. There is no such code. Pinned
+  # `adcp/_schemas/3.1/enums/error-code.json` declares 92 codes and that is not one
+  # of them, and `Error.code` is typed `ErrorCodeT` (src/core/schemas/_base.py:225),
+  # so an advisory carrying it is unconstructible rather than merely non-standard.
+  # The code for a corrupt cell in the SELLER's own store is CONFIGURATION_ERROR,
+  # recovery "terminal" — settled, with its full reasoning, in the
+  # @T-UC-019-blob-degraded-package-field comment block below, which these scenarios
+  # now share a Then sentence with rather than restating. What survives of the
+  # original sentence is its quantifier: EXACTLY ONE advisory in the whole document,
+  # which is the half that grades "isolation" as opposed to "an advisory exists".
+  #
+  # GEO SPELLING CORRECTED: the valid sibling was spelled `{geo:["US"]}`. Pinned
+  # `core/targeting.json` declares no `geo` field at all — the v3 spelling is
+  # `geo_countries` (array of ISO 3166-1 alpha-2) — and `Targeting` reshapes nothing
+  # on the way in, so the flat spelling raises extra_forbidden in dev/CI while
+  # rehydrating the SIBLING and fails the whole listing: the exact outcome these
+  # scenarios forbid. Same correction as `_VALID_BLOB_SIBLINGS`.
+  @T-UC-019-inv-294-5 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-5 holds - one corrupted package does not break sibling packages in the same buy
     Given the principal "buyer-001" owns media buy "mb-001" with packages "pkg-001" and "pkg-002"
-    And package "pkg-001" persisted targeting_overlay is corrupted (will raise TypeError)
-    And package "pkg-002" persisted targeting_overlay is a valid dict {geo:["US"]}
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
+    And package "pkg-002" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And the package "pkg-001" targeting_overlay should be null
-    And the package "pkg-002" targeting_overlay should be a Targeting object with geo ["US"]
-    And response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("mb-001", "pkg-001")
+    And the response should include media buy "mb-001" with package "pkg-001"
+    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
+    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
     # BR-RULE-294 INV-5: per-package failure isolation
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
-  @T-UC-019-inv-294-6 @invariant @BR-RULE-294 @schema-v3.1
+  @T-UC-019-inv-294-6 @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario: INV-6 holds - one buy with a corrupted package does not break sibling buys
-    Given the principal "buyer-001" owns media buys "mb-001" and "mb-002"
-    And media buy "mb-001" package "pkg-001" has corrupted targeting_overlay (will raise TypeError)
-    And media buy "mb-002" has valid persisted state
+    # Two buys seeded one Given each, rather than through a two-buy sentence of its
+    # own: the per-buy seeder already exists and already registers the package, so
+    # "mb-002 has valid persisted state" becomes a value the scenario STATES instead
+    # of a phrase whose meaning lived in a step body. The When names no
+    # media_buy_ids on purpose — this is the unfiltered listing path, where a row
+    # that fails to render takes the whole tenant's listing with it.
+    Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
+    And the principal "buyer-001" owns media buy "mb-002" with package "pkg-002"
+    And package "pkg-001" package_config key targeting_overlay holds the JSON value "not a dict"
+    And package "pkg-002" package_config key targeting_overlay holds the JSON value {"geo_countries": ["US"]}
     When the Buyer Agent sends a get_media_buys request
     Then the response is compliant with the get_media_buys spec
-    And the response should include media buy "mb-001" with package "pkg-001" targeting_overlay null
-    And the response should include media buy "mb-002" rendered normally
-    And response.errors[] should include exactly one TARGETING_REHYDRATION_FAILED entry for ("mb-001", "pkg-001")
+    And the response should include media buy "mb-001" with package "pkg-001"
+    And the package "pkg-001" wire field targeting_overlay should be null or absent
+    And the response should include media buy "mb-002" with package "pkg-002"
+    And the package "pkg-002" targeting_overlay should carry geo_countries ["US"]
+    And response.errors[] should carry exactly one advisory for package "pkg-001" field targeting_overlay with code "CONFIGURATION_ERROR" and recovery "terminal"
     # BR-RULE-294 INV-6: per-buy failure isolation across the response
     # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/get-media-buys-response.json
 
+  # BOTH HALVES OF "ONLY", as two rows. The original single scenario asserted the
+  # fallback fires when the modern key is absent and said nothing about the case its
+  # own title names — a read path that consulted `targeting` unconditionally, or in
+  # preference to `targeting_overlay`, satisfied it. Production reads
+  # `pkg_config.get("targeting_overlay") or pkg_config.get("targeting")`
+  # (src/core/tools/media_buy_list.py:274), so the modern key winning when both are
+  # present is the behavior, and it is now the second row.
+  #
+  # GEO SPELLING CORRECTED to the pinned `geo_countries` for the reason given on
+  # INV-5 above: `core/targeting.json` declares no `geo`.
   @T-UC-019-inv-294-8 @invariant @BR-RULE-294 @schema-v3.1
-  Scenario: INV-8 holds - legacy targeting key consulted only when modern key absent
+  Scenario Outline: INV-8 holds - legacy targeting key consulted only when modern key absent - <case>
     Given the principal "buyer-001" owns media buy "mb-001" with package "pkg-001"
-    And package "pkg-001" persisted package_config has no targeting_overlay key but has legacy targeting {geo:["US"]}
+    And <persisted_keys>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
-    And the package "pkg-001" targeting_overlay should be a Targeting object with geo ["US"]
+    And the package "pkg-001" targeting_overlay should carry geo_countries <expected_countries>
     # BR-RULE-294 INV-8: pre-rename data compatibility through legacy `targeting` key fallback
+
+    Examples:
+      | case               | persisted_keys                                                                                                                  | expected_countries |
+      | modern_key_absent  | package "pkg-001" package_config has no targeting_overlay key but has legacy targeting {"geo_countries": ["US"]}                 | ["US"]             |
+      | modern_key_present | package "pkg-001" package_config has legacy targeting {"geo_countries": ["US"]} and targeting_overlay {"geo_countries": ["GB"]}  | ["GB"]             |
 
   @T-UC-019-blob-degraded-package-field @invariant @BR-RULE-294 @error @schema-v3.1
   Scenario Outline: a legacy-invalid <field> in package_config degrades that field alone - <field>

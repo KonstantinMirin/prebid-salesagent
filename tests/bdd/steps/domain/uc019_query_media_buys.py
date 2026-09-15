@@ -2989,29 +2989,90 @@ _VALID_BLOB_SIBLINGS = {
 }
 
 
+def _set_package_config(
+    ctx: dict,
+    pkg_id: str,
+    updates: dict[str, Any],
+    *,
+    defaults: dict[str, Any] | None = None,
+    drop: tuple[str, ...] = (),
+) -> None:
+    """Rewrite keys of one package's untyped ``package_config`` column and commit.
+
+    The ONE write path for that column, shared by every Given that seeds a persisted
+    blob value: ``drop`` removes keys (a key's ABSENCE is a state a scenario states,
+    and it is what INV-8's fallback turns on), ``defaults`` fills keys the row does not
+    already carry, and ``updates`` wins over both.
+    """
+    row = _package_row(ctx, pkg_id)
+    config = dict(row.package_config or {})
+    for key in drop:
+        config.pop(key, None)
+    for key, value in (defaults or {}).items():
+        config.setdefault(key, value)
+    config.update(updates)
+    row.package_config = config
+    ctx["env"]._session.commit()
+
+
 @given(parsers.parse('package "{pkg_id}" package_config key {field} holds the legacy JSON value {legacy_json}'))
+# Same write, said of a value the pinned model ACCEPTS. The isolation scenarios
+# (INV-5/INV-6) need a sibling package whose targeting_overlay survives, and calling
+# that seed a "legacy" value would be false — while giving it a second step body would
+# duplicate this one for a difference that is only in the sentence.
+@given(parsers.parse('package "{pkg_id}" package_config key {field} holds the JSON value {legacy_json}'))
 def given_package_config_legacy_value(ctx: dict, pkg_id: str, field: str, legacy_json: str) -> None:
-    """Write ONE legacy-invalid value into the package's untyped package_config column.
+    """Write ONE value into the package's untyped package_config column.
 
     The value is spelled as JSON in the Examples table so the seed carries the real
     persisted TYPE (``123`` is an int, ``"maybe"`` is a str) rather than the string
     Gherkin would otherwise hand over — a str ``"123"`` would satisfy the pinned
     ``product_id`` type and grade nothing.
     """
-    import json
-
-    row = _package_row(ctx, pkg_id)
-    config = dict(row.package_config or {})
     # Seed every OTHER blob key with a value the pinned model accepts, so the row has
     # siblings that must survive. Without them "degrades that field alone" is not
     # gradeable on rows whose seed carries no other blob value: an implementation that
     # degrades everything has nothing else to destroy, so it looks correct. Measured --
     # with these siblings absent, such an implementation passed the two product_id rows.
-    for key, valid in _VALID_BLOB_SIBLINGS.items():
-        config.setdefault(key, valid)
-    config[field] = json.loads(legacy_json)
-    row.package_config = config
-    ctx["env"]._session.commit()
+    _set_package_config(ctx, pkg_id, {field: json.loads(legacy_json)}, defaults=_VALID_BLOB_SIBLINGS)
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" package_config has no targeting_overlay key but has legacy targeting {legacy_json}'
+    )
+)
+def given_package_config_legacy_targeting_only(ctx: dict, pkg_id: str, legacy_json: str) -> None:
+    """Persist the PRE-RENAME key only: ``targeting`` written, ``targeting_overlay`` absent.
+
+    Both halves are the point. The read path is
+    ``pkg_config.get("targeting_overlay") or pkg_config.get("targeting")``
+    (src/core/tools/media_buy_list.py:274), so the fallback is reachable only while the
+    modern key is absent — and ``_VALID_BLOB_SIBLINGS`` carries a ``targeting_overlay``
+    entry, which is exactly why this Given does not go through the sibling-seeding step:
+    that default would supply the modern key and grade the wrong branch.
+    """
+    _set_package_config(ctx, pkg_id, {"targeting": json.loads(legacy_json)}, drop=("targeting_overlay",))
+
+
+@given(
+    parsers.parse(
+        'package "{pkg_id}" package_config has legacy targeting {legacy_json} and targeting_overlay {modern_json}'
+    )
+)
+def given_package_config_both_targeting_keys(ctx: dict, pkg_id: str, legacy_json: str, modern_json: str) -> None:
+    """Persist BOTH keys, with different values, so which one is read is observable.
+
+    The other half of INV-8's "only": a read path that consulted ``targeting``
+    unconditionally, or preferred it, is indistinguishable from the correct one while
+    the modern key is absent. Distinct country lists are what make the two orders
+    tell apart on the wire.
+    """
+    _set_package_config(
+        ctx,
+        pkg_id,
+        {"targeting": json.loads(legacy_json), "targeting_overlay": json.loads(modern_json)},
+    )
 
 
 @given(parsers.parse('media buy "{mb_id}" raw_request key {field} holds the legacy JSON value {legacy_json}'))
@@ -3152,6 +3213,35 @@ def then_package_wire_field_degraded(ctx: dict, pkg_id: str, field: str) -> None
     assert package.get(field) is None, (
         f"expected the legacy-invalid {field!r} to render empty on package {pkg_id!r}; "
         f"got {package.get(field)!r} — a value derived from a cell the pinned type rejects"
+    )
+
+
+@then(parsers.parse('the package "{pkg_id}" targeting_overlay should carry geo_countries {countries}'))
+def then_package_targeting_overlay_geo_countries(ctx: dict, pkg_id: str, countries: str) -> None:
+    """Assert the package's rehydrated overlay reached the buyer carrying these countries.
+
+    ``geo_countries``, not ``geo``: pinned ``core/targeting.json`` declares no flat
+    ``geo`` field, and ``Targeting`` reshapes nothing on the way in, so the value under
+    test is the one the pinned model accepts.
+
+    Read off the WIRE rather than the typed payload. The overlay is the one blob value
+    resolved before the constructor, so the typed object would show an already-coerced
+    ``Targeting`` while the buyer's question is whether the countries survived
+    rehydration, projection and ``exclude_none`` — and on the isolation scenarios this
+    is the assertion that catches a fail-soft that degrades the SIBLING too, which a
+    null-check on the corrupt package cannot see.
+    """
+    expected = json.loads(countries)
+    package = _wire_package(ctx, pkg_id)
+    overlay = package.get("targeting_overlay")
+
+    assert isinstance(overlay, dict), (
+        f"expected package {pkg_id!r} to carry a rehydrated targeting_overlay object on the wire; "
+        f"got {overlay!r} — a sibling's valid overlay must survive another package's corrupt one"
+    )
+    assert overlay.get("geo_countries") == expected, (
+        f"expected targeting_overlay.geo_countries {expected!r} on package {pkg_id!r}; "
+        f"got {overlay.get('geo_countries')!r} from overlay {overlay!r}"
     )
 
 

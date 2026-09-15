@@ -364,14 +364,10 @@ T-UC-019-inv-293-5 :: then the response media_buys array should be empty
 # T-UC-019-inv-294-3  (test_uc019_query_media_buys.py)
 T-UC-019-inv-294-3 :: given package "<>" persisted targeting_overlay is a string (will raise TypeError on Targeting(**str))
 
-# T-UC-019-inv-294-5  (test_uc019_query_media_buys.py)
-T-UC-019-inv-294-5 :: given package "<>" persisted targeting_overlay is corrupted (will raise TypeError)
-
-# T-UC-019-inv-294-6  (test_uc019_query_media_buys.py)
-T-UC-019-inv-294-6 :: given the principal "<>" owns media buys "<>" and "<>"
-
-# T-UC-019-inv-294-8  (test_uc019_query_media_buys.py)
-T-UC-019-inv-294-8 :: given package "<>" persisted package_config has no targeting_overlay key but has legacy targeting {<>}
+# WIRED (inv-294-5 / inv-294-6 / inv-294-8): the three isolation scenarios of
+# BR-RULE-294 now bind every step and grade on the wire, across a2a/mcp/rest. Their
+# entries are gone rather than kept "just in case" — while they sat here, the tripwire
+# would have let the same scenarios go dormant again silently.
 
 # T-UC-019-inv-295-1  (test_uc019_query_media_buys.py)
 T-UC-019-inv-295-1 :: given package "<>" has snapshot.staleness_seconds <n> and elapsed 600s since activation
