@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 from src.core.schemas import UpdateMediaBuyRequest
 from tests.harness._mixins import make_adapter_update_side_effect
-from tests.harness.media_buy_create import MediaBuyCreateEnv
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY, MediaBuyCreateEnv
 from tests.harness.transport import DeliverResult
 
 _UPDATE_MODULE = "src.core.tools.media_buy_update"
@@ -193,16 +193,35 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
 
         The A2A skill and MCP tool accept a flat param dict, not a request model,
         and reject the wrapper-unsupported fields — so pop ``req``, expand it
-        (dropping those fields), then overlay any explicit kwargs. ``identity``
-        (if present) is passed through; the real handlers pop and apply it.
+        (dropping those fields), then overlay any explicit kwargs.
         Shared by the A2A, MCP and REST update paths (DRY) — REST adapts the
         result in :meth:`_build_update_rest_body` rather than re-spelling it.
+
+        ``identity`` is NOT a wire parameter and is not passed through. This used to say
+        "``identity`` (if present) is passed through; the real handlers pop and apply it",
+        which was false: neither ``_run_a2a_handler`` nor ``_run_mcp_client`` pops it, so it
+        travelled into the flat params and the DTO refused it under extra="forbid". A
+        no-auth UC-003 row that dispatched ``identity=None`` therefore got INVALID_REQUEST
+        on all three transports while asserting AUTH_MISSING. The caller presents a
+        credential instead; nothing on this path supplies an identity.
+
+        The ``OMIT_*`` sentinels are stripped here, which is what makes "the request does
+        NOT include an account field" (and the ``<not provided>`` idempotency rows) send a
+        body with the field genuinely absent. Same seat and same reason as
+        ``MediaBuyCreateEnv._ensure_required_request_fields`` on the create side: the ONE
+        function all three update transports funnel through, so no step can forget it, and
+        the sentinel still reaches ``tests/bdd/payload_capture.py`` (which records it as
+        ``<omit:account>`` / ``<omit:idempotency_key>``) before this strip runs.
         """
         req = kwargs.pop("req", None)
         if req is None:
-            return dict(kwargs)
-        flat = req.model_dump(mode="json", exclude_none=True)
-        flat.update(kwargs)
+            flat = dict(kwargs)
+        else:
+            flat = req.model_dump(mode="json", exclude_none=True)
+            flat.update(kwargs)
+        for field, sentinel in (("idempotency_key", OMIT_IDEMPOTENCY_KEY), ("account", OMIT_ACCOUNT)):
+            if flat.get(field) is sentinel:
+                del flat[field]
         return flat
 
     def _call_update_a2a(self, **kwargs: Any) -> DeliverResult:
