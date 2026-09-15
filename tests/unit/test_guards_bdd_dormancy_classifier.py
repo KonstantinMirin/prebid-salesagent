@@ -2,7 +2,7 @@
 must actually flip a MISCLASSIFIED strict-xfail to FAILED, and must leave alone
 every xfail that is not a misclassification.
 
-R1-2 (six independent reviewers converged on this): T-UC-010-main's strict-xfail
+The case that motivated it: T-UC-010-main's strict-xfail
 reason claimed a graded "production gap" (account.sandbox), but the scenario
 never reached that assert -- it failed on a missing Given-side write, a pure
 test-wiring gap. The tripwire this guard covers (``_classify_strict_xfail_dormancy``,

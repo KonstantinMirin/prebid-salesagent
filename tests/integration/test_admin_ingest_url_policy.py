@@ -632,7 +632,7 @@ def test_register_webhook_stores_a_row_when_the_url_is_admitted(
 # "the object's contents are identical"). UNGRADED by the conformance
 # storyboard: nothing in dist/compliance/3.1.1/ sends a short credential, so
 # grading cannot be cited either way and the schema is the only authority in
-# play. Full ruling: .claude/notes/pldmk8-spec-grounding.md.
+# play, so the pinned schema cited above is the whole ruling.
 # The boundary value and the contract that grades it both live in
 # ``tests.helpers.webhook_credential_refusal`` — the module that already holds
 # "what a credential refusal looks like" for the protocol surfaces — so this

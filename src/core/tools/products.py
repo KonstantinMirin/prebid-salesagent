@@ -15,7 +15,6 @@ from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
-from src.core.config import get_settings
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
     AdCPAuthorizationError,
@@ -221,9 +220,6 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     # Use a generic offering if not provided
     if not offering:
         offering = "Generic product inquiry"
-
-    # Under test, simple placeholder values pass where a real brand would be demanded.
-    is_test_mode = get_settings().relaxed_brand_validation
 
     # Note: brand_manifest validation is handled by Pydantic schema, no need for runtime validation here
 
