@@ -272,11 +272,13 @@ def test_principal(db_session, test_tenant):
 
     unique_id = str(uuid.uuid4())[:8]
 
-    principal = Principal(
+    # with_token, not access_token=: Principal.with_token is the one way a row gets a
+    # credential -- it stores the hash and the prefix and never the plaintext.
+    principal = Principal.with_token(
+        f"test_token_{unique_id}",
         tenant_id=test_tenant.tenant_id,
         principal_id=f"test_principal_{unique_id}",
         name=f"Test Principal {unique_id}",
-        access_token=f"test_token_{unique_id}",
         platform_mappings={"mock": {"advertiser_id": f"test_advertiser_{unique_id}"}},
     )
     db_session.add(principal)

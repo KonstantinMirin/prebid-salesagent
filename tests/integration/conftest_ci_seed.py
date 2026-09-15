@@ -41,7 +41,9 @@ class CiTestSeed:
 
     tenant_id: str
     principal_id: str
-    access_token: str
+    #: The PLAINTEXT credential to present. Named for what it is: the row stores only
+    #: sha256(token) and a prefix, so there is no access_token to read back.
+    token: str
     subdomain: str
 
 
@@ -58,20 +60,27 @@ def ci_test_principal(factory_session) -> CiTestSeed:
     limit through a ``RelatedFactory``, and creating a second violates
     ``uq_currency_limit``.
     """
+    from src.core.credentials import hash_token, token_prefix
     from tests.factories import PrincipalFactory, PropertyTagFactory, TenantFactory
 
     tenant = TenantFactory(subdomain=CI_TEST_SUBDOMAIN, name="CI Test Tenant")
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
+    # The hash and prefix of the DOCUMENTED token, not the factory's derived-from-id
+    # default: this seed's whole purpose is that one known credential resolves here, and
+    # the plaintext cannot be read back out of the row. `access_token=` used to be passed
+    # instead -- a column that no longer exists and a field the factory does not declare,
+    # so this fixture could not produce a principal answering ci-test-token at all.
     principal = PrincipalFactory(
         tenant=tenant,
         name="CI Test Principal",
-        access_token=CI_TEST_TOKEN,
+        token_hash=hash_token(CI_TEST_TOKEN),
+        token_prefix=token_prefix(CI_TEST_TOKEN),
     )
     factory_session.commit()
 
     return CiTestSeed(
         tenant_id=tenant.tenant_id,
         principal_id=principal.principal_id,
-        access_token=principal.access_token,
+        token=CI_TEST_TOKEN,
         subdomain=tenant.subdomain,
     )

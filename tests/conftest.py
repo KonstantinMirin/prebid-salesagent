@@ -482,11 +482,13 @@ def sample_tenant():
 @pytest.fixture
 def sample_principal(sample_tenant):
     """Provide a sample principal."""
+    # No access_token: the row stores sha256(token) and a prefix, and the factory derives
+    # both from the principal_id, so the token a test PRESENTS comes from
+    # plaintext_token_for(principal_id) rather than from a column.
     return PrincipalFactory.create(
         tenant_id=sample_tenant["tenant_id"],
         principal_id="test_principal",
         name="Test Advertiser",
-        access_token="test_token_123",
     )
 
 

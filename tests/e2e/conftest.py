@@ -568,13 +568,19 @@ def docker_services_e2e(request):
         product_count = cursor.fetchone()[0]
         print(f"   Products in database: {product_count}")
 
-        # Count principals
-        cursor.execute("SELECT COUNT(*) FROM principals WHERE access_token = 'ci-test-token'")
+        # Count principals. BY TOKEN HASH: the row stores sha256(token) and a prefix, never
+        # the plaintext, so `WHERE access_token = ...` names a column that does not exist
+        # and raised UndefinedColumn here -- inside the block that reports whether the
+        # stack is seeded at all.
+        from src.core.credentials import hash_token
+
+        ci_token_hash = hash_token("ci-test-token")
+        cursor.execute("SELECT COUNT(*) FROM principals WHERE token_hash = %s", (ci_token_hash,))
         principal_count = cursor.fetchone()[0]
-        print(f"   Principals with ci-test-token: {principal_count}")
+        print(f"   Principals answering ci-test-token: {principal_count}")
 
         # Get principal's tenant_id
-        cursor.execute("SELECT tenant_id FROM principals WHERE access_token = 'ci-test-token'")
+        cursor.execute("SELECT tenant_id FROM principals WHERE token_hash = %s", (ci_token_hash,))
         result = cursor.fetchone()
         if result:
             principal_tenant = result[0]

@@ -22,8 +22,12 @@ def test_the_seeded_token_resolves_to_the_seeded_tenant(ci_test_principal):
     from src.core.resolved_identity import _resolve_identity
     from tests.helpers.credentials import credential_headers
 
+    # The tenant is addressed too, because a token is resolved INSIDE the tenant the
+    # request names (PrincipalRepository.find_by_token_hash; the cross-tenant lookup is
+    # seed maintenance, not the credential path). A token-only credential resolves no
+    # tenant, so the resolver rejects it however well the row is seeded.
     identity = _resolve_identity(
-        credential_headers(token=ci_test_principal.access_token),
+        credential_headers(token=ci_test_principal.token, tenant=ci_test_principal.tenant_id),
         require_valid_token=True,
     )
 

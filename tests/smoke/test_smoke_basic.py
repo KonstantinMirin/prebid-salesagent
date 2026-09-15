@@ -66,9 +66,12 @@ class TestDatabaseSchema:
         assert hasattr(Tenant, "tenant_id")
         assert hasattr(Tenant, "name")
 
-        # Test Principal has auth fields
+        # Test Principal has auth fields. token_hash, not access_token: the row stores
+        # sha256(token) and a prefix and never the plaintext, so asserting the old column
+        # asserted the opposite of the design.
         assert hasattr(Principal, "principal_id")
-        assert hasattr(Principal, "access_token")
+        assert hasattr(Principal, "token_hash")
+        assert not hasattr(Principal, "access_token")
 
         # Test Product has required fields
         assert hasattr(Product, "product_id")
