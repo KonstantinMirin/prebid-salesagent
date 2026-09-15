@@ -19,7 +19,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from tests.factories.principal import PrincipalFactory
 
 if TYPE_CHECKING:
-    from src.core.resolved_identity import ResolvedIdentity
+    from src.core.resolved_identity import PublicIdentity
 
 
 class TestGetAdcpCapabilitiesSchema:
@@ -148,7 +148,7 @@ class TestGetAdcpCapabilitiesImpl:
         current_tenant.set(None)
 
         # Call without context - should return minimal response
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
 
         assert isinstance(response, GetAdcpCapabilitiesResponse)
         assert response.adcp is not None
@@ -171,7 +171,7 @@ class TestGetAdcpCapabilitiesImpl:
         # Reset tenant context to ensure clean state
         current_tenant.set(None)
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
 
         # Should be able to serialize - use mode="json" for JSON-compatible output
         data = response.model_dump(mode="json")
@@ -218,11 +218,7 @@ class TestGetAdcpCapabilitiesWithTenant:
             ):
                 from tests.factories import PrincipalFactory
 
-                identity = PrincipalFactory.make_identity(
-                    principal_id=None,
-                    tenant_id="test-tenant-123",
-                    tenant=mock_tenant,
-                )
+                identity = PrincipalFactory.make_public_identity(tenant=mock_tenant)
                 response = _get_adcp_capabilities_impl(None, identity)
 
                 # Verify full response structure
@@ -355,13 +351,18 @@ def _make_capabilities_identity(
     principal_id: str | None = "principal-123",
     tenant_id: str = "test-tenant",
     tenant: dict | None = None,
-) -> ResolvedIdentity:
-    """Build a ResolvedIdentity for capabilities tests."""
+) -> PublicIdentity:
+    """Build the identity a capabilities call arrives with.
+
+    ``get_adcp_capabilities`` is a PUBLIC tool, so it takes a ``PublicIdentity``:
+    ``principal_id=None`` is the anonymous caller, which is a principal-less identity and
+    not a ``ResolvedIdentity`` with a ``None`` id.
+    """
     from tests.factories import PrincipalFactory
 
     if tenant is None:
         tenant = {"tenant_id": tenant_id, "name": "Test Publisher", "subdomain": "testpub"}
-    return PrincipalFactory.make_identity(
+    return PrincipalFactory.make_public_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
@@ -652,7 +653,7 @@ class TestResponseShapeCapabilities:
         """Response has no last_updated when no tenant context (minimal response)."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
         assert response.last_updated is None
 
     def test_features_defaults_with_tenant(self):
@@ -696,7 +697,7 @@ class TestResponseShapeCapabilities:
         """Minimal response (no tenant) omits media_buy from serialized output."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
         assert response.media_buy is None
         data = response.model_dump(mode="json")
         # media_buy is excluded from serialization when None
@@ -729,7 +730,7 @@ class TestAccountBlockAndSigningDeclarations:
 
         current_tenant.set(None)
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
 
         assert response.account is None
 
@@ -789,7 +790,9 @@ class TestAccountBlockAndSigningDeclarations:
         with stack:
             response = _get_adcp_capabilities_impl(None, identity)
 
-        expected = resolve_supported_billing(tenant)
+        # The helper takes the typed TenantContext production reads, not the dict the
+        # identity was built from.
+        expected = resolve_supported_billing(identity.tenant)
         assert [bp.value for bp in response.account.supported_billing] == expected
         assert expected == ["operator", "advertiser"]
 

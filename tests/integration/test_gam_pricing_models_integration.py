@@ -28,7 +28,7 @@ from src.core.database.models import (
     Tenant,
 )
 from tests.factories import PricingOptionFactory
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.helpers.external_service import is_external_service_response_error
 from tests.utils.database_helpers import create_tenant_with_timestamps
@@ -87,7 +87,8 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
         session.add(property_tag)
 
         # Create principal
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_advertiser_pricing"),
             tenant_id="test_gam_pricing_tenant",
             principal_id="test_advertiser_pricing",
             name="Test Advertiser - Pricing",

@@ -16,11 +16,13 @@ import pytest
 
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import Principal
+from tests.factories.principal import plaintext_token_for
 
 
 def _make_principal() -> Principal:
     """Create a minimal Principal for adapter construction."""
-    return Principal(
+    return Principal.with_token(
+        plaintext_token_for("test_principal"),
         principal_id="test_principal",
         name="Test Principal",
         platform_mappings={},

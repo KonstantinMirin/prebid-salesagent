@@ -15,6 +15,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, Principal, Tenant
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
     adapter_success,
@@ -67,7 +68,8 @@ def test_tenant(integration_db):
         )
         session.add(tenant)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(_PRINCIPAL_ID),
             tenant_id=_TENANT_ID,
             principal_id=_PRINCIPAL_ID,
             name="Creative Test Principal",

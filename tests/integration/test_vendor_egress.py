@@ -64,6 +64,7 @@ from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
+from tests.factories.principal import plaintext_token_for
 from tests.harness._base import IntegrationEnv
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
@@ -103,7 +104,8 @@ class _BareEnv(IntegrationEnv):
 
 def _principal(adapter: str, mappings: dict[str, Any] | None = None) -> Principal:
     """A real ``Principal`` carrying an advertiser id for *adapter*."""
-    return Principal(
+    return Principal.with_token(
+        plaintext_token_for("test_principal"),
         principal_id="test_principal",
         name="Test Buyer",
         platform_mappings=mappings or {adapter: {"advertiser_id": "123"}},
@@ -215,7 +217,8 @@ def _mock_ad_server(origin: LocalOrigin):
     """A mock adapter configured to post its HITL completion webhook at *origin*."""
     from src.adapters.mock_ad_server import MockAdServer
 
-    principal = Principal(
+    principal = Principal.with_token(
+        plaintext_token_for("test_principal"),
         principal_id="test_principal",
         name="Test Buyer",
         platform_mappings={

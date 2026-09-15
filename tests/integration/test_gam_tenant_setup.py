@@ -25,6 +25,7 @@ sys.path.insert(0, str(project_root))
 
 from scripts.setup.setup_tenant import create_tenant, main
 from src.core.database.models import AdapterConfig, Tenant
+from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.integration
@@ -237,7 +238,8 @@ class TestGAMTenantSetup:
         from src.core.schemas import Principal
 
         # Create principal with GAM platform mapping
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             name="Test Advertiser",
             platform_mappings={"google_ad_manager": "12345"},

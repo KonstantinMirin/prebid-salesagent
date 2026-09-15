@@ -28,6 +28,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Tenant as ModelTenant
 from src.core.helpers import get_adapter
 from src.core.schemas import Principal
+from tests.factories.principal import plaintext_token_for
 
 # Test encryption key (only for tests — Fernet requires a valid key)
 _TEST_ENCRYPTION_KEY = Fernet.generate_key().decode()
@@ -166,7 +167,8 @@ def _load_principal(tenant_id: str, principal_id: str) -> Principal:
         db_principal = session.scalars(
             select(ModelPrincipal).filter_by(tenant_id=tenant_id, principal_id=principal_id)
         ).first()
-        return Principal(
+        return Principal.with_token(
+            plaintext_token_for(db_principal.principal_id),
             principal_id=db_principal.principal_id,
             name=db_principal.name,
             platform_mappings=db_principal.platform_mappings or {},

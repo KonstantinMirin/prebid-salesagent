@@ -14,6 +14,7 @@ from src.adapters.constants import UPDATE_ACTIONS
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.exceptions import AdCPAuthorizationError, AdCPCapabilityNotSupportedError
 from src.core.schemas import Principal
+from tests.factories.principal import plaintext_token_for
 
 
 def _assert_unsupported_feature_for_action(response, action: str) -> None:
@@ -46,17 +47,20 @@ class TestGAMOrderLifecycleIntegration:
     def test_principals(self):
         """Create test principals with different admin configurations."""
         return {
-            "regular": Principal(
+            "regular": Principal.with_token(
+                plaintext_token_for("advertiser"),
                 principal_id="advertiser",
                 name="Regular Advertiser",
                 platform_mappings={"google_ad_manager": {"advertiser_id": "123456"}},
             ),
-            "gam_admin": Principal(
+            "gam_admin": Principal.with_token(
+                plaintext_token_for("gam_admin"),
                 principal_id="gam_admin",
                 name="GAM Admin",
                 platform_mappings={"google_ad_manager": {"advertiser_id": "123456", "gam_admin": True}},
             ),
-            "is_admin": Principal(
+            "is_admin": Principal.with_token(
+                plaintext_token_for("is_admin"),
                 principal_id="is_admin",
                 name="Is Admin",
                 platform_mappings={"google_ad_manager": {"advertiser_id": "123456", "is_admin": True}},

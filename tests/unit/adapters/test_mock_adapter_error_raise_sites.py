@@ -20,6 +20,7 @@ import pytest
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import FormatId, MediaPackage, Principal
+from tests.factories.principal import plaintext_token_for
 
 
 def _make_request() -> AdapterCreateRequest:
@@ -62,7 +63,8 @@ class TestMockMediaBuyRejectedRaiseSites:
         from src.core.exceptions import AdCPMediaBuyRejectedError
 
         # HITL config: sync mode, zero delay, approval simulation forced to reject.
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("principal_test"),
             principal_id="principal_test",
             name="Test Principal",
             platform_mappings={
@@ -123,7 +125,12 @@ class TestMockBudgetExhaustedRaiseSite:
         )
         strategy_context = StrategyContext(strategy_model)
 
-        principal = Principal(principal_id="principal_test", name="Test Principal", platform_mappings={})
+        principal = Principal.with_token(
+            plaintext_token_for("principal_test"),
+            principal_id="principal_test",
+            name="Test Principal",
+            platform_mappings={},
+        )
         adapter = MockAdServer(
             config={},
             principal=principal,
@@ -167,7 +174,12 @@ class TestMockInventoryUnavailableRaiseSite:
         )
         strategy_context = StrategyContext(strategy_model)
 
-        principal = Principal(principal_id="principal_test", name="Test Principal", platform_mappings={})
+        principal = Principal.with_token(
+            plaintext_token_for("principal_test"),
+            principal_id="principal_test",
+            name="Test Principal",
+            platform_mappings={},
+        )
         adapter = MockAdServer(
             config={},
             principal=principal,

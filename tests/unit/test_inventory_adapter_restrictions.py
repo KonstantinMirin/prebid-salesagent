@@ -8,6 +8,8 @@ Per development guidelines:
 
 from unittest.mock import MagicMock
 
+from tests.factories.principal import plaintext_token_for
+
 
 class TestInventoryAdapterRestrictions:
     """Test that inventory sync is restricted to GAM adapter only."""
@@ -18,7 +20,8 @@ class TestInventoryAdapterRestrictions:
         from src.core.schemas import Principal
 
         # Create mock principal (use schemas.Principal, not models.Principal)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             name="Test Advertiser",
             platform_mappings={},
@@ -59,7 +62,8 @@ class TestInventoryAdapterRestrictions:
         from src.adapters.mock_ad_server import MockAdServer
         from src.core.schemas import MediaPackage, Principal
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             name="Test Advertiser",
             platform_mappings={},

@@ -14,6 +14,7 @@ import pytest
 from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.models import MediaPackage as DBMediaPackage
 from src.core.schemas import CreateMediaBuySuccess
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_approval import run_approval
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -450,7 +451,8 @@ class TestExecuteApprovedEnrichesSellerConcept:
         from src.adapters.google_ad_manager import GoogleAdManager
         from src.core.schemas import Principal
 
-        gam_principal = Principal(
+        gam_principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             name="Test Principal",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},

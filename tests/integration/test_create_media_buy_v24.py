@@ -24,7 +24,7 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
@@ -65,7 +65,8 @@ class TestCreateMediaBuyV24Format:
             session.flush()  # Flush so add_required_setup_data can find the tenant
 
             # Create principal
-            principal = ModelPrincipal(
+            principal = ModelPrincipal.with_token(
+                plaintext_token_for("test_principal_v24"),
                 tenant_id="test_tenant_v24",
                 principal_id="test_principal_v24",
                 name="Test Principal V24",

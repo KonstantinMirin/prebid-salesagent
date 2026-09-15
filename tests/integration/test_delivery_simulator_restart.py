@@ -11,6 +11,7 @@ from sqlalchemy import select
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, Principal, PushNotificationConfig, Tenant
 from src.services.delivery_simulator import delivery_simulator
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration]
 
@@ -44,7 +45,8 @@ class TestDeliverySimulatorRestart:
     def test_principal(self, test_tenant):
         """Create test principal."""
         with get_db_session() as session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_restart"),
                 tenant_id=test_tenant,
                 principal_id="test_principal_restart",
                 name="Test Principal",
@@ -177,7 +179,8 @@ class TestDeliverySimulatorRestart:
         with get_db_session() as session:
             # Create media buy WITHOUT webhook config (no PushNotificationConfig for this principal)
             # First create a principal without webhook
-            principal_no_webhook = Principal(
+            principal_no_webhook = Principal.with_token(
+                plaintext_token_for("principal_no_webhook"),
                 tenant_id=test_tenant,
                 principal_id="principal_no_webhook",
                 name="Principal Without Webhook",

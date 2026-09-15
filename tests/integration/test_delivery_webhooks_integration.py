@@ -23,6 +23,7 @@ from src.core.database.models import (
 )
 from src.services.delivery_webhook_scheduler import DeliveryWebhookScheduler
 from tests.factories import PricingOptionFactory
+from tests.factories.principal import plaintext_token_for
 
 
 def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str, str]:
@@ -33,7 +34,8 @@ def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str
         tenant = Tenant(
             tenant_id=tenant_id, name="Integration Tenant", subdomain="gam-pricing-test", ad_server="ad_server"
         )
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_id,
             principal_id=principal_id,
             name="Integration Principal",

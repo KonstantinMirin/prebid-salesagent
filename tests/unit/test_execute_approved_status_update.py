@@ -24,6 +24,7 @@ from src.core.database.models import PersistedMediaBuyStatus
 from src.core.database.repositories.creative import CreativeAssignmentRepository
 from src.core.schemas import Principal
 from src.core.tools.media_buy_create import ApprovalOutcome
+from tests.factories.principal import plaintext_token_for
 
 # Who approved, and when. Passed in by the caller and written by the same
 # ``update_status`` call as the status, so the assertion can name all three.
@@ -120,7 +121,8 @@ class TestExecuteApprovedStatusUpdate:
         db_package = _make_mock_package()
         product = _make_mock_product()
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("principal_1"),
             principal_id="principal_1",
             name="Test Principal",
             platform_mappings={},

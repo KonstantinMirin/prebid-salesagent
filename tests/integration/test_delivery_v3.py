@@ -35,7 +35,7 @@ from src.core.schemas import (
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,7 +139,8 @@ def _setup_base_state(session) -> dict:
     )
     session.add(property_tag)
 
-    principal = Principal(
+    principal = Principal.with_token(
+        plaintext_token_for(principal_id),
         tenant_id=tenant_id,
         principal_id=principal_id,
         name="Test Principal",
@@ -595,7 +596,8 @@ class TestDeliveryOwnershipIntegration:
             now = datetime.now(UTC)
 
             # Create second principal
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("other_principal"),
                 tenant_id="test_tenant",
                 principal_id="other_principal",
                 name="Other Principal",
@@ -651,7 +653,8 @@ class TestDeliveryOwnershipIntegration:
             base = _setup_base_state(session)
             now = datetime.now(UTC)
 
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("secret_principal"),
                 tenant_id="test_tenant",
                 principal_id="secret_principal",
                 name="Secret Principal",
@@ -695,7 +698,8 @@ class TestDeliveryOwnershipIntegration:
             base = _setup_base_state(session)
             now = datetime.now(UTC)
 
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("other_principal"),
                 tenant_id="test_tenant",
                 principal_id="other_principal",
                 name="Other Principal",

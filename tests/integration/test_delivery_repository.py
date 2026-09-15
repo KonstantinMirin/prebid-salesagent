@@ -24,6 +24,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.delivery import DeliveryRepository
 from src.core.webhooks.delivery import WebhookDeliveryOutcome, WebhookTaskContext
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -77,7 +78,8 @@ def principal_a(tenant_a):
     """Create a principal in tenant A."""
     principal_id = "del_principal_a"
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_a,
             principal_id=principal_id,
             name="Delivery Advertiser A",
@@ -93,7 +95,8 @@ def principal_b(tenant_b):
     """Create a principal in tenant B."""
     principal_id = "del_principal_b"
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_b,
             principal_id=principal_id,
             name="Delivery Advertiser B",

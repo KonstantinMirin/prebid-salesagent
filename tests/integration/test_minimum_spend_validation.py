@@ -62,6 +62,7 @@ from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.factories import PricingOptionFactory, PrincipalFactory
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_package_request
 from tests.integration.conftest import create_test_product_with_pricing, get_pricing_option_id
 
@@ -135,7 +136,8 @@ class TestMinimumSpendValidation:
             session.add(authorized_property)
 
             # Create principal with both kevel and mock mappings
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal"),
                 tenant_id="test_minspend_tenant",
                 principal_id="test_principal",
                 name="Test Principal",

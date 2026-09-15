@@ -23,6 +23,7 @@ import pytest
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from pydantic import ValidationError
 
+from src.adapters.base import AdapterUpdateResult
 from src.core.errors.codes import ErrorCode
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -145,7 +146,7 @@ def test_multi_package_update_processes_all_packages():
     all 3 are processed and appear in affected_packages."""
     with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
         # Adapter returns success for each update_package_budget call
-        env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+        env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
             media_buy_id="mb_multi",
             affected_packages=[],
         )
@@ -205,7 +206,7 @@ def test_main_flow_package_budget_update():
     with media_buy_id and affected_packages."""
     with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
         # Adapter returns success
-        env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+        env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
             media_buy_id="mb_main",
             affected_packages=[],
         )
@@ -463,7 +464,7 @@ def test_pause_completes_workflow_step():
     """
     with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
         # Configure adapter to return success for pause
-        mock_result = UpdateMediaBuySuccess.carrier(
+        mock_result = AdapterUpdateResult(
             media_buy_id="mb_pause",
             affected_packages=[],
         )
@@ -770,7 +771,7 @@ class TestUC003MainObligations:
             mock_scalars.first.return_value = mock_cl
             mock_session.scalars.return_value = mock_scalars
 
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
                 media_buy_id="mb_no_max", affected_packages=[]
             )
 
@@ -798,7 +799,7 @@ class TestUC003MainObligations:
             mock_scalars.first.return_value = mock_cl
             mock_session.scalars.return_value = mock_scalars
 
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
                 media_buy_id="mb_adapter", affected_packages=[]
             )
 
@@ -829,7 +830,7 @@ class TestUC003MainObligations:
             mock_scalars.first.return_value = mock_cl
             mock_session.scalars.return_value = mock_scalars
 
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
                 media_buy_id="mb_persist", affected_packages=[]
             )
 
@@ -2796,7 +2797,7 @@ class TestUC003StateMachine:
             active_mb = _make_mock_media_buy("mb_active", status="active")
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = active_mb
 
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
                 media_buy_id="mb_active",
                 affected_packages=[],
             )
@@ -2840,7 +2841,7 @@ class TestUC003StateMachine:
             paused_mb = _make_mock_media_buy("mb_paused_resume", status="paused")
             env.mock["uow"].return_value.media_buys.get_by_id.return_value = paused_mb
 
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
                 media_buy_id="mb_paused_resume",
                 affected_packages=[],
             )
@@ -2878,7 +2879,7 @@ class TestUC003StateMachine:
                 post_action_mb,  # post-action status lookup (the line-421 fix)
             ]
 
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuySuccess.carrier(
+            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
                 media_buy_id="mb_post_action",
                 affected_packages=[],
             )

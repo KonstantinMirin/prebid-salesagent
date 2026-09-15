@@ -10,7 +10,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
@@ -42,7 +42,8 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         session.add(property_tag)
 
         # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
@@ -199,7 +200,8 @@ def test_update_media_buy_replaces_creatives(integration_db):
         session.add(property_tag)
 
         # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
@@ -377,7 +379,8 @@ def test_creative_assignments_with_weights(integration_db):
         session.add(property_tag)
 
         # Create principal (MUST be flushed before creatives due to FK constraint)
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
@@ -529,7 +532,8 @@ def test_creative_assignments_replaces_all(integration_db):
         )
         session.add(property_tag)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",

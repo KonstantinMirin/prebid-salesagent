@@ -2,6 +2,12 @@
 
 from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
 
+#: ``revision`` carries no model default -- it is the column the repository owns -- so
+#: every buyer-facing envelope states where its value came from. These cases assert on
+#: ``affected_packages``, never on the revision, and a test does not speak for the
+#: repository.
+_REVISION = 1
+
 
 def test_affected_packages_includes_creative_assignment_details():
     """Test that affected_packages contains proper PackageUpdateResult structure."""
@@ -21,9 +27,10 @@ def test_affected_packages_includes_creative_assignment_details():
         )
     ]
 
-    response = UpdateMediaBuySuccess.carrier(
+    response = UpdateMediaBuySuccess.sync_success(
         media_buy_id="test_buy_123",
         affected_packages=affected_packages,
+        revision=_REVISION,
     )
 
     # Verify structure
@@ -49,9 +56,10 @@ def test_affected_packages_includes_creative_assignment_details():
 
 def test_affected_packages_can_be_empty():
     """Test that affected_packages can be empty for non-creative updates."""
-    response = UpdateMediaBuySuccess.carrier(
+    response = UpdateMediaBuySuccess.sync_success(
         media_buy_id="test_buy_456",
         affected_packages=[],
+        revision=_REVISION,
     )
 
     assert response.affected_packages is not None
@@ -75,9 +83,10 @@ def test_affected_packages_shows_replaced_creatives():
         )
     ]
 
-    response = UpdateMediaBuySuccess.carrier(
+    response = UpdateMediaBuySuccess.sync_success(
         media_buy_id="test_buy_789",
         affected_packages=affected_packages,
+        revision=_REVISION,
     )
 
     creative_changes = response.affected_packages[0].changes_applied["creative_ids"]
@@ -88,8 +97,9 @@ def test_affected_packages_shows_replaced_creatives():
 
 def test_response_serialization_includes_affected_packages():
     """Test that UpdateMediaBuySuccess serializes affected_packages correctly."""
-    response = UpdateMediaBuySuccess.carrier(
+    response = UpdateMediaBuySuccess.sync_success(
         media_buy_id="test_buy_serialization",
+        revision=_REVISION,
         affected_packages=[
             AffectedPackage(
                 package_id="pkg_1",  # Required by AdCP

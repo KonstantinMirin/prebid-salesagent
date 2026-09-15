@@ -36,7 +36,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_approval import run_approval
 from tests.integration.media_buy_helpers import (
     _get_tenant_dict,
@@ -820,7 +820,8 @@ class TestUpdateMediaBuyOwnership:
         # Create a different principal
         other_pid = f"other_principal_{uuid.uuid4().hex[:8]}"
         with get_db_session() as session:
-            other_principal = Principal(
+            other_principal = Principal.with_token(
+                plaintext_token_for(other_pid),
                 tenant_id=mb_tenant["tenant_id"],
                 principal_id=other_pid,
                 name="Other Advertiser",

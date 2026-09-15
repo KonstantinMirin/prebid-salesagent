@@ -14,6 +14,7 @@ from sqlalchemy import delete, select
 from src.admin.app import create_app
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Context, Principal, Tenant, WorkflowStep
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.media_buy_approval import (
     ADAPTER_BOUNDARY,
     adapter_success,
@@ -70,7 +71,8 @@ def test_tenant(integration_db):
         )
         session.add(tenant)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("wf_test_principal"),
             tenant_id=_TENANT_ID,
             principal_id="wf_test_principal",
             name="Workflow Test Principal",

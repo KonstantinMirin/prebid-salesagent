@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.factories.principal import plaintext_token_for
+
 _REPO_INVARIANTS_HOOK = Path(__file__).resolve().parents[2] / ".pre-commit-hooks" / "check_repo_invariants.py"
 _spec = importlib.util.spec_from_file_location("check_repo_invariants", _REPO_INVARIANTS_HOOK)
 assert _spec and _spec.loader
@@ -109,7 +111,8 @@ class TestCriticalPaths:
         from src.core.schemas import Principal
 
         # Create a test principal
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test"),
             principal_id="test",
             name="Test",
             platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},

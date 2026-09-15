@@ -20,7 +20,7 @@ from src.core.database.models import MediaBuy, Principal
 from src.core.exceptions import AdCPAuthorizationError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -49,13 +49,15 @@ class TestCrossPrincipalSecurity:
             session.add(tenant)
 
             # Create two different principals (advertisers)
-            principal_a = Principal(
+            principal_a = Principal.with_token(
+                plaintext_token_for("advertiser_a"),
                 tenant_id="security_test_tenant",
                 principal_id="advertiser_a",
                 name="Advertiser A",
                 platform_mappings={"mock": {"id": "advertiser_a"}},
             )
-            principal_b = Principal(
+            principal_b = Principal.with_token(
+                plaintext_token_for("advertiser_b"),
                 tenant_id="security_test_tenant",
                 principal_id="advertiser_b",
                 name="Advertiser B",
@@ -214,7 +216,8 @@ class TestCrossPrincipalSecurity:
             )
             session.add(tenant2)
 
-            principal_c = Principal(
+            principal_c = Principal.with_token(
+                plaintext_token_for("advertiser_c"),
                 tenant_id="second_tenant",
                 principal_id="advertiser_c",
                 name="Advertiser C",

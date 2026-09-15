@@ -7,6 +7,7 @@ import pytest
 from rich.console import Console
 
 from src.core.context_manager import ContextManager
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -29,7 +30,8 @@ def test_simplified_context(integration_db):
         session.add(tenant)
 
         # Create principal
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Principal",

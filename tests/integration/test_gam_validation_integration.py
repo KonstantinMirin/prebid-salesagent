@@ -12,6 +12,7 @@ import pytest
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import Principal
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -22,7 +23,8 @@ class TestGAMValidationIntegration:
     def setup_method(self):
         """Set up test fixtures."""
         # Create a mock principal
-        self.principal = Principal(
+        self.principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             name="Test Principal",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},
@@ -386,7 +388,8 @@ class TestGAMValidationPerformance:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.principal = Principal(
+        self.principal = Principal.with_token(
+            plaintext_token_for("test_principal"),
             principal_id="test_principal",
             name="Test Principal",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123"}},

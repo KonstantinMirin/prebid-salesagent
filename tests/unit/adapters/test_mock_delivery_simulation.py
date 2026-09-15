@@ -21,10 +21,16 @@ from src.core.schemas.delivery import (
     DeliveryTotals,
     ReportingPeriod,
 )
+from tests.factories.principal import plaintext_token_for
 
 
 def _principal() -> Principal:
-    return Principal(principal_id="principal_test", name="Test Principal", platform_mappings={})
+    return Principal.with_token(
+        plaintext_token_for("principal_test"),
+        principal_id="principal_test",
+        name="Test Principal",
+        platform_mappings={},
+    )
 
 
 def _adapter(tenant_id: str | None = "tenant_test") -> MockAdServer:

@@ -24,7 +24,7 @@ from src.core.exceptions import AdCPAuthenticationError, AdCPMediaBuyNotFoundErr
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 
 # Note: _verify_principal is now internal to _update_media_buy_impl
 # Tests that used _verify_principal directly will need to test through the public API
@@ -61,7 +61,8 @@ def test_tenant_setup(integration_db):
         session.add(tenant)
 
         # Create principal
-        principal = ModelPrincipal(
+        principal = ModelPrincipal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=tenant_id,
             principal_id=principal_id,
             name="Test Advertiser Persist",

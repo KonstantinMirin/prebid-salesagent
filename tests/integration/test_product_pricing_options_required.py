@@ -20,6 +20,7 @@ from src.core.database.models import Tenant as TenantModel
 from src.core.schemas import Product as ProductSchema
 from src.core.tools.products import get_product_catalog
 from tests.factories import PricingOptionFactory
+from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.requires_db
@@ -46,7 +47,8 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
         session.commit()
 
         # Create test principal
-        principal = PrincipalModel(
+        principal = PrincipalModel.with_token(
+            plaintext_token_for(f"test-principal-{unique_id}"),
             tenant_id=tenant.tenant_id,
             principal_id=f"test-principal-{unique_id}",
             name=f"Test Principal {unique_id}",
@@ -349,7 +351,8 @@ def test_create_media_buy_loads_pricing_options(integration_db):
         session.commit()
 
         # Create test principal
-        principal = PrincipalModel(
+        principal = PrincipalModel.with_token(
+            plaintext_token_for(f"test-principal-{unique_id}"),
             tenant_id=tenant.tenant_id,
             principal_id=f"test-principal-{unique_id}",
             name=f"Test Principal {unique_id}",

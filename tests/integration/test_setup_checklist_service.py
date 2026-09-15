@@ -23,6 +23,7 @@ from src.services.setup_checklist_service import (
     get_incomplete_critical_tasks,
     validate_setup_complete,
 )
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
 
 pytestmark = pytest.mark.requires_db
@@ -485,7 +486,8 @@ class TestSetupChecklistService:
                 principal_id="bulk_principal_3",
                 name="Test Principal",
             )
-            principal3 = Principal(
+            principal3 = Principal.with_token(
+                plaintext_token_for(principal3_data["principal_id"]),
                 tenant_id=principal3_data["tenant_id"],
                 principal_id=principal3_data["principal_id"],
                 name=principal3_data["name"],

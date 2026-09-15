@@ -22,6 +22,7 @@ from src.core.schemas import (
     PackageRequest,
 )
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.principal import plaintext_token_for
 
 
 class TestInlineCreativesInAdapters:
@@ -130,7 +131,12 @@ class TestInlineCreativesInAdapters:
         # Mock get_current_tenant to avoid database access in unit test
         mocker.patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "tenant_123"})
 
-        principal = Principal(principal_id="principal_123", name="Test Principal", platform_mappings={})
+        principal = Principal.with_token(
+            plaintext_token_for("principal_123"),
+            principal_id="principal_123",
+            name="Test Principal",
+            platform_mappings={},
+        )
         adapter = MockAdServer(
             config={},
             principal=principal,

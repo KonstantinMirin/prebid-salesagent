@@ -54,6 +54,7 @@ from src.core.schemas import (
 )
 from tests.factories.creative_asset import build_assets, image_spec, url_spec, video_spec
 from tests.factories.media_buy import package_pricing_fields
+from tests.factories.principal import plaintext_token_for
 
 
 class TestSchemaMatchesLibrary:
@@ -488,7 +489,8 @@ class TestAdCPContract:
 
     def test_principal_model_to_schema(self):
         """Test that Principal model matches AdCP authentication requirements."""
-        model = PrincipalModel(
+        model = PrincipalModel.with_token(
+            plaintext_token_for("test_principal"),
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Advertiser",

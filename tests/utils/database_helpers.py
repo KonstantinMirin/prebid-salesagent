@@ -17,6 +17,7 @@ from src.core.database.models import (
     Product,
     Tenant,
 )
+from tests.factories.principal import plaintext_token_for
 
 
 @contextmanager
@@ -132,7 +133,8 @@ def create_principal_with_platform_mappings(
         # Default to mock adapter with test advertiser
         platform_mappings = {"mock": {"advertiser_id": "test_advertiser"}}
 
-    return Principal(
+    return Principal.with_token(
+        plaintext_token_for(principal_id),
         tenant_id=tenant_id,
         principal_id=principal_id,
         name=name,

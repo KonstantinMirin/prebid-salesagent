@@ -48,6 +48,15 @@ def assert_fields_present(data: dict, required_fields: list[str]) -> None:
     assert not missing, f"Missing required fields: {missing} in {sorted(data.keys())}"
 
 
+#: The confirmation instant every create response built here carries, and the revision
+#: beside it. Neither field has a model default -- both are columns the repository owns --
+#: so every construction states where its value came from. A literal rather than
+#: ``now()``: these cases assert on response SHAPE, so one deterministic value keeps them
+#: from disagreeing, and a test does not speak for the repository.
+_CONFIRMED_AT = datetime(2026, 3, 15, 12, 0, tzinfo=UTC)
+_REVISION = 1
+
+
 # ===========================================================================
 # 1. GetProductsResponse
 # ===========================================================================
@@ -173,9 +182,11 @@ class TestCreateMediaBuyResponseShape:
         """Minimal success response has required fields."""
         from src.core.schemas import CreateMediaBuySuccess
 
-        resp = CreateMediaBuySuccess.carrier(
+        resp = CreateMediaBuySuccess.sync_success(
             media_buy_id="buy_001",
             packages=[],
+            confirmed_at=_CONFIRMED_AT,
+            revision=_REVISION,
         )
         data = resp.model_dump(mode="json")
 
@@ -192,9 +203,11 @@ class TestCreateMediaBuyResponseShape:
             package_id="pkg_001",
             product_id="prod_1",
         )
-        resp = CreateMediaBuySuccess.carrier(
+        resp = CreateMediaBuySuccess.sync_success(
             media_buy_id="buy_002",
             packages=[package],
+            confirmed_at=_CONFIRMED_AT,
+            revision=_REVISION,
         )
         data = resp.model_dump(mode="json")
 
@@ -205,12 +218,21 @@ class TestCreateMediaBuyResponseShape:
         assert pkg["package_id"] == "pkg_001"
 
     def test_internal_fields_excluded(self):
-        """Internal fields (workflow_step_id) are excluded from serialization."""
+        """An undeclared seller-internal key does not reach the buyer.
+
+        ``workflow_step_id`` is no longer a field on this model at all -- it was deleted
+        when adapters moved to ``AdapterCreateResult``. What this grades now is the
+        ``extra="ignore"`` config that makes the deletion effective: with the SDK
+        parent's ``extra="allow"``, a construction site still passing the keyword turned
+        it into a stored extra that serialized to the buyer on all three dump paths.
+        """
         from src.core.schemas import CreateMediaBuySuccess
 
-        resp = CreateMediaBuySuccess.carrier(
+        resp = CreateMediaBuySuccess.sync_success(
             media_buy_id="buy_003",
             packages=[],
+            confirmed_at=_CONFIRMED_AT,
+            revision=_REVISION,
             workflow_step_id="wf_123",
         )
         data = resp.model_dump(mode="json")
@@ -548,8 +570,9 @@ class TestUpdateMediaBuyResponseShape:
         """Minimal success response has required fields."""
         from src.core.schemas import UpdateMediaBuySuccess
 
-        resp = UpdateMediaBuySuccess.carrier(
+        resp = UpdateMediaBuySuccess.sync_success(
             media_buy_id="buy_100",
+            revision=_REVISION,
         )
         data = resp.model_dump(mode="json")
 
@@ -565,9 +588,10 @@ class TestUpdateMediaBuyResponseShape:
             package_id="pkg_001",
             paused=False,
         )
-        resp = UpdateMediaBuySuccess.carrier(
+        resp = UpdateMediaBuySuccess.sync_success(
             media_buy_id="buy_101",
             affected_packages=[package],
+            revision=_REVISION,
         )
         data = resp.model_dump(mode="json")
 
@@ -580,7 +604,12 @@ class TestUpdateMediaBuyResponseShape:
         assert pkg["package_id"] == "pkg_001"
 
     def test_internal_fields_excluded(self):
-        """Internal fields (workflow_step_id, changes_applied, buyer_package_ref) are excluded."""
+        """Internal fields (changes_applied, buyer_package_ref) are excluded.
+
+        ``workflow_step_id`` is no longer declared on this model -- see the create-side
+        case of the same name: passing it grades ``extra="ignore"``, which is what keeps
+        the deleted field off the wire rather than storing it as an extra.
+        """
         from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
 
         package = AffectedPackage(
@@ -589,9 +618,10 @@ class TestUpdateMediaBuyResponseShape:
             changes_applied={"creative_ids_added": ["c1", "c2"]},
             buyer_package_ref="buyer_pkg_ref_002",
         )
-        resp = UpdateMediaBuySuccess.carrier(
+        resp = UpdateMediaBuySuccess.sync_success(
             media_buy_id="buy_102",
             affected_packages=[package],
+            revision=_REVISION,
             workflow_step_id="wf_456",
         )
         data = resp.model_dump(mode="json")
@@ -752,8 +782,8 @@ class TestSerializationConsistency:
                     media_buy_id="mb_test",
                     packages=[],
                     # No model defaults: both are columns the repository owns.
-                    confirmed_at="2026-03-15T12:00:00Z",
-                    revision=1,
+                    confirmed_at=_CONFIRMED_AT,
+                    revision=_REVISION,
                 ),
                 id="create_media_buy",
             ),
@@ -766,7 +796,7 @@ class TestSerializationConsistency:
             pytest.param(
                 lambda: __import__(
                     "src.core.schemas", fromlist=["UpdateMediaBuySuccess"]
-                ).UpdateMediaBuySuccess.carrier(media_buy_id="mb_test", affected_packages=[]),
+                ).UpdateMediaBuySuccess.sync_success(media_buy_id="mb_test", affected_packages=[], revision=_REVISION),
                 id="update_media_buy",
             ),
             pytest.param(

@@ -49,7 +49,6 @@ def _base_patches(mock_uow, convert_fn=None):
         convert_fn = lambda p, **kw: p  # noqa: E731
     return [
         patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-        patch("src.core.tools.products.get_principal_object", return_value=None),
         patch("src.core.tools.products.convert_product_model_to_schema", side_effect=convert_fn),
     ]
 
@@ -156,7 +155,6 @@ class TestDynamicPricingExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -193,7 +191,6 @@ class TestDynamicPricingExceptionPropagation:
 
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",
@@ -301,13 +298,9 @@ class TestAdapterAnnotationExceptionPropagation:
         product = create_test_product(product_id="p1")
         mock_uow = _mock_uow_with_products([product])
 
-        # Need a principal to trigger adapter annotation path
-        mock_principal = MagicMock()
-        mock_principal.principal_id = "user-1"
-
+        # The adapter annotation path needs a principal: ``_make_identity()`` carries one.
         patches = [
             patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_principal_object", return_value=mock_principal),
             patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
             patch(
                 "src.services.dynamic_products.generate_variants_for_brief",

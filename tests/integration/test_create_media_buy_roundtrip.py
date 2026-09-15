@@ -28,6 +28,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.schemas import CreateMediaBuySuccess
+from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -59,7 +60,8 @@ class TestCreateMediaBuyRoundtrip:
             session.add(tenant)
 
             # Create principal
-            principal = ModelPrincipal(
+            principal = ModelPrincipal.with_token(
+                plaintext_token_for("test_roundtrip_principal"),
                 tenant_id="test_roundtrip_tenant",
                 principal_id="test_roundtrip_principal",
                 name="Test Roundtrip Principal",

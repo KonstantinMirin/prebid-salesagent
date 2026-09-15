@@ -35,6 +35,7 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
 from src.core.schemas import CreateMediaBuyRequest, MediaPackage, Principal, Targeting
+from tests.factories.principal import plaintext_token_for
 
 
 class GAMAutomationTester:
@@ -50,7 +51,8 @@ class GAMAutomationTester:
         self.created_orders: list[str] = []
         self.test_tenant_id = "gam_test_tenant"
 
-        self.principal = Principal(
+        self.principal = Principal.with_token(
+            plaintext_token_for("test_advertiser"),
             tenant_id=self.test_tenant_id,
             principal_id="test_advertiser",
             name="GAM Test Advertiser",

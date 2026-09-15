@@ -34,7 +34,7 @@ from src.core.schemas import CreateMediaBuyRequest, ListCreativesResponse, SyncC
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.credentials import credential_headers
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
@@ -191,7 +191,8 @@ class TestCreativeLifecycleMCP:
             session.add(currency_limit)
 
             # Create test principal
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_advertiser"),
                 tenant_id="creative_test",
                 principal_id="test_advertiser",
                 name="Test Advertiser",

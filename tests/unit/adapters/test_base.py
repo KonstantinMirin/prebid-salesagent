@@ -7,6 +7,7 @@ from pydantic import ValidationError
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest, Principal
+from tests.factories.principal import plaintext_token_for
 
 pytestmark = pytest.mark.unit
 
@@ -44,7 +45,8 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     when a create_media_buy request is received.
     """
     # Arrange
-    principal = Principal(
+    principal = Principal.with_token(
+        plaintext_token_for("test_principal"),
         principal_id="test_principal",
         name="Test Principal",
         platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},

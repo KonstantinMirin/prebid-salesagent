@@ -16,6 +16,7 @@ from src.core.database.models import Principal as ModelPrincipal
 from src.core.database.models import Tenant as ModelTenant
 from src.core.helpers import get_adapter
 from src.core.schemas import Principal
+from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.integration
@@ -237,7 +238,8 @@ class TestAdapterFactory:
                 )
 
                 # Convert to schema object
-                principal = Principal(
+                principal = Principal.with_token(
+                    plaintext_token_for(db_principal.principal_id),
                     principal_id=db_principal.principal_id,
                     name=db_principal.name,
                     platform_mappings=db_principal.platform_mappings or {},
@@ -295,7 +297,8 @@ class TestAdapterFactory:
                 }
             )
 
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for(db_principal.principal_id),
                 principal_id=db_principal.principal_id,
                 name=db_principal.name,
                 platform_mappings=db_principal.platform_mappings or {},

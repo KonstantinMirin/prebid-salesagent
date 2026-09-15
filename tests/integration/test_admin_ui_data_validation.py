@@ -9,6 +9,8 @@ Data tests: "Does it show the right data?" (content validation)
 
 import pytest
 
+from tests.factories.principal import plaintext_token_for
+
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
@@ -213,7 +215,8 @@ class TestPrincipalsDataValidation:
         # Create 3 principals to test list display
         with get_db_session() as db_session:
             for i in range(3):
-                principal = Principal(
+                principal = Principal.with_token(
+                    plaintext_token_for(f"test_principal_dup_check_{i}"),
                     tenant_id=tenant_id,
                     principal_id=f"test_principal_dup_check_{i}",
                     name=f"Test Advertiser {i}",
@@ -440,7 +443,8 @@ class TestDashboardDataValidation:
 
         # Create principal first
         with get_db_session() as db_session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_dashboard"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_dashboard",
                 name="Test Advertiser",
@@ -498,7 +502,8 @@ class TestMediaBuysDataValidation:
 
         # Create principal first
         with get_db_session() as db_session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_mb"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_mb",
                 name="Test Advertiser",
@@ -555,7 +560,8 @@ class TestMediaBuysDataValidation:
 
         # Create principal
         with get_db_session() as db_session:
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_status"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_status",
                 name="Test Advertiser",
@@ -611,7 +617,8 @@ class TestWorkflowsDataValidation:
         # Create principal and context
         with get_db_session() as db_session:
             # Create principal
-            principal = Principal(
+            principal = Principal.with_token(
+                plaintext_token_for("test_principal_workflow"),
                 tenant_id=tenant_id,
                 principal_id="test_principal_workflow",
                 name="Test Advertiser",

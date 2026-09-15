@@ -17,6 +17,7 @@ from src.core.database.models import (
 )
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import PricingOptionFactory
+from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.requires_db
@@ -295,13 +296,15 @@ def test_principal_model_exists_for_access_control(integration_db):
 
         # Create principals (with required fields)
         # platform_mappings must have at least one platform (google_ad_manager, kevel, or mock)
-        principal1 = Principal(
+        principal1 = Principal.with_token(
+            plaintext_token_for("adv_001"),
             principal_id="adv_001",
             tenant_id=tenant_id,
             name="Advertiser One",
             platform_mappings={"mock": {"advertiser_id": "mock_adv_001"}},
         )
-        principal2 = Principal(
+        principal2 = Principal.with_token(
+            plaintext_token_for("adv_002"),
             principal_id="adv_002",
             tenant_id=tenant_id,
             name="Advertiser Two",

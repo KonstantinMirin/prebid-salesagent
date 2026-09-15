@@ -23,7 +23,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.factories import PricingOptionFactory
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
 
 
@@ -93,7 +93,8 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         )
         session.add(pricing)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal_media_buy"),
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_media_buy",
             name="Test Advertiser",
@@ -186,7 +187,8 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
         )
         session.add(pricing)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal_format_validation"),
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_format_validation",
             name="Test Advertiser Format",
@@ -275,7 +277,8 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             session.add(pricing)
             products.append(product)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal_shared"),
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_shared",
             name="Test Advertiser Shared",
@@ -370,7 +373,8 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         )
         session.add(pricing)
 
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_principal_updates"),
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_updates",
             name="Test Advertiser Updates",

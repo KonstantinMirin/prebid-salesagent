@@ -36,7 +36,7 @@ from src.core.database.models import Product as DBProduct
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -186,7 +186,8 @@ class TestCrossPrincipalIsolation:
                 )
             )
             session.add(
-                Principal(
+                Principal.with_token(
+                    plaintext_token_for("principal_1"),
                     tenant_id=self.TENANT_ID,
                     principal_id="principal_1",
                     name="Principal 1",
@@ -194,7 +195,8 @@ class TestCrossPrincipalIsolation:
                 )
             )
             session.add(
-                Principal(
+                Principal.with_token(
+                    plaintext_token_for("principal_2"),
                     tenant_id=self.TENANT_ID,
                     principal_id="principal_2",
                     name="Principal 2",
@@ -323,7 +325,8 @@ class TestApprovalWorkflow:
                 )
             )
             session.add(
-                Principal(
+                Principal.with_token(
+                    plaintext_token_for(self.PRINCIPAL_ID),
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="Test Advertiser",
@@ -438,7 +441,8 @@ class TestBatchSync:
                 )
             )
             session.add(
-                Principal(
+                Principal.with_token(
+                    plaintext_token_for(self.PRINCIPAL_ID),
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="Batch Advertiser",
@@ -563,7 +567,8 @@ class TestFormatCompatibility:
                 )
             )
             session.add(
-                Principal(
+                Principal.with_token(
+                    plaintext_token_for(self.PRINCIPAL_ID),
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="Format Compat Advertiser",
@@ -686,7 +691,8 @@ class TestMediaBuyStatusTransition:
                 )
             )
             session.add(
-                Principal(
+                Principal.with_token(
+                    plaintext_token_for(self.PRINCIPAL_ID),
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="MB Status Advertiser",

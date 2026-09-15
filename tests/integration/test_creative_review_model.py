@@ -22,6 +22,7 @@ from src.core.database.queries import (
     get_creative_reviews,
     get_creative_with_latest_review,
 )
+from tests.factories.principal import plaintext_token_for
 
 
 def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str):
@@ -42,7 +43,8 @@ def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str)
     session.add(tenant)
     session.commit()
 
-    principal = Principal(
+    principal = Principal.with_token(
+        plaintext_token_for(principal_id),
         tenant_id=tenant_id,
         principal_id=principal_id,
         name="Test Principal",

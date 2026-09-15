@@ -58,11 +58,7 @@ def _call_impl(
     if req is None:
         req = ListCreativeFormatsRequest()
 
-    identity = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=MOCK_TENANT["tenant_id"],
-        tenant=MOCK_TENANT,
-    )
+    identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
 
     with (
         patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry,
@@ -569,11 +565,7 @@ def _call_impl_raw(
     from src.core.tools.creative_formats import _list_creative_formats_impl
 
     req = ListCreativeFormatsRequest()
-    identity = PrincipalFactory.make_identity(
-        principal_id=None,
-        tenant_id=MOCK_TENANT["tenant_id"],
-        tenant=MOCK_TENANT,
-    )
+    identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
 
     if registry_side_effect:
         with patch(
@@ -799,11 +791,7 @@ class TestAgentReferralFailureLogsWarning:
         mock_reg.list_all_formats_with_errors = mock_list_formats_with_errors
         mock_reg.list_all_formats = mock_list_formats
 
-        identity = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id=MOCK_TENANT["tenant_id"],
-            tenant=MOCK_TENANT,
-        )
+        identity = PrincipalFactory.make_public_identity(tenant=MOCK_TENANT)
 
         with (
             patch(

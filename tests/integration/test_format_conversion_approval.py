@@ -25,6 +25,7 @@ from src.core.database.models import (
 )
 from src.core.tools.media_buy_create import ApprovalOutcome
 from tests.factories import PricingOptionFactory
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.helpers.media_buy_approval import run_approval
 
@@ -158,7 +159,8 @@ def test_principal(integration_db, test_tenant):
     """Create test principal."""
     principal_id = "test_advertiser"
     with get_db_session() as session:
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for(principal_id),
             tenant_id=test_tenant,
             principal_id=principal_id,
             name="Test Advertiser",

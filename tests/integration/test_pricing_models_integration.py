@@ -15,7 +15,7 @@ from src.core.schemas import GetProductsRequest, PricingModel
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
 from tests.factories import PricingOptionFactory
-from tests.factories.principal import PrincipalFactory
+from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -66,7 +66,8 @@ def setup_tenant_with_pricing_products(integration_db):
         session.add(currency_limit)
 
         # Add principal for authentication
-        principal = Principal(
+        principal = Principal.with_token(
+            plaintext_token_for("test_advertiser"),
             tenant_id="test_pricing_tenant",
             principal_id="test_advertiser",
             name="Test Advertiser",
