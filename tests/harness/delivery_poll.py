@@ -93,6 +93,4 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         )
         return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
-    def parse_rest_response(self, data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
-        """Parse REST JSON into GetMediaBuyDeliveryResponse."""
-        return GetMediaBuyDeliveryResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL.

@@ -1246,6 +1246,8 @@ class AccountListDispatchMixin:
         return self._run_mcp_client("list_accounts", ListAccountsResponse, **kwargs)  # type: ignore[attr-defined]
 
     def _parse_list_rest_response(self, data: dict[str, Any]) -> Any:
+        # revive, not the constructor: a served document carries the context the boundary
+        # stamped and AdcpResponse refuses that field on construction.
         from src.core.schemas.account import ListAccountsResponse
 
-        return ListAccountsResponse(**data)
+        return ListAccountsResponse.revive(data)

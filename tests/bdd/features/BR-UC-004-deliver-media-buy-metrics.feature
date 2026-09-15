@@ -527,19 +527,29 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     #   BR-030 describes batch behavior. See Pass 2 gap analysis.
 
   @T-UC-004-ext-d @extension @ext-d @error @invariant @ownership @nfr @nfr-001
-  Scenario: Ownership mismatch - returns media_buy_not_found for security
+  Scenario: Ownership mismatch - a non-owned id is reported as not found
     Given a media buy "mb-other" owned by "other-buyer"
     And the Buyer is authenticated
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-other"]
-    Then the error is compliant with the AdCP error spec
-    And the operation should fail
-    And the error code should be "media_buy_not_found"
+    Then the response is compliant with the get_media_buy_delivery spec
+    And the response should NOT include delivery data for "mb-other"
+    And the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-other"
     And the error should NOT reveal that the media buy exists
-    And the error should include "suggestion" field
     # POST-F1: System state unchanged
     # POST-F2: Error does not reveal existence (security)
-    # POST-F3: Suggestion to verify identifier
-    # PRE-BIZ3: non-owner -> rejection masked as not_found
+    # PRE-BIZ3: non-owner -> reported as not_found
+    #
+    # Corrected on two counts. The code was spelled "media_buy_not_found"; the pin's 92
+    # codes are upper snake case and the member is MEDIA_BUY_NOT_FOUND. And the shape was
+    # a hard failure, which contradicts the reading already settled for this same rule on
+    # this same tool: @T-UC-004-identify-batch-ownership above grades BR-RULE-030 INV-5 as
+    # ADVISORY PER ID, because get-media-buy-delivery-response.json (3.1.1) declares
+    # errors[] for "missing delivery data". A single-id request is the one-element case of
+    # that batch, not a different obligation. The security property the scenario exists for
+    # is untouched: the answer for a non-owned id is byte-identical to the answer for a
+    # nonexistent one, which is what stops the response disclosing that someone else's buy
+    # exists. The suggestion assertion is gone because a per-id advisory is not the
+    # top-level error the "suggestion" step reads.
 
   @T-UC-004-ext-f @extension @ext-f @error
   Scenario: Adapter error - ad server unavailable
@@ -1084,24 +1094,30 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     Given a media buy "mb-001" with a known owner
     When the Buyer Agent requests delivery metrics with principal "<partition>"
     Then the response is compliant with the get_media_buy_delivery spec
-    And the ownership check should result in <expected>
+    And <expected_outcome>
+    # Both rows name the OUTCOME rather than a verdict word. They read "should result in
+    # valid" / "invalid", which is not an obligation: the step had to guess what invalid
+    # meant, guessed a hard refusal, and so demanded the opposite of what
+    # @T-UC-004-identify-batch-ownership grades for the same rule -- no delivery data for
+    # the id plus a MEDIA_BUY_NOT_FOUND advisory, which is the shape
+    # get-media-buy-delivery-response.json (3.1.1) declares for missing delivery data.
 
     Examples:
-      | partition       | expected |
-      | owner_matches   | valid    |
-      | owner_mismatch  | invalid  |
+      | partition       | expected_outcome                                                          |
+      | owner_matches   | the response should include delivery data for "mb-001"                    |
+      | owner_mismatch  | the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-001" |
 
   @T-UC-004-boundary-ownership @boundary @ownership
   Scenario Outline: Principal ownership boundary - <boundary_point>
     Given a media buy "mb-001" with a known owner
     When the Buyer Agent requests delivery metrics at ownership boundary "<boundary_point>"
     Then the response is compliant with the get_media_buy_delivery spec
-    And the ownership should be <expected>
+    And <expected_outcome>
 
     Examples:
-      | boundary_point                        | expected |
-      | principal matches owner               | valid    |
-      | principal differs from owner          | invalid  |
+      | boundary_point                        | expected_outcome                                                              |
+      | principal matches owner               | the response should include delivery data for "mb-001"                       |
+      | principal differs from owner          | the response errors include code "MEDIA_BUY_NOT_FOUND" for media buy "mb-001" |
 
   @T-UC-004-partition-sampling @partition @sampling_method
   Scenario Outline: Sampling method partition - <partition>

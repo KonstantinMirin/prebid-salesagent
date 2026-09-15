@@ -139,9 +139,9 @@ class ProductEnv(ProductMixin, IntegrationEnv):
         """
         return {k: v for k, v in kwargs.items() if v is not None}
 
-    def parse_rest_response(self, data: dict[str, Any]) -> GetProductsResponse:
-        """Parse REST JSON response into GetProductsResponse."""
-        return GetProductsResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL. The one-line override
+    # here read GetProductsResponse(**data), which the served document's boundary-stamped
+    # `context` makes impossible to construct.
 
 
 class RealResolverProductEnv(EgressHatchMixin, ProductEnv):

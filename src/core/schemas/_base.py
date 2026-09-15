@@ -796,18 +796,36 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
 
     @classmethod
     def revive(cls, data: dict[str, Any]) -> "AdcpResponse":
-        """Rebuild a stored response of this type, resolving a ``oneOf`` to its branch.
+        """Rebuild a response of this type from a document, resolving a ``oneOf`` to its branch.
 
         A response whose schema is a single shape validates as itself. A union root resolves
         through the discriminated union registered for it, which returns the BRANCH the buyer
         originally received -- validating against the root would build the root and drop
         whatever the branch declares.
 
+        THE ONE DOOR FOR A DOCUMENT THAT ALREADY CARRIES A CONTEXT. The constructor refuses
+        ``context`` and so does assignment, which is what makes ``_boundary._served`` the only
+        thing that can PUT one on a response. A reader rebuilding a document the boundary
+        already served is the other side of that: the context is not minted here, it arrived,
+        and refusing to carry it would mean no reader can ever have the response it was sent.
+        The idempotency cache does not exercise this -- it stores the body BEFORE the stamp --
+        but the test harness re-parses the served wire into this env's own response subclass,
+        and two integration tests read ``result.payload.context`` off it
+        (tests/integration/test_creative_sync_transport.py:1468). So the field comes off the
+        document, the rest validates through the refusing constructor unchanged, and the value
+        is re-attached through ``object.__setattr__`` -- the same door the boundary uses, in the
+        one classmethod that owns reconstruction.
+
         Raises whatever pydantic raises; the caller decides that an unrevivable stored body is
         a cache miss.
         """
+        payload = dict(data)
+        context = payload.pop("context", None)
         adapter = _BRANCH_ADAPTERS.get(cls)
-        return adapter.validate_python(data) if adapter is not None else cls.model_validate(data)
+        revived = adapter.validate_python(payload) if adapter is not None else cls.model_validate(payload)
+        if context is not None:
+            object.__setattr__(revived, "context", context)
+        return revived
 
 
 class AdcpErrorResponse(AdcpResponse):

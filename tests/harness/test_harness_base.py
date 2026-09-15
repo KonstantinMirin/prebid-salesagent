@@ -237,7 +237,10 @@ class TestBaseClassContract:
         env = BaseTestEnv(principal_id="p1", tenant_id="t1")
         credential = env.credential()
 
-        assert credential["Authorization"] == f"Bearer {env._unit_principal().access_token}"
+        # Derived, not read off the row: production stores only sha256(token).
+        from tests.factories.principal import plaintext_token_for
+
+        assert credential["Authorization"] == f"Bearer {plaintext_token_for('p1')}"
         assert env._unit_principal().principal_id == "p1"
         assert credential["x-adcp-tenant"] == "t1"
         assert "x-dry-run" not in credential

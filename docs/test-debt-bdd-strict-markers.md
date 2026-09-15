@@ -23,7 +23,7 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
 | Item | Status | Bead |
 |------|--------|------|
 | C1 + C2 (account not enforced at _impl boundary; +9d5 REST FIXME) | OPEN P1 sec | `salesagent-xpcd` |
-| C3 (cross-principal 200+empty, not 403) | OPEN P1 sec | `salesagent-h25j` |
+| C3 (cross-principal 200+empty, not 403) | RECONCILED | — |
 | C4 (ValidationError→AdCPSalesAgentError boundary translator) | OPEN P2 broad | `salesagent-l6ev` |
 | C5 (`include_package_daily_breakdown` no-op) | OPEN P2 | #1776 |
 | C6 (date-range validation in success envelope) | OPEN P3 | `salesagent-t6y9` |
@@ -87,18 +87,28 @@ only record). Reconciled items were fixed by the Phase-2 wave (run
 - **Severity:** P1 (correctness; pairs with C1)
 - **Origin:** Batch 3 audit
 
-### C3 — Cross-principal media-buy access returns 200+empty instead of 403
+### C3 — Cross-principal media-buy access — RECONCILED
 - **Scope:** `T-UC-004-partition-ownership` / `-boundary-ownership`,
-  mismatch rows
-- **Where:** `src/core/database/repositories/media_buy.py:99-107`
-  (`get_by_principal` filters silently)
-- **Impact:** Security gap. A request with a foreign principal_id receives
-  an empty deliveries list rather than `AdCPAuthorizationError`.
-- **Unblocks:** raise `AdCPAuthorizationError` (or 404 with suggestion) when
-  the requesting principal does not own any of the requested media_buys.
-  Then the ownership mismatch rows can flip to `strict=True`.
-- **Severity:** P1 (security gap)
-- **Origin:** Batch 3 audit
+  mismatch rows, and `T-UC-004-ext-d`
+- **Reconciled against:** adcp 3.1.1
+  `media-buy/get-media-buy-delivery-response.json`, which declares `errors[]`
+  for "missing delivery data", and the reading already settled for the same
+  rule on the same tool by `@T-UC-004-identify-batch-ownership`: a non-owned
+  id is answered exactly like a nonexistent one — no delivery data, plus a
+  `MEDIA_BUY_NOT_FOUND` advisory per id. That IS the fail-closed answer L1
+  security asks for ("the body MUST NOT distinguish 'unauthorized' from 'not
+  found'"), and it is what the tenant-and-principal-scoped repository
+  produces. The entry demanded a hard 403 instead, which would have
+  distinguished the two cases and disclosed that someone else's buy exists.
+- **What was actually broken:** the scenarios, on two counts. They asserted a
+  verdict word ("invalid") that the step had to interpret, and it guessed a
+  hard refusal; and their When INJECTED a fabricated `ResolvedIdentity` as a
+  request kwarg, so no transport tested ownership at all — a2a and mcp
+  "passed" by rejecting an unknown argument, rest dropped it and dispatched as
+  the owner. Both outlines now name the outcome in their Examples, and the
+  When seeds a real second principal and presents its token.
+- **Severity:** was P1 (security gap); the gap was in the grading, not in
+  production.
 
 ### C4 — Pydantic `ValidationError` not translated to `AdCPSalesAgentError(INVALID_REQUEST, suggestion)`
 - **Scope:** ~32 partition rows across UC-004 (`reporting_dimensions`,

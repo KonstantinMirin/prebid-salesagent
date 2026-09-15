@@ -215,6 +215,4 @@ class CreativeFormatsEnv(IntegrationEnv):
                 body[key] = value
         return body
 
-    def parse_rest_response(self, data: dict[str, Any]) -> ListCreativeFormatsResponse:
-        """Parse REST JSON into ListCreativeFormatsResponse."""
-        return ListCreativeFormatsResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL.

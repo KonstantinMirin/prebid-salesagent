@@ -2554,11 +2554,17 @@ def _credential_for_agent(ctx: dict, agent_name: str) -> dict[str, str]:
     The server resolves the agent from these headers, on every transport, so a
     tokenless agent sync is refused there rather than let through (PR #1430 items 1-2).
     """
+    # The token is DERIVED, not read: production stores sha256(token) and never the
+    # plaintext, so `agent.access_token` stopped existing with the column and raised
+    # AttributeError here. `plaintext_token_for` is the one deriver the factory and the
+    # harness's own credential() both use, so the header carries the token the real
+    # resolver will hash and find.
+    from tests.factories.principal import plaintext_token_for
     from tests.helpers.credentials import credential_headers
 
     agent = _create_agent(ctx, agent_name)
     ctx["env"]._commit_factory_data()
-    return credential_headers(token=agent.access_token, tenant=agent.tenant_id)
+    return credential_headers(token=plaintext_token_for(agent.principal_id), tenant=agent.tenant_id)
 
 
 def _given_agent_synced(ctx: dict, agent_name: str, domain: str) -> None:

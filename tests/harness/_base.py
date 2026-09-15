@@ -25,7 +25,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any, Self
+from typing import TYPE_CHECKING, Any, Self, cast, get_type_hints
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
@@ -467,8 +467,22 @@ class BaseTestEnv:
                 f"{type(self).__name__} declares no MCP_TOOL — set it to the tool's registry "
                 "name before calling inject_untyped_exception()"
             )
-        raising = AsyncMock(side_effect=exception)
-        patcher = patch.dict(_TOOLS, {self.MCP_TOOL: replace(_TOOLS[self.MCP_TOOL], impl=raising)})
+        # A REAL async function, annotated like the implementation it replaces -- not an
+        # AsyncMock. ToolSpec.__post_init__ derives the row's credential policy from the
+        # impl's `identity` annotation, so `replace(row, impl=AsyncMock())` raised
+        # "TypeError: <AsyncMock ...> is not a module, class, method, or function" out of
+        # get_type_hints before the scenario could dispatch anything. The annotations are
+        # the CLASS OBJECTS taken off the original, so get_type_hints returns them without
+        # re-resolving a string in this module's namespace, and the substituted row keeps
+        # the tool's own DTO and identity type.
+        spec = _TOOLS[self.MCP_TOOL]
+        declared = get_type_hints(spec.impl)
+
+        async def raising(*, req: Any, identity: Any) -> Any:
+            raise exception
+
+        raising.__annotations__ = {"req": declared["req"], "identity": declared["identity"]}
+        patcher = patch.dict(_TOOLS, {self.MCP_TOOL: replace(spec, impl=raising)})
         patcher.start()
         self.mock["_untyped_exception"] = raising
         self._guard("patch:_untyped_exception", patcher.stop)
@@ -779,8 +793,17 @@ class BaseTestEnv:
         # The captured wire is deliberately UNSTRIPPED so envelope assertions can
         # see message/success; the response model has not declared them, so they
         # come off before validation.
+        #
+        # Through ``revive`` when the parser is a response model, because a SERVED document
+        # carries the context the boundary stamped and the constructor refuses that field --
+        # ``AdcpResponse`` makes ``_boundary._served`` the only thing that can put one on a
+        # response, so ``parser(**wire)`` raised a ValidationError in the TEST process and the
+        # scenario reported "no response arrived" for a request the seller answered fine.
+        # ``revive`` is the reader-side door: it takes the field off the document, validates
+        # the rest through the same refusing constructor, and re-attaches the value.
         parser = self.response_parser(tool)
-        return DeliverResult(payload=parser(**wire), wire_response=wire)
+        revive = getattr(parser, "revive", None)
+        return DeliverResult(payload=revive(wire) if revive is not None else parser(**wire), wire_response=wire)
 
     def call_mcp(self, **kwargs: Any) -> Any:
         """The parsed MCP payload. Defined ONCE; never override — override
@@ -1083,14 +1106,31 @@ class BaseTestEnv:
         )
 
     def parse_rest_response(self, data: dict[str, Any]) -> BaseModel:
-        """Parse REST JSON response dict into the expected Pydantic model.
+        """Parse a REST body into this env's ``RESPONSE_MODEL``, through ``revive``.
 
-        Override in subclass.
+        Implemented here rather than refused here. This used to raise
+        NotImplementedError, and nine envs answered it with one line of their own --
+        ``SomeResponse(**data)`` -- which is the substituted-variable duplication the DRY
+        rule forbids, and which every one of them got WRONG in the same way: a served
+        document carries the ``context`` the boundary stamped, ``AdcpResponse`` refuses
+        that field on construction so the boundary is the only thing that can put one
+        there, and so every REST dispatch of a context-carrying request raised in the TEST
+        process. The scenario then reported "no response arrived" for a request the seller
+        had answered correctly. ``revive`` is the reader-side door for exactly that, and
+        ``MediaBuyCreateEnv`` was already using it for the branch-resolution half of the
+        same problem.
+
+        An env whose tool has no single pinned response model declares no
+        ``RESPONSE_MODEL`` and overrides this; the refusal below is what it used to be.
         """
-        raise NotImplementedError(
-            f"{type(self).__name__} does not implement parse_rest_response(). "
-            "Override to enable Transport.REST dispatch."
-        )
+        model = self.RESPONSE_MODEL
+        revive = getattr(model, "revive", None)
+        if revive is None:
+            raise NotImplementedError(
+                f"{type(self).__name__} declares no RESPONSE_MODEL with a revive() and does not "
+                "override parse_rest_response(). Do one or the other to enable Transport.REST."
+            )
+        return cast("BaseModel", revive(data))
 
     def parse_rest_error_envelope(self, status_code: int, data: dict[str, Any]) -> dict[str, Any] | None:
         """The two-layer envelope from a REST error body, or ``None``.

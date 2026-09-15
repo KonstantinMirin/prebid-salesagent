@@ -109,6 +109,4 @@ class CreativeListEnv(IntegrationEnv):
         accepted = TOOLS["list_creatives"].dto.model_fields
         return {key: value for key, value in kwargs.items() if key in accepted and value is not None}
 
-    def parse_rest_response(self, data: dict[str, Any]) -> ListCreativesResponse:
-        """Parse REST JSON into ListCreativesResponse."""
-        return ListCreativesResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL.

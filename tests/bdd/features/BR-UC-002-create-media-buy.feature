@@ -380,7 +380,12 @@ Feature: BR-UC-002 Create Media Buy
   @T-UC-002-ext-i @extension @ext-i @error @post-f1 @post-f2 @post-f3
   Scenario: Authentication failure -- no principal in context
     Given the Buyer has no authentication credentials
+    And a valid create_media_buy request
     When the Buyer Agent sends the create_media_buy request
+    # The request has to be OTHERWISE VALID or this scenario grades the wrong refusal.
+    # Without the second Given it dispatched a near-empty body, so the boundary answered
+    # INVALID_REQUEST for three missing required fields and the AUTH_MISSING assertion
+    # below was measuring schema validation. The subject is the absent credential.
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "AUTH_MISSING"

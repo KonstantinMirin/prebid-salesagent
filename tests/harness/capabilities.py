@@ -342,9 +342,7 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         return kwargs
 
-    def parse_rest_response(self, data: dict[str, Any]) -> GetAdcpCapabilitiesResponse:
-        """Parse REST JSON into GetAdcpCapabilitiesResponse."""
-        return GetAdcpCapabilitiesResponse(**data)
+    # parse_rest_response: the base's, which revives RESPONSE_MODEL.
 
     # -- Async variants for @pytest.mark.asyncio tests ------------------------
 
