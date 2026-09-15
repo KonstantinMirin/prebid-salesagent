@@ -48,6 +48,12 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "COMPAT",
         "UC-005",
         "UC-019",
+        # UC-026 was disconnected in two places at once: no ENV_ROUTES row, and its
+        # step module unregistered, so all 75 scenarios graded nothing while the file
+        # was still being maintained. Both are connected now, which is a graduation
+        # and so belongs in this pin -- deleting the row again would silently
+        # dormant every one of those scenarios.
+        "UC-026",
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "codes-declared-code-reaches-buyer",
