@@ -4835,19 +4835,6 @@ def _build_creative_formats_env(e2e_config: object | None) -> AbstractContextMan
     return CreativeFormatsEnv(e2e_config=e2e_config)
 
 
-def _seed_uc005(ctx: dict, env: object) -> None:
-    """Seed a tenant ONLY in e2e mode.
-
-    The live server authenticates the token against the DB tenant, and UC-005
-    baseline scenarios carry no account/tenant Given step to seed it (unlike
-    UC-006/UC-011). In-process the registry is mocked and the DB is per-test,
-    so the in-process status quo must stay unseeded. Mirrors the UC-004 poll
-    branch (#1417).
-    """
-    if env.e2e_config is not None:
-        env.setup_default_data()
-
-
 def _build_media_buy_list_env(e2e_config: object | None) -> AbstractContextManager:
     """get_media_buys — MediaBuyListEnv runs the real _get_media_buys_impl and
     its A2A/MCP wrappers against a real DB (no adapter mock; list is a pure
@@ -5073,7 +5060,18 @@ _UC_BUCKET_ROUTES: dict[str, EnvRoute] = {
     "ADMIN": EnvRoute(tag="ADMIN", env_builder=_build_admin_env),
     "COMPAT": EnvRoute(tag="COMPAT", env_builder=_build_product_env),
     "UC-GET-PRODUCTS": EnvRoute(tag="UC-GET-PRODUCTS", env_builder=_build_product_env),
-    "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_uc005),
+    # UC-005 seeds the tenant on EVERY transport, not e2e only. The e2e-only row said
+    # "in-process the registry is mocked and the DB is per-test, so the in-process status
+    # quo must stay unseeded" -- true of the registry, false of the SELLER. The resolver
+    # reads the tenant out of the database on every transport, so with no row the Background
+    # sentence "a Seller Agent is operational and accepting requests" was false and
+    # list_creative_formats took its no-seller branch (``if tenant is None`` ->
+    # ``ListCreativeFormatsResponse(formats=[])``): every filter scenario graded an empty
+    # catalog. It looked transport-specific only because _run_a2a_handler's audit-FK
+    # preamble (_seed_ambient_tenant -> _ensure_tenant_for_audit) creates the row behind
+    # the scenario's back, so a2a alone had a seller and mcp/rest did not -- the same
+    # scenario running two different worlds.
+    "UC-005": EnvRoute(tag="UC-005", env_builder=_build_creative_formats_env, seed=_seed_default_data),
     "UC-019": EnvRoute(tag="UC-019", env_builder=_build_media_buy_list_env, seed=_seed_tenant_and_principal),
 }
 
