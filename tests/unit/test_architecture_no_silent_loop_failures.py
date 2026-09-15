@@ -871,7 +871,10 @@ _PRODUCTS_DEGRADATION_SUBJECTS = (
     "Failed to generate dynamic product variants",  # variants dropped
     "Failed to enrich products with dynamic pricing",  # pricing enrichment dropped
     "Failed to apply AI product ranking",  # ranking dropped (superset still returned)
-    "Failed to annotate pricing options with adapter support",  # non-spec extension dropped
+    # "Failed to annotate pricing options with adapter support" is gone with the
+    # annotation itself: the non-spec `supported`/`unsupported_reason` fields were
+    # removed from the adapter-support annotations, so there is no enrichment left
+    # to degrade and no handler to recognize.
 )
 
 _MEDIA_BUY_CREATE_REL = "src/core/tools/media_buy_create.py"
