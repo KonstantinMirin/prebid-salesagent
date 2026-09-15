@@ -252,18 +252,45 @@ Feature: BR-UC-005 Discover Creative Formats
   @T-UC-005-inv-049-8-violated @UC-005-MAIN-MCP-18 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-8 violated - Disclosure positions partial match excluded
     Given the registry has format "audio-ad" with supported_disclosure_positions ["prominent", "audio"]
+    And the registry has format "exact-ad" with supported_disclosure_positions ["prominent", "footer"]
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent", "footer"]
     Then the response is compliant with the list_creative_formats spec
     And "audio-ad" should not be returned
+    And "exact-ad" should be returned
     # BR-RULE-049 INV-8: format only supports "prominent" not "footer" -> excluded
+    #
+    # "exact-ad" is a POSITIVE CONTROL, added when this row was graduated. The scenario
+    # asserted an exclusion and nothing else, so it passed on ANY empty result -- which is
+    # how it XPASSED for a whole release while production applied no disclosure filter at
+    # all: the seller returned an empty catalog for an unrelated reason (the UC-005 route
+    # seeded no tenant) and "audio-ad is absent" held vacuously. The control makes the
+    # Then discriminate: the filter must REMOVE the partial match and KEEP the exact one,
+    # so neither an empty catalog nor an unfiltered one can satisfy it. Distinct from
+    # @T-UC-005-inv-049-8-holds, which grades a SUPERSET match
+    # (["prominent","footer","overlay"]); this row grades an EXACT match against a partial
+    # one.
+    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-8-nofield @UC-005-MAIN-MCP-18 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-8 edge - Format without disclosure positions excluded
     Given the registry has format "basic-banner" with no supported_disclosure_positions field
+    And the registry has format "disclosing-banner" with supported_disclosure_positions ["prominent"]
     When the Buyer Agent requests formats with disclosure_positions filter ["prominent"]
     Then the response is compliant with the list_creative_formats spec
     And "basic-banner" should not be returned
+    And "disclosing-banner" should be returned
     # BR-RULE-049 INV-8: formats without supported_disclosure_positions excluded
+    #
+    # "disclosing-banner" is a POSITIVE CONTROL, added when this row was graduated, for
+    # the same reason as the sibling -violated row: an exclusion-only Then passes on any
+    # empty result, and this row XPASSED vacuously on exactly that. The control pins that
+    # an UNDECLARED format is dropped while a DECLARED one survives the same request --
+    # the pinned obligation is a discrimination between the two, not an absence.
+    #
+    # The obligation is core/format.json on supported_disclosure_positions: "When omitted,
+    # the format makes no disclosure rendering guarantees -- creative agents SHOULD treat
+    # this as incompatible with briefs that require specific disclosure positions."
+    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/format.json
     # --- INV-9: output_format_ids OR-match (NEW) ---
 
   @T-UC-005-inv-049-8-capabilities @invariant @BR-RULE-049

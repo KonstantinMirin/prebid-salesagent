@@ -457,9 +457,29 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-002-inv-087-5": "duplicate optimization_goals priority: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-6": "empty optimization_goals array: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
     "T-UC-002-inv-087-7": "per_ad_spend without value_field: VALIDATION_ERROR instead of INVALID_REQUEST — spec-production gap",
-    # FIXME(#1660): disclosure_positions filter not implemented in production
-    # Note: violated/nofield pass vacuously (field rejected at schema level)
-    "T-UC-005-inv-049-8-holds": "disclosure_positions filter not implemented",
+    # Graduated: T-UC-005-inv-049-8-holds, together with the -violated and -nofield rows
+    # that used to sit in _UC005_PARTIAL_TAGS below. The disclosure_positions filter IS
+    # implemented now -- src/core/tools/creative_formats.py applies AND semantics
+    # (requested set must be a SUBSET of the format's) over the two-source lookup
+    # get_format_disclosure_positions, which is disclosure_capabilities[].position when
+    # present and supported_disclosure_positions otherwise, the order
+    # media-buy/list-creative-formats-request.json prescribes on the filter itself.
+    #
+    # The old note here -- "violated/nofield pass vacuously (field rejected at schema
+    # level)" -- was WRONG on its stated cause, and being wrong is what kept the gap
+    # alive: nothing was ever rejected at the schema level. ListCreativeFormatsRequest
+    # inherits disclosure_positions from its library parent and model_fields carries it,
+    # so the field was ACCEPTED on every transport and then silently dropped by an _impl
+    # that had no filter for it -- a buyer asking for a disclosure position got formats
+    # that do not support it, with no error. The vacuity had an unrelated cause: the
+    # UC-005 route seeded no tenant in-process, the seller answered with an empty catalog,
+    # and an exclusion-only Then passes on any empty result. Both rows now carry a
+    # positive control (see the scenarios) so an empty catalog can no longer satisfy them.
+    #
+    # NOT #1660: that issue is adcp 6.6.0 codegen divergence (the generated request
+    # omitting the `type` filter, and missing uniqueItems on
+    # disclosure_positions/persistence). Presence was never the defect here; application
+    # was. #1660 stays open on its own subject.
     # adcp 3.12: FormatCategory/type filter removed from ListCreativeFormatsRequest.
     # Scenarios that rely on type filter or type-based sorting can no longer pass.
     "T-UC-005-main-filtered": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
@@ -1337,9 +1357,11 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
 # MCP selective xfails: previously the MCP wrapper did not accept the
 # disclosure_positions keyword. #1417 added disclosure_positions +
 # disclosure_persistence to the MCP list_creative_formats wrapper, so the param
-# is now accepted on MCP exactly like A2A/REST. The disclosure *filter* gap
-# (_impl does not filter by disclosure) is all-transport and handled by
-# _UC005_PARTIAL_TAGS / _XFAIL_TAGS, so no UC-005 MCP-specific entries remain.
+# is now accepted on MCP exactly like A2A/REST. The disclosure *filter* gap it
+# also described ("_impl does not filter by disclosure", all-transport, routed via
+# _UC005_PARTIAL_TAGS / _XFAIL_TAGS) is CLOSED: creative_formats.py applies the
+# disclosure_positions filter, and both routings were graduated with it. Either
+# way no UC-005 MCP-specific entries remain.
 # (tag, example_substrings, reason, strict)
 # strict=True  → must fail (genuine xfail)
 # strict=False → may pass vacuously (MCP errors → empty list → exclusion assertions pass)
@@ -1912,43 +1934,44 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # workflow_step_id) and passes on all 4 transports — a strict xfail here
         # would XPASS-fail.
 
-        # --- UC-005: disclosure/asset scenarios with partial impl ---
-        # FIXME(#1660): disclosure_positions and brief/catalog asset types
-        # partially implemented — some transport variants pass, others fail.
-        # Must run BEFORE selective xfails (which use strict=True) to avoid
-        # XPASS failures on transport variants that now pass.
-        _UC005_PARTIAL_TAGS = {
-            # disclosure_positions filter is not implemented in _impl (all transports).
-            # #1417 added the param to the MCP wrapper, so MCP now sends it
-            # and fails the exclusion assertion exactly like impl/a2a/rest — hence the
-            # former `not is_mcp` exclusion is removed (MCP no longer passes vacuously).
-            "T-UC-005-inv-049-8-violated",
-            "T-UC-005-inv-049-8-nofield",
-        }
-        if marker_names & _UC005_PARTIAL_TAGS and not is_e2e_rest:
-            item.add_marker(pytest.mark.xfail(reason="disclosure/asset partial impl", strict=False))
-            # Skip selective xfails for these — the strict=False above covers them
-        else:
-            # Graduated (#1417): the partition/boundary-disclosure "valid"
-            # examples (all_positions / no_matching_formats / all 8 positions /
-            # "format has no") return unfiltered results that satisfy the assertion,
-            # so they now PASS on every wire transport (a2a/mcp/rest) — no marker.
-            # NOTE: main's MCP-specific strict xfails ("MCP wrapper does not accept
-            # the disclosure_positions keyword") are intentionally dropped here —
-            # #1417 added disclosure_positions to the MCP list_creative_formats
-            # wrapper (src/core/tools/creative_formats.py:519), so MCP now accepts the
-            # keyword exactly like a2a/rest and the valid examples pass on MCP too.
+        # Graduated: the _UC005_PARTIAL_TAGS set that stood here — a strict=False
+        # xfail over T-UC-005-inv-049-8-violated and -nofield, citing FIXME(#1660)
+        # "disclosure_positions ... not implemented in _impl (all transports)". That
+        # sentence was true and is no longer: creative_formats.py now applies the filter
+        # (AND semantics over the disclosure_capabilities -> supported_disclosure_positions
+        # lookup), so both rows grade the real obligation on a2a/mcp/rest. Their reason
+        # and the false "rejected at schema level" note are unpicked in full at the
+        # _XFAIL_TAGS entry for the sibling -holds row.
+        #
+        # Being strict=False is why this hid for so long: both rows XPASSED on mcp/rest
+        # against an empty catalog and a non-strict marker swallows an xpass, so nothing
+        # ever said the filter was missing. The scenarios each carry a positive control
+        # now, which is what makes an empty catalog fail them instead of satisfying them.
+        #
+        # The branch also gated the selective-xfail loop below (it was the `if`, the loop
+        # was its `else`), so the loop is now unconditional — which is the behaviour every
+        # non-UC-005 tag already got.
 
-            # Selective xfail for parametrized scenarios
-            for tag, substrings, reason in _SELECTIVE_XFAIL:
-                if tag in marker_names:
-                    if is_e2e_rest and tag in uc005_filter_e2e_untestable:
-                        # tolerate either outcome — see uc005_filter_e2e_reason
-                        item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
-                        break
-                    if any(s in item.nodeid for s in substrings):
-                        item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
-                    break  # tag matched — skip remaining selective entries
+        # Graduated (#1417): the partition/boundary-disclosure "valid"
+        # examples (all_positions / no_matching_formats / all 8 positions /
+        # "format has no") return unfiltered results that satisfy the assertion,
+        # so they now PASS on every wire transport (a2a/mcp/rest) — no marker.
+        # NOTE: main's MCP-specific strict xfails ("MCP wrapper does not accept
+        # the disclosure_positions keyword") are intentionally dropped here —
+        # #1417 added disclosure_positions to the MCP list_creative_formats
+        # wrapper, so MCP now accepts the
+        # keyword exactly like a2a/rest and the valid examples pass on MCP too.
+
+        # Selective xfail for parametrized scenarios
+        for tag, substrings, reason in _SELECTIVE_XFAIL:
+            if tag in marker_names:
+                if is_e2e_rest and tag in uc005_filter_e2e_untestable:
+                    # tolerate either outcome — see uc005_filter_e2e_reason
+                    item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))
+                    break
+                if any(s in item.nodeid for s in substrings):
+                    item.add_marker(pytest.mark.xfail(reason=reason, strict=True))
+                break  # tag matched — skip remaining selective entries
 
         # Original rejection scenario missing webhook Given step.
         # Replaced by BR-UC-002-manual-overrides.feature with webhook config.
