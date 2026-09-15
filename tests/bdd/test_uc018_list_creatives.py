@@ -723,10 +723,17 @@ def _creative_ids_of_length(ctx: dict, count: int) -> list[str]:
     The maxItems boundary rows care about the LENGTH; which creatives match is decided by
     the seeded ids at the front, so padding with ids nothing carries keeps the 100-item row
     and the 101-item row asking the same question about the same library.
+
+    ONE SEEDED CREATIVE IS DELIBERATELY LEFT OUT. Naming the whole library made the row
+    unfalsifiable: dropping the filter from the query returns exactly the same creatives
+    the filter would have selected, so the row passed either way. Measured, not reasoned —
+    a mutation that skipped the filter entirely left this row green while seven sibling
+    behaviours reddened. With the last seeded creative unnamed, an unapplied filter returns
+    it and the exact-set assertion fails.
     """
     seeded = [record.creative_id for record in ctx.get("library", ())]
     padding = [_ABSENT_CREATIVE_ID.format(index=index) for index in range(count)]
-    return (seeded + padding)[:count]
+    return (seeded[:-1] + padding)[:count]
 
 
 #: phrase pattern -> the request kwargs it means. Order matters only where one pattern is a
