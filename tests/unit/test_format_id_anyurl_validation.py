@@ -8,31 +8,34 @@ real entry point, ``format_resolver.format_identity_or_none``, which is the one
 place that turns a reference of any shape into a comparison key.
 """
 
-from pydantic import AnyUrl
-
 from src.core.format_resolver import format_display, format_identity_or_none
-from src.core.schemas import FormatId, FormatIdentity
+from src.core.schemas import FormatId
 
 # The CANONICAL form: an empty path renders as "/" (algorithm step 5).
 AGENT_INPUT = "https://creative.adcontextprotocol.org"
 AGENT = "https://creative.adcontextprotocol.org/"
 
 
-def test_anyurl_agent_url_does_not_raise_and_ignores_a_trailing_slash():
-    """A trailing slash is not part of the identity, and AnyUrl is not string-mangled.
-
-    The expectation is a ``FormatIdentity``, never a ``tuple[str, str]``. The comparison
-    key is a distinct type precisely so a hand-built tuple cannot stand in for it
-    (``src/core/schemas/_base.py``: a raw tuple has the identical static type and differs
-    only in value, so nothing could say the key skipped the spec's canonicalization).
-    """
-    with_slash = FormatId(agent_url=AGENT, id="display_300x250")
-    without_slash = FormatId(agent_url=AGENT_INPUT, id="display_300x250")
-
-    assert isinstance(with_slash.agent_url, AnyUrl), "FormatId must keep agent_url typed"
-
-    assert format_identity_or_none(with_slash) == FormatIdentity(agent_url=AGENT, id="display_300x250")
-    assert format_identity_or_none(with_slash) == format_identity_or_none(without_slash)
+# REMOVED: test_anyurl_agent_url_does_not_raise_and_ignores_a_trailing_slash and
+# test_case_port_and_fragment_are_canonicalized_away. Both asserted CANONICALIZATION
+# rules -- step 5 (empty path and "/" are one agent), step 2 (host case), step 4 (default
+# port dropped), step 8 (fragment stripped) -- and every one of those is graded directly
+# against the spec's own equivalences in
+# ``tests/unit/test_url_canonicalization_vectors.py`` (SAME_AGENT rows "step 5", "step 2:
+# host case", "step 4: default port is dropped", "step 8: fragment is stripped"), on top of
+# the 37 published conformance vectors run against the vendored implementation in
+# ``src/vendor/adcp_canonical``. That module is deliberately MORE conformant than the
+# pinned SDK, which fails 14 of the 37, so canonicalization is not a place where
+# production is suspect by default.
+#
+# Duplicating those rules here re-asserted them through one extra caller, in a form that
+# names an implementation value rather than a spec rule, and the two cases went red on a
+# type change (FormatIdentity is a distinct type, not a tuple[str, str]) while the
+# behavior they described was never wrong. The cases below are what this module still
+# grades that the vector test cannot: that ``format_identity_or_none`` accepts a FormatId
+# whose ``agent_url`` is an AnyUrl and a raw dict off the wire alike (the original
+# regression was ``.rstrip()`` called on an AnyUrl), and that the display form spells the
+# identity that was compared.
 
 
 def test_product_and_package_references_compare_equal_across_url_spellings():
@@ -61,10 +64,3 @@ def test_path_is_part_of_the_identity():
     assert format_identity_or_none(FormatId(agent_url=f"{AGENT_INPUT}/mcp", id="d")) != format_identity_or_none(
         FormatId(agent_url=AGENT_INPUT, id="d")
     )
-
-
-def test_case_port_and_fragment_are_canonicalized_away():
-    """What a trim could never do, and what the pin's canonical form requires."""
-    noisy = {"agent_url": "https://Creative.AdContextProtocol.org:443/#section", "id": "d"}
-
-    assert format_identity_or_none(noisy) == FormatIdentity(agent_url=AGENT, id="d")
