@@ -1174,11 +1174,9 @@ def execute_approved_media_buy(
                 logger.error(f"[APPROVAL] {error_msg}")
                 return ApprovalResult.failed(error_msg)
 
-            # Resolution from stored ids: this job acts as the buy's owner, on the buy's
-            # account (refused above if the row has none). Captured while the session is
-            # open, because media_buy detaches when this block commits.
+            # Captured while the session is open, because media_buy detaches when this
+            # block commits. The RESOLUTION happens after the block closes — see below.
             buy_principal_id = media_buy.principal_id
-            identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
             logger.info(
                 f"[APPROVAL] Calling adapter for {media_buy_id}: "
@@ -1188,6 +1186,17 @@ def execute_approved_media_buy(
             # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
             # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
             _validate_creatives_before_adapter_call(packages, tenant_id, buy_principal_id, session=session)
+
+        # Resolution from stored ids: this job acts as the buy's owner, on the buy's
+        # account (refused above if the row has none). Resolved HERE, after the unit above
+        # has closed, because identity_of opens its own sessions (TenantContext.load,
+        # get_principal_by_id, and the account read when one is named) and
+        # get_db_session() yields the THREAD-SCOPED session with no nesting refcount — so
+        # calling it inside the block left the outer unit holding a closed session, and
+        # anything it wrote afterwards committed on its own transaction or not at all
+        # (GH #1644). Only the two ids cross the boundary, which is why the capture above
+        # is separate from this line.
+        identity = identity_of(tenant_id, buy_principal_id, buy_account_id)
 
         # Execute adapter creation (outside session to avoid conflicts)
         # Set BEFORE the call, not after: the condition is whether the ad server was
@@ -1447,6 +1456,29 @@ def execute_approved_media_buy(
         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
+def _creative_owner_identity(*, creative_id: str, tenant_id: str) -> ResolvedIdentity | None:
+    """The identity of the principal that owns *creative_id*, or None if there is no such row.
+
+    Two steps, in this order, and the order is the point: read the owner's id with a unit
+    of work that is CLOSED before returning, then resolve. ``identity_of`` opens its own
+    sessions, and because ``get_db_session()`` yields the thread-scoped session with no
+    nesting refcount, resolving while any other unit is open closes that unit's session
+    out from under it (GH #1644). Keeping both halves here means the caller can resolve
+    before it opens its own unit and never has to think about the ordering again.
+    """
+    from src.core.database.repositories.uow import AdminCreativeUoW
+
+    with AdminCreativeUoW(tenant_id) as uow:
+        assert uow.creatives is not None
+        creative = uow.creatives.admin_get_by_id(creative_id)
+        if creative is None:
+            return None
+        owner_principal_id = creative.principal_id
+
+    # Outside the block: see the docstring.
+    return identity_of(tenant_id, owner_principal_id)
+
+
 def push_creative_to_existing_buy(
     *,
     creative_id: str,
@@ -1465,6 +1497,19 @@ def push_creative_to_existing_buy(
     from src.core.database.repositories.uow import AdminCreativeUoW
 
     try:
+        # Resolved BEFORE the unit below opens, and this ordering is load-bearing.
+        # identity_of opens its own sessions (TenantContext.load, get_principal_by_id, and
+        # the account read when one is named), and get_db_session() yields the
+        # THREAD-SCOPED session with no nesting refcount — so its exit runs
+        # session.close(); scoped.remove() on the SAME session object the enclosing unit
+        # holds. Called from inside the block, as it was, it left ``uow`` holding a closed
+        # session, and the reads and the update_data WRITE that follow ran against it
+        # (GH #1644). The owner is a fact of the stored row, so it can be read and the
+        # unit closed before anything else starts.
+        owner = _creative_owner_identity(creative_id=creative_id, tenant_id=tenant_id)
+        if owner is None:
+            return False, f"Creative {creative_id} not found"
+
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
             assert uow.assignments is not None
@@ -1495,9 +1540,8 @@ def push_creative_to_existing_buy(
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
-            # Resolution from stored ids: this job acts as the creative's owner.
-            identity = identity_of(tenant_id, creative.principal_id)
-            adapter = get_adapter(identity)
+            # Resolved above, outside this unit. See the comment at the top of the try.
+            adapter = get_adapter(owner)
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 
