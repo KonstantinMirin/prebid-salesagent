@@ -24,9 +24,11 @@ from pathlib import Path
 
 from tests.helpers.ledger import load_ledger_nodeids
 
-# The 14 e2e_rest nodeids remaining: 7 genuine gaps + 7 parallel-e2e_rest
+# The 18 e2e_rest nodeids remaining: 7 genuine gaps + 7 parallel-e2e_rest
 # mock-injection artifacts (owner-approved, added on the adcp-6.6 /
-# perf/parallelize-test-suite work — see the block comment inside the set).
+# perf/parallelize-test-suite work — see the block comment inside the set)
+# + the adcp#7338 catalog row (2026-09-13) + 3 UC-010 targeting-shape rows
+# (2026-09-15), both annotated at their entries below.
 # The 3 uc018 rows of that block graduated 2026-08-31: their Givens seed through
 # the factories into the live server's own database, so the block's
 # "injected cross-principal creatives" clause no longer describes them. XPASS in
@@ -88,6 +90,27 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # pinned Format.assets union does not admit (adcp#7338), so the compliance
         # Then fails there for the same reason as the three UC-005 rows above.
         "tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]",
+        # Added 2026-09-15: three UC-010 rows that configure a targeting SHAPE per
+        # tenant (which metro systems, which country-keyed postal systems) and read
+        # it back from get-adcp-capabilities-response.json
+        # #/properties/media_buy/properties/execution/properties/targeting.
+        # Production builds both blocks correctly -- the in-process rows prove it --
+        # but there is no per-tenant surface to configure the shape over HTTP, and
+        # adding one is refused twice over: TargetingCapabilities is adapter-CLASS
+        # level by documented design (AdServerAdapter.get_targeting_capabilities is a
+        # @staticmethod so discovery can read it without a Principal-bound instance,
+        # INV-4 / salesagent-dn2s), and the declaration store carries no field for a
+        # posture production cannot back ("the absence is the enforcement",
+        # src/core/schemas/capability_declarations.py). The third option is the
+        # test_behavior override read in src/core/ that a1b79d22d deleted and
+        # prebid/salesagent#1891 questions. Their sibling channel and degradation rows
+        # needed none of this: channels now come from Product.channels via
+        # channel_helpers, and "adapter unavailable" is a real unresolvable
+        # adapter_type. Full reasoning and the graduation condition are in the ledger
+        # file's own block.
+        "tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_absent no nested sub-properties declared-no nested sub-properties true-geo_metros and geo_postal_areas absent from targeting]",
+        'tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_populated native postal map and metros-geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]-geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"]',
+        'tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-postal_areas_native DE/CH/AT via native country-keyed map-geo_postal_areas DE=["plz"] CH=["plz"] AT=["plz"]-geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}]',
         # The 3 uc018 rows of this block GRADUATED 2026-08-31 on main (#1858): their
         # Givens seed through the factories into the live server's own database, so
         # the block's "injected cross-principal creatives" clause stopped describing

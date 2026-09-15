@@ -134,23 +134,37 @@ class CapabilitiesEnv(IntegrationEnv):
         self._capability_declarations.update(blocks)
         self.configure_tenant_field("capability_declarations", dict(self._capability_declarations))
 
-    def _realize_adapter_channels(self, channels: list[str]) -> None:
-        """E2E realization: persist the channel set into test_behavior (#1871)."""
-        from tests.factories.core import set_adapter_test_behavior
+    def set_portfolio_channels(self, channels: list[str]) -> None:
+        """Seed the tenant's catalog so its portfolio offers *channels*.
 
-        set_adapter_test_behavior(self, self._tenant_id, default_channels=list(channels))
+        NO ``@realize_e2e``, and that is the point: one product row per channel is
+        ORDINARY TENANT DATA, written through ``ProductFactory`` into the same
+        database the live server reads, so in-process and e2e run the identical
+        setup against the identical production read
+        (``media_buy.portfolio.primary_channels`` unions each product's effective
+        channels -- src/core/helpers/channel_helpers.py). Its sibling
+        ``given_publisher_partnerships`` already seeds ``PublisherPartner`` this way,
+        which is why publisher_domains has always graded over a real transport
+        while channels did not.
 
-    @realize_e2e(_realize_adapter_channels)
-    def set_adapter_channels(self, channels: list[str]) -> None:
-        """Configure the channel names the adapter reports.
+        This replaces ``set_adapter_channels``, which configured a channel set on
+        the ADAPTER. That could only ever be a per-adapter-TYPE constant
+        (``AdServerAdapter.default_channels`` is a class attribute), so honouring it
+        per tenant needed an override read in core -- a test-only control surface
+        this repo deleted on purpose (a1b79d22d, prebid/salesagent#1891). Seeding
+        products needs no such surface.
 
-        In-process: overrides the adapter mock directly. E2E: persists the set
-        into AdapterConfig.config_json['test_behavior'], read back by
-        get_adapter_channels_override — the same shape set_targeting_capabilities
-        already uses, so a channels Given grades a real transport instead of
-        silently landing on the adapter class's defaults.
+        One product per channel rather than one product declaring all of them: the
+        production rule is a UNION ACROSS products, and a single multi-channel
+        product would not exercise it.
         """
-        self._adapter_mock.default_channels = list(channels)
+        from src.core.database.models import Tenant
+        from tests.factories import ProductFactory
+
+        tenant = self.get_session().get(Tenant, self._tenant_id)
+        for channel in channels:
+            ProductFactory(tenant=tenant, channels=[channel])
+        self._commit_factory_data()
 
     def _realize_targeting_capabilities(self, **dims: bool) -> None:
         """E2E realization: persist targeting_capabilities into test_behavior."""
@@ -170,10 +184,25 @@ class CapabilitiesEnv(IntegrationEnv):
         self._adapter_mock.get_targeting_capabilities.return_value = TargetingCapabilities(**dims)
 
     def _realize_adapter_unavailable(self) -> None:
-        """E2E realization: persist the 'unavailable' fault-injection flag."""
-        from tests.factories.core import set_adapter_test_behavior
+        """E2E realization: point the tenant at an ad server that does not exist.
 
-        set_adapter_test_behavior(self, self._tenant_id, unavailable=True)
+        A REAL operator misconfiguration, exercising a refusal production already
+        has: ``get_adapter_class`` (src/adapters/__init__.py) raises
+        ``AdCPConfigurationError`` for an ``adapter_type`` outside
+        ``ADAPTER_REGISTRY``, and ``get_adapter_class_for_tenant`` is inside the
+        capabilities degradation boundary, so the response degrades and records the
+        advisory exactly as it would for a tenant whose operator typed the adapter
+        name wrong.
+
+        This is why the "unavailable" simulation flag is not needed: no new
+        production code, no fault-injection branch, and the state the scenario
+        describes -- "this seller's adapter cannot be resolved" -- is one a real
+        deployment reaches. Scoped to the scenario's own tenant, so the
+        misconfiguration cannot follow any other tenant onto the media-buy path.
+        """
+        from tests.factories.core import set_adapter_type
+
+        set_adapter_type(self, self._tenant_id, "__no_such_ad_server__")
 
     @realize_e2e(_realize_adapter_unavailable)
     def make_adapter_unavailable(self) -> None:

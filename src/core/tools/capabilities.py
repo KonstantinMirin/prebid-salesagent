@@ -54,6 +54,7 @@ from src.core.helpers.activity_helpers import log_tool_activity
 from src.core.helpers.adapter_helpers import (
     get_adapter_class_for_tenant,
 )
+from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error, GetAdcpCapabilitiesRequest, GetAdcpCapabilitiesResponse
 from src.core.schemas.capability_declarations import (
@@ -355,13 +356,39 @@ def _get_adcp_capabilities_impl(
         advisories, "adapter", lambda: get_adapter_class_for_tenant(tenant), default=None
     )
 
-    def _map_adapter_channels() -> None:
-        declared = adapter.default_channels if adapter and hasattr(adapter, "default_channels") else None
-        for channel_name in declared or []:
-            if channel_name.lower() in CHANNEL_MAPPING:
-                primary_channels.append(CHANNEL_MAPPING[channel_name.lower()])
+    def _map_portfolio_channels() -> None:
+        # portfolio.primary_channels is "Primary advertising channels in this
+        # PORTFOLIO" (get-adcp-capabilities-response.json), and the portfolio is the
+        # tenant's product catalog -- the same thing its sibling publisher_domains
+        # already summarizes from a real per-tenant table. So the channels are the
+        # union of what each product effectively offers, under the ONE rule
+        # get_products applies per product (channel_helpers). A seller whose catalog
+        # declares its channels was previously described by its adapter CLASS's
+        # constant, which is per-adapter-type and cannot vary by tenant at all.
+        #
+        # A tenant with NO catalog falls back to the adapter's defaults: an empty
+        # catalog is not a claim of "no channels", and the ad server is the
+        # next-best answer -- the same reasoning channel_helpers applies to a
+        # product that declares none.
+        from src.core.database.repositories.uow import ProductUoW
 
-    _resolve_or_degrade(advisories, "adapter channels", _map_adapter_channels, default=None)
+        defaults = adapter.default_channels if adapter and hasattr(adapter, "default_channels") else []
+        # Resolved INSIDE the UoW block: the rows are session-bound, and reading
+        # `channels` after the block closed raises DetachedInstanceError.
+        with ProductUoW(tenant_id) as uow:
+            assert uow.products is not None
+            per_product = [
+                effective_channel_names(product.channels, adapter_defaults=defaults)
+                for product in uow.products.list_all()
+            ]
+        names = set().union(*per_product) if per_product else effective_channel_names(None, adapter_defaults=defaults)
+        # Emitted in the pinned enum's own order (channels.json#/enum), not the
+        # catalog's or a set's. A union has no order, and the wire list must be
+        # deterministic for the same catalog on every call.
+        mapped = {CHANNEL_MAPPING[name] for name in names if name in CHANNEL_MAPPING}
+        primary_channels.extend(channel for channel in MediaChannel if channel in mapped)
+
+    _resolve_or_degrade(advisories, "portfolio channels", _map_portfolio_channels, default=None)
 
     # Default to display if we couldn't determine from adapter
     if not primary_channels:

@@ -165,8 +165,27 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 #     failure over real HTTP. Surfaced as xfail by the conftest report hook,
 #     pinned in EXPECTED_UNSUPPORTED_DECLARATIONS
 #     (test_architecture_e2e_rest_escape_hatches.py), not listed here.
-#   - set_adapter_channels stays in-process-only (e2e_unsupported): no
-#     production test_behavior channel overrides reported default_channels.
+#   - set_adapter_channels was in-process-only at the time of that note; #1871
+#     then gave it the same write-through (get_adapter_channels_override).
+# All three reads were deleted by a1b79d22d ("remove the testing-hook channel"),
+# and the deletion was right: they were test-only control surfaces in src/core/,
+# which is what prebid/salesagent#1891 questions. Two facts confirm test_behavior
+# never belonged in that column at all -- it is absent from MockConnectionConfig,
+# which is extra="forbid", and save_adapter_config replaces config_json wholesale,
+# so an operator saving mock config through the admin UI silently deletes it.
+# The Givens then landed nowhere over e2e and 8 UC-010 scenarios graded the mock
+# adapter's class defaults while still passing in-process against a MagicMock.
+#
+# Resolved WITHOUT restoring any of it:
+#   - channels: portfolio.primary_channels now unions each product's effective
+#     channels (src/core/helpers/channel_helpers.py), the same rule get_products
+#     applies per product. Product.channels is a real per-tenant column, so the
+#     Given seeds ordinary catalog data in BOTH worlds -- one mechanism, no
+#     @realize_e2e branch.
+#   - degradation: an adapter_type outside ADAPTER_REGISTRY is real operator
+#     misconfiguration and get_adapter_class already refuses it. No new code.
+#   - targeting granularity: no per-tenant surface exists and none is being added.
+#     The three rows below record that.
 
 # --- upstream adcp#7338 on the live catalog (1) ---
 # Added 2026-09-13 when @T-UC-005-main's Given moved from minted fmt_N ids to three
@@ -179,3 +198,43 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # Graduates when adcp#7338 lands and the pin moves, or when production stops serving
 # assets the pin does not admit (salesagent-i5znm).
 tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
+
+# --- UC-010 targeting granularity has no per-tenant surface (3) ---
+# Added 2026-09-15. These three rows configure a targeting SHAPE per tenant --
+# which metro systems and which country-keyed postal systems the seller supports --
+# and read it back from
+#   get-adcp-capabilities-response.json
+#     #/properties/media_buy/properties/execution/properties/targeting
+# (geo_metros -> core/geo-metros.json, geo_postal_areas -> core/postal-area-support.json).
+# The pin is not the problem: production BUILDS both blocks correctly from a
+# TargetingCapabilities, and the in-process rows prove it.
+#
+# WHY THIS CANNOT BE FIXED HERE, not a symptom:
+#   1. TargetingCapabilities is ADAPTER-CLASS-LEVEL by documented design.
+#      AdServerAdapter.get_targeting_capabilities is a @staticmethod, and
+#      src/adapters/base.py states why: capability discovery must read it off the
+#      adapter CLASS, tenant-only, without constructing a Principal-bound instance
+#      (INV-4 / salesagent-dn2s -- Kevel and TritonDigital crash in __init__ for a
+#      synthetic Principal). So the value is per-adapter-TYPE and cannot vary by
+#      tenant at all. In-process a scenario patches the class; over HTTP the server
+#      resolves its own, and there is nothing per-tenant for a Given to write.
+#   2. A per-tenant DECLARATION is forbidden on purpose. The declaration store
+#      (src/core/schemas/capability_declarations.py) carries fields only for facts
+#      production backs: "a field that exists but is always rejected still tempts
+#      the next implementer to relax the check. The absence is the enforcement."
+#      Adding a targeting block would let an operator declare geo granularity the
+#      adapter cannot deliver -- the false-conformance risk that store exists to
+#      prevent.
+#   3. The obvious third option is what a1b79d22d deleted and #1891 questions: a
+#      test_behavior override read in src/core/. Not reinstated.
+# The sibling channel and degradation rows needed none of this and were fixed on
+# real production paths; only the targeting SHAPE is stuck.
+#
+# GRADUATES when either a real per-tenant targeting surface lands (an adapter
+# reading its own config through a signature that is not a plain @staticmethod
+# override, which base.py's comment already prescribes as the deliberate decision
+# that change requires), or the three rows are rewritten to grade the blocks off
+# the adapter class's own declared shape instead of a configured one.
+tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_absent no nested sub-properties declared-no nested sub-properties true-geo_metros and geo_postal_areas absent from targeting]
+tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-nested_populated native postal map and metros-geo_metros.nielsen_dma=true, geo_postal_areas US=["zip"]-geo_metros equals {nielsen_dma: true} and geo_postal_areas has US containing "zip"]
+tests/bdd/test_uc010_discover_seller_capabilities.py::test_targeting_capability_configurations__partition[e2e_rest-postal_areas_native DE/CH/AT via native country-keyed map-geo_postal_areas DE=["plz"] CH=["plz"] AT=["plz"]-geo_postal_areas equals {DE: [plz], CH: [plz], AT: [plz]}]

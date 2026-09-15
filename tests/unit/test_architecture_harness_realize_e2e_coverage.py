@@ -99,6 +99,17 @@ ALLOWLIST_ALWAYS_DB_WRITE: frozenset[tuple[str, str]] = frozenset(
         # which is this bucket's rule exactly: one code path, correct in both modes.
         ("tests/harness/protocol_webhook.py", "make_config"),
         ("tests/harness/_mixins.py", "make_media_buy"),
+        # CapabilitiesEnv.set_portfolio_channels seeds ProductFactory rows through
+        # the same env-bound session, for the same reason: over e2e that session is
+        # bound to the live server's DB, and production reads the catalog it finds
+        # there (media_buy.portfolio.primary_channels unions each product's
+        # effective channels). It REPLACED a @realize_e2e method --
+        # set_adapter_channels, whose e2e branch wrote an AdapterConfig
+        # test_behavior override that only a test-only read in src/core/ could
+        # honour (deleted by a1b79d22d, questioned by prebid/salesagent#1891). One
+        # code path over ordinary tenant data is what made the decorator
+        # unnecessary, which is this bucket's rule rather than an exemption from it.
+        ("tests/harness/capabilities.py", "set_portfolio_channels"),
     }
 )
 
