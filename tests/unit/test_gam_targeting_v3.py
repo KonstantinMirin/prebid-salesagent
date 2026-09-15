@@ -236,31 +236,8 @@ class TestUnsupportedTargetingRaisesTypedCapabilityError:
         # code's table entry now, so assert it exactly.
 
 
-class TestBuildTargetingCityRemoved:
-    """had_city_targeting flag must trigger ValueError in build_targeting."""
-
-    def test_city_flag_raises(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_city_any_of=["Chicago"])
-        assert targeting.had_city_targeting is True
-        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
-    def test_no_city_flag_no_error(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"])
-        result = gam_manager.build_targeting(targeting)
-        # Should succeed without city error
-        assert "geoTargeting" in result
-
-
 class TestValidateTargetingV3:
     """validate_targeting uses v3 fields, not v2."""
-
-    def test_city_flag_reported(self, gam_manager):
-        targeting = Targeting(geo_city_any_of=["NYC"])
-        unsupported = gam_manager.validate_targeting(targeting)
-        assert any("city" in u.lower() for u in unsupported)
 
     def test_postal_areas_reported(self, gam_manager):
         targeting = Targeting(

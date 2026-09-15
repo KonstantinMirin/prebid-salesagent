@@ -57,26 +57,15 @@ class TestMemberExtraPolicy:
 
 
 class TestInternalAnnotationsStayOffTheWire:
-    def test_supported_fields_are_declared_writes(self):
-        option = CpmPricingOption(**_cpm_kwargs())
-        option.supported = False
-        option.unsupported_reason = "Current adapter does not support CPM pricing"
-        assert option.supported is False
-        assert option.unsupported_reason == "Current adapter does not support CPM pricing"
-
-    def test_supported_fields_never_serialize(self):
-        option = CpmPricingOption(**_cpm_kwargs())
-        option.supported = False
-        option.unsupported_reason = "Current adapter does not support CPM pricing"
-        dump = option.model_dump(mode="json")
-        assert "supported" not in dump
-        assert "unsupported_reason" not in dump
-        wrapped_dump = PricingOption(option).model_dump(mode="json")
-        assert "supported" not in wrapped_dump
-        assert "unsupported_reason" not in wrapped_dump
+    # Two tests here wrote ``supported`` / ``unsupported_reason`` and then asserted they
+    # stayed off the wire. Both fields are DELETED from _AdapterSupportAnnotations, which
+    # now declares no field at all -- only the extra policy and the derived ``is_fixed``
+    # property -- so the mixin has nothing it could put on the wire and the write itself
+    # is a ValueError. What is left to grade is that the mixin adds nothing, which is
+    # exactly the equality below.
 
     def test_wire_shape_matches_sdk_member(self):
-        """Beyond the two internal fields, the local member serializes exactly like the SDK's."""
+        """The local member serializes exactly like the SDK's -- the mixin adds no wire field."""
         from adcp.types import CpmPricingOption as LibraryCpmPricingOption
 
         local = CpmPricingOption(**_cpm_kwargs()).model_dump(mode="json", exclude_none=True)
@@ -177,12 +166,17 @@ class TestProductIntegration:
         assert type(product.pricing_options[0]) is PricingOption
         assert type(product.pricing_options[0].root) is CpmPricingOption
 
-    def test_product_wire_omits_internal_annotations(self):
-        """The get_products annotation path must never reach the buyer-facing wire."""
+    def test_product_wire_pricing_options_exact_shape(self):
+        """A nested option reaches the wire as exactly the pinned dict, no local extras.
+
+        This asserted the same dict after writing ``supported`` / ``unsupported_reason``
+        onto the inner member, to grade that the get_products annotation path never
+        reached the buyer. Those fields and that path are both deleted, so the write is
+        gone; the exact-dict assertion is kept because it grades something else that is
+        live -- the nested member re-serializing through its own serializer inside the
+        PricingOption wrapper inside Product (critical pattern #4).
+        """
         product = self._product([_cpm_kwargs()])
-        inner = product.pricing_options[0].root
-        inner.supported = False
-        inner.unsupported_reason = "Current adapter does not support CPM pricing"
 
         wire = product.model_dump(mode="json")
         assert wire["pricing_options"] == [

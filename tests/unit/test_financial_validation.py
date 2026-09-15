@@ -96,12 +96,12 @@ def test_validate_min_package_budget_subject_overrides_prefix() -> None:
     assert "Package budget" not in error
 
 
-def test_validate_min_package_budget_context_overrides_trailing_sentence() -> None:
+def test_validate_min_package_budget_trailer_overrides_trailing_sentence() -> None:
     error = validate_min_package_budget(
         package_budget=Decimal("99"),
         min_package_budget=Decimal("100"),
         currency="USD",
-        context="for products in this package",
+        trailer="for products in this package",
     )
 
     assert error is not None
@@ -136,13 +136,13 @@ def test_validate_max_daily_package_spend_limit_label_overrides_limit_text() -> 
     assert "exceeds maximum daily spend per package" in error
 
 
-def test_validate_max_daily_package_spend_context_overrides_trailing_sentence() -> None:
+def test_validate_max_daily_package_spend_trailer_overrides_trailing_sentence() -> None:
     error = validate_max_daily_package_spend(
         package_budget=Decimal("3100"),
         flight_days=3,
         max_daily_spend=Decimal("1000"),
         currency="USD",
-        context="This protects against accidental large budgets.",
+        trailer="This protects against accidental large budgets.",
     )
 
     assert error is not None
