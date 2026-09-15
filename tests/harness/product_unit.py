@@ -1,8 +1,8 @@
 """ProductEnv — unit test environment for _get_products_impl.
 
-Patches: ProductUoW, get_principal_object, convert_product_model_to_schema,
-         PolicyCheckService, generate_variants_for_brief, DynamicPricingService,
-         get_factory (ranking), resolve_property_list, get_adapter.
+Patches: ProductUoW, convert_product_model_to_schema, PolicyCheckService,
+         generate_variants_for_brief, DynamicPricingService, get_factory (ranking),
+         resolve_property_list, get_adapter.
 
 Usage::
 
@@ -28,6 +28,7 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import MagicMock
 
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Product
 from tests.factories.product import PricingOptionRequestFactory
 from tests.harness._base import BaseTestEnv
@@ -59,10 +60,18 @@ def _make_product(
     delivery_measurement: dict[str, str] | None = None,
     publisher_properties: list[dict[str, Any]] | None = None,
     estimated_exposures: int | None = None,
+    reporting_capabilities: Any | None = None,
     **extra: Any,
 ) -> Product:
-    """Build a Product schema instance for unit testing."""
+    """Build a Product schema instance for unit testing.
+
+    ``reporting_capabilities`` is required by core/product.json and carries no default on
+    the wire model, so the harness supplies the same value production's row-to-model read
+    supplies for a row that stores NULL — asked of ``default_reporting_capabilities``
+    rather than restated here, so a harness product cannot drift from a converted one.
+    """
     return Product(
+        reporting_capabilities=reporting_capabilities or default_reporting_capabilities(),
         product_id=product_id,
         name=name,
         description=description,

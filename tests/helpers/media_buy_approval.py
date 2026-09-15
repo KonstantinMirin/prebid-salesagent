@@ -152,7 +152,6 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
     """
     from src.core.context_manager import ContextManager
     from tests.factories import (
-        AgentAccountAccessFactory,
         MediaBuyFactory,
         MediaPackageFactory,
         PricingOptionFactory,
@@ -200,14 +199,12 @@ def seed_pending_buy(*, starts_in_days: int, status: str = "pending_approval") -
         package_config={"product_id": product.product_id, "budget": 5000.0},
     )
 
-    # The principal must be able to REACH the account its own buy carries. Approval rebuilds
-    # the identity from the stored account_id (``identity_of`` in the approval executor) and
-    # resolves it through ``account_lookup._by_id``, which is NOT access-scoped and therefore
-    # calls ``_require_access``. MediaBuyFactory creates the Account row — it has to, for the
-    # composite FK — but grants nothing, so without this the approval fails with
-    # AdCPAuthorizationError and the route answers 500. That is a seeded world production
-    # cannot produce: a buy whose own principal is not permitted on its own account.
-    AgentAccountAccessFactory(tenant=tenant, principal=principal, account_id=media_buy.account_id)
+    # The access grant that used to be written here by hand is now MediaBuyFactory's own
+    # ``grant_account_access`` post-generation hook: a factory that cannot produce a
+    # REACHABLE buy without the caller remembering a second factory is the factory's defect,
+    # and three other fixtures were missing exactly this line. The reasoning is recorded on
+    # the hook; pass ``grant_account_access=False`` to seed a buy whose principal is locked
+    # out of its own account.
 
     cm = ContextManager()
     context = cm.create_context(tenant_id=tenant.tenant_id, principal_id=principal.principal_id)

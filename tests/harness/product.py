@@ -7,7 +7,7 @@ real egress seam.
 
 Patches: PolicyCheckService, generate_variants_for_brief,
          get_factory (ranking), resolve_property_list.
-Real: ProductUoW, get_principal_object, convert_product_model_to_schema,
+Real: ProductUoW, convert_product_model_to_schema,
       DynamicPricingService, adapter metadata, audit logger, get_db_session.
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
@@ -57,7 +57,7 @@ class ProductEnv(ProductMixin, IntegrationEnv):
     Only mocks external services (policy, dynamic variants,
     AI ranking, property list resolution). Everything else is real:
     - Real ProductUoW -> real DB queries
-    - Real get_principal_object -> real DB queries
+    - The principal comes off the identity; nothing looks one up
     - Real convert_product_model_to_schema -> real conversion
     - Real DynamicPricingService -> real DB queries (FormatPerformanceMetrics)
     - Real audit logging

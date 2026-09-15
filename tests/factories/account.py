@@ -70,6 +70,52 @@ class AgentAccountAccessFactory(factory.alchemy.SQLAlchemyModelFactory):
     account_id = LazyAttribute(lambda o: o.account.account_id)
 
 
+def seed_default_account(tenant_id: str, principal_id: str | None = None) -> str:
+    """Get-or-create the tenant's default Account row, and optionally grant one principal access.
+
+    The ONE implementation of "this tenant has the account the request payloads name".
+    ``media_buy_helpers._make_create_request`` and its siblings send
+    ``account={"account_id": "acct_test"}``, ``media_buys`` carries a composite FK to
+    (tenant_id, account_id), and resolution is gated on the ``AgentAccountAccess`` join
+    (#1417) — so a test that drives a REAL media-buy implementation needs the row AND the
+    grant, and a row without the grant fails indistinguishably from no row at all.
+
+    Idempotent on both halves: the account's key is (tenant_id, account_id) and the
+    junction's is (tenant_id, principal_id, account_id), so a second INSERT is a unique
+    violation rather than a no-op, and several buys in one test share both.
+
+    Returns the account id. ``MediaBuyFactory`` calls this per buy; a fixture that seeds
+    a tenant by hand calls it once. Both used to carry their own copy of the get-or-create,
+    and three fixtures were missing it altogether.
+    """
+    from sqlalchemy import select
+
+    session = AccountFactory._meta.sqlalchemy_session
+    if session is None:
+        # ``.build()`` persists nothing, so there is no row for the FK to point at and
+        # nothing to query. Return the id so the built object carries what a persisted
+        # one would.
+        return DEFAULT_TEST_ACCOUNT_ID
+    if (
+        session.scalars(select(Account).filter_by(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)).first()
+        is None
+    ):
+        AccountFactory(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
+        session.flush()
+    if principal_id:
+        already = session.scalars(
+            select(AgentAccountAccess).filter_by(
+                tenant_id=tenant_id, principal_id=principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
+        ).first()
+        if already is None:
+            AgentAccountAccessFactory(
+                tenant_id=tenant_id, principal_id=principal_id, account_id=DEFAULT_TEST_ACCOUNT_ID
+            )
+            session.flush()
+    return DEFAULT_TEST_ACCOUNT_ID
+
+
 class AddressFactory(factory.Factory):
     """core/business-entity.json #/properties/address — all four fields required."""
 

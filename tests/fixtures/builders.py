@@ -9,8 +9,6 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from tests.factories.principal import plaintext_token_for
-
 
 class ResponseBuilder:
     """Builder for constructing API response objects."""
@@ -317,8 +315,7 @@ async def create_test_tenant_with_principal(**kwargs) -> dict:
     # The schema Principal declares exactly principal_id, name and platform_mappings —
     # it is what a tool reads off identity.principal, so it carries no credential and
     # no tenant_id.
-    principal_obj = Principal.with_token(
-        plaintext_token_for(principal["principal_id"]),
+    principal_obj = Principal(
         principal_id=principal["principal_id"],
         name=principal["name"],
         platform_mappings=platform_mappings,

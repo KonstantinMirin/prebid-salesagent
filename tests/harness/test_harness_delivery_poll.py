@@ -101,7 +101,8 @@ class TestDeliveryPollEnvContract:
         """env.mock[name] provides access to all patch targets."""
         with DeliveryPollEnv() as env:
             assert "uow" in env.mock
-            assert "principal" in env.mock
+            # No "principal" patch: the principal comes off the identity the env builds,
+            # so there is no principal lookup for the env to stand in for.
             assert "adapter" in env.mock
             assert "pricing" in env.mock
 

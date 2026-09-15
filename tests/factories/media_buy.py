@@ -19,7 +19,7 @@ from factory import LazyAttribute, Sequence, SubFactory
 from src.core.database.models import MediaBuy, MediaPackage, PricingOption, is_media_buy_seller_confirmed
 from src.core.helpers.pricing_helpers import pricing_info_for
 from src.core.schemas import GetMediaBuysMediaBuy
-from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.core import TenantFactory
 from tests.factories.principal import PrincipalFactory
 from tests.factories.product import DEFAULT_PRICING_OPTION_ID, PricingOptionFactory
@@ -254,6 +254,40 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
     )
 
     @factory.post_generation
+    def grant_account_access(obj, create, extracted, **kwargs):  # noqa: N805 — factory_boy hook signature
+        """Let the buy's own principal REACH the account the buy carries.
+
+        ``account_id`` above seeds the Account ROW because the composite FK demands one,
+        but a row is not access: resolution is gated on the ``AgentAccountAccess`` join
+        (#1417), and ``account_lookup._by_id`` — the path anything rebuilding an identity
+        from a stored ``account_id`` takes, including the approval executor's
+        ``identity_of`` — is NOT access-scoped, so it calls ``_require_access``. Seeding
+        the row and not the grant therefore produced a buy whose own principal was not
+        permitted on its own account: a world production cannot reach, which surfaced as
+        ``AttributeError: 'NoneType' object has no attribute 'account_id'`` or a bare
+        ``AdCPAuthorizationError`` in tests whose subject was something else entirely.
+
+        Granted HERE rather than at each call site because a factory that cannot produce a
+        reachable buy without the caller remembering a second factory is the factory's
+        defect — every future test would hit it, and three already did
+        (``test_media_buy_v3``, ``test_creative_assignment_principal_id``,
+        ``tests/helpers/media_buy_approval.seed_pending_buy``, which carried this line by
+        hand).
+
+        Grants exactly (this buy's principal, this buy's account) and nothing wider, so a
+        refusal test is unaffected: an OWNERSHIP-mismatch case drives a DIFFERENT principal,
+        which is still unpermitted, and an access-refusal case names its own account
+        (``test_resolve_account::test_no_access_raises`` builds ``acc_noaccess`` through
+        ``AccountFactory``, which this hook never touches).
+
+        Pass ``grant_account_access=False`` for a case that needs the buy's own principal
+        locked out of its own account.
+        """
+        if not create or extracted is False:
+            return
+        seed_default_account(obj.tenant_id, obj.principal_id)
+
+    @factory.post_generation
     def persisted_packages(obj, create, extracted, **kwargs):  # noqa: N805 — factory_boy hook signature
         """Materialize the ``MediaPackage`` row each persisted request package names.
 
@@ -279,29 +313,16 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
 
 
 def _ensure_default_account(tenant_id: str) -> str:
-    """Get-or-create the tenant's default Account row and return its id.
+    """The tenant's default Account row, created if absent, returning its id.
 
-    Idempotent: several buys in one test share the tenant, and a second INSERT of the same
-    (tenant_id, account_id) is a unique violation rather than a no-op.
+    Delegates to ``seed_default_account`` so there is ONE get-or-create for this row: the
+    account grant hook above and the fixtures that seed a tenant by hand all go through
+    it, and a second copy here is what let the grant half drift out of three fixtures.
+    Called with no principal because the buy's ``principal_id`` is not resolved yet at
+    LazyAttribute time; the ``grant_account_access`` post-generation hook adds the grant
+    once the row exists.
     """
-    from sqlalchemy import select
-
-    from src.core.database.models import Account
-    from tests.factories.account import AccountFactory
-
-    session = MediaBuyFactory._meta.sqlalchemy_session
-    if session is None:
-        # ``MediaBuyFactory.build()`` — constructs the instance and persists nothing, so
-        # there is no row for the FK to point at and nothing to query. Return the id so the
-        # built object still carries the account a persisted one would.
-        return DEFAULT_TEST_ACCOUNT_ID
-    existing = session.scalars(
-        select(Account).filter_by(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
-    ).first()
-    if existing is None:
-        AccountFactory(tenant_id=tenant_id, account_id=DEFAULT_TEST_ACCOUNT_ID)
-        session.flush()
-    return DEFAULT_TEST_ACCOUNT_ID
+    return seed_default_account(tenant_id)
 
 
 def _request_packages(media_buy) -> list[dict[str, Any]]:

@@ -1,6 +1,6 @@
 """DeliveryPollEnv — unit test environment for _get_media_buy_delivery_impl.
 
-Patches: MediaBuyUoW, get_principal_object, get_adapter, _get_pricing_options
+Patches: MediaBuyUoW, get_adapter, _get_pricing_options
 
 Usage::
 
@@ -12,7 +12,6 @@ Usage::
 
 Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock
-    "principal"  -- get_principal_object mock
     "adapter"    -- get_adapter mock
     "pricing"    -- _get_pricing_options mock
 """

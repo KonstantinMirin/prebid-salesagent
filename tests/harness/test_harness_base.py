@@ -121,13 +121,11 @@ class TestBaseClassContract:
             ]
         assert env._enter_cleanups == []
 
-    def test_identity_respects_dry_run(self):
-        """Both base classes pass dry_run to testing_context."""
-        from tests.harness._base import BaseTestEnv, IntegrationEnv
-
-        for cls in [IntegrationEnv, BaseTestEnv]:
-            env = cls(dry_run=True)
-            assert env.identity.testing_context.dry_run is True
+    # (Retired) test_identity_respects_dry_run asserted both base classes forwarded
+    # ``dry_run=True`` into ``identity.testing_context``. The identity carries no testing
+    # context and no adapter carries a dry-run flag (commit a1b79d22d removed the
+    # testing-hook channel), so there is nothing to forward: ``**tenant_overrides`` now
+    # refuses ``dry_run`` by name, which is the behaviour tested two cases below.
 
     def test_configure_mocks_called_during_enter(self):
         """_configure_mocks is called after patches start."""
@@ -246,12 +244,17 @@ class TestBaseClassContract:
         assert "x-dry-run" not in credential
 
     def test_credential_overrides(self):
-        """token=None presents nothing; an invalid token is presented; dry_run adds the header."""
+        """token=None presents nothing; an invalid token is presented; tenant is overridable.
+
+        There is no ``x-dry-run`` header: requests carry no testing headers at all
+        (commit a1b79d22d), and ``credential_headers`` produces exactly Authorization and
+        x-adcp-tenant.
+        """
         from tests.harness._base import INVALID_TOKEN, BaseTestEnv
 
-        env = BaseTestEnv(principal_id="p1", tenant_id="t1", dry_run=True)
+        env = BaseTestEnv(principal_id="p1", tenant_id="t1")
 
-        assert env.credential()["x-dry-run"] == "true"
+        assert set(env.credential()) == {"Authorization", "x-adcp-tenant"}
         assert "Authorization" not in env.credential(token=None)
         assert env.credential(token=None)["x-adcp-tenant"] == "t1"
         assert env.credential(token=INVALID_TOKEN)["Authorization"] == f"Bearer {INVALID_TOKEN}"
@@ -287,13 +290,19 @@ class TestBaseClassContract:
             with pytest.raises(AdCPAuthenticationError):
                 _resolve_identity(env.credential(token=INVALID_TOKEN), require_valid_token=False)
 
-    def test_identity_backward_compat(self):
-        """env.identity still works and defaults to the mcp protocol."""
+    def test_identity_carries_the_principal_and_no_transport(self):
+        """``env.identity`` names the caller; the transport is not one of its facts.
+
+        It used to default to ``protocol="mcp"``. The identity answers who is calling and
+        for which seller; which transport carried the request is the boundary's own label
+        (``TransportProtocol``, passed to ``invoke_tool``), so reading it off the identity
+        is not possible any more.
+        """
         from tests.harness._base import BaseTestEnv
 
         env = BaseTestEnv(principal_id="p1")
         assert env.identity.principal_id == "p1"
-        assert env.identity.protocol == "mcp"
+        assert not hasattr(env.identity, "protocol")
 
     def test_call_via_raises_for_unimplemented_transport(self):
         """call_via with Transport.A2A raises NotImplementedError if call_a2a not overridden."""
@@ -637,38 +646,44 @@ class TestPartialEnterUnwind:
         """A failed enter must not leave production's retry backoff shortened.
 
         ``OrderApprovalWebhookEnv`` shortens the egress seam's retry base to
-        10ms so its retry cases do not cost wall time. That override is read by
-        the seam at CALL time from the environment, so a copy stranded by a
-        failed enter silently rescales BR-RULE-029's 1s/2s/4s schedule for every
-        later test in this worker -- including the ones that grade the schedule.
+        10ms so its retry cases do not cost wall time. The knob is the SETTINGS
+        field the seam reads (``limits.adcp_outbound_backoff_base_seconds``) --
+        the environment is read once at startup, so the variable this case used
+        to pop is invisible to the seam -- and a patch stranded by a failed
+        enter silently rescales BR-RULE-029's 1s/2s/4s schedule for every later
+        test in this worker, including the ones that grade the schedule.
         """
         import pytest
 
-        from src.core.security.egress.attempts import _BACKOFF_BASE_ENV
+        from src.core.config import get_settings
         from tests.harness.order_approval_webhook import OrderApprovalWebhookEnv
 
+        limits = get_settings().limits
+        before = limits.adcp_outbound_backoff_base_seconds
         env = OrderApprovalWebhookEnv()
-        with patch.dict(os.environ, {}):
-            os.environ.pop(_BACKOFF_BASE_ENV, None)
-            try:
-                with (
-                    patch(
-                        "src.core.database.database_session.get_engine",
-                        side_effect=RuntimeError("engine boom"),
-                    ),
-                    patch("tests.factories.ALL_FACTORIES", []),
-                    pytest.raises(RuntimeError, match="engine boom"),
-                ):
-                    env.__enter__()
+        try:
+            with (
+                patch(
+                    "src.core.database.database_session.get_engine",
+                    side_effect=RuntimeError("engine boom"),
+                ),
+                patch("tests.factories.ALL_FACTORIES", []),
+                pytest.raises(RuntimeError, match="engine boom"),
+            ):
+                env.__enter__()
 
-                leaked_backoff = os.environ.get(_BACKOFF_BASE_ENV)
-            finally:
-                self._force_release(env)
+            stranded = limits.adcp_outbound_backoff_base_seconds
+        finally:
+            self._force_release(env)
 
-            assert leaked_backoff is None, (
-                f"{_BACKOFF_BASE_ENV}={leaked_backoff!r} survived a failed __enter__ -- "
-                f"the egress seam's retry schedule stays shortened for the rest of this worker"
-            )
+        assert stranded == before, (
+            f"adcp_outbound_backoff_base_seconds={stranded!r} survived a failed __enter__ "
+            f"(was {before!r}) -- the egress seam's retry schedule stays shortened for the "
+            f"rest of this worker"
+        )
+        assert stranded != env.FAST_BACKOFF_BASE_SECONDS or before == env.FAST_BACKOFF_BASE_SECONDS, (
+            "the fast base is still in place after a failed enter"
+        )
 
         # The override belongs to one owner, composed into this env -- not to a
         # hand-rolled __enter__/__exit__ pair that test_harness_envs_define_no_enter_exit

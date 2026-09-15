@@ -11,11 +11,12 @@ two different names for what used to be one.
 from __future__ import annotations
 
 import asyncio
+import inspect
 from collections.abc import Iterator
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from functools import wraps
-from typing import Any
+from typing import Any, get_type_hints
 from unittest.mock import DEFAULT, AsyncMock, patch
 
 # _TOOLS, not TOOLS: the public registry is a read-only MappingProxyType, and the proxy
@@ -24,10 +25,48 @@ from unittest.mock import DEFAULT, AsyncMock, patch
 from src.core.tools.registry import _TOOLS as TOOLS
 
 
+def _conforming_impl(row: Any, replacement: Any, dto: Any) -> Any:
+    """*replacement*, wrapped so the registry row still validates if it carries no signature.
+
+    ``ToolSpec.__post_init__`` derives the tool's credential policy from its
+    implementation's ``identity`` ANNOTATION and refuses a row whose annotation disagrees
+    with the DTO. That refusal is correct and load-bearing — it is what makes the identity
+    type the one statement of the policy — so this does not loosen it. A test substituting
+    an ``AsyncMock`` is simply substituting something that answers no signature question at
+    all (``get_type_hints`` on a mock raises), and the fix is to give the mock a conforming
+    seam rather than to stop asking.
+
+    The annotations are COPIED FROM THE ROW being replaced, so the shim asserts nothing of
+    its own: the DTO is the row's DTO and the identity type is the one the real
+    implementation declares. Substituting an implementation therefore cannot change the
+    tool's credential policy, which is the property the registry check exists to protect.
+
+    Calls are forwarded verbatim as ``(req=..., identity=...)``, so
+    ``assert_called_once_with(req=..., identity=...)`` on the mock reads exactly as it did.
+    """
+    if getattr(replacement, "__annotations__", None) and "identity" in replacement.__annotations__:
+        return replacement
+
+    declared_identity = get_type_hints(row.impl)["identity"]
+
+    async def _shim(*, req: Any, identity: Any) -> Any:
+        result = replacement(req=req, identity=identity)
+        return await result if inspect.isawaitable(result) else result
+
+    _shim.__annotations__ = {"req": dto, "identity": declared_identity, "return": Any}
+    # Keep the substitute reachable for a test that holds the context manager rather than
+    # the mock it passed in.
+    _shim.wrapped_stub = replacement  # type: ignore[attr-defined]
+    return _shim
+
+
 @contextmanager
 def registry_row(tool_name: str, **fields: Any) -> Iterator[None]:
     """Run the block with ``tool_name``'s row fields (``impl``, ``dto``, ...) replaced."""
-    with patch.dict(TOOLS, {tool_name: replace(TOOLS[tool_name], **fields)}):
+    row = TOOLS[tool_name]
+    if "impl" in fields:
+        fields = {**fields, "impl": _conforming_impl(row, fields["impl"], fields.get("dto", row.dto))}
+    with patch.dict(TOOLS, {tool_name: replace(row, **fields)}):
         yield
 
 

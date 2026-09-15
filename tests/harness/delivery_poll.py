@@ -1,7 +1,7 @@
 """DeliveryPollEnv — integration test environment for _get_media_buy_delivery_impl.
 
 Patches: get_adapter ONLY (external ad server).
-Real: MediaBuyUoW, get_principal_object, _get_pricing_options (all hit real DB).
+Real: MediaBuyUoW, _get_pricing_options (all hit real DB).
 
 Requires: integration_db fixture (creates test PostgreSQL DB).
 
@@ -37,7 +37,7 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     Only mocks the adapter (external ad server). Everything else is real:
     - Real MediaBuyUoW -> real DB queries
-    - Real get_principal_object -> real DB queries
+    - The principal comes off the identity; nothing looks one up
     - Real _get_pricing_options -> real DB queries
 
     Fluent API (from DeliveryPollMixin):

@@ -1,6 +1,6 @@
 """MediaBuyUpdateEnv — unit test environment for _update_media_buy_impl.
 
-Patches: MediaBuyUoW, get_principal_object, _verify_principal,
+Patches: MediaBuyUoW, _verify_principal,
          get_context_manager, get_adapter, get_audit_logger,
          ensure_tenant_context, get_db_session.
 
@@ -17,12 +17,10 @@ Usage::
 
 Available mocks via env.mock:
     "uow"       -- MediaBuyUoW class mock (env.mock["uow"].return_value is the UoW instance)
-    "principal" -- get_principal_object mock
     "verify"    -- _verify_principal mock
     "ctx_mgr"   -- get_context_manager mock
     "adapter"   -- get_adapter mock
     "audit"     -- get_audit_logger mock
-    "tenant"    -- ensure_tenant_context mock
     "db"        -- get_db_session mock
 
 Fluent API:

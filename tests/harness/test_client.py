@@ -231,15 +231,17 @@ class TestClientE2eRestDelivery:
         assert captured["headers"]["Authorization"] == "Bearer tok_abc"
         assert captured["headers"]["x-adcp-tenant"] == "t1"
 
-    def test_e2e_rest_delivery_sends_same_header_set_the_deleted_inline_code_did(self, monkeypatch):
-        """``_deliver_e2e_rest`` must emit the full Authorization / x-adcp-tenant /
-        x-dry-run header set that ``RestE2EDispatcher`` used to build inline, before
-        commit 4363757dc deleted that code and routed delivery through the shared
-        producer instead. e2e_rest is a live caller (real HTTP to the Docker stack), so a
-        regression here silently drops a header a real server request depends on. The
-        auth/tenant pair has coverage above; this is the one place x-dry-run — the third
-        header the deleted code built — is checked, through the env's own ``credential()``
-        so the dry-run flag travels the way a dry-run env sends it."""
+    def test_e2e_rest_delivery_sends_exactly_the_shared_producers_headers(self, monkeypatch):
+        """``_deliver_e2e_rest`` must emit the header set ``credential()`` produces, and
+        nothing else.
+
+        ``RestE2EDispatcher`` used to build these inline until commit 4363757dc routed
+        delivery through the shared producer. e2e_rest is a live caller (real HTTP to the
+        Docker stack), so a regression here silently drops a header a real server request
+        depends on -- or adds one no seller reads. The set is Authorization +
+        x-adcp-tenant plus the content type: the third header this case used to check,
+        x-dry-run, is gone with the testing-hook channel (commit a1b79d22d), and asserting
+        the dict WHOLE is what keeps it gone."""
         import httpx
 
         captured = {}
@@ -275,7 +277,6 @@ class TestClientE2eRestDelivery:
         env = _UnitEnv(
             principal_id="p1",
             tenant_id="t1",
-            dry_run=True,
             e2e_config=E2EConfig(base_url="http://e2e-stack.test", postgres_url="postgresql://x/y"),
         )
         with env:
@@ -287,7 +288,6 @@ class TestClientE2eRestDelivery:
             "Content-Type": "application/json",
             "Authorization": env.credential()["Authorization"],
             "x-adcp-tenant": "t1",
-            "x-dry-run": "true",
         }
 
     def test_e2e_rest_delivery_unauthenticated_omits_auth_header(self, monkeypatch):
