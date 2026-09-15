@@ -1737,11 +1737,16 @@ def then_query_summary_sort_applied(ctx: dict, field: str, direction: str) -> No
 
 @then("the archived creative is not included in the results")
 def then_archived_not_included(ctx: dict) -> None:
-    """The archived row is seeded and must NOT come back — the exclusion's counter-example."""
+    """The archived row is seeded and must NOT come back — the exclusion's counter-example.
+
+    Asserted as the WHOLE set the read must return, not as the absence of the archived ids.
+    An absence holds over an empty response, so a seller that returned nothing — or a
+    scenario whose seller never had the rows — would satisfy "the archived creative is not
+    included" while grading nothing at all.
+    """
     archived = {record.creative_id for record in _library(ctx) if record.status == _ARCHIVED}
     assert archived, "the Given seeded no archived creative, so this assertion cannot fail"
-    leaked = archived & set(_wire_creative_ids(ctx))
-    assert not leaked, f"archived creatives came back from a read that did not name them: {sorted(leaked)}"
+    _assert_returned_exactly(ctx, _non_archived_ids(ctx), "the non-archived creatives, and no archived one")
 
 
 @then("each creative includes creative_id, name, format_id, status, created_date, updated_date")
@@ -1847,11 +1852,21 @@ def then_returned_creative_has_both_tags(ctx: dict, first: str, second: str) -> 
 
 @then(parsers.re(r'the creative with only tag "(?P<tag>[^"]+)" is not returned'))
 def then_under_tagged_creative_excluded(ctx: dict, tag: str) -> None:
-    """The AND counter-example: one matching tag is not enough."""
+    """The AND counter-example: one matching tag is not enough.
+
+    Asserted as the exact set the filter must return — which over this library is EMPTY,
+    because the one creative seeded carries only one of the two tags asked for. Written as
+    "the forbidden id is absent" it would also have held if the seller had returned nothing
+    for an unrelated reason, or if the scenario's library had never been seeded; written as
+    an exact set it holds only when the filter ran over the rows it was supposed to.
+    """
+    filter_tags = set(ctx["request"]["filters"]["tags"])
     under_tagged = {record.creative_id for record in _library(ctx) if record.tags == (tag,)}
     assert under_tagged, f"the Given seeded no creative whose only tag is {tag!r}"
-    leaked = under_tagged & set(_wire_creative_ids(ctx))
-    assert not leaked, f"a creative carrying only {tag!r} matched an AND filter: {sorted(leaked)}"
+    matching = {
+        record.creative_id for record in _library(ctx) if filter_tags <= set(record.tags) and record.status != _ARCHIVED
+    }
+    _assert_returned_exactly(ctx, matching, f"the creatives carrying every tag in {sorted(filter_tags)}")
 
 
 @then(parsers.re(r'the response contains creatives from both "(?P<first>[^"]+)" and "(?P<second>[^"]+)"'))
