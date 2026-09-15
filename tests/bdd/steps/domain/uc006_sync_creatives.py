@@ -767,7 +767,22 @@ def _readback(ctx: dict) -> Iterator[Session]:
 
 
 def _get_creative_from_db(ctx: dict) -> object:
-    """Retrieve the synced creative from the DB for status assertion."""
+    """Retrieve the synced creative from the DB for status assertion.
+
+    FIXME(#2236): this reads the creative as a raw ORM row and every caller then
+    walks ``creative.data`` as an untyped ``JSONType`` blob — a chain of ``.get``
+    calls with ``or {}`` at each hop, because the blob's shape is whatever the
+    writer happened to store. A test asking "what provenance does this asset
+    carry?" should ask a typed model, not a dict; a raw ``select()`` in a test
+    body is the same defect one layer down (it is the reason this helper exists
+    instead of a repository method).
+
+    The class of defect — creative identity and creative payloads modelled as
+    name-keyed dicts rather than typed values — is what #2236 (RFC:
+    Re-engineer the creative format model on canonical format kinds) proposes to
+    remove. Fix it there, as part of the creative redesign; do not paper over the
+    next ``NoneType has no attribute 'get'`` with another ``or {}``.
+    """
     from sqlalchemy import select
 
     from src.core.database.models import Creative
@@ -3817,12 +3832,19 @@ def then_asset_has_provenance_not_inherited(ctx: dict, expected: str, inherited:
     )
     creative = _get_creative_from_db(ctx)
     data = getattr(creative, "data", None) or {}
-    assets = data.get("assets", {})
+    # `or {}` at every hop, never a .get default: the default applies only to an ABSENT
+    # key, and the live server stores these as explicit NULLs where the in-process path
+    # leaves them absent. `data.get("provenance", {})` therefore returned None in-network
+    # and the next .get raised AttributeError, which says nothing about the obligation.
+    # This is a band-aid, kept only so the next run reports the obligation instead of a
+    # crash — the defect is the untyped traversal itself: FIXME(#2236) on
+    # `_get_creative_from_db`.
+    assets = data.get("assets") or {}
     assert assets, (
         "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — asset-level provenance storage not implemented in production. BR-RULE-094 INV-5: asset-level provenance should replace creative-level."
     )
-    first_asset = next(iter(assets.values())) if assets else {}
-    asset_provenance = first_asset.get("provenance", {})
+    first_asset = next(iter(assets.values())) or {}
+    asset_provenance = (first_asset or {}).get("provenance") or {}
     asset_source = asset_provenance.get("digital_source_type")
     assert asset_source is not None, (
         "SPEC-PRODUCTION GAP: asset-level provenance.digital_source_type not stored in creative.data.assets — production may not support per-asset provenance yet. BR-RULE-094 INV-5."
@@ -3844,13 +3866,16 @@ def then_no_field_level_merging(ctx: dict) -> None:
     assert "error" not in ctx, f"Expected no-merge assertion but sync raised: {ctx.get('error')}"
     creative = _get_creative_from_db(ctx)
     data = getattr(creative, "data", None) or {}
-    assets = data.get("assets", {})
+    # `or {}` at every hop — see the sibling step above: a .get default does not fire on a
+    # key that is present and null, which is how the live server stores an undeclared
+    # block. Band-aid, same FIXME(#2236).
+    assets = data.get("assets") or {}
     assert assets, (
         "SPEC-PRODUCTION GAP: creative.data has no 'assets' key — cannot verify no-merge semantics. BR-RULE-094 INV-5."
     )
-    creative_provenance = data.get("provenance", {})
-    first_asset = next(iter(assets.values())) if assets else {}
-    asset_provenance = first_asset.get("provenance", {})
+    creative_provenance = data.get("provenance") or {}
+    first_asset = next(iter(assets.values())) or {}
+    asset_provenance = (first_asset or {}).get("provenance") or {}
     assert asset_provenance, (
         "SPEC-PRODUCTION GAP: no asset-level provenance stored — cannot verify replacement semantics. BR-RULE-094 INV-5."
     )
