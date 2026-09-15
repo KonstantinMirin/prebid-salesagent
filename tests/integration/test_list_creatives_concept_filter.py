@@ -353,7 +353,7 @@ class TestMalformedAssetsBlobCoerced:
     blob, so a stored non-dict (a list/string written by the same out-of-band producer)
     would fail the entire listing with a 400 ``VALIDATION_ERROR`` during response
     construction. Reverting the
-    ``_coerce_blob_dict`` call at the ``assets=`` site back to the raw ``assets_dict``
+    ``_coerce_blob_assets`` call at the ``assets=`` site back to the raw ``assets_dict``
     reddens this (the listing raises mid-build)."""
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
@@ -362,8 +362,12 @@ class TestMalformedAssetsBlobCoerced:
         creative = result.wire_response["creatives"][0]
         # Dropped to None → exclude_none omits the key from the wire entirely.
         assert "assets" not in creative
-        # Observability (No Quiet Failures): the drop is surfaced in logs, not silent.
-        assert "Dropping non-dict assets value" in warnings
+        # Observability (No Quiet Failures): the drop is surfaced in logs, not silent. The
+        # value is now validated against the asset union rather than merely type-checked,
+        # so the drop names the reason it was rejected ("invalid-assets") — this assertion
+        # still read the pre-validation wording and had been failing on all three
+        # transports since that change.
+        assert "Dropping invalid-assets assets value" in warnings
 
     @pytest.mark.parametrize("transport", _ALL_WIRE)
     def test_empty_assets_dict_is_preserved_on_wire(self, integration_db, transport):

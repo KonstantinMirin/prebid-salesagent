@@ -84,6 +84,15 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "uc011-list",
         "uc011-sync",
         "uc018-list",
+        # The two former catch-all PARKS, now wired: their rows build the same env their
+        # UC's other rows do and carry no xfail_reason, so every scenario of UC-011 and
+        # UC-018 executes. They are pinned here for the same reason as any other wired
+        # route — deleting one would silently dormant every scenario that falls through to
+        # it — and an unbound step in those UCs now fails through the dormancy tripwire
+        # (tests/bdd/dormant_scenarios.txt), which names the missing step, rather than
+        # xfailing invisibly.
+        "uc011-not-wired",
+        "uc018-not-wired",
     }
 )
 

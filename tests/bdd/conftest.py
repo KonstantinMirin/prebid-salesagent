@@ -1074,61 +1074,24 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # NOT touch, so they are parked PER ROW rather than the whole outline being left
     # dormant at the harness gate (which is how the merge and coercion rows came to be
     # ungraded in the first place). Every entry cites #1721.
-    (
-        "T-UC-018-partition-filters",
-        {
-            "no_filters",
-            "flat_only",
-            "structured_only",
-            "flat_and_structured_no_conflict",
-            "flat_and_structured_conflict",
-            "tags_and_semantics",
-            "tags_or_semantics",
-            "combined_date_range",
-            "invalid_date_format",
-            "empty_tags_array",
-            "creative_ids_over_limit",
-        },
-        "UC-018 filter-semantics rows outside the media_buy_id/media_buy_ids merge this lane "
-        "grades: flat/structured precedence, tags AND/OR semantics, date-range and creative_ids "
-        "validation are unimplemented or ungraded production surfaces — #1721",
-    ),
-    (
-        "T-UC-018-partition-field-selector",
-        {
-            "omitted",
-            "single_field",
-            "minimal_set",
-            "all_fields",
-            "enrichment_fields",
-            "invalid_db_status_tolerance",
-            "empty_array",
-            "unknown_field",
-            "non_string_item",
-        },
-        "UC-018 fields[] projection is not implemented in production (nothing reads req.fields; "
-        "no field selector exists in src/), so only the include_assignments row of this outline "
-        "grades a real behavior — #1721",
-    ),
-    (
-        "T-UC-018-boundary-pagination",
-        {
-            "assignment_count",
-        },
-        # GRADUATED (2026-08-31, ): the max_results rows are OUT of this
-        # entry because the gap it described is closed -- ListCreativesRequest declares the
-        # spec's pagination object and every transport validates into it, so max_results has
-        # a path on A2A and REST and those rows XPASSed strict. The limit=1000/1001 rows are
-        # gone entirely: `limit` is not an AdCP 3.1.1 field, and the code cap they graded is
-        # not a spec behaviour.
-        # Still dormant: assignment_count sorting is genuinely unimplemented --
-        # CreativeRepository.get_by_principal maps only name/status/created_at -- so the
-        # enum's last member cannot be honoured yet. That is a real production gap, not a
-        # wiring one — #1721
-        "UC-018: assignment_count sorting is unimplemented (CreativeRepository."
-        "get_by_principal maps only name/status/created_at), so the last member of "
-        "creative-sort-field.json cannot be honoured — #1721",
-    ),
+    # T-UC-018-partition-filters is GRADUATED IN FULL. The three flat/structured
+    # precedence rows are deleted from the feature (there are no flat filter params in
+    # 3.1.1, so they graded a precedence rule between a spec field and a non-field), and
+    # every remaining row now executes: tags AND / tags_any OR ask jsonb for containment
+    # over the creative's own tags, creative_ids is threaded into the query, and the
+    # date-range and validation rows are refusals the DTO already makes.
+    # T-UC-018-partition-field-selector IS GRADUATED IN FULL. `fields` is read now: the
+    # projection narrows the OPTIONAL members and keeps the six list-creatives-response.json
+    # marks required, which is the reading that satisfies both halves of the pin and is why
+    # the rows are gradeable at all. The one row that did not graduate was deleted rather
+    # than parked: its request_params cell named a database fixture, and that obligation is
+    # graded by @T-UC-018-inv-149-6-holds.
+    # T-UC-018-boundary-pagination IS GRADUATED IN FULL. assignment_count sorting was the
+    # last row parked here, and it is implemented: the repository orders by the creative's
+    # assignment count through a correlated subquery, and the response carries the count in
+    # the assignments block the pin defaults to including — which is what makes the ordering
+    # observable on the wire at all. The 60-creative library now seeds rotating counts, so
+    # the row cannot pass over a constant column.
     (
         "T-UC-005-partition-disclosure",
         {"duplicate_positions"},
@@ -5676,25 +5639,25 @@ ENV_ROUTES: list[EnvRoute] = [
         ),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
     ),
-    EnvRoute(
-        tag="uc018-ext-c",
-        when=_uc("UC-018", lambda m: "T-UC-018-ext-c" in m),
-        env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
-        xfail_reason="T-UC-018-ext-c list_creatives validation harness wiring is tracked in #1652",
-    ),
+    # The uc018-ext-c ROW IS GONE, not merely un-parked. #1652's "validation harness
+    # wiring" was the missing When bindings, not a production gap: every row of that
+    # outline sends a payload violating a constraint the pinned request schema declares,
+    # and the DTO refuses it at the boundary on every transport, so the rows grade the
+    # refusal for real. With its xfail_reason removed the row named the same env as the
+    # UC-018 catch-all below and did nothing else, and a row that selects a subset in
+    # order to give it identical treatment is a routing decision with no consequence.
     # When the dormant all-fields boundary scenarios are wired, their Then must
     # assert value-when-present, not key-presence-of-13: list_creatives drops a
     # corrupt tags/assets blob to absent and collapses an empty stored tags list
     # to omission (both conformant at 3.1.1) -- see the #1508 reconciliation note
     # in test_uc018_list_creatives.py's module docstring.
     EnvRoute(
+        # Not a catch-all park any more: this row builds the SAME env as uc018-list and
+        # carries no seed either, so the scenarios it matches were parked by a reason
+        # string rather than by a missing harness. The reason is gone and they execute.
         tag="uc018-not-wired",
         when=_uc("UC-018", lambda m: True),
         env_builder=_env("tests.harness.creative_list.CreativeListEnv"),
-        xfail_reason=(
-            "UC-018 harness wired only for the @list-after-sync (#1405), @concept-id (#1407), "
-            "and @BR-RULE-034 isolation (#1503) scenarios"
-        ),
     ),
     # ── UC-011 ──────────────────────────────────────────────────────────────
     EnvRoute(
@@ -5708,10 +5671,11 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.account_sync.AccountSyncEnv"),
     ),
     EnvRoute(
+        # Same env and same absent seed as uc011-sync, so the reason string was the
+        # only thing stopping these scenarios: it is gone and they execute.
         tag="uc011-not-wired",
         when=_uc("UC-011", lambda m: True),
         env_builder=_env("tests.harness.account_sync.AccountSyncEnv"),
-        xfail_reason="UC-011 harness not yet wired for these markers",
     ),
     # ── UC-004 ──────────────────────────────────────────────────────────────
     EnvRoute(

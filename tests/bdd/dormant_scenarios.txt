@@ -263,33 +263,11 @@ T-UC-005-v31-payload-vs-requirements-separation :: given the seller catalog has 
 # T-UC-006-storyboard-provenance-claim-contradicted  (test_uc006_sync_creatives.py)
 T-UC-006-storyboard-provenance-claim-contradicted :: given the Buyer Agent submits a creative claiming digital_source_type "<>"
 
-# T-UC-018-boundary-pagination  (test_uc018_list_creatives.py)
-T-UC-018-boundary-pagination :: then <n> creative returned
-T-UC-018-boundary-pagination :: then <n> creatives returned (all available)
-
-# T-UC-018-partition-field-selector  (test_uc018_list_creatives.py)
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with database has creative with unrecognized status value
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields ["<>", "<>", "<>"]
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields ["<>", "<>", "<>"] and include_snapshot true
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields ["<>", "<>"]
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields ["<>"]
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields as empty array
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields containing integer <n>
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with fields with all <n> enum values
-T-UC-018-partition-field-selector :: when the Buyer Agent sends a list_creatives request with no fields parameter
-
-# T-UC-018-partition-filters  (test_uc018_list_creatives.py)
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with created_after "<>"
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with created_after "<>" and created_before "<>"
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with creative_ids with <n> items
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with flat status "<>"
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with flat status "<>" and structured statuses ["<>"]
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with flat tags ["<>"] and structured name_contains "<>"
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with no filter parameters
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with structured filters with statuses ["<>"] and name_contains "<>"
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with tags filter ["<>", "<>"]
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with tags filter as empty array
-T-UC-018-partition-filters :: when the Buyer Agent sends a list_creatives request with tags_any filter ["<>", "<>"]
+# UC-018 has NO entries. Every scenario of BR-UC-018-list-creatives.feature executes: the
+# `fields` projection is implemented (it narrows the optional members and keeps the six the
+# response schema requires, which is the reading that satisfies both halves of the pin), and
+# the one row whose request_params cell named a database fixture rather than a request was
+# deleted in favour of @T-UC-018-inv-149-6-holds, which grades that obligation end to end.
 
 # T-UC-019-boundary-cancellation  (test_uc019_query_media_buys.py)
 T-UC-019-boundary-cancellation :: given the principal "<>" owns media buy "<>" with status active

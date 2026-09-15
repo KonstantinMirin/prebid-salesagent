@@ -154,6 +154,11 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
     env = ctx["env"]
+    # The account hangs off the scenario's tenant and principal, which an EARLIER Given
+    # usually seeded — but not always: a scenario whose only other Given is the
+    # Background's authentication reached this step with no ctx["tenant"] and raised
+    # KeyError. The shared bootstrap is a no-op when they are already there.
+    ensure_tenant_principal(ctx, env)
     account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
     AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()

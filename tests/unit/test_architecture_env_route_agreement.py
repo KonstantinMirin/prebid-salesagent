@@ -84,8 +84,13 @@ _CATCH_ALL_SCENARIOS = (
     # parked was corrected to the pin and wired, or deleted as ungrounded in the sync
     # request's schema. The row family still exists in tests/bdd/conftest.py and would
     # pin a specimen again the day a UC-006 scenario is parked on one of them.
-    ("UC-011", "T-UC-011-v31-error-conflict-version", "conftest.py:3665"),
-    ("UC-018", "T-UC-018-boundary-default-query", "conftest.py:3644-3647"),
+    # UC-011 and UC-018 have no specimen either, for the same reason UC-006 has none: the
+    # catch-all rows they fell through to no longer park anything. Both rows survive and
+    # build the real env (they are pinned in test_architecture_measurement_floors.py's
+    # EXPECTED_WIRED_ROUTES), so a scenario of those UCs is WIRED by construction and
+    # cannot be a specimen of "falls through to an xfail". What catches an unbound step in
+    # them now is the dormancy tripwire, which fails the scenario and names the step
+    # instead of xfailing it out of sight.
 )
 
 _UC004_TAG_PREFIX = "T-UC-004-"
