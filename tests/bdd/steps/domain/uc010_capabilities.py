@@ -224,9 +224,19 @@ def given_database_query_fails(ctx: dict) -> None:
     ctx["env"].break_tenant_config_db()
 
 
-@given(parsers.parse("the tenant has an adapter with channels {channels}"))
-def given_adapter_channels(ctx: dict, channels: str) -> None:
-    ctx["env"].set_adapter_channels(_quoted_list(channels))
+@given(parsers.parse("the tenant offers products in channels {channels}"))
+def given_portfolio_channels(ctx: dict, channels: str) -> None:
+    """Seed the catalog whose channels the portfolio summarizes.
+
+    Was "the tenant has an adapter with channels ...", which named the wrong
+    source: 3.1.1 calls the field "Primary advertising channels in this PORTFOLIO"
+    (get-adcp-capabilities-response.json#/properties/media_buy/properties/portfolio/
+    properties/primary_channels), the portfolio is the product catalog, and
+    ``Product.channels`` is the per-tenant column ``get_products`` already filters
+    on. An adapter's ``default_channels`` is a per-adapter-TYPE class constant and
+    can only be the fallback for a seller with no catalog.
+    """
+    ctx["env"].set_portfolio_channels(_quoted_list(channels))
 
 
 @given(parsers.parse("the tenant has registered publisher partnerships with domains {domains}"))
@@ -243,11 +253,13 @@ def given_adapter_geo_targeting(ctx: dict) -> None:
     ctx["env"].set_targeting_capabilities(geo_countries=True, geo_regions=True, nielsen_dma=True)
 
 
-@given("the adapter reports all 20 channels enum values")
-def given_adapter_all_canonical_channels(ctx: dict) -> None:
-    """Seed the adapter with every 3.1.1 channels enum value (channels.json#/enum).
-    Production maps each recognized value through CHANNEL_MAPPING onto primary_channels."""
-    ctx["env"].set_adapter_channels(list(CHANNELS_ENUM))
+@given("the tenant offers products spanning all 20 channels enum values")
+def given_catalog_spans_all_canonical_channels(ctx: dict) -> None:
+    """Seed a catalog covering every 3.1.1 channels enum value (channels.json#/enum).
+    Production unions each product's channels and maps them through CHANNEL_MAPPING
+    onto primary_channels, so this grades the mapping's completeness over a real
+    catalog -- 20 products, one channel each, which is also what exercises the union."""
+    ctx["env"].set_portfolio_channels(list(CHANNELS_ENUM))
 
 
 @given("the adapter resolves but enumerating its channels fails")
@@ -1164,8 +1176,11 @@ def then_primary_channels_all_canonical(ctx: dict) -> None:
     """Every 3.1.1 channels enum value round-trips onto primary_channels.
     primary_channels items $ref channels.json#/enum (20 values, no minItems/
     uniqueItems) — so the graded contract is set-equality against all 20.
-    Strict xfail today: CHANNEL_MAPPING omits sponsored_intelligence, so the
-    20th value is dropped and the wire carries only 19."""
+
+    What is graded is CHANNEL_MAPPING's completeness, not a claim that a seller
+    must offer all 20 channels: the Given fixes the adapter's reported set to
+    every enum value, and each one must survive the mapping. A seller declaring a
+    subset is conformant, and other scenarios grade those subsets."""
     actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
     assert sorted(actual) == sorted(CHANNELS_ENUM), (
         f"primary_channels is not the full 20-value channels enum: "

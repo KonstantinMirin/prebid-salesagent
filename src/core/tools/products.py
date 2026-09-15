@@ -25,6 +25,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
@@ -601,27 +602,25 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
             # Filter by channels
             if req.filters.channels:
-                # Check if product has channels field
-                product_channels: set[str] = set()
-                if product.channels:
-                    product_channels = {c.value.lower() for c in product.channels}
+                # The one rule (channel_helpers), shared with the portfolio summary
+                # get_adcp_capabilities builds: declared channels if the product has
+                # any, the tenant adapter's defaults otherwise.
+                product_channels = effective_channel_names(
+                    product.channels, adapter_defaults=get_adapter_default_channels(tenant.ad_server)
+                )
 
                 # Extract channel values from filter (enum values)
                 request_channels: set[str] = set()
                 for channel in req.filters.channels:
                     request_channels.add(channel.value.lower())
 
-                if product_channels:
-                    # Product has explicit channels - must have at least one match
-                    if not product_channels.intersection(request_channels):
-                        continue
-                else:
-                    # Product has no channels - use adapter defaults
-                    adapter_channels = get_adapter_default_channels(tenant.ad_server)
-
-                    # Product matches if any of adapter's default channels is in request
-                    if adapter_channels and not request_channels.intersection(set(adapter_channels)):
-                        continue
+                # An EMPTY effective set is "no basis to answer", not "no channels", so it
+                # does not narrow -- the product stays. That is what the two-branch form
+                # this replaced did: its adapter-defaults branch was guarded by
+                # `if adapter_channels and ...`, so a tenant whose adapter reports no
+                # channels excluded nothing.
+                if product_channels and not product_channels.intersection(request_channels):
+                    continue
 
             # Product passed all filters
             filtered_products.append(product)

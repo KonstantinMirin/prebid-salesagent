@@ -264,6 +264,27 @@ class SignalsAgentFactory(factory.alchemy.SQLAlchemyModelFactory):
     timeout = 30
 
 
+def set_adapter_type(env: Any, tenant_id: str, adapter_type: str) -> AdapterConfig:
+    """Point a tenant's ``AdapterConfig`` at *adapter_type* (BDD/E2E support).
+
+    ``resolve_tenant_adapter_type`` reads this column as the authoritative adapter
+    for a tenant, so writing a name outside ``ADAPTER_REGISTRY`` reproduces an
+    ordinary operator misconfiguration: ``get_adapter_class`` refuses it with
+    ``AdCPConfigurationError``. That is a real production state, which is why the
+    capability-degradation scenarios use it instead of a fault-injection flag.
+
+    Factory-based upsert -- no raw model construction in step bodies.
+    """
+    session = env.get_session()
+    row = session.get(AdapterConfig, tenant_id)
+    if row is None:
+        row = AdapterConfigFactory(tenant=session.get(Tenant, tenant_id), adapter_type=adapter_type)
+    else:
+        row.adapter_type = adapter_type
+    env._commit_factory_data()
+    return row
+
+
 def set_adapter_test_behavior(env: Any, tenant_id: str, **behavior: Any) -> AdapterConfig:
     """Upsert the mock-adapter ``test_behavior`` for a tenant (BDD/E2E support).
 

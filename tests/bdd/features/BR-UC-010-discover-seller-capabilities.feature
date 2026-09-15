@@ -82,7 +82,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-main @main-flow @post-s1 @post-s2 @post-s3 @post-s4 @post-s5 @post-s6 @post-s7 @post-s8 @post-s10 @post-s15 @post-s18 @partition @boundary
   Scenario: not_provided — Not provided (no protocol filter), discover complete capabilities
     Given a tenant is resolvable from the request context
-    And the tenant has an adapter with channels "display", "social", "ctv"
+    And the tenant offers products in channels "display", "social", "ctv"
     And the tenant has registered publisher partnerships with domains "news.com", "sports.com"
     And the adapter provides targeting capabilities including geo
     And the tenant billing policy is configured as operator, agent
@@ -683,7 +683,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-channel-all-canonical @channel @boundary
   Scenario: All 20 canonical channels enum values are valid
     Given a tenant is resolvable from the request context
-    And the adapter reports all 20 channels enum values
+    And the tenant offers products spanning all 20 channels enum values
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And primary_channels should equal the channels enum's 20 canonical values
@@ -692,12 +692,12 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # influencer, affiliate, product_placement, sponsored_intelligence
     # (count corrected 2026-07-13: scenario said 18, comment listed 19, spec has 20 — the
     # pre-release snapshot lacked sponsored_intelligence)
-    # PRODUCTION GAP (strict xfail): CHANNEL_MAPPING (src/core/tools/capabilities.py)
-    # maps 19 canonical values + 2 aliases but OMITS sponsored_intelligence, so an
-    # adapter reporting all 20 enum values yields only 19 on the wire —
-    # sponsored_intelligence is dropped as "unrecognized" (MediaChannel.sponsored_intelligence
-    # exists in the adcp enum; only the production mapping lags). Executes and fails at
-    # the 20-value equality until the mapping gains the 20th channel.
+    # GRADUATED: CHANNEL_MAPPING (src/core/tools/capabilities.py) now maps all 20
+    # canonical values + the 2 aliases, so an adapter reporting every enum value
+    # round-trips intact. The xfail row is gone from tests/bdd/conftest.py; the
+    # scenario grades the mapping's COMPLETENESS, not a claim that a seller must
+    # offer all 20 channels (a subset is conformant — primary_channels has no
+    # minItems and the Given is what fixes the adapter's reported set).
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/channels.json pointer=/enum
 
   @T-UC-010-features @validation @post-s4
