@@ -40,7 +40,6 @@ do not use the harness.
 
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -73,46 +72,32 @@ from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
-# A subdomain free of underscores is required: Product.publisher_properties derives
-# publisher_domain from the tenant subdomain (f"{subdomain}.example.com") and the
-# AdCP domain pattern rejects underscores. TenantFactory derives the subdomain via
-# tenant_subdomain() (pub-<tenant_id> with underscores normalized to hyphens); a
-# hyphen-free tenant_id keeps the rest of the derived name predictable here.
-_TENANT_ID = "behavioraltenant"
-_PRINCIPAL_ID = "behavioralprincipal"
-
-
 # ---------------------------------------------------------------------------
-# Harness factory + request helper
+# Request helper
 # ---------------------------------------------------------------------------
-
-
-def _env(**overrides: Any) -> MediaBuyCreateEnv:
-    """Build the harness with a hyphen-safe tenant. Names NO tenant policy fact.
-
-    ``human_review_required`` used to be set here and at fourteen call sites, and it
-    decided nothing: a constructor kwarg lands in the env's in-memory tenant overrides,
-    while ``MediaBuyCreateEnv.call_impl`` dispatches at ``invoke_tool`` -- so the REAL
-    resolver loads the tenant from its ROW, where ``TenantFactory`` leaves the column
-    ``False``. Every ``human_review_required=True`` site therefore ran the auto-approve
-    path and read production's correct answer as a defect.
-
-    The fact is a COLUMN, so it is stated where the row is written:
-    ``env.setup_default_data(human_review_required=True)`` (the base forwards tenant
-    kwargs to ``TenantFactory`` on create and applies them to the row on get -- its
-    docstring names this exact field).
-    """
-    overrides.setdefault("tenant_id", _TENANT_ID)
-    overrides.setdefault("principal_id", _PRINCIPAL_ID)
-    return MediaBuyCreateEnv(**overrides)
+#
+# There is no ``_env()`` wrapper and no fixed ``_TENANT_ID`` / ``_PRINCIPAL_ID``. The
+# wrapper's whole body was two ``setdefault`` calls that ``MediaBuyCreateEnv.__init__``
+# already makes -- and makes BETTER: the env mints a UNIQUE hyphen-safe id per instance
+# to avoid cross-test collisions under xdist, and the wrapper overrode that with one
+# fixed id, reintroducing exactly the collision the env exists to prevent. The
+# "hyphen-free keeps the derived name predictable" rationale bought nothing either: no
+# test read the derived name.
+#
+# It was also where fourteen sites had their intent silently swallowed. ``**overrides``
+# accepts any keyword and reports nothing, so ``human_review_required=True`` landed in an
+# in-memory tenant override that the boundary's resolver never reads -- the row decides.
+# A bag that takes anything cannot tell a caller it was ignored. The fact is a COLUMN and
+# is stated where the row is written: ``env.setup_default_data(human_review_required=True)``.
 
 
 def _require_manual_approval(env: MediaBuyCreateEnv) -> None:
     """Make the mock adapter opt into manual approval for create_media_buy.
 
-    The approval branch needs both tenant.human_review_required (set via the env
-    constructor) AND "create_media_buy" in adapter.manual_approval_operations.
-    The harness default leaves the operations list empty.
+    The approval branch needs both tenant.human_review_required (seeded onto the tenant
+    ROW via ``setup_default_data``) AND "create_media_buy" in
+    adapter.manual_approval_operations. The harness default leaves the operations list
+    empty.
     """
     env.mock["adapter"].return_value.manual_approval_operations = ["create_media_buy"]
 
@@ -180,7 +165,7 @@ class TestProductNotFound:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             # Only prod_exists is in the DB.
             env.setup_product_chain(tenant, product_id="prod_exists")
@@ -214,7 +199,7 @@ class TestMaxDailySpendExceeded:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             tenant.currency_limits[0].max_daily_package_spend = 500
             env.setup_product_chain(tenant)
@@ -242,7 +227,7 @@ class TestMaxDailySpendExceeded:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             tenant.currency_limits[0].max_daily_package_spend = 500
             env.setup_product_chain(tenant)
@@ -272,7 +257,7 @@ class TestMaxDailySpendExceeded:
             ],
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             tenant.currency_limits[0].max_daily_package_spend = 500
             env.setup_product_chain(tenant)
@@ -297,7 +282,7 @@ class TestMaxDailySpendExceeded:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             tenant.currency_limits[0].max_daily_package_spend = None
             env.setup_product_chain(tenant)
@@ -425,7 +410,7 @@ class TestCreativeUploadFailure:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             from tests.factories import CreativeFactory
 
             tenant, principal = env.setup_default_data()
@@ -495,7 +480,7 @@ class TestInlineCreativesProcessedBeforeApproval:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -653,7 +638,7 @@ class TestCreativeIdsNotFound:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             from tests.factories import CreativeFactory
 
             tenant, principal = env.setup_default_data()
@@ -751,7 +736,7 @@ class TestManualApprovalPathCreativeValidation:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -798,7 +783,7 @@ class TestManualApprovalPathCreativeValidation:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -831,7 +816,7 @@ class TestMainFlowObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
@@ -853,7 +838,7 @@ class TestMainFlowObligations:
 
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
@@ -928,7 +913,7 @@ class TestMainFlowObligations:
         #
         # The setup gate is the env's own mock ("setup_check"), not a hand-rolled patch of
         # the same target.
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=False)
             env.setup_product_chain(tenant)
             env.mock["setup_check"].side_effect = SetupIncompleteError(
@@ -975,7 +960,7 @@ class TestMainFlowObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             # All products exist -> pipeline reaches success without a not-found error.
@@ -990,7 +975,7 @@ class TestMainFlowObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             # CurrencyLimit USD exists (auto-created) -> USD supported.
             env.setup_product_chain(tenant, currency="USD")
@@ -1014,7 +999,7 @@ class TestMainFlowObligations:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
@@ -1032,7 +1017,7 @@ class TestMainFlowObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=False)
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
@@ -1066,7 +1051,7 @@ class TestMainFlowObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
@@ -1100,7 +1085,7 @@ class TestAsapStartTimingObligations:
         """
         req = _make_request(start_time="asap")
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             result = env.call_impl(req=req)
@@ -1127,7 +1112,7 @@ class TestAsapStartTimingObligations:
             ],
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             # $7000/~14 days ~= $500/day -> $1500 cap should pass.
             tenant.currency_limits[0].max_daily_package_spend = 1500
@@ -1147,7 +1132,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1165,7 +1150,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=False)
             env.setup_product_chain(tenant)
             # Adapter (not tenant) requires manual approval.
@@ -1184,7 +1169,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1209,7 +1194,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1228,7 +1213,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1248,7 +1233,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1269,7 +1254,7 @@ class TestManualApprovalObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1305,7 +1290,7 @@ class TestInlineCreativeObligations:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1455,7 +1440,7 @@ class TestProposalBasedObligations:
             ],
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             # No products in DB -> products not found.
             env.setup_default_data()
             # Missing product_ids raise the typed AdCPProductNotFoundError.
@@ -1476,7 +1461,7 @@ class TestCrossCuttingObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1506,7 +1491,7 @@ class TestCrossCuttingObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=True)
             env.setup_product_chain(tenant)
             _require_manual_approval(env)
@@ -1565,7 +1550,7 @@ class TestExtensionObligations:
 
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             # Product priced in EUR; tenant supports EUR (CurrencyLimit) but GAM does not.
             CurrencyLimitFactory(tenant=tenant, currency_code="EUR")
@@ -1692,7 +1677,7 @@ class TestExtensionObligations:
 
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             # Adapter returns an error envelope (not success).
@@ -1712,7 +1697,7 @@ class TestExtensionObligations:
             packages=[{"product_id": "prod_1", "budget": 999999.0, "pricing_option_id": "cpm_usd_fixed"}]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             tenant.currency_limits[0].max_daily_package_spend = None
             env.setup_product_chain(tenant)
@@ -1767,7 +1752,7 @@ class TestExtensionObligations:
         # catch unchanged (typed AdCPSalesAgentError raised directly).
         req = _make_request(packages=[{"product_id": "prod_1", "budget": 0, "pricing_option_id": "cpm_usd_fixed"}])
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
             with pytest.raises(AdCPBudgetTooLowError) as excinfo:
@@ -1801,7 +1786,7 @@ class TestExtensionObligations:
         """
         req = _make_request()
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             # Product created WITHOUT any pricing option.
             env.setup_product_chain(tenant, with_pricing=False)
@@ -1874,7 +1859,7 @@ class TestPostconditionObligations:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             from sqlalchemy import func, select
 
             from src.core.database.models import MediaBuy
@@ -1911,7 +1896,7 @@ class TestPostconditionObligations:
             ]
         )
 
-        with _env() as env:
+        with MediaBuyCreateEnv() as env:
             # No products in DB.
             env.setup_default_data()
             # Production raises the typed AdCPProductNotFoundError, whose class
