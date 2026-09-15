@@ -2908,15 +2908,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # structured AdCP error envelope (not a raw 500/empty body), so the
         # wire-envelope assertion handles it.
 
-        # e2e_rest: principal_ownership "differs from owner" — ownership check not enforced
-        # through REST layer; test succeeds when it should fail (strict=True xfail).
-        if "T-UC-004-boundary-ownership" in marker_names and is_e2e_rest and "differs from owner" in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="e2e_rest: ownership boundary not enforced through REST — test succeeds unexpectedly",
-                    strict=True,
-                )
-            )
+        # Graduated: e2e_rest T-UC-004-boundary-ownership "differs from owner". The reason
+        # read "ownership check not enforced through REST — test succeeds unexpectedly",
+        # which is what a strict xfail says when the scenario demanded a HARD refusal and
+        # production answered 200 + empty. The obligation was the wrong one: 3.1.1's
+        # get-media-buy-delivery-response.json declares errors[] for missing delivery data,
+        # and the row now asserts the per-id MEDIA_BUY_NOT_FOUND advisory that
+        # @T-UC-004-identify-batch-ownership already graded for the batch case. Production
+        # emits it on the REST wire too, so this xpassed strictly on the in-network run
+        # innet_150926_0049 — the last of that run's 11 e2e failures that was a routing
+        # artifact rather than a defect.
 
         # e2e_rest: sort_by_metric_not_available — the spend-fallback needs injected
         # by_placement data, but the injector (_inject_placement_data) is in-process
