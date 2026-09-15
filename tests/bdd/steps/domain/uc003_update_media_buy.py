@@ -8,6 +8,7 @@ conftest's _harness_env.
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC
 from typing import Any
 
@@ -19,6 +20,8 @@ from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import as_bool, drop_header_if
 from tests.bdd.steps.generic.given_media_buy import _resolve_date_token
+from tests.factories.mint import mint
+from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
 
 # ═══════════════════════════════════════════════════════════════════════
 # Label mapping — Gherkin package labels → real package_ids
@@ -312,12 +315,39 @@ def given_request_omits_start_end_paused(ctx: dict) -> None:
         kwargs.pop(field, None)
 
 
-# Step "the request does NOT include an idempotency_key" is defined in
-# tests/bdd/steps/domain/uc002_create_media_buy.py (canonical, shared across
-# UC-002/003) to avoid a cross-module shadow now that this module is registered.
-# No graded UC-003 scenario uses that text; when the dormant UC-003 idempotency
-# scenarios graduate (PR #1567 follow-up) they need an update-kwargs strip under
-# a distinct step text (create/update behaviours genuinely differ).
+@given("the request does NOT include an idempotency_key")
+def given_request_omits_idempotency_key(ctx: dict) -> None:
+    """Send NO idempotency_key, which 3.1.1 makes a rejection.
+
+    ``media-buy/update-media-buy-request.json`` lists ``idempotency_key`` in ``/required``,
+    so the absence is INVALID_REQUEST — see the version-cited note on
+    @T-UC-003-idempotency-absent in the feature file.
+
+    This sentence used to live in ``uc002_create_media_buy.py`` as "canonical, shared
+    across UC-002/003", writing ``ctx["idempotency_key"] = None`` — a key no UC-003 step
+    reads, so the scenario dispatched WITH the key and graded the opposite of what it says.
+    The sentence appears on exactly one feature line, this use case's, and UC-002 bound it
+    to none; ownership moves to the bag it describes, which is what the note it replaces
+    already prescribed ("create/update behaviours genuinely differ").
+
+    The sentinel rather than a pop: see ``_ensure_update_defaults``.
+    """
+    _ensure_update_defaults(ctx)["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
+
+
+@given("the request does NOT include an account field")
+def given_request_omits_account(ctx: dict) -> None:
+    """Send NO account, which 3.1.1 makes a rejection.
+
+    ``media-buy/update-media-buy-request.json`` lists ``account`` in ``/required``
+    (v3.1 added it, for governance checks and account resolution), so the absence is
+    INVALID_REQUEST — which is what @T-UC-003-account-absent asserts.
+
+    The sentence had NO definition at all, so the scenario raised
+    StepDefinitionNotFoundError and its xfail recorded a spec/production gap where the
+    real cause was missing wiring.
+    """
+    _ensure_update_defaults(ctx)["account"] = OMIT_ACCOUNT
 
 
 @given("the request does not include any updatable fields")
@@ -832,16 +862,28 @@ def when_send_update_request(ctx: dict) -> None:
     # The harness already supports this form; _is_update_request's docstring says the raw
     # dispatch exists precisely "for scenarios whose payload the LOCAL UpdateMediaBuyRequest
     # must reject". The step simply was not using it.
-    raw: dict = {
-        "account": {"account_id": "acct_test"},
-        "idempotency_key": "test-idem-key-0001",
-        **update_kwargs,
-    }
-
-    if ctx.get("has_auth") is False:
-        dispatch_request(ctx, identity=None, **raw)
-    else:
-        dispatch_request(ctx, **raw)
+    #
+    # The required fields are LITERALS no longer. `account={"account_id": "acct_test"}` and
+    # `idempotency_key="test-idem-key-0001"` used to be written into the bag at this point,
+    # which put them beyond the reach of every Given that means to remove one: "the request
+    # does NOT include an account field" and the `<not provided>` Examples rows all popped a
+    # key this step then put straight back, so those rows graded a request carrying the
+    # field they say is absent. `apply_required_update_fields` setdefaults them instead, so
+    # a Given's OMIT sentinel survives to the wire — and it runs HERE as well as in
+    # `_ensure_update_defaults` because this sentence is also UC-026's and the dual-emit
+    # feature's When, and UC-026 builds its bag with its own `_ensure_update_kwargs`.
+    #
+    # NO `identity=` EITHER. A no-auth scenario used to dispatch `identity=None`, which is
+    # not a request field: `_flatten_update_request` passes it into the flat wire params, so
+    # the DTO rejected it under extra="forbid" and all three transports answered
+    # INVALID_REQUEST to an auth row asserting AUTH_MISSING. The credential is the channel —
+    # `given_buyer_no_auth` stashes a token-less one in ctx["credential"] and
+    # `dispatch_request` presents it, so the REAL resolver refuses a real request. UC-019
+    # removed this exact shape from its own dispatch (_dispatch_query); this was the last copy.
+    #
+    # The defaults are written INTO the scenario's own bag, not a copy, so the minted key is
+    # the same on a second dispatch within one scenario — what an idempotent-replay row needs.
+    dispatch_request(ctx, **apply_required_update_fields(ctx, update_kwargs))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -1242,7 +1284,10 @@ def then_old_assignments_removed(ctx: dict, old_ids: str) -> None:
 def given_idempotency_key(ctx: dict, value: str) -> None:
     """Set or omit idempotency_key on the update request.
 
-    '<not provided>' means omit the field (test preservation semantics).
+    '<not provided>' means omit the field — recorded as the OMIT sentinel rather than by
+    popping the key, because a later Given's `_ensure_update_defaults` call would default a
+    popped key straight back and the row would grade a request carrying the key it says is
+    absent. `_flatten_update_request` drops the sentinel at the wire.
     Empty string means set to '' (for boundary validation of empty keys).
     Any other value sets it as-is. Handles length placeholders like
     '<255 character string>' by generating a string of the described length.
@@ -1255,7 +1300,7 @@ def given_idempotency_key(ctx: dict, value: str) -> None:
     kwargs = _ensure_update_defaults(ctx)
     stripped = value.strip()
     if stripped == "<not provided>":
-        kwargs.pop("idempotency_key", None)
+        kwargs["idempotency_key"] = OMIT_IDEMPOTENCY_KEY
         return
 
     # Handle length placeholders: <N character string>, <N char string>, <N chars>
@@ -2238,8 +2283,63 @@ def given_package_update_with_content(ctx: dict, update_content: str) -> None:
 # ═══════════════════════════════════════════════════════════════════════
 
 
+def apply_required_update_fields(ctx: dict, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Default the two fields update-media-buy-request.json lists in /required besides the id.
+
+    3.1.1 declares ``required: ["idempotency_key", "account", "media_buy_id"]``, so a bag
+    carrying only ``media_buy_id`` is a request the pin rejects. ONE function with two
+    callers: :func:`_ensure_update_defaults`, so the Given that says "a VALID
+    update_media_buy request" builds a valid bag; and the When step, so a use case with its
+    own bag builder (UC-026's ``_ensure_update_kwargs``) dispatches a valid request too.
+
+    ``setdefault``, so a Given that names a field wins — including a Given that means to
+    send NONE, which writes the harness's ``OMIT_*`` sentinel rather than popping the key.
+    A pop would be undone by the next Given's call through here; the sentinel survives both
+    this function and the next, and ``MediaBuyDualEnv._flatten_update_request`` strips it at
+    the wire (the payload artifact records it as ``<omit:idempotency_key>`` /
+    ``<omit:account>``).
+
+    ``idempotency_key`` is minted per scenario and spec-shaped
+    (``^[A-Za-z0-9_.:-]{16,255}$``): unique, because a key reused across scenarios replays
+    the first one's response instead of performing the update; stable within a scenario, so
+    a row that dispatches the same request twice hits the idempotency cache on purpose.
+    Same two-policy split as ``given_media_buy._ensure_request_defaults`` on the create
+    side, for the same reason.
+
+    ``account`` must RESOLVE, not merely be present: the transport boundary looks the
+    reference up, so a literal id answers ACCOUNT_NOT_FOUND and every scenario that is not
+    about accounts fails on resolution before reaching what it grades. It is taken from
+    ``ctx["account_ref"]`` — the one key in this tree meaning "the account this request
+    names", filled in by the env route's seed — and only seeded here when no route named
+    one. That preference is load-carrying, not tidiness: ``setup_default_account`` goes
+    through ``setup_default_data``, which RE-CREATES a missing principal, and
+    @T-UC-003-ext-a-unknown deletes its principal on purpose two Givens earlier. Seeding
+    unconditionally resurrected the identity that scenario had just removed, and all three
+    transports answered PERMISSION_DENIED instead of the refusal the row grades.
+    """
+    kwargs.setdefault("idempotency_key", mint(f"bdd-upd-key-{uuid.uuid4().hex}"))
+    kwargs.setdefault(
+        "account",
+        ctx.get("account_ref") or {"account_id": ctx["env"].setup_default_account().account_id},
+    )
+    return kwargs
+
+
 def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
-    """Ensure ctx['update_kwargs'] has valid defaults for an update request."""
+    """Ensure ctx['update_kwargs'] holds an update request that is VALID BY CONSTRUCTION.
+
+    3.1.1 ``media-buy/update-media-buy-request.json`` declares
+    ``required: ["idempotency_key", "account", "media_buy_id"]``, so a bag carrying only
+    ``media_buy_id`` is a request the pin rejects — and the step that calls this says "a
+    VALID update_media_buy request", which then held for no scenario using it: every one
+    dispatched a body production answers with INVALID_REQUEST naming a field the scenario
+    never meant to test. The auth rows were the visible case (AUTH_MISSING expected,
+    INVALID_REQUEST received), and the same defect silently re-pointed every other row.
+
+    ``media_buy_id`` comes from the Background's buy; the other two are
+    :func:`apply_required_update_fields`, which the When step also runs so a bag this
+    function never touched still dispatches a valid request.
+    """
     if "update_kwargs" not in ctx:
         mb = ctx.get("existing_media_buy")
         assert mb is not None, (
@@ -2249,7 +2349,7 @@ def _ensure_update_defaults(ctx: dict) -> dict[str, Any]:
         ctx["update_kwargs"] = {
             "media_buy_id": mb.media_buy_id,
         }
-    return ctx["update_kwargs"]
+    return apply_required_update_fields(ctx, ctx["update_kwargs"])
 
 
 # ═══════════════════════════════════════════════════════════════════════

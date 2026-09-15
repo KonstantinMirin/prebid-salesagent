@@ -4913,11 +4913,27 @@ def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
     ctx["uc002_full_create"] = True
 
 
+def _seed_update_account_ref(ctx: dict, env: object) -> None:
+    """Name the seeded account as the one every update request will carry.
+
+    update-media-buy-request.json lists ``account`` in ``/required`` (v3.1), and the
+    boundary RESOLVES the reference, so an update scenario needs a row that exists and is
+    reachable by the caller. Seeded HERE, before any Given runs, rather than in
+    ``_ensure_update_defaults``: ``setup_default_account`` goes through
+    ``setup_default_data``, which re-creates a missing principal, and
+    @T-UC-003-ext-a-unknown deletes its principal on purpose — a Given cannot be allowed to
+    be undone by a later Given's request default. ``ctx["account_ref"]`` is the key the
+    rest of this tree already uses for "the account this request names".
+    """
+    ctx["account_ref"] = {"account_id": env.setup_default_account().account_id}
+
+
 def _seed_update_with_existing_buy(ctx: dict, env: object) -> None:
     """The chain plus an existing media buy + package for UC-003 update scenarios."""
     _seed_media_buy_chain(ctx, env)
     _setup_existing_media_buy(ctx, env, ctx["tenant"], ctx["principal"], ctx["default_product"])
     env._seeded_media_buy_id = ctx["existing_media_buy"].media_buy_id
+    _seed_update_account_ref(ctx, env)
 
 
 def _seed_update_with_mb_existing(ctx: dict, env: object) -> None:
@@ -4934,6 +4950,7 @@ def _seed_update_with_mb_existing(ctx: dict, env: object) -> None:
     env._commit_factory_data()
     env._seeded_media_buy_id = "mb_existing"
     ctx["existing_media_buy"] = existing_media_buy
+    _seed_update_account_ref(ctx, env)
 
 
 def _seed_default_data(ctx: dict, env: object) -> None:

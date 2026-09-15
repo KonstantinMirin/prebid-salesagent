@@ -318,8 +318,8 @@ Feature: BR-UC-003 Update Media Buy
     And the response status should be "completed"
     # BR-RULE-081 INV-2: Key 8-255 chars accepted
 
-  @T-UC-003-idempotency-absent @invariant @BR-RULE-081
-  Scenario: Idempotency key -- absent, proceeds without protection
+  @T-UC-003-idempotency-absent @invariant @BR-RULE-081 @schema-v3.1
+  Scenario: Idempotency key -- absent is now rejected (v3.1 required)
     Given the tenant is configured for auto-approval
     And a valid update_media_buy request with:
     | field        | value       |
@@ -331,9 +331,19 @@ Feature: BR-UC-003 Update Media Buy
     | budget     | 5000    |
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # BR-RULE-081 INV-1: Key absent → proceeds without idempotency
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "INVALID_REQUEST"
+    And the error should include "suggestion" field
+    # v3.1: root required-set is [idempotency_key, account, media_buy_id], so an absent key
+    #       is a schema rejection, not an unprotected update. Reconciled against
+    #       adcp/_schemas/3.1/media-buy/update-media-buy-request.json (/required) at the
+    #       pinned spec version 3.1.1 (adcp==6.6.0).
+    # BR-RULE-081 INV-1 read "key absent → proceeds without idempotency". That obligation
+    #       predates the field becoming required; the key is no longer optional, so there is
+    #       no unprotected path for it to describe. Same shape as @T-UC-003-account-absent
+    #       below, and it agrees with @T-UC-003-bva-idempotency-key's "absent (field not
+    #       provided) → error INVALID_REQUEST — rejected (v3.1 requires idempotency_key)".
 
   @T-UC-003-account-absent @invariant @schema-v3.1
   Scenario: Account -- absent is now rejected (v3.1 required)
@@ -1061,7 +1071,6 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Valid partitions
       | partition      | value                                  | outcome |
-      | absent         | <not provided>                         | success |
       | typical_valid  | abc12345-retry-001                     | success |
       | boundary_min   | 1234567890123456                       | success |
       | boundary_max   | <255 character string>                 | success |
@@ -1069,9 +1078,13 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Invalid partitions
       | partition      | value          | outcome                                              |
+      | absent         | <not provided> | error "INVALID_REQUEST" with suggestion              |
       | empty_string   |                | error "VALIDATION_ERROR" with suggestion              |
       | too_short      | abc1234        | error "INVALID_REQUEST" with suggestion              |
       | too_long       | <256 character string> | error "INVALID_REQUEST" with suggestion      |
+    # The `absent` row moved from Valid to Invalid: v3.1 lists idempotency_key in the root
+    # /required set of adcp/_schemas/3.1/media-buy/update-media-buy-request.json, at the
+    # pinned spec version 3.1.1 (adcp==6.6.0), so omitting it is a schema rejection.
 
   @T-UC-003-boundary-idempotency-key @boundary @idempotency_key
   Scenario Outline: Idempotency key boundary validation - <boundary_point>
@@ -1091,7 +1104,7 @@ Feature: BR-UC-003 Update Media Buy
 
     Examples: Boundary values
       | boundary_point                  | value               | outcome                                |
-      | absent (field not provided)     | <not provided>      | success                                |
+      | absent (field not provided)     | <not provided>      | error "INVALID_REQUEST" with suggestion |
       | empty string (length 0)         |                     | error "INVALID_REQUEST" with suggestion |
       | length 15 (min - 1)            | <15 char string>    | error "INVALID_REQUEST" with suggestion |
       | length 16 (min, inclusive)      | <16 char string>    | success                                |
@@ -1099,6 +1112,9 @@ Feature: BR-UC-003 Update Media Buy
       | length 254 (max - 1)           | <254 char string>   | success                                |
       | length 255 (max, inclusive)     | <255 char string>   | success                                |
       | length 256 (max + 1)           | <256 char string>   | error "INVALID_REQUEST" with suggestion |
+    # The absent row said `success`: v3.1 lists idempotency_key in the root /required set of
+    # adcp/_schemas/3.1/media-buy/update-media-buy-request.json, at the pinned spec version
+    # 3.1.1 (adcp==6.6.0), so an omitted key is rejected rather than served unprotected.
 
   @T-UC-003-partition-media-buy-status @partition @media_buy_status
   Scenario Outline: Media buy status partition validation - <partition>

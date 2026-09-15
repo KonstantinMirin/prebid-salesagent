@@ -1596,13 +1596,13 @@ def given_adapter_available(ctx: dict) -> None:
     )
 
 
-@given("the request does NOT include an idempotency_key")
-def given_no_idempotency_key(ctx: dict) -> None:
-    """Explicitly set request to have no idempotency_key."""
-    ctx["idempotency_key"] = None
-    # The `ctx["request_fields"]` pop that stood here was already a no-op: the only writer
-    # of that key was the unbindable datatable Given noted above, so the get() always
-    # returned a fresh empty dict.
+# "the request does NOT include an idempotency_key" stood here, described as "canonical,
+# shared across UC-002/003". It was bound to NO UC-002 feature line — the sentence appears
+# on exactly one line in the whole tree, BR-UC-003's @T-UC-003-idempotency-absent — and the
+# body it offered that scenario (`ctx["idempotency_key"] = None`) named a key no UC-003 step
+# reads, so the row dispatched WITH a key and graded the opposite of its own sentence.
+# Ownership moved to the bag it describes:
+# tests/bdd/steps/domain/uc003_update_media_buy.py.
 
 
 @given(parsers.parse("the idempotency_key is set to {value}"))
