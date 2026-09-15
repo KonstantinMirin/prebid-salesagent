@@ -296,6 +296,37 @@ def _list_creative_formats_impl(
                     dimensions.append((w, h))
         return dimensions
 
+    def get_format_disclosure_positions(f) -> set[str]:
+        """The disclosure positions a format declares, by the pin's two-source order.
+
+        ``media-buy/list-creative-formats-request.json`` states the order on the
+        ``disclosure_positions`` filter itself: "Filter to formats that support all of
+        these disclosure positions. When a format has disclosure_capabilities, match
+        against those positions. Otherwise fall back to
+        supported_disclosure_positions." So ``disclosure_capabilities`` is not merged
+        with the flat list — it SUPERSEDES it, which ``core/format.json`` says in the
+        other direction ("When present, supersedes supported_disclosure_positions...
+        The flat supported_disclosure_positions field is retained for backward
+        compatibility").
+
+        A format declaring NEITHER yields the empty set, and that is the pinned answer
+        rather than a missing-data escape: ``core/format.json`` on
+        ``supported_disclosure_positions`` — "When omitted, the format makes no
+        disclosure rendering guarantees — creative agents SHOULD treat this as
+        incompatible with briefs that require specific disclosure positions." An empty
+        set is a subset of nothing the filter can request (the request's ``minItems: 1``
+        means a present filter always asks for at least one position), so such a format
+        drops out, which is what that SHOULD requires.
+
+        Normalized through ``enum_value`` on both sides for the same reason
+        ``get_format_asset_types`` is: the request carries ``DisclosurePosition``
+        members while a registry format may carry the plain strings it was built from,
+        and comparing a member to its own value silently matches nothing.
+        """
+        if f.disclosure_capabilities:
+            return {enum_value(c.position) for c in f.disclosure_capabilities if c.position is not None}
+        return {enum_value(p) for p in (f.supported_disclosure_positions or [])}
+
     def get_format_asset_types(f) -> set[str]:
         """Get all asset types from format's assets.
 
@@ -359,6 +390,18 @@ def _list_creative_formats_impl(
             for f in formats
             if f.accessibility is not None and _WCAG_ORDER.get(f.accessibility.wcag_level, 0) >= min_level
         ]
+
+    # Filter by disclosure_positions — AND semantics, unlike every filter around it.
+    # media-buy/list-creative-formats-request.json: "Filter to formats that support all
+    # of these disclosure positions" -- "all", not "any", so the
+    # requested set must be a SUBSET of what the format declares. asset_types and the
+    # two format-id filters intersect (OR); this one contains (AND), and getting that
+    # backwards would hand a buyer a format missing a position they asked for.
+    # get_format_disclosure_positions owns the disclosure_capabilities ->
+    # supported_disclosure_positions fallback the same schema prescribes.
+    if req.disclosure_positions:
+        requested_positions = {enum_value(p) for p in req.disclosure_positions}
+        formats = [f for f in formats if requested_positions <= get_format_disclosure_positions(f)]
 
     # Filter by output_format_ids / input_format_ids (OR semantics each).
     # These $ref the same core/format-id.json schema as format_ids, so they carry
