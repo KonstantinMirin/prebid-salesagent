@@ -37,7 +37,6 @@ def _make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol="mcp",
     )
 
 

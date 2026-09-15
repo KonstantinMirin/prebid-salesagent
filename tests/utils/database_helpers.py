@@ -136,7 +136,6 @@ def create_principal_with_platform_mappings(
         tenant_id=tenant_id,
         principal_id=principal_id,
         name=name,
-        access_token=access_token,
         platform_mappings=platform_mappings,
         **kwargs,
     )
@@ -248,7 +247,6 @@ def seed_targeting_test_tenant(
             tenant_id=tenant_id,
             principal_id=principal_id,
             name=principal_name,
-            access_token=access_token,
             platform_mappings={"mock": {"advertiser_id": "mock_adv_1"}},
         )
 

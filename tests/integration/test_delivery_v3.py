@@ -143,7 +143,6 @@ def _setup_base_state(session) -> dict:
         tenant_id=tenant_id,
         principal_id=principal_id,
         name="Test Principal",
-        access_token="test_token_12345",
         platform_mappings={"mock": {"id": "test_advertiser"}},
         created_at=now,
     )
@@ -600,7 +599,6 @@ class TestDeliveryOwnershipIntegration:
                 tenant_id="test_tenant",
                 principal_id="other_principal",
                 name="Other Principal",
-                access_token="other_token",
                 platform_mappings={"mock": {"id": "other_advertiser"}},
                 created_at=now,
             )
@@ -657,7 +655,6 @@ class TestDeliveryOwnershipIntegration:
                 tenant_id="test_tenant",
                 principal_id="secret_principal",
                 name="Secret Principal",
-                access_token="secret_token",
                 platform_mappings={"mock": {"id": "secret"}},
                 created_at=now,
             )
@@ -702,7 +699,6 @@ class TestDeliveryOwnershipIntegration:
                 tenant_id="test_tenant",
                 principal_id="other_principal",
                 name="Other Principal",
-                access_token="other_token_2",
                 platform_mappings={"mock": {"id": "other"}},
                 created_at=now,
             )

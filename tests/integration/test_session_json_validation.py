@@ -239,7 +239,6 @@ class TestJSONValidation:
                 tenant_id="test_tenant",
                 principal_id="test_principal",
                 name="Test Principal",
-                access_token="token123",
                 platform_mappings={"mock": {"enabled": True}},
                 created_at=now,
             )
@@ -254,7 +253,6 @@ class TestJSONValidation:
         """Test WorkflowStep comments validation."""
         with get_db_session() as session:
             # Create tenant and principal first (required for foreign key)
-            import uuid
 
             tenant = Tenant(tenant_id="test", name="Test Tenant", subdomain="test", ad_server="mock", is_active=True)
             session.add(tenant)
@@ -263,7 +261,6 @@ class TestJSONValidation:
                 principal_id="test",
                 name="Test Principal",
                 platform_mappings={"mock": {"advertiser_id": "test"}},  # Use valid platform mapping
-                access_token=str(uuid.uuid4()),  # Required field
             )
             session.add(principal)
             session.commit()
@@ -344,7 +341,6 @@ class TestIntegration:
                     tenant_id="workflow_test",
                     principal_id="buyer_1",
                     name="Test Buyer",
-                    access_token="buyer_token_123",
                     platform_mappings={"google_ad_manager": {"advertiser_id": "12345"}, "mock": {"test_mode": True}},
                     created_at=now,
                 )

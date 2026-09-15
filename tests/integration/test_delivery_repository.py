@@ -81,7 +81,6 @@ def principal_a(tenant_a):
             tenant_id=tenant_a,
             principal_id=principal_id,
             name="Delivery Advertiser A",
-            access_token="del_token_a",
             platform_mappings={"mock": {"advertiser_id": "del_adv_a"}},
         )
         session.add(principal)
@@ -98,7 +97,6 @@ def principal_b(tenant_b):
             tenant_id=tenant_b,
             principal_id=principal_id,
             name="Delivery Advertiser B",
-            access_token="del_token_b",
             platform_mappings={"mock": {"advertiser_id": "del_adv_b"}},
         )
         session.add(principal)

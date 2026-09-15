@@ -28,7 +28,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -113,7 +112,6 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
             tenant_id="test_gam_tenant",
             principal_id="test_advertiser",
             name="Test Advertiser",
-            access_token="test_gam_token",
             platform_mappings={"google_ad_manager": {"advertiser_id": "987654321"}},
         )
         session.add(principal)
@@ -317,8 +315,6 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
         tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     from src.core.exceptions import AdCPValidationError
@@ -351,8 +347,6 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
         tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     # This should succeed
@@ -395,8 +389,6 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
         tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     from src.core.exceptions import AdCPValidationError
@@ -428,8 +420,6 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
         principal_id="test_advertiser",
         tenant_id="test_gam_tenant",
         tenant={"tenant_id": "test_gam_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     # This should succeed - buyer chose CPM from multi-option product

@@ -63,7 +63,6 @@ class TestCreateMediaBuyRoundtrip:
                 tenant_id="test_roundtrip_tenant",
                 principal_id="test_roundtrip_principal",
                 name="Test Roundtrip Principal",
-                access_token="test_roundtrip_token",
                 platform_mappings={"mock": {"advertiser_id": "adv_test"}},
             )
             session.add(principal)

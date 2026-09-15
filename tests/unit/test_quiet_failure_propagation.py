@@ -27,7 +27,6 @@ def _make_identity(tenant_id="test-tenant"):
             "ad_server": "mock",
             "advertising_policy": None,
         },
-        protocol="mcp",
     )
 
 
@@ -245,7 +244,6 @@ class TestAIRankingExceptionPropagation:
                 "advertising_policy": None,
                 "product_ranking_prompt": "Rank by relevance",
             },
-            protocol="mcp",
         )
 
         mock_factory = MagicMock()

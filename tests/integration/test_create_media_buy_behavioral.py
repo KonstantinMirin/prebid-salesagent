@@ -45,7 +45,6 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.errors.details import EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -886,9 +885,6 @@ class TestMainFlowObligations:
             principal_id=None,  # No principal -> should fail
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False},
-            auth_token="test-token",
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
         )
 
         req = _make_request()
@@ -918,9 +914,6 @@ class TestMainFlowObligations:
             principal_id="principal_1",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "human_review_required": False},
-            auth_token="test-token",
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
         )
 
         req = _make_request()
@@ -1672,8 +1665,6 @@ class TestExtensionObligations:
             principal_id=None,
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant"},
-            auth_token="test",
-            protocol="mcp",
         )
         with pytest.raises(AdCPAuthenticationError) as exc_info:
             await _create_media_buy_impl(req=req, identity=identity_no_principal)

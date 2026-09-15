@@ -298,11 +298,13 @@ async def create_test_tenant_with_principal(**kwargs) -> dict:
             if isinstance(principal["platform_mappings"], str)
             else principal["platform_mappings"]
         )
-        db_principal = ModelPrincipal(
+        # with_token, not access_token=: the row keeps sha256(token) plus a display
+        # prefix, so the plaintext is a constructor argument rather than a column.
+        db_principal = ModelPrincipal.with_token(
+            principal["access_token"],
             tenant_id=principal["tenant_id"],
             principal_id=principal["principal_id"],
             name=principal["name"],
-            access_token=principal["access_token"],
             platform_mappings=platform_mappings,
             created_at=datetime.now(UTC),
         )
@@ -310,11 +312,12 @@ async def create_test_tenant_with_principal(**kwargs) -> dict:
         db_session.commit()
 
     # Convert principal dict to Principal schema object for compatibility
+    # The schema Principal declares exactly principal_id, name and platform_mappings —
+    # it is what a tool reads off identity.principal, so it carries no credential and
+    # no tenant_id.
     principal_obj = Principal(
-        tenant_id=principal["tenant_id"],
         principal_id=principal["principal_id"],
         name=principal["name"],
-        access_token=principal["access_token"],
         platform_mappings=platform_mappings,
     )
 

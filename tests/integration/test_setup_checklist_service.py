@@ -155,11 +155,11 @@ def setup_complete_tenant(integration_db, test_tenant_id):
         db_session.add(product)
 
         # Add principal
-        principal = Principal(
+        principal = Principal.with_token(
+            "test_token",
             tenant_id=test_tenant_id,
             principal_id="principal_1",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"google_ad_manager": {"advertiser_id": "12345"}},
         )
         db_session.add(principal)
@@ -484,13 +484,11 @@ class TestSetupChecklistService:
                 tenant_id=tenant_ids[2],
                 principal_id="bulk_principal_3",
                 name="Test Principal",
-                access_token="test_token_bulk_3",
             )
             principal3 = Principal(
                 tenant_id=principal3_data["tenant_id"],
                 principal_id=principal3_data["principal_id"],
                 name=principal3_data["name"],
-                access_token=principal3_data["access_token"],
                 platform_mappings=(
                     json.loads(principal3_data["platform_mappings"])
                     if isinstance(principal3_data["platform_mappings"], str)
@@ -805,11 +803,11 @@ class TestTaskDetails:
             )
             db_session.add(product)
 
-            principal = Principal(
+            principal = Principal.with_token(
+                "test_token",
                 tenant_id=test_tenant_id,
                 principal_id="principal_1",
                 name="Test Advertiser",
-                access_token="test_token",
                 platform_mappings={"mock": {"advertiser_id": "12345"}},
             )
             db_session.add(principal)

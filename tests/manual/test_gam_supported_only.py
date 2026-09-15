@@ -57,7 +57,6 @@ class SupportedTargetingTester:
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Supported Targeting Test",
-            access_token="test_token",
             platform_mappings={
                 "google_ad_manager": {"advertiser_id": self.advertiser_id, "advertiser_name": "Test Advertiser"}
             },

@@ -46,7 +46,6 @@ def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str)
         tenant_id=tenant_id,
         principal_id=principal_id,
         name="Test Principal",
-        access_token=access_token,
         platform_mappings={"mock": {"id": "test_advertiser"}},
     )
     session.add(principal)

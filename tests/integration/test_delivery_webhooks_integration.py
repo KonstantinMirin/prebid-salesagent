@@ -38,7 +38,6 @@ def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str
             principal_id=principal_id,
             name="Integration Principal",
             platform_mappings={"mock": {"advertiser_id": "adv_123"}},
-            access_token="test-token",
         )
 
         if ad_server == "google_ad_manager":

@@ -36,7 +36,6 @@ def mock_adapter(integration_db):
             tenant_id=tenant.tenant_id,
             principal_id="test_principal_ai",
             name="Test Principal AI",
-            access_token="test_token_ai",
             platform_mappings={"mock": {"account_id": "test_mock_account"}},
         )
         session.add(principal)

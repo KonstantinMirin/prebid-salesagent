@@ -112,8 +112,6 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='invalid_placement_ids'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.testing_hooks import AdCPTestContext
-
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -124,7 +122,6 @@ class TestPlacementIdsValidation:
             principal_id="principal_test",
             tenant_id="t1",
             tenant={"tenant_id": "t1", "name": "Test"},
-            testing_context=AdCPTestContext(dry_run=False),
         )
 
         # Build mock DB session
@@ -223,8 +220,6 @@ class TestPlacementIdsValidation:
         _update_media_buy_impl returns UpdateMediaBuyError with code='placement_targeting_not_supported'."""
         from unittest.mock import MagicMock, Mock, patch
 
-        from src.core.testing_hooks import AdCPTestContext
-
         from src.core.schemas import UpdateMediaBuyRequest
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
@@ -235,7 +230,6 @@ class TestPlacementIdsValidation:
             principal_id="principal_test",
             tenant_id="t1",
             tenant={"tenant_id": "t1", "name": "Test"},
-            testing_context=AdCPTestContext(dry_run=False),
         )
 
         mock_session = MagicMock()

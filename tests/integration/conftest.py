@@ -260,11 +260,13 @@ def test_tenant_with_data(integration_db):
 
         # Principal (required for setup completion)
         # Include both kevel and mock mappings to support ad_server="kevel" (which is production-ready)
-        principal = Principal(
+        # with_token, not access_token=: the row keeps sha256 plus a display prefix,
+        # so the plaintext is an ARGUMENT to the constructor rather than a column.
+        principal = Principal.with_token(
+            f"{tenant_id}_token",
             tenant_id=tenant_id,
             principal_id=f"{tenant_id}_principal",
             name="Test Principal",
-            access_token=f"{tenant_id}_token",
             platform_mappings={
                 "kevel": {"advertiser_id": f"kevel_adv_{tenant_id}"},
                 "mock": {"advertiser_id": f"mock_adv_{tenant_id}"},
@@ -352,7 +354,6 @@ def sample_tenant(integration_db):
             authorized_domains=["example.com"],
             auto_approve_format_ids=["display_300x250"],
             human_review_required=False,
-            admin_token="test_admin_token",
             created_at=now,
             updated_at=now,
         )
@@ -444,11 +445,12 @@ def sample_principal(integration_db, sample_tenant):
         from datetime import UTC, datetime
 
         now = datetime.now(UTC)
-        principal = Principal(
+        token = "test_token_12345"
+        principal = Principal.with_token(
+            token,
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal",
             name="Test Advertiser",
-            access_token="test_token_12345",
             # Include both kevel and mock mappings for compatibility
             platform_mappings={
                 "kevel": {"advertiser_id": "test_advertiser"},
@@ -462,7 +464,9 @@ def sample_principal(integration_db, sample_tenant):
         return {
             "principal_id": principal.principal_id,
             "name": principal.name,
-            "access_token": principal.access_token,
+            # The plaintext this fixture minted, not a column read: the row keeps
+            # only sha256(token), so there is nothing on `principal` to read back.
+            "access_token": token,
         }
 
 
@@ -1182,11 +1186,11 @@ def add_required_setup_data(session, tenant_id: str):
     stmt_principal = select(Principal).filter_by(tenant_id=tenant_id)
     existing_principal = session.scalars(stmt_principal).first()
     if not existing_principal:
-        principal = Principal(
+        principal = Principal.with_token(
+            f"{tenant_id}_default_token",
             tenant_id=tenant_id,
             principal_id=f"{tenant_id}_default_principal",
             name="Default Test Principal",
-            access_token=f"{tenant_id}_default_token",
             platform_mappings={
                 "kevel": {"advertiser_id": f"kevel_adv_{tenant_id}"},
                 "mock": {"advertiser_id": f"mock_adv_{tenant_id}"},
@@ -1257,6 +1261,7 @@ def seed_error_test_tenant(
         ProductFactory,
         TenantFactory,
     )
+    from tests.factories.principal import plaintext_token_for
 
     tenant_dict = {
         "tenant_id": tenant_id,
@@ -1268,10 +1273,13 @@ def seed_error_test_tenant(
     tenant = TenantFactory(**tenant_dict, is_active=True)
     product = ProductFactory(tenant=tenant, product_id=product_id, property_tags=["all_inventory"])
     PricingOptionFactory(product=product)
+    # No access_token=: the row keeps sha256 plus a display prefix, and the factory
+    # derives both from ``plaintext_token_for(principal_id)``. The token a caller
+    # PRESENTS is therefore derived, not chosen — which is why the returned
+    # ``access_token`` below is that derived value rather than the argument.
     principal = PrincipalFactory(
         tenant=tenant,
         principal_id=principal_id,
-        access_token=access_token,
         platform_mappings={"mock": {"advertiser_id": advertiser_id}},
     )
 
@@ -1283,12 +1291,15 @@ def seed_error_test_tenant(
 
     set_current_tenant(tenant_dict)
 
+    # make_identity takes the principal and the tenant and nothing else. It refuses
+    # unknown keywords by design rather than dropping them, so auth_token= and
+    # protocol= are removed here instead of being silently ignored: the credential is
+    # presented in a header the harness builds, and the transport is the harness's
+    # choice, so neither is a property of the resolved identity.
     identity = PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=tenant_dict,
-        auth_token=access_token,
-        protocol=protocol,
+        tenant=TenantFactory.make_tenant(**tenant_dict),
     )
     return {
         "tenant": tenant,
@@ -1297,7 +1308,11 @@ def seed_error_test_tenant(
         "tenant_dict": tenant_dict,
         "identity": identity,
         "principal_id": principal_id,
-        "access_token": access_token,
+        # The token that actually authenticates this principal, derived the one way
+        # the resolver can match. The ``access_token`` parameter is kept in the
+        # signature so existing callers still pass, but it cannot select the
+        # credential any more — the hash in the row comes from the principal id.
+        "access_token": plaintext_token_for(principal_id),
     }
 
 

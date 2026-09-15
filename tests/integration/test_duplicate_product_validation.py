@@ -16,7 +16,6 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.exceptions import AdCPValidationError
 from src.core.schemas import CreateMediaBuyRequest
@@ -46,8 +45,6 @@ class TestDuplicateProductValidation:
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=mock_tenant,
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test-session"),
-            protocol="mcp",
         )
 
         # Mock the dependencies that still exist on the module
@@ -107,8 +104,6 @@ class TestDuplicateProductValidation:
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant=mock_tenant,
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test-session"),
-            protocol="mcp",
         )
 
         # Mock the dependencies that still exist on the module

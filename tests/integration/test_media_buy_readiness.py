@@ -41,7 +41,6 @@ def test_principal(integration_db, test_tenant):
             tenant_id=test_tenant,
             principal_id=principal_id,
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "test_adv_123"}},  # Required field with valid mapping
         )
         session.add(principal)

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
@@ -67,7 +69,23 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
                 f"make_identity() got tenant overrides {', '.join(sorted(tenant_overrides))} "
                 "alongside an explicit tenant; set the fields on the TenantContext instead"
             )
-        return TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides) if tenant is _UNSET else tenant
+        if tenant is _UNSET:
+            return TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
+        if isinstance(tenant, Mapping):
+            # A MAPPING IS BUILT, NOT REFUSED. The identity itself still refuses a dict —
+            # ``InstanceOf(TenantContext)`` on the field — and that is the invariant worth
+            # keeping: what a tool reads off ``identity.tenant`` is always the typed
+            # context. Refusing to CONSTRUCT one from a mapping protects nothing extra,
+            # because this factory already builds the context from keyword overrides two
+            # lines up; it only meant that a caller holding a tenant dict (the shape
+            # ``set_current_tenant`` takes, so a great many tests hold one) had to
+            # hand-convert it, and ~150 call sites passed the dict straight through and
+            # failed at ResolvedIdentity construction instead.
+            #
+            # An unknown key is still loud: it reaches TenantContext and fails there,
+            # naming the field, exactly as a bad override does.
+            return TenantFactory.make_tenant(**dict(tenant))
+        return tenant
 
     @staticmethod
     def _principal_for(principal_id: str) -> SchemaPrincipal:

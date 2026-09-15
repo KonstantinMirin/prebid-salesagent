@@ -107,12 +107,19 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Uses same defaults as TenantFactory fields.
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
+        # Overrides win over the defaults rather than colliding with them. Spelling the
+        # defaults as keyword arguments meant passing name=, subdomain= or ad_server=
+        # raised "got multiple values for keyword argument", so a caller holding a whole
+        # tenant dict could not hand it over — which is what made ``tenant={...}`` a dead
+        # end at every call site.
         return TenantContext(
-            tenant_id=tenant_id,
-            name=f"Test Publisher {tenant_id}",
-            subdomain=tenant_subdomain(tenant_id),
-            ad_server="mock",
-            **overrides,
+            **{
+                "tenant_id": tenant_id,
+                "name": f"Test Publisher {tenant_id}",
+                "subdomain": tenant_subdomain(tenant_id),
+                "ad_server": "mock",
+                **overrides,
+            }
         )
 
     # Auto-create required CurrencyLimit (USD) for budget validation

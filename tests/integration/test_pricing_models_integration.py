@@ -7,7 +7,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import CurrencyLimit, PricingOption, Principal, Product, PropertyTag, Tenant
@@ -71,7 +70,6 @@ def setup_tenant_with_pricing_products(integration_db):
             tenant_id="test_pricing_tenant",
             principal_id="test_advertiser",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
         )
         session.add(principal)
@@ -251,8 +249,6 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _get_products_impl(request, identity)
@@ -303,8 +299,6 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -341,8 +335,6 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -379,8 +371,6 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
@@ -414,8 +404,6 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -451,8 +439,6 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
@@ -486,8 +472,6 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -523,8 +507,6 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         principal_id="test_advertiser",
         tenant_id="test_pricing_tenant",
         tenant={"tenant_id": "test_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that

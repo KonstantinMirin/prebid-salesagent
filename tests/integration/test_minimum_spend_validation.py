@@ -45,7 +45,6 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import delete, select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -140,7 +139,6 @@ class TestMinimumSpendValidation:
                 tenant_id="test_minspend_tenant",
                 principal_id="test_principal",
                 name="Test Principal",
-                access_token="test_minspend_token",
                 platform_mappings={
                     "kevel": {"advertiser_id": "test_advertiser_id"},
                     "mock": {"advertiser_id": "test_advertiser_id"},
@@ -325,8 +323,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         # Try to create media buy below USD minimum ($1000)
@@ -360,8 +356,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
@@ -395,8 +389,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
@@ -429,8 +421,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
@@ -463,8 +453,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
@@ -496,8 +484,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         start_time = datetime.now(UTC) + timedelta(days=1)
@@ -542,8 +528,6 @@ class TestMinimumSpendValidation:
             principal_id="test_principal",
             tenant_id="test_minspend_tenant",
             tenant={"tenant_id": "test_minspend_tenant"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         start_time = datetime.now(UTC) + timedelta(days=1)

@@ -295,7 +295,6 @@ class TestTenantContextFromA2AHeaders:
             identity = PrincipalFactory.make_identity(
                 principal_id="buyer_1",
                 tenant_id="my_tenant",
-                protocol="a2a",
             )
             response = env.call_a2a(identity=identity)
 
@@ -324,7 +323,6 @@ class TestTenantContextFromA2AHeaders:
             identity_a = PrincipalFactory.make_identity(
                 principal_id="buyer_a",
                 tenant_id="tenant_a",
-                protocol="a2a",
             )
             response_a = env_a.call_a2a(identity=identity_a)
 
@@ -336,7 +334,6 @@ class TestTenantContextFromA2AHeaders:
             identity_b = PrincipalFactory.make_identity(
                 principal_id="buyer_b",
                 tenant_id="tenant_b",
-                protocol="a2a",
             )
             response_b = env_b.call_a2a(identity=identity_b)
 
@@ -358,7 +355,6 @@ class TestTenantContextFromA2AHeaders:
             principal_id="buyer_no_tenant",
             tenant_id="no_tenant",
             tenant=None,
-            protocol="a2a",
         )
 
         with CreativeFormatsEnv() as env:

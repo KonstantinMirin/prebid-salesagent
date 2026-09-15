@@ -136,7 +136,6 @@ class TestSyncCreativesErrorHandling:
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-            protocol="mcp",
         )
 
         # Creative with NO URL anywhere - this should fail when preview returns no previews.
@@ -218,7 +217,6 @@ class TestSyncCreativesAsyncScenario:
             principal_id="test_principal",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "approval_mode": "auto-approve"},
-            protocol="mcp",
         )
 
         creative = {

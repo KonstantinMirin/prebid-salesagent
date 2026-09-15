@@ -56,7 +56,6 @@ class TestTenantDashboard:
                 tenant_id="test_dashboard",
                 principal_id="test_principal",
                 name="Test Principal",
-                access_token="test_token",
                 platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},  # Valid mapping
             )
             db_session.add(principal)
@@ -110,7 +109,6 @@ class TestTenantDashboard:
                     tenant_id="test_metrics",
                     principal_id=f"principal_{i}",
                     name=f"Principal {i}",
-                    access_token=f"token_{i}",
                     platform_mappings={"mock": {"id": f"advertiser_{i}"}},
                 )
                 db_session.add(principal)

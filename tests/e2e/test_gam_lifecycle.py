@@ -232,7 +232,6 @@ def _seed_lifecycle_test_data():
             platform_mappings={
                 "google_ad_manager": {"advertiser_id": GAM_TEST_ADVERTISER_ID},
             },
-            access_token=f"e2e_test_token_{uuid.uuid4().hex[:8]}",
         )
         session.add(principal)
 

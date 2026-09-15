@@ -8,7 +8,6 @@ exercised through the full _get_products_impl pipeline with real DB data.
 """
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.tenant_context import TenantContext
@@ -27,8 +26,6 @@ def _lazy_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=TenantContext.load(tenant_id),
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
     )
 
 

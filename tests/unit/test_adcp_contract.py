@@ -483,7 +483,6 @@ class TestAdCPContract:
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Advertiser",
-            access_token="secure_token_123",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123456"}, "mock": {"id": "test"}},
         )
 

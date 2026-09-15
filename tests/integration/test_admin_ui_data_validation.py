@@ -217,7 +217,6 @@ class TestPrincipalsDataValidation:
                     tenant_id=tenant_id,
                     principal_id=f"test_principal_dup_check_{i}",
                     name=f"Test Advertiser {i}",
-                    access_token=f"test_token_{i}",
                     platform_mappings={"mock": {"id": f"test_advertiser_{i}"}},
                 )
                 db_session.add(principal)
@@ -445,7 +444,6 @@ class TestDashboardDataValidation:
                 tenant_id=tenant_id,
                 principal_id="test_principal_dashboard",
                 name="Test Advertiser",
-                access_token="test_token_dashboard",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
@@ -504,7 +502,6 @@ class TestMediaBuysDataValidation:
                 tenant_id=tenant_id,
                 principal_id="test_principal_mb",
                 name="Test Advertiser",
-                access_token="test_token_mb",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
@@ -562,7 +559,6 @@ class TestMediaBuysDataValidation:
                 tenant_id=tenant_id,
                 principal_id="test_principal_status",
                 name="Test Advertiser",
-                access_token="test_token_status",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)
@@ -619,7 +615,6 @@ class TestWorkflowsDataValidation:
                 tenant_id=tenant_id,
                 principal_id="test_principal_workflow",
                 name="Test Advertiser",
-                access_token="test_token_workflow",
                 platform_mappings={"mock": {"id": "test"}},
             )
             db_session.add(principal)

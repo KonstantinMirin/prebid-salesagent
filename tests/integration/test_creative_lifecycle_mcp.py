@@ -19,7 +19,6 @@ import pytest
 from adcp.types import AccountReference, CreativeFilters
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
@@ -123,8 +122,6 @@ class TestCreativeLifecycleMCP:
             principal_id=pid,
             tenant_id=tid,
             tenant=tenant_dict,
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
     @pytest.fixture(autouse=True)
@@ -198,7 +195,6 @@ class TestCreativeLifecycleMCP:
                 tenant_id="creative_test",
                 principal_id="test_advertiser",
                 name="Test Advertiser",
-                access_token="test-token-123",
                 platform_mappings={"mock": {"id": "test_advertiser"}},
             )
             session.add(principal)
@@ -947,14 +943,11 @@ class TestCreativeLifecycleMCP:
         creative_ids = [c["creative_id"] for c in sample_creatives]
 
         # Build ResolvedIdentity instead of patching removed auth functions
-        from src.core.testing_hooks import AdCPTestContext
 
         identity = PrincipalFactory.make_identity(
             principal_id=self.test_principal_id,
             tenant_id=self.test_tenant_id,
             tenant={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="creative_lifecycle_test"),
-            protocol="mcp",
         )
 
         with (

@@ -71,7 +71,6 @@ def _make_identity() -> ResolvedIdentity:
     identity = PrincipalFactory.make_identity(
         principal_id="test_adv",
         tenant_id=TENANT_ID,
-        protocol="mcp",
         dry_run=True,
     )
     set_current_tenant(identity.tenant)

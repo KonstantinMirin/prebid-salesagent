@@ -46,7 +46,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -111,8 +110,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        auth_token="test_token",
-        protocol="mcp",
     )
 
     with (
@@ -206,7 +203,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -293,8 +289,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        auth_token="test_token",
-        protocol="mcp",
     )
 
     with (
@@ -387,7 +381,6 @@ def test_creative_assignments_with_weights(integration_db):
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -452,7 +445,6 @@ def test_creative_assignments_with_weights(integration_db):
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        protocol="mcp",
     )
 
     with (
@@ -541,7 +533,6 @@ def test_creative_assignments_replaces_all(integration_db):
             principal_id="test_principal",
             tenant_id="test_tenant",
             name="Test Advertiser",
-            access_token="test_token",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -621,7 +612,6 @@ def test_creative_assignments_replaces_all(integration_db):
         principal_id="test_principal",
         tenant_id="test_tenant",
         tenant={"tenant_id": "test_tenant"},
-        protocol="mcp",
     )
 
     with (

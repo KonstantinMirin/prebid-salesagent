@@ -89,7 +89,6 @@ class TestListTasksTool:
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
-            protocol="mcp",
         )
 
     async def test_list_tasks_returns_tasks(self, mock_uow, mock_workflow_repo, sample_tenant, sample_workflow_step):
@@ -192,7 +191,6 @@ class TestGetTaskTool:
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
-            protocol="mcp",
         )
 
     async def test_get_task_returns_task_details(
@@ -306,7 +304,6 @@ class TestGetTaskSpecFlags:
             principal_id="principal_123",
             tenant_id="test_tenant",
             tenant={"tenant_id": "test_tenant", "name": "Test Tenant"},
-            protocol="mcp",
         )
 
     async def test_result_absent_by_default(self, mock_uow, mock_workflow_repo, completed_step):
@@ -454,7 +451,6 @@ class TestCompleteTaskTool:
             principal_id="principal_123",
             tenant_id=sample_tenant["tenant_id"],
             tenant=sample_tenant,
-            protocol="mcp",
         )
 
     async def test_complete_task_updates_status(self, mock_uow, mock_workflow_repo, sample_tenant, sample_pending_step):

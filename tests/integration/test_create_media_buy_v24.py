@@ -21,7 +21,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import delete, select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
@@ -70,7 +69,6 @@ class TestCreateMediaBuyV24Format:
                 tenant_id="test_tenant_v24",
                 principal_id="test_principal_v24",
                 name="Test Principal V24",
-                access_token="test_token_v24",
                 platform_mappings={"mock": {"advertiser_id": "adv_test_v24"}},
             )
             session.add(principal)
@@ -236,8 +234,6 @@ class TestCreateMediaBuyV24Format:
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
             tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         # Call _impl with a CreateMediaBuyRequest object
@@ -304,8 +300,6 @@ class TestCreateMediaBuyV24Format:
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
             tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         req = CreateMediaBuyRequest(
@@ -378,8 +372,6 @@ class TestCreateMediaBuyV24Format:
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
             tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         # Total budget is sum of all package budgets
@@ -426,8 +418,6 @@ class TestCreateMediaBuyV24Format:
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
             tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         req = CreateMediaBuyRequest(
@@ -464,8 +454,6 @@ class TestCreateMediaBuyV24Format:
             principal_id="test_principal_v24",
             tenant_id="test_tenant_v24",
             tenant={"tenant_id": "test_tenant_v24"},
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
 
         # Standard AdCP format with explicit package

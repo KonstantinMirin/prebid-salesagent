@@ -33,7 +33,6 @@ def test_simplified_context(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
         )
         session.add(principal)

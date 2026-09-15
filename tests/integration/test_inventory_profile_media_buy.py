@@ -13,7 +13,6 @@ from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -34,8 +33,6 @@ def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
 
@@ -100,7 +97,6 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_media_buy",
             name="Test Advertiser",
-            access_token="test_token_media_buy",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -194,7 +190,6 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_format_validation",
             name="Test Advertiser Format",
-            access_token="test_token_format",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -284,7 +279,6 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_shared",
             name="Test Advertiser Shared",
-            access_token="test_token_shared",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)
@@ -380,7 +374,6 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
             tenant_id=sample_tenant["tenant_id"],
             principal_id="test_principal_updates",
             name="Test Advertiser Updates",
-            access_token="test_token_updates",
             platform_mappings={"mock": {"id": "test_advertiser"}},
         )
         session.add(principal)

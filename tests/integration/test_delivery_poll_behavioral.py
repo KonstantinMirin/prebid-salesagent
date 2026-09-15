@@ -119,7 +119,6 @@ class TestSimulationReachesFinalThroughRealHook:
     """
 
     def test_mock_time_past_flight_reaches_completed_and_final(self, integration_db):
-        from src.core.testing_hooks import AdCPTestContext
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -141,7 +140,6 @@ class TestSimulationReachesFinalThroughRealHook:
             identity = PrincipalFactory.make_identity(
                 principal_id="p1",
                 tenant_id="t1",
-                testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)),
             )
 
             response = env.call_impl(media_buy_ids=[buy.media_buy_id], identity=identity)
@@ -154,7 +152,6 @@ class TestSimulationReachesFinalThroughRealHook:
 
     def test_mock_time_in_flight_reports_active_and_scheduled(self, integration_db):
         """The in-flight companion: simulated clock inside the window -> active/scheduled."""
-        from src.core.testing_hooks import AdCPTestContext
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -174,7 +171,6 @@ class TestSimulationReachesFinalThroughRealHook:
             identity = PrincipalFactory.make_identity(
                 principal_id="p1",
                 tenant_id="t1",
-                testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)),
             )
 
             response = env.call_impl(media_buy_ids=[buy.media_buy_id], identity=identity)
@@ -2171,7 +2167,7 @@ class TestCustomDateRangeBothProvided:
 
         Covers: UC-004-ALT-CUSTOM-DATE-RANGE-01
         """
-        from datetime import UTC, date, datetime
+        from datetime import date
 
         from tests.factories import MediaBuyFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
@@ -2548,7 +2544,6 @@ class TestStartTimeFallbackForStatus:
 
         Covers: media_buy_delivery.py line 743, 748
         """
-        from datetime import UTC, datetime
 
         from tests.factories import (
             MediaBuyFactory,

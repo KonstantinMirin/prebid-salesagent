@@ -77,7 +77,6 @@ def _create_test_principal(tenant_id: str, principal_id: str = "test_principal")
             tenant_id=tenant_id,
             principal_id=principal_id,
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
         )
         session.add(principal)

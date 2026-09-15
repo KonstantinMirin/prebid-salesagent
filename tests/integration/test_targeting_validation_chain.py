@@ -14,7 +14,6 @@ import uuid
 from decimal import Decimal
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
@@ -78,8 +77,6 @@ def _make_identity() -> ResolvedIdentity:
     return PrincipalFactory.make_identity(
         principal_id="test_adv",
         tenant_id=TENANT_ID,
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_targeting"),
     )
 
 

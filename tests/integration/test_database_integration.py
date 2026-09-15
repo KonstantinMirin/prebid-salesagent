@@ -42,7 +42,6 @@ def test_settings_queries(integration_db):
             tenant_id=tenant_id,
             principal_id="test_principal",
             name="Test Principal",
-            access_token="test_token",
             platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
         )
         session.add(principal)

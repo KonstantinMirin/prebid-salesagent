@@ -37,7 +37,6 @@ class TestSyncCreativesFormatValidation:
             principal_id="principal_123",
             tenant_id="tenant_123",
             tenant={"tenant_id": "tenant_123", "approval_mode": "auto-approve", "slack_webhook_url": None},
-            protocol="mcp",
         )
 
     @pytest.fixture

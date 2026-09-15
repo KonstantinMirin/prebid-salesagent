@@ -13,7 +13,6 @@ from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
 from src.core.resolved_identity import ResolvedIdentity
@@ -34,8 +33,6 @@ def _lazy_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=TenantContext.load(tenant_id),
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
     )
 
 

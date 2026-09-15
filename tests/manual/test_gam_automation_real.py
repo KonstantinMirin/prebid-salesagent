@@ -54,7 +54,6 @@ class GAMAutomationTester:
             tenant_id=self.test_tenant_id,
             principal_id="test_advertiser",
             name="GAM Test Advertiser",
-            access_token="test_token",
             platform_mappings={"gam_advertiser_id": advertiser_id},
         )
 

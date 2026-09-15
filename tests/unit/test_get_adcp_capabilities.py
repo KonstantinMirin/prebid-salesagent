@@ -222,7 +222,6 @@ class TestGetAdcpCapabilitiesWithTenant:
                     principal_id=None,
                     tenant_id="test-tenant-123",
                     tenant=mock_tenant,
-                    protocol="mcp",
                 )
                 response = _get_adcp_capabilities_impl(None, identity)
 
@@ -300,7 +299,6 @@ class TestGetAdcpCapabilitiesWithTenant:
                     principal_id="principal-123",
                     tenant_id="test-tenant-456",
                     tenant=mock_tenant,
-                    protocol="mcp",
                 )
 
                 with patch("src.core.tools.capabilities.get_adapter_class_for_tenant") as mock_get_adapter_class:
@@ -367,7 +365,6 @@ def _make_capabilities_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol="mcp",
     )
 
 

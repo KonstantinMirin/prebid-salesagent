@@ -51,7 +51,6 @@ class TestSyncCreativesCreativeIdsFilter:
             principal_id="principal_1",
             tenant_id="tenant_1",
             tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
-            protocol="mcp",
         )
         # Mock UoW with creative repo
         mock_uow = MagicMock()

@@ -824,7 +824,6 @@ class TestUpdateMediaBuyOwnership:
                 tenant_id=mb_tenant["tenant_id"],
                 principal_id=other_pid,
                 name="Other Advertiser",
-                access_token=f"other_token_{uuid.uuid4().hex[:8]}",
                 platform_mappings={"mock": {"id": "other_adv"}},
                 created_at=datetime.now(UTC),
             )

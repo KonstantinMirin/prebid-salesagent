@@ -49,7 +49,6 @@ class TestWorkflowLifecycle:
                 tenant_id=self.tenant_id,
                 principal_id=self.principal_id,
                 name="Test Principal",
-                access_token="test_token",
                 platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},
             )
             session.add(principal)

@@ -40,7 +40,6 @@ def test_a_token_alone_discovers_its_own_tenant(integration_db):
         PrincipalFactory(
             tenant=tenant,
             principal_id="principal_global",
-            access_token="global_principal_token",
         )
         env.get_session()  # commit factory data so the resolver's own session sees it
 
@@ -69,7 +68,6 @@ def test_an_admin_token_resolves_the_tenant_its_subdomain_names(integration_db):
             tenant_id="tenant_admin_test",
             subdomain="admin-test",
             ad_server="mock",
-            admin_token="admin_test_admin_token",
         )
         env.get_session()
 

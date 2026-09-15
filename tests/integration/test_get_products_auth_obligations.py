@@ -10,7 +10,6 @@ Covers obligations:
 """
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.exceptions import AdCPAuthenticationError
 from src.core.resolved_identity import ResolvedIdentity
@@ -31,8 +30,6 @@ def _lazy_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=TenantContext.load(tenant_id),
-        protocol=protocol,
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
     )
 
 

@@ -13,7 +13,6 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -92,7 +91,6 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             tenant_id="test_gam_pricing_tenant",
             principal_id="test_advertiser_pricing",
             name="Test Advertiser - Pricing",
-            access_token="test_gam_pricing_token",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123456789"}},
         )
         session.add(principal)
@@ -395,8 +393,6 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -444,8 +440,6 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -494,8 +488,6 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -545,8 +537,6 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -605,8 +595,6 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)
@@ -673,8 +661,6 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         principal_id="test_advertiser_pricing",
         tenant_id="test_gam_pricing_tenant",
         tenant={"tenant_id": "test_gam_pricing_tenant"},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
     response = await _create_media_buy_impl(req=request, identity=identity)

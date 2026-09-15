@@ -50,7 +50,6 @@ class TestDeliveryLoopErrorHandling:
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,
-            protocol="mcp",
         )
 
         # Create two mock media buys: one good, one that will error
@@ -159,7 +158,6 @@ class TestBrandExtractionFromPydanticModel:
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,
-            protocol="mcp",
         )
 
         with (
@@ -204,7 +202,6 @@ class TestAuditLogBrandFieldName:
             principal_id="p1",
             tenant_id="test",
             tenant=tenant,
-            protocol="mcp",
         )
 
         with (

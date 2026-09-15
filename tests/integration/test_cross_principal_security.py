@@ -53,14 +53,12 @@ class TestCrossPrincipalSecurity:
                 tenant_id="security_test_tenant",
                 principal_id="advertiser_a",
                 name="Advertiser A",
-                access_token="token-advertiser-a",
                 platform_mappings={"mock": {"id": "advertiser_a"}},
             )
             principal_b = Principal(
                 tenant_id="security_test_tenant",
                 principal_id="advertiser_b",
                 name="Advertiser B",
-                access_token="token-advertiser-b",
                 platform_mappings={"mock": {"id": "advertiser_b"}},
             )
             session.add_all([principal_a, principal_b])
@@ -133,8 +131,6 @@ class TestCrossPrincipalSecurity:
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-b",
-            protocol="mcp",
         )
 
         response = _list_creatives_impl(req=ListCreativesRequest(), identity=identity_b)
@@ -157,8 +153,6 @@ class TestCrossPrincipalSecurity:
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-b",
-            protocol="mcp",
         )
 
         # Principal B tries to update Principal A's media buy
@@ -192,8 +186,6 @@ class TestCrossPrincipalSecurity:
             principal_id="advertiser_b",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-b",
-            protocol="mcp",
         )
 
         request = GetMediaBuyDeliveryRequest(
@@ -226,7 +218,6 @@ class TestCrossPrincipalSecurity:
                 tenant_id="second_tenant",
                 principal_id="advertiser_c",
                 name="Advertiser C",
-                access_token="token-advertiser-c",
                 platform_mappings={"mock": {"id": "advertiser_c"}},
             )
             session.add(principal_c)
@@ -262,8 +253,6 @@ class TestCrossPrincipalSecurity:
             principal_id="advertiser_a",
             tenant_id="security_test_tenant",
             tenant={"tenant_id": "security_test_tenant"},
-            auth_token="token-advertiser-a",
-            protocol="mcp",
         )
 
         response = _list_creatives_impl(req=ListCreativesRequest(), identity=identity_a)

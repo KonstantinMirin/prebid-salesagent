@@ -9,7 +9,6 @@ Tests covering:
 """
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -34,8 +33,6 @@ def identity(integration_db):
         principal_id="test_principal",
         tenant_id="filter-sem-test",
         tenant={"tenant_id": "filter-sem-test", "name": "Filter Semantics Test"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
     )
 
 

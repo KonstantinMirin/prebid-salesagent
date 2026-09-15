@@ -50,7 +50,6 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
             tenant_id=tenant.tenant_id,
             principal_id=f"test-principal-{unique_id}",
             name=f"Test Principal {unique_id}",
-            access_token=f"test-token-{unique_id}",
             platform_mappings={"mock": {"advertiser_id": f"test-advertiser-{unique_id}"}},
         )
         session.add(principal)
@@ -354,7 +353,6 @@ def test_create_media_buy_loads_pricing_options(integration_db):
             tenant_id=tenant.tenant_id,
             principal_id=f"test-principal-{unique_id}",
             name=f"Test Principal {unique_id}",
-            access_token=f"test-token-{unique_id}",
             platform_mappings={"mock": {"advertiser_id": f"test-advertiser-{unique_id}"}},
         )
         session.add(principal)

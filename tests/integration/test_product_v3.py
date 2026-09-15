@@ -56,6 +56,7 @@ from src.core.product_conversion import convert_product_model_to_schema
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import GetProductsRequest
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.factories.principal import plaintext_token_for
 from tests.harness._base import IntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -79,7 +80,6 @@ def _make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol=protocol,
     )
 
 
@@ -95,18 +95,24 @@ async def _call_get_products(
     property_list: dict | None = None,
     tenant_overrides: dict | None = None,
 ):
-    """Dispatch get_products at the shared boundary, with identity resolution."""
+    """Dispatch get_products at the shared boundary, letting the resolver resolve.
+
+    Hands over HEADERS, not an identity. ``invoke_tool`` takes the headers a request
+    arrived with and the resolver is their one reader, so a test that built its own
+    identity and passed it in was bypassing the very step the boundary owns. The
+    credential is the one the factory principal answers to
+    (``plaintext_token_for``), so the real resolver runs here exactly as in
+    production.
+    """
+    from src.core.resolved_identity import TransportProtocol
     from src.core.tools._boundary import invoke_tool
 
-    tenant_dict: dict[str, Any] = {"tenant_id": tenant_id}
-    if tenant_overrides:
-        tenant_dict.update(tenant_overrides)
-
-    identity = _make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant_dict,
-    )
+    # x-adcp-tenant carries the tenant the credential addresses, because the principal
+    # lookup is tenant-scoped; Authorization carries the credential the factory principal
+    # answers to. An anonymous case presents the tenant and no credential.
+    headers = {"x-adcp-tenant": tenant_id}
+    if principal_id is not None:
+        headers["Authorization"] = f"Bearer {plaintext_token_for(principal_id)}"
     if brand is _BRAND_DEFAULT:
         brand = {"domain": "testbrand.com"}
 
@@ -119,7 +125,7 @@ async def _call_get_products(
         filters=filters,
         property_list=property_list,
     )
-    return await invoke_tool("get_products", req, identity)
+    return await invoke_tool("get_products", req, headers, TransportProtocol.MCP)
 
 
 # ---------------------------------------------------------------------------
@@ -136,13 +142,11 @@ def uc001_tenant(integration_db):
             tenant=tenant,
             principal_id="test_principal",
             name="Test Advertiser",
-            access_token="test_token",
         )
         PrincipalFactory(
             tenant=tenant,
             principal_id="other_principal",
             name="Other Advertiser",
-            access_token="other_token",
         )
     return "uc001_tenant"
 

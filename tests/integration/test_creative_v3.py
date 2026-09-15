@@ -23,7 +23,6 @@ import pytest
 from adcp.types import AccountReference
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
@@ -63,8 +62,6 @@ def _make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "approval_mode": approval_mode},
-        testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-        protocol="mcp",
     )
 
 
@@ -193,7 +190,6 @@ class TestCrossPrincipalIsolation:
                     tenant_id=self.TENANT_ID,
                     principal_id="principal_1",
                     name="Principal 1",
-                    access_token="token_p1",
                     platform_mappings={"mock": {"id": "p1"}},
                 )
             )
@@ -202,7 +198,6 @@ class TestCrossPrincipalIsolation:
                     tenant_id=self.TENANT_ID,
                     principal_id="principal_2",
                     name="Principal 2",
-                    access_token="token_p2",
                     platform_mappings={"mock": {"id": "p2"}},
                 )
             )
@@ -332,7 +327,6 @@ class TestApprovalWorkflow:
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="Test Advertiser",
-                    access_token="token_approval",
                     platform_mappings={"mock": {"id": "adv1"}},
                 )
             )
@@ -398,8 +392,6 @@ class TestApprovalWorkflow:
             principal_id=self.PRINCIPAL_ID,
             tenant_id=self.TENANT_ID,
             tenant={"tenant_id": self.TENANT_ID},  # No approval_mode key
-            testing_context=AdCPTestContext(dry_run=True, test_session_id="test_session"),
-            protocol="mcp",
         )
         _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_default")],
@@ -450,7 +442,6 @@ class TestBatchSync:
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="Batch Advertiser",
-                    access_token="token_batch",
                     platform_mappings={"mock": {"id": "batch_adv"}},
                 )
             )
@@ -576,7 +567,6 @@ class TestFormatCompatibility:
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="Format Compat Advertiser",
-                    access_token="token_fmt",
                     platform_mappings={"mock": {"id": "fmt_adv"}},
                 )
             )
@@ -700,7 +690,6 @@ class TestMediaBuyStatusTransition:
                     tenant_id=self.TENANT_ID,
                     principal_id=self.PRINCIPAL_ID,
                     name="MB Status Advertiser",
-                    access_token="token_mb_status",
                     platform_mappings={"mock": {"id": "mb_status_adv"}},
                 )
             )

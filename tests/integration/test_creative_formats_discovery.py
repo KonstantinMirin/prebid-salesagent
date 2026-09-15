@@ -63,8 +63,6 @@ class TestAuthOptionalForDiscovery:
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="mcp",
-                credential_presented=False,
             )
             response = env.call_impl(identity=identity_no_token)
 
@@ -89,8 +87,6 @@ class TestAuthOptionalForDiscovery:
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="a2a",
-                credential_presented=False,
             )
             response = env.call_a2a(identity=identity_no_token)
 
@@ -112,8 +108,6 @@ class TestAuthOptionalForDiscovery:
             identity_no_token = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="a2a",
-                credential_presented=False,
             )
             result = env.call_via(Transport.A2A, identity=identity_no_token)
 
@@ -139,8 +133,6 @@ class TestAuthOptionalForDiscovery:
                 principal_id="anon_buyer",
                 tenant_id="orphan",
                 tenant=None,
-                protocol="mcp",
-                credential_presented=False,
             )
             # _impl is called directly and the raised error class IS the oracle --
             # no transport is involved, so none is named. Previously dispatched
@@ -169,14 +161,10 @@ class TestAuthOptionalForDiscovery:
             authed_identity = PrincipalFactory.make_identity(
                 principal_id="authed_buyer",
                 tenant_id="test_tenant",
-                protocol="mcp",
-                credential_presented=True,
             )
             unauthed_identity = PrincipalFactory.make_identity(
                 principal_id="anon_buyer",
                 tenant_id="test_tenant",
-                protocol="mcp",
-                credential_presented=False,
             )
 
             authed_response = env.call_impl(identity=authed_identity)
@@ -211,8 +199,6 @@ class TestTenantResolutionFailure:
                 principal_id="anon_buyer",
                 tenant_id="unknown",
                 tenant=None,
-                protocol="mcp",
-                credential_presented=False,
             )
             # _impl is called directly and the raised error class IS the oracle --
             # no transport is involved, so none is named. Previously dispatched
@@ -233,8 +219,6 @@ class TestTenantResolutionFailure:
                 principal_id="anon_buyer",
                 tenant_id="unknown",
                 tenant=None,
-                protocol="a2a",
-                credential_presented=False,
             )
             result = env.call_via(Transport.A2A, identity=identity)
 
