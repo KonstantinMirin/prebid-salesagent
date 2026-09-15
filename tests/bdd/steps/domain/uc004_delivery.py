@@ -1453,16 +1453,10 @@ def when_boundary_ownership(ctx: dict, boundary_point: str) -> None:
     _dispatch_ownership_partition(ctx, boundary_point)
 
 
-@when(parsers.re(r'the Buyer Agent queries delivery artifacts with sampling method "(?P<partition_value>[^"]+)"'))
-def when_partition_sampling(ctx: dict, partition_value: str) -> None:
-    """Partition test: sampling method."""
-    _dispatch_partition(ctx, "sampling_method", partition_value)
-
-
-@when(parsers.re(r'the Buyer Agent queries delivery artifacts at sampling boundary "(?P<boundary_value>[^"]+)"'))
-def when_boundary_sampling(ctx: dict, boundary_value: str) -> None:
-    """Boundary test: sampling method."""
-    _dispatch_partition(ctx, "sampling_method", boundary_value)
+# The two sampling When steps are deleted with the scenarios that bound them
+# (2026-09-15). They dispatched `sampling_method`, which AdCP 3.1.1 declares nowhere,
+# so nothing they sent could be graded against the pin. BR-UC-004 records the full
+# reasoning where the outlines stood.
 
 
 @when("the Buyer Agent queries delivery metrics for a non-existent media buy")

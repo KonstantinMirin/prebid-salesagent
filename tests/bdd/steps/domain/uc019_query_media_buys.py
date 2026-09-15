@@ -9,7 +9,8 @@ Then steps assert on GetMediaBuysResponse fields.
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
+import re
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from pytest_bdd import given, parsers, then, when
@@ -169,6 +170,72 @@ def given_principal_owns_media_buy_with_dates(ctx: dict, principal_id: str, mb_i
     _register_media_buy(ctx, mb_id, mb)
 
 
+_DAY_OFFSETS = {"today": 0}
+
+
+def _day_offset(phrase: str) -> int:
+    """Parse a flight-window edge stated RELATIVE to the day the test runs.
+
+    Accepts ``today``, ``in N days`` and ``N days ago`` (``day`` singular too).
+    Returns the signed number of days from today.
+
+    Relative, because the alternative does not survive the transport it matters on.
+    Stating an absolute date obliges the scenario to pin the clock, and the only
+    lever available for that is ``unittest.mock.patch`` on a production module --
+    which reaches production ONLY while production shares this process. Over
+    e2e_rest it does not: the server runs in its own container against the real
+    clock, so the patch is inert and the seeded window is judged against whatever
+    day the suite happens to run. The named boundary is then never exercised, and
+    the row passes or fails on the calendar. Expressing the edge as an offset needs
+    no clock control at all, so ONE scenario grades the same boundary identically on
+    a2a, mcp, rest and e2e_rest -- which is what BDD rule 1 (transport-independent by
+    construction, tests/CLAUDE.md) asks for.
+    """
+    text = phrase.strip()
+    if text in _DAY_OFFSETS:
+        return _DAY_OFFSETS[text]
+    ago = re.fullmatch(r"(\d+)\s+days?\s+ago", text)
+    if ago:
+        return -int(ago.group(1))
+    ahead = re.fullmatch(r"in\s+(\d+)\s+days?", text)
+    if ahead:
+        return int(ahead.group(1))
+    raise ValueError(f"unrecognized relative day {phrase!r}; expected 'today', 'in N days' or 'N days ago'")
+
+
+@given(
+    parsers.parse(
+        'the principal "{principal_id}" owns media buy "{mb_id}" '
+        "whose flight window starts {start_offset} and ends {end_offset}"
+    )
+)
+def given_principal_owns_media_buy_relative_window(
+    ctx: dict, principal_id: str, mb_id: str, start_offset: str, end_offset: str
+) -> None:
+    """Seed a persisted-``active`` buy whose flight window is placed relative to today.
+
+    The persisted status is the generic serving state, so production refines it
+    against the window (``resolve_canonical_status``, src/core/tools/_media_buy_status.py:
+    ``reference_date < start`` is pending_start, ``> end`` is completed, otherwise
+    active). Placing the window relative to the real clock is what lets that
+    refinement be graded over a real HTTP transport.
+    """
+    _register_principal(ctx, principal_id)
+    env = ctx["env"]
+    today = datetime.now(UTC).date()
+    real_id = _generate_unique_id(mb_id)
+    mb = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        media_buy_id=real_id,
+        status="active",
+        start_date=today + timedelta(days=_day_offset(start_offset)),
+        end_date=today + timedelta(days=_day_offset(end_offset)),
+    )
+    env._commit_factory_data()
+    _register_media_buy(ctx, mb_id, mb)
+
+
 @given(parsers.parse('today is "{today_str}"'))
 def given_today_is(ctx: dict, today_str: str) -> None:
     """Override 'today' for status computation.
@@ -182,7 +249,12 @@ def given_today_is(ctx: dict, today_str: str) -> None:
     from unittest.mock import patch
 
     parsed = date.fromisoformat(today_str)
-    ctx["mock_today"] = today_str
+
+    # ``ctx["mock_today"]`` used to be written here and read by the two seeding Givens,
+    # which anchored their flight windows on it. Both now anchor on the REAL clock so
+    # their scenarios grade identically on a server running in its own container, which
+    # left this key with no reader. A ctx key nothing reads is a claim that cannot be
+    # wrong, so it is deleted rather than kept for symmetry.
 
     # Build a datetime that corresponds to the target date
     fake_now = datetime(parsed.year, parsed.month, parsed.day, 12, 0, 0, tzinfo=UTC)
@@ -392,8 +464,14 @@ def given_principal_owns_various_statuses(ctx: dict, principal_id: str) -> None:
     env = ctx["env"]
     # Create one in each status by using dates relative to 'today'
     # Pre-flight → pending_start, In-flight → active, Post-flight → completed
-    today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
-    from datetime import timedelta
+    # The REAL clock, never ctx["mock_today"]. Every window below is already stated as
+    # an offset from this anchor, so anchoring on today makes the seed correct without
+    # anyone pinning a clock -- and pinning one was the defect: the patch installed by
+    # `today is "..."` reaches production only in-process, so over e2e_rest the server
+    # judged a window built around a fixed 2026-03-15 against the real date and every
+    # buy collapsed to "completed". Anchoring here means the three buys hold their
+    # intended statuses on a2a, mcp, rest and e2e_rest alike.
+    today = datetime.now(UTC).date()
 
     status_dates = {
         "mb-pending": (today + timedelta(days=10), today + timedelta(days=30)),
@@ -419,8 +497,14 @@ def given_principal_owns_active_and_completed(ctx: dict, principal_id: str, mb1:
     """Create one active and one completed media buy (INV-151-1)."""
     _register_principal(ctx, principal_id)
     env = ctx["env"]
-    today = date.fromisoformat(ctx.get("mock_today", "2026-03-15"))
-    from datetime import timedelta
+    # The REAL clock, never ctx["mock_today"]. Every window below is already stated as
+    # an offset from this anchor, so anchoring on today makes the seed correct without
+    # anyone pinning a clock -- and pinning one was the defect: the patch installed by
+    # `today is "..."` reaches production only in-process, so over e2e_rest the server
+    # judged a window built around a fixed 2026-03-15 against the real date and every
+    # buy collapsed to "completed". Anchoring here means the three buys hold their
+    # intended statuses on a2a, mcp, rest and e2e_rest alike.
+    today = datetime.now(UTC).date()
 
     # Active: today is within flight dates
     real_id1 = _generate_unique_id(mb1)

@@ -30,7 +30,7 @@ than deleting the item, because conftest reasons still cite the ids.
 | B1 (Gherkin `pending_activation`) | Closed in the feature, dead rows in conftest | `tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature:991,995` |
 | B2 (`date_range` sent as a fake kwarg) | Closed | `tests/bdd/steps/domain/uc004_delivery.py:3909-3929` |
 | B3 (symbolic resolution/ownership labels) | Closed | `tests/bdd/steps/domain/uc004_delivery.py:1438,1453,3932` |
-| B4 (`sampling_method` on the wrong feature) | Open | feature lines 1122-1146; the field is not on the pinned request |
+| B4 (`sampling_method` on the wrong feature) | Closed | the two outlines are deleted; `BR-UC-004-deliver-media-buy-metrics.feature` carries a RETIRED note in their place |
 | B5 (`webhook_credentials` wrong dispatch) | Closed | `tests/bdd/steps/domain/uc004_delivery.py:1412-1421,3737` |
 | B6 (`disclosure_positions` filter) | Closed | `src/core/tools/creative_formats.py:402-404`; `tests/bdd/steps/generic/when_request.py:419-441` |
 | B7 (UC-006 faked `AdCPValidationError`) | Closed | `SyncCreativesRequest.account` is required; the impl takes `AccountIdentity` |
@@ -107,24 +107,22 @@ validator for it, so production accepts `geo_level=metro` with no `system`.
   system`).
 - **Severity:** P3.
 
-### B4 — `sampling_method` scenarios live on the wrong feature
-
-`sampling_method` is not a field of the pinned `GetMediaBuyDeliveryRequest`
-(read the field set off the model: it carries `account`, `attribution_window`,
-`end_date`, `include_package_daily_breakdown`, `include_window_breakdown`,
-`media_buy_ids`, `reporting_dimensions`, `start_date`, `status_filter`,
-`time_granularity`, plus the envelope fields). The two scenario outlines are
-still in `tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature`
-(lines 1122-1146), where every row grades "does this transport reject an unknown
-argument" rather than sampling behaviour.
-
-- **Unblocks:** delete them from the UC-004 feature, and re-author under the
-  content-standards use case if the obligation is real there. Do not graduate
-  rows.
-- **Where conftest cites it:** `tests/bdd/conftest.py:2738`.
-- **Severity:** P3.
-
 ## Closed items, kept for the ids conftest still names
+
+- **B4** — the two `sampling_method` outlines are deleted, not corrected. The
+  field appears nowhere in the pinned 3.1 schemas:
+  `get-media-buy-delivery-request.json` declares twelve properties and none is
+  it, and no pinned enum carries `random` / `stratified` / `recent` /
+  `systematic`. So the outlines' own "valid" rows asked this seller to accept an
+  invented field, and their "invalid" row asked for a refusal the specification
+  never requests. They passed anyway, which is what hid the defect: the DTO
+  declares no `sampling_method`, so the accepted-shape strip refuses it as an
+  undeclared field with `INVALID_REQUEST` — the identical rejection the "valid"
+  rows received, so the Then could not tell "this enum value is refused" from
+  "this field does not exist". `BR-UC-004-deliver-media-buy-metrics.feature`
+  carries a RETIRED note where they were. The one real sampling concept in the
+  pin is `failures_only`, a boolean on a different tool, already graded at
+  `BR-UC-024-content-compliance.feature`.
 
 - **C3** — production answers a non-owned media buy like a nonexistent one: no
   delivery data plus a `MEDIA_BUY_NOT_FOUND` advisory per id. That is the
@@ -198,3 +196,84 @@ file's to edit:
 
 Step 4 forces step 5: once you set `strict=True`, drift on that scenario fails
 the suite instead of passing quietly.
+
+## UC-026 connected to the suite, and what it now admits
+
+UC-026 (package media buy) had never graded anything. Its 75 scenarios, its
+2784-line step module and its own xfail tag set were all written and maintained,
+while every node xfailed at fixture setup with `No harness wired for UC-026`.
+Nothing flagged it, because the use case is absent from `dormant_scenarios.txt`
+too, so it read as ordinary xfail volume.
+
+The harness was never the missing piece. `MediaBuyDualEnv`'s first line says it
+is "a composite environment for UC-026 and UC-003 BDD scenarios": it was built
+for this and left unreferenced. UC-026 was disconnected in two independent
+places, either of which alone was fatal:
+
+1. no row in `_UC_BUCKET_ROUTES`, so no environment was ever built;
+2. `tests.bdd.steps.domain.uc026_package_media_buy` absent from
+   `pytest_plugins`, so no sentence had a binding.
+
+Wiring both turns several hundred nodes that reported nothing into a few hundred
+that pass and a smaller set that states precisely what is missing. Nothing
+fails.
+
+### Read this before trusting an xfail here
+
+A tag in `_UC026_XFAIL_TAGS` xfails every parametrized row it carries, so
+whole-tag xfail is a coverage decision rather than bookkeeping. Listing an
+outline that fails two rows out of twelve converts the other ten from passing to
+xpassed, which removes grading instead of adding it. That mistake was made and
+measured here: routing the keyword, replacement and format-id outlines by tag
+cut the passing count by more than half. Those are keyed by ROW in
+`_UC026_PARTITION_SELECTIVE` instead. Only four tags fail wholesale on a2a, mcp
+and rest alike, and only those four are in the set.
+
+Every reason is the assertion the scenario reports. The misclassification
+tripwire in `conftest.py` refuses a dormancy or a Given-side error dressed as a
+production gap, and each entry below cleared it.
+
+### Production is not ready — graded, not assumed
+
+| Gap | Tag or rows |
+|---|---|
+| `format_ids` is neither defaulted to the product's formats when omitted nor echoed when supplied, though pinned 3.1 `core/package.json` declares the field on the returned package | `main-required-fields`, `main-explicit-formats` |
+| a `format_id` the product does not carry is accepted instead of refused | `boundary-format-ids`, `partition-format-ids` (unsupported rows only) |
+| `catalogs` is accepted but not echoed on the created package | `inv-089-2` |
+| `price_breakdown` is absent from the create response, so the default `list_price == option rate` claim has nothing to read | `inv-196-3` |
+| keyword and negative-keyword conflict validation, and empty-value validation, are missing on the REST update path (a2a and mcp pass the same rows) | the eight `kw` and `neg-kw` row entries |
+| `targeting_overlay` is not replaced wholesale on update | `boundary-replacement`, `partition-replacement` (overlay rows only) |
+
+### The harness is not ready — one scenario, stated as such
+
+`@T-UC-026-ext-j` opens "the Buyer owns a media buy with a package that has
+already settled". Nothing reaches that state: settlement is billing-side, no
+buyer-facing request performs it, and no seeding path writes one. Its Given
+creates the package and stops, so production receives an ordinary active package
+and cancels it rather than refusing with `NOT_CANCELLABLE`.
+
+Production is not failing there. It is answering a different question than the
+scenario means to ask, and the xfail says so rather than blaming the seller.
+Graduating it needs a way to persist a settled package, after which the scenario
+grades the refusal for real.
+
+The sibling precondition — an already-canceled package — is realized rather than
+asserted: the Given creates the package and then cancels it through the real
+update path, which is a buyer-facing operation. That scenario grades for real.
+
+### Two defects this exposed, both fixed
+
+- **A label mistaken for a key.** The feature names its product `prod-1` while
+  the shared seed creates `prod_1`, and five steps asserted the two matched.
+  Requests are built from the seeded row's own id, so the feature's spelling
+  never reached the wire and the two were never required to agree. The package
+  builder now resolves the label the way `pricing_option_id` already did, and
+  only for the label the scenario declared, so a scenario deliberately naming an
+  absent product still gets its refusal.
+- **Two scenarios that could not run on any transport.** "Create package via
+  MCP" and "Create package via REST" graded identical behaviour, differed only
+  in an arbitrary budget, and the second contradicted its own title by naming an
+  A2A task. Their `@mcp` and `@rest` tags put them in `_TRANSPORT_SPECIFIC_TAGS`,
+  which skips parametrization on the premise that the When steps dispatch
+  explicitly — UC-026's do not. They are one transport-independent scenario now,
+  running on all three.

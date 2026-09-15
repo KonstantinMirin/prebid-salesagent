@@ -24,11 +24,14 @@ from pathlib import Path
 
 from tests.helpers.ledger import load_ledger_nodeids
 
-# The 18 e2e_rest nodeids remaining: 7 genuine gaps + 7 parallel-e2e_rest
+# The 13 e2e_rest nodeids remaining: 7 genuine gaps + 2 parallel-e2e_rest
 # mock-injection artifacts (owner-approved, added on the adcp-6.6 /
 # perf/parallelize-test-suite work — see the block comment inside the set)
 # + the adcp#7338 catalog row (2026-09-13) + 3 UC-010 targeting-shape rows
 # (2026-09-15), both annotated at their entries below.
+# 5 of that mock-injection block graduated 2026-09-15 (4 UC-004 delivery rows and
+# the UC-005 format-id roundtrip row): the block's stated mechanism had gone stale,
+# XPASS in-network innet_150926_0531, evidence at their former entries below.
 # A SECOND #7338 row (@T-UC-005-main-referrals) was considered on 2026-09-15 and
 # NOT added: it would have validated a document byte-identical to the row below
 # while denying POST-S4 the only transport where the seller's real federation path
@@ -75,24 +78,27 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # Account valid rows graduated at the #1417 merge (jr5b seeded-account
         # Given; XPASS in-network innet_140726_1516) — see ledger note.
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_boundary__boundary_point[e2e_rest-principal differs from owner-invalid]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_principal_ownership_partition__partition[e2e_rest-owner_mismatch-invalid]",
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_sampling_method_boundary__boundary_point[e2e_rest-Unknown string not in enum-systematic-invalid]",
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
         # Added 2026-07-09 on the adcp-6.6 branch (owner-approved) when
         # perf/parallelize-test-suite enabled parallel e2e_rest (E2E_PER_WORKER):
-        # mock-injection-incompatible artifacts, not regressions — UC-004
-        # set_adapter_response (delivery), UC-005 set_registry_formats, UC-018
-        # injected cross-principal creatives are invisible to the separate HTTP
-        # server. Preserved through the main merge.
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_complete_not_truncated__truncation_flag_set_false[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_breakdown_truncated_by_limit__truncation_flag_set_true[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_buyer_requests_supported_dimension__seller_returns_breakdown[e2e_rest]",
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_multiple_dimensions_requested_simultaneously[e2e_rest]",
+        # mock-injection-incompatible artifacts, not regressions — UC-005
+        # set_registry_formats is invisible to the separate HTTP server.
+        #
+        # The 4 UC-004 delivery rows and the UC-005 format-id roundtrip row graduated
+        # 2026-09-15 (XPASS in-network, innet_150926_0531). The clause that routed the
+        # UC-004 four named the wrong mechanism: #1418 gave set_adapter_response an e2e
+        # realization that persists a DeliverySimulationConfig row the deployed server's
+        # MockAdServer reads, so nothing is injected and nothing is invisible. The
+        # roundtrip row was never a registry-injection case at all. Evidence per row is
+        # in the ledger file's block comment.
+        #
+        # The third-party-agent row below stays: it xpasses VACUOUSLY (its one
+        # discriminating assertion compares a raw agent_url against canonicalized
+        # identities, so an id-only filter regression would still pass) and graduating
+        # it would delete coverage rather than record it.
         "tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]",
-        "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_roundtrip__list_creative_formats_returns_the_same_format_object_that_get_products_advertised[e2e_rest]",
         "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]",
         # Added 2026-09-13: @T-UC-005-main's Given moved from minted fmt_N ids to
         # reference-catalog formats, which retired its tag-level xfail on every

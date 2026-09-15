@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
-from src.core.schemas import Format, format_id_identity
+from src.core.schemas import Format, FormatIdentity, format_id_identity
 from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -76,7 +76,7 @@ def format_ref_id(ref: FormatRef) -> str | None:
     return str(value) if value is not None else None
 
 
-def format_identity(ref: FormatRef) -> tuple[str, str]:
+def format_identity(ref: FormatRef) -> FormatIdentity:
     """The federation identity of a format reference, in any shape it arrives in.
 
     Delegates the rule itself to ``src.core.schemas.format_id_identity`` — the
@@ -108,7 +108,7 @@ def same_format(left: FormatRef, right: FormatRef) -> bool:
     return format_identity(left) == format_identity(right)
 
 
-def format_identity_or_none(entry: Any) -> tuple[str, str] | None:
+def format_identity_or_none(entry: Any) -> FormatIdentity | None:
     """The federation identity of a format reference, or None if it is not one.
 
     Two things separate this from :func:`format_identity`. It absorbs the ONE
@@ -154,7 +154,7 @@ def format_identity_or_none(entry: Any) -> tuple[str, str] | None:
         return None
 
 
-def product_format_identities(format_ids: Iterable[Any] | None) -> set[tuple[str, str]]:
+def product_format_identities(format_ids: Iterable[Any] | None) -> set[FormatIdentity]:
     """The federation identities a product's declared ``format_ids`` accept.
 
     Empty means the product imposes no format restriction — the same reading
@@ -164,7 +164,7 @@ def product_format_identities(format_ids: Iterable[Any] | None) -> set[tuple[str
     return {identity for identity in identities if identity is not None}
 
 
-def format_display(identity: tuple[str, str]) -> str:
+def format_display(identity: FormatIdentity) -> str:
     """``<canonical agent_url>/<id>`` — how a format identity is spelled to a buyer.
 
     The identity, not the raw reference: an error that lists "supported
@@ -180,9 +180,8 @@ def format_display(identity: tuple[str, str]) -> str:
     this string is read by a human deciding what to resubmit, and nothing
     parses it back.
     """
-    agent_url, format_id = identity
-    separator = "" if agent_url.endswith("/") else "/"
-    return f"{agent_url}{separator}{format_id}"
+    separator = "" if identity.agent_url.endswith("/") else "/"
+    return f"{identity.agent_url}{separator}{identity.id}"
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

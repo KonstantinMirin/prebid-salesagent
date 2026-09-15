@@ -192,11 +192,14 @@ Feature: BR-UC-019 Query Media Buys
 
   @T-UC-019-partition-status @partition @status
   Scenario Outline: Status computation from flight dates - <partition>
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "<start>" and end_date "<end>"
-    And today is "<today>"
+    Given the principal "buyer-001" owns media buy "mb-001" whose flight window starts <start> and ends <end>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "<expected_status>"
+    # The window is relative to the run date and no clock is pinned, for the reason
+    # given on the boundary outline below: a patched datetime never reaches a server
+    # running in its own container, so an absolute window graded the calendar rather
+    # than the partition.
     # BR-RULE-150: Status computed from relationship between today and flight dates
     # RETIRED (T-UC-019-partition-status-invalid): "Status computation with missing dates".
     # Verified against AdCP 3.1 GA (spec pin v3.1-04f59d2d5): the core media-buy object
@@ -212,30 +215,37 @@ Feature: BR-UC-019 Query Media Buys
     # status, no TypeError). Retired at the source, so the merge does not re-add it.
 
     Examples: Valid partitions
-      | partition                 | today      | start      | end        | expected_status |
-      | active_refined_pending_start | 2026-03-01 | 2026-03-15 | 2026-03-31 | pending_start   |
-      | active_refined_in_flight  | 2026-03-15 | 2026-03-01 | 2026-03-31 | active          |
-      | active_refined_completed  | 2026-04-01 | 2026-03-01 | 2026-03-31 | completed       |
-      | single_day_flight         | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
+      | partition                    | start        | end          | expected_status |
+      | active_refined_pending_start | in 14 days   | in 30 days   | pending_start   |
+      | active_refined_in_flight     | 14 days ago  | in 16 days   | active          |
+      | active_refined_completed     | 31 days ago  | 1 day ago    | completed       |
+      | single_day_flight            | today        | today        | active          |
 
+  # The flight window is stated RELATIVE to the day the test runs, and the scenario
+  # pins no clock. An absolute window obliges the scenario to patch production's
+  # datetime, which reaches production only while it shares the test process: over
+  # e2e_rest the server runs in its own container on the real clock, so the patch was
+  # inert and every row was judged against the calendar instead of against the
+  # boundary it names. Three rows then "passed" merely because the real date had
+  # drifted past a fixed 2026-03 window, and the other four could not pass at all.
+  # Offsets need no clock, so each boundary is graded identically on every transport.
   @T-UC-019-boundary-status @boundary @status
   Scenario Outline: Status computation boundary - <boundary_point>
-    Given the principal "buyer-001" owns media buy "mb-001" with start_date "<start>" and end_date "<end>"
-    And today is "<today>"
+    Given the principal "buyer-001" owns media buy "mb-001" whose flight window starts <start> and ends <end>
     When the Buyer Agent sends a get_media_buys request for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buys spec
     And the media buy "mb-001" should have status "<expected_status>"
     # BR-RULE-150: Boundary test at flight date transition points
 
     Examples: Boundary values
-      | boundary_point                                            | today      | start      | end        | expected_status |
-      | persisted='active', day before start                      | 2026-03-14 | 2026-03-15 | 2026-03-31 | pending_start   |
-      | persisted='active', start day itself                      | 2026-03-15 | 2026-03-15 | 2026-03-31 | active          |
-      | persisted='active', end day itself                        | 2026-03-31 | 2026-03-15 | 2026-03-31 | active          |
-      | persisted='active', day after end                         | 2026-04-01 | 2026-03-15 | 2026-03-31 | completed       |
-      | persisted='active', start==end==today                     | 2026-03-15 | 2026-03-15 | 2026-03-15 | active          |
-      | persisted='active', start==end, day before                | 2026-03-14 | 2026-03-15 | 2026-03-15 | pending_start   |
-      | persisted='active', start==end, day after                 | 2026-03-16 | 2026-03-15 | 2026-03-15 | completed       |
+      | boundary_point                                            | start        | end          | expected_status |
+      | persisted='active', day before start                      | in 1 day     | in 17 days   | pending_start   |
+      | persisted='active', start day itself                      | today        | in 16 days   | active          |
+      | persisted='active', end day itself                        | 16 days ago  | today        | active          |
+      | persisted='active', day after end                         | 17 days ago  | 1 day ago    | completed       |
+      | persisted='active', start==end==today                     | today        | today        | active          |
+      | persisted='active', start==end, day before                | in 1 day     | in 1 day     | pending_start   |
+      | persisted='active', start==end, day after                 | 1 day ago    | 1 day ago    | completed       |
 
   @T-UC-019-inv-150-4 @invariant @BR-RULE-150
   Scenario: INV-4 holds - start_time takes precedence over start_date
@@ -258,13 +268,16 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-partition-status-filter @partition @status_filter
   Scenario Outline: Default status filter behavior - <partition>
     Given the principal "buyer-001" owns media buys in various statuses
-    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then the response is compliant with the get_media_buys spec
     And <expected_behavior>
-    # Pin the clock: the "various statuses" seed builds each buy's flight window
-    # around this date, so the query MUST evaluate status against it too (else all
-    # windows are in the past under the real clock and every buy reads completed).
+    # No clock is pinned. The "various statuses" seed builds each window as an offset
+    # from the REAL date, so the query evaluates status against the same day the seed
+    # used on every transport. Pinning a clock here did the opposite of what its note
+    # claimed: the patch never reached a server in its own container, so over e2e_rest
+    # all three windows sat in the past and every buy read "completed" -- which made
+    # the "completed" and "all seven" rows pass for a reason that had nothing to do
+    # with status_filter.
     # BR-RULE-151: Status filter defaults and validation
 
     Examples: Valid partitions
@@ -300,12 +313,11 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-boundary-status-filter @boundary @status_filter
   Scenario Outline: Status filter boundary - <boundary_point>
     Given the principal "buyer-001" owns media buys in various statuses
-    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with <filter_config>
     Then the response is compliant with the get_media_buys spec
     And <expected_behavior>
-    # Pin the clock so the seed's flight windows and the query's status
-    # computation agree (see the partition scenario above).
+    # No clock is pinned; the seed anchors on the real date (see the partition
+    # scenario above for why pinning one silently degraded this outline on e2e_rest).
     # BR-RULE-151: Boundary test for status filter
 
     Examples: Boundary values
@@ -518,14 +530,13 @@ Feature: BR-UC-019 Query Media Buys
   @T-UC-019-inv-151-1 @invariant @BR-RULE-151
   Scenario: INV-1 holds - default filter returns only active media buys
     Given the principal "buyer-001" owns active media buy "mb-001" and completed media buy "mb-002"
-    And today is "2026-03-15"
     When the Buyer Agent sends a get_media_buys request with no status_filter
     Then the response is compliant with the get_media_buys spec
     And the response should include media buy "mb-001"
     And the response should not include media buy "mb-002"
-    # Pin the clock: the seed builds mb-001/mb-002 flight windows around this same
-    # "today" (mock_today), so the query MUST evaluate status against it too, else
-    # mb-001's window is in the past under the real clock and it reads as completed.
+    # No clock is pinned. The seed builds both windows around the REAL date, so the
+    # query evaluates status against the same day the seed used -- on a server in its
+    # own container as well as in-process, which a patched datetime never reached.
     # BR-RULE-151 INV-1: null status_filter defaults to {active}
 
   @T-UC-019-inv-151-4 @invariant @BR-RULE-151 @error
