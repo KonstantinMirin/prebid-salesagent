@@ -84,9 +84,19 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     # was retired in PR #1567: it xfailed the pre-3.1.1 workflow_step_id assertion,
     # which the spec-reconciled scenario no longer makes — the scenario now grades
     # the CreateMediaBuySubmitted envelope live on all four transports.
-    "'T-UC-004-boundary-ownership' in marker_names and is_e2e_rest and ('differs from owner' in nodeid)",
+    # REMOVED with the route: T-UC-004-boundary-ownership "differs from owner". Its
+    # strict xfail said the REST layer did not enforce the ownership boundary, which is
+    # what that marker says when a scenario demands a HARD refusal and production answers
+    # 200 plus an empty list. The demand was the wrong one -- 3.1.1's
+    # get-media-buy-delivery-response.json declares errors[] for missing delivery data --
+    # so the row now asserts the per-id MEDIA_BUY_NOT_FOUND advisory, which production
+    # emits on the REST wire too. Observed xpassing in innet_150926_0049.
     "'T-UC-004-dim-sortby-fallback' in marker_names and is_e2e_rest",
-    "(is_rest or is_e2e_rest) and 'T-UC-019-boundary-principal' in marker_names",
+    # REMOVED with the route: T-UC-019-boundary-principal. The outline's two rows demanding
+    # an identity resolved WITHOUT a principal are gone -- get_media_buys declares
+    # ResolvedIdentity, on which the principal is not optional, so that state is
+    # unconstructible -- and the surviving row presents a credential the resolver really
+    # rejects (AUTH_INVALID, terminal) rather than injecting a null identity.
     # NARROWED from "(is_rest or is_e2e_rest)" to e2e_rest only (#1762).
     # The route's reason was a REST-only auth suggestion string ("authenticate" vs
     # "authentication"), which cannot exist any more: suggestions derive from
@@ -109,7 +119,11 @@ EXPECTED_XFAIL_ROUTES: tuple[str, ...] = (
     "is_e2e_rest and marker_names & _UC005_E2E_FIXTURE_INJECTION_TAGS",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
     "is_e2e_rest and tag in uc005_filter_e2e_untestable",
-    "marker_names & _UC005_PARTIAL_TAGS and (not is_e2e_rest)",
+    # REMOVED with the route: the _UC005_PARTIAL_TAGS in-process arm. Its rows were the
+    # disclosure_positions scenarios, which xpassed against an EMPTY catalog -- the UC-005
+    # env seeded its seller only in e2e mode, so an exclusion assertion passed trivially.
+    # With the seller seeded on every transport the filter is implemented (3.1.1
+    # list-creative-formats-request.json declares it) and the rows grade for real.
     "not is_e2e_rest",
 )
 
