@@ -131,7 +131,7 @@ class CreativeFormatsEnv(IntegrationEnv):
         explicitly call set_registry_formats() still get non-empty results.
         Scenarios needing specific formats override via set_registry_formats().
         """
-        from src.core.creative_agent_registry import FormatFetchResult
+        from src.core.creative_agent_registry import CreativeAgentRegistry, FormatFetchResult
         from src.core.format_cache import load_reference_formats
 
         default_formats = list(load_reference_formats())
@@ -143,6 +143,19 @@ class CreativeFormatsEnv(IntegrationEnv):
             return_value=FormatFetchResult(formats=default_formats, errors=[])
         )
         self.mock["registry"].return_value = mock_registry
+
+        # ``_get_tenant_agents`` is the REAL method, bound to a real registry, so the
+        # referral path (``creative_agents``, POST-S4) reads the tenant's
+        # ``creative_agents`` rows exactly as the live server does. Left as a MagicMock
+        # attribute it returned a MagicMock, which MagicMock makes ITERABLE AND EMPTY --
+        # so production walked zero agents and answered ``creative_agents: []`` on every
+        # in-process transport. That is a mock inventing an answer it does not have, and
+        # it read as a production gap for long enough to be recorded as one.
+        #
+        # ``_get_tenant_agents`` is defined once, on the base, and neither
+        # ``ReferenceFormatsRegistry`` nor anything else overrides it, so which class is
+        # instantiated here cannot change the answer.
+        mock_registry._get_tenant_agents = CreativeAgentRegistry()._get_tenant_agents
 
         # Audit logger: no-op
         mock_logger = MagicMock()

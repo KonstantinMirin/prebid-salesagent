@@ -199,20 +199,31 @@ def then_no_real_api_calls(ctx: dict) -> None:
     #    env declares EXTERNAL_PATCHES that replace real ad-platform clients
     #    (adapter, registry, etc.) with mocks. If external patches exist,
     #    real calls are structurally impossible — the import target is replaced.
+    #    Read off the CLASS DECLARATION, not the live mock registry. The registry is
+    #    built by iterating EXTERNAL_PATCHES (tests/harness/_base.py), so
+    #    ``len(env.mock) > 0`` was implied by the clause it was or-ed with and could
+    #    never decide the assertion on its own — while being a wrong-process read over
+    #    e2e_rest and an unroutable ``env.mock`` reach in a step body.
     external_patches = getattr(env, "EXTERNAL_PATCHES", {})
-    assert len(external_patches) > 0 or len(env.mock) > 0, (
-        f"Harness {type(env).__name__} has no external patches and no active mocks — "
+    assert len(external_patches) > 0, (
+        f"Harness {type(env).__name__} declares no external patches — "
         "cannot guarantee real ad-platform calls were suppressed"
     )
 
-    # Verify at least one external mock was exercised by production code.
-    # This proves production actually ran through the patched seam (not that
-    # it silently skipped the external call entirely and returned a stub).
-    any_external_mock_called = any(mock.called for mock in env.mock.values())
-    assert any_external_mock_called, (
-        f"None of the harness mocks ({list(env.mock.keys())}) were called — "
-        "production code may have bypassed all patched external services. "
-        f"Harness: {type(env).__name__}"
+    # Verify production actually ran through its external seams (not that it silently
+    # skipped every outside call and returned a stub).
+    #
+    # THE ENV OWNS THIS ANSWER, because the observable is not the same object on every
+    # transport. In process it is the patched mock registry. Over e2e_rest the work happens
+    # inside the Docker server and the mocks sit in THIS process, so reading them here
+    # reported "nothing was called" for a request the server served perfectly — the exact
+    # wrong-process read 97608a6fa took off four UC-006 Thens. ``external_seams_exercised``
+    # reads the mock in process and the audit row the live server wrote over e2e.
+    assert env.external_seams_exercised, (
+        f"{type(env).__name__} saw no external seam exercised, so production may have "
+        "bypassed all of them and answered with a stub. In process that seam is the "
+        "patched-mock registry; over e2e_rest it is the audit row the live server writes "
+        "as it serves the call."
     )
 
     # 3. Corroborate via the sandbox flag on the response. The sandbox=True

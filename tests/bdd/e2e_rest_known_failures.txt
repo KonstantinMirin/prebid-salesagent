@@ -197,6 +197,40 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # tests/bdd/conftest.py's _SELECTIVE_XFAIL block record for the UC-005 outlines.
 # Graduates when adcp#7338 lands and the pin moves, or when production stops serving
 # assets the pin does not admit (salesagent-i5znm).
+#
+# The inconsistency is UPSTREAM's, within one release, which is why no change here can
+# resolve it. tests/fixtures/creative_formats/reference_formats.json records the catalog
+# captured from the reference creative agent at pin 467fd93d7711 -- the SAME upstream
+# commit the feature files cite for the pinned schemas (@source ref=v3.1.1
+# commit=467fd93d7) -- and that catalog publishes pixel_tracker assets on 40+ formats.
+# The adcp SDK from that release ALREADY accommodates the mismatch on the read path:
+# adcp/types/aliases.py adds an UnknownFormatAsset arm to Format.assets because "AdCP
+# enums grow additively by design", with declared asymmetric strictness (strict on emit,
+# lenient on parse). The JSON schema is the half that did not get the arm.
+#
+# The one local "fix" available is to drop the assets the pin omits from the catalog this
+# seller serves, and that is worse than the gap: list_creative_formats aggregates a
+# creative agent's own format definitions, so stripping an asset slot tells the buyer a
+# format needs fewer assets than it does, and it is a rule the pin does not carry --
+# exactly what then_webhook_payload_compliant's docstring refuses for the same reason.
+#
+# THIS BLOCK STAYS AT ONE ROW, and the near-miss is worth recording.
+# @T-UC-005-main-referrals was about to be added here 2026-09-15 for the same failure: its
+# tag-level xfail is gone (the in-process registry mock stopped faking _get_tenant_agents,
+# so it grades POST-S4 for real), and over e2e_rest the only thing still failing was a COPY
+# of the same whole-catalog compliance Then. A second row would have bought nothing -- the
+# live server answers with the whole catalog whichever formats a Given names, so both copies
+# validate a byte-identical document -- while permanently denying POST-S4 the one transport
+# where the seller's real federation path runs. The copy was deleted from that scenario
+# instead, with the redundancy argued at the scenario itself. One obligation, one row: this one.
+#
+# SCOPE OF THE GAP, measured, because "one row" understates it: 45 of the reference catalog's
+# 57 formats carry a pixel_tracker asset, so EVERY uc005 success path fails this check over
+# e2e_rest. Nothing passes by luck today -- all 12 green uc005 e2e_rest nodes in
+# innet_150926_0258 are refusal paths, where _assert_compliant grades core/error.json and
+# never reaches the success schema. But any uc005 scenario that graduates onto a success path
+# over e2e_rest lands on this defect immediately. Expect that rather than reading it as a
+# regression.
 tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
 
 # --- UC-010 targeting granularity has no per-tenant surface (3) ---

@@ -1036,7 +1036,14 @@ EXPECTED_ENV_MOCK_REACHES: frozenset[tuple[str, str]] = frozenset(
         ("tests/bdd/steps/generic/given_media_buy.py", "given_adapter_success"),
         ("tests/bdd/steps/generic/then_error.py", "then_no_new_ad_platform_order"),
         ("tests/bdd/steps/generic/then_media_buy.py", "then_adapter_executed"),
-        ("tests/bdd/steps/generic/then_success.py", "then_no_real_api_calls"),
+        # then_success.py::then_no_real_api_calls REMOVED 2026-09-15 — the good
+        # direction this pin exists to encourage, and the same repair uc006's gemini
+        # Givens took. Its reach was ``any(mock.called for mock in env.mock.values())``,
+        # which answers "did production run its external seams" only in process; over
+        # e2e_rest the mocks are in the wrong process and it reported False for a call
+        # the live server served (the UC-018 sandbox scenario failed on it in
+        # innet_150926_0258). It now asks ``env.external_seams_exercised``, a named
+        # harness accessor whose e2e branch reads the audit row the server wrote.
     }
 )
 

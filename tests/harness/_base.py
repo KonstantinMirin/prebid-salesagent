@@ -317,6 +317,24 @@ class _TestClock:
         return self._iso(datetime.now(UTC) - timedelta(days=days))
 
 
+def _e2e_external_seams_exercised(self: IntegrationEnv) -> bool:
+    """Whether the SERVER did the work, read off the audit trail it wrote.
+
+    ``log_operation`` writes one ``audit_logs`` row per tool call and the database is the
+    audit authority (src/core/audit_logger.py), so that row is the live-stack counterpart
+    of the in-process ``audit_logger`` mock the other branch counts. Same claim on both
+    branches: the seller recorded this operation as it served it.
+
+    NOT VACUOUS, and that rests on a fact rather than on hope: ``_reset_e2e_db``
+    (tests/bdd/conftest.py) empties every data table BEFORE each e2e scenario builds its
+    env, so ``audit_logs`` starts this scenario empty, and the Givens write through
+    factories, which audit nothing. A row for this tenant therefore came from the request
+    under test. A response the server never actually served leaves the table empty and
+    this returns False.
+    """
+    return bool(self.get_audit_logs())
+
+
 class BaseTestEnv:
     """Base test environment for _impl function testing.
 
@@ -1460,6 +1478,44 @@ class BaseTestEnv:
             raise ExceptionGroup("Multiple teardown errors", errors)
         return False
 
+    @property
+    @realize_e2e(_e2e_external_seams_exercised)
+    def external_seams_exercised(self) -> bool:
+        """Whether production actually ran through its external seams for this call.
+
+        The question a sandbox scenario asks after the response is back: did the seller
+        really do the work, or skip every outside call and hand back a stub? A response
+        alone cannot answer it, which is why BR-RULE-209's "no real ad platform API
+        calls" Then asks this as well as reading ``sandbox`` off the wire.
+
+        In process the patched seam IS the observable: every external integration point
+        is a mock, and one of them being called is production having reached it.
+
+        Over e2e_rest those mocks live in the WRONG PROCESS -- the work happens inside the
+        Docker server, nothing here is patched, and ``any(mock.called)`` is False for
+        every scenario. That is the shape 97608a6fa fixed for UC-006's four mock-reading
+        Thens: the env owns the answer and each branch reads the observable that exists in
+        its own world. Here the live one is the audit row the server writes
+        (:func:`_e2e_external_seams_exercised`).
+
+        DECLARED ON ``BaseTestEnv``, NOT ``IntegrationEnv``, and that placement is the
+        fix for a near-miss rather than a preference. ``then_no_real_api_calls`` is a
+        GENERIC step -- UC-001, UC-004, UC-005, UC-018 and UC-019 sandbox scenarios all
+        carry it -- so the envs it can reach are not one family. Five env classes in
+        ``tests/harness/`` extend ``BaseTestEnv`` directly (the ``*_unit.py`` variants of
+        ProductEnv / DeliveryPollEnv / WebhookEnv / CircuitBreakerEnv, plus
+        MediaBuyUpdateEnv), and on ``IntegrationEnv`` this property was an
+        ``AttributeError`` waiting for the first route that sent one of them through the
+        step. Here every env has it.
+
+        The e2e branch needs ``get_audit_logs``, which only ``IntegrationEnv`` can offer,
+        and that asymmetry is sound: ``is_e2e`` keys on ``e2e_config``, a unit-mode env is
+        built without one, so the branch that needs a session is unreachable from the envs
+        that have none. If that ever stops being true the AttributeError is the right,
+        loud answer.
+        """
+        return any(mock.called for mock in self.mock.values())
+
 
 class IntegrationEnv(BaseTestEnv):
     """Integration test environment — real database, only mocks external services.
@@ -1693,6 +1749,42 @@ class IntegrationEnv(BaseTestEnv):
 
         stmt = select(WorkflowStep).join(WorkflowStep.context).where(Context.tenant_id == self._tenant_id)
         return list(self.get_session().scalars(stmt).all())
+
+    def get_audit_logs(self, operation_substring: str | None = None) -> list:
+        """``AuditLog`` rows this tenant accumulated, oldest first.
+
+        The audit trail is a DATABASE table by design -- "the database is the audit
+        authority" (src/core/audit_logger.py) and the files beside it are a backup -- so
+        the rows are readable on every transport, including the one where the audit
+        logger itself runs in another process.
+
+        Three step helpers in ``tests/bdd/steps/_outcome_helpers.py`` already CALLED
+        ``env.get_audit_logs`` on their e2e branch (``assert_audit_logged``,
+        ``assert_audit_approval_logged``, ``assert_audit_adapter_logged``) and no such
+        method existed: those branches raised ``AttributeError``, unnoticed because no
+        e2e_rest node has reached one of them yet. This is the method they were written
+        against, not a second spelling of it.
+
+        ``expire_all`` first: over e2e the server committed through its OWN session, so a
+        row written after this session last read is otherwise served from the identity
+        map -- the same reason ``creative_sync``'s and ``webhook_registration``'s
+        read-backs expire.
+
+        ``operation_substring`` matches against ``AuditLog.operation``, which production
+        stores adapter-prefixed (``AdCP.list_creatives``), so a caller naming the bare
+        tool name still matches.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import AuditLog
+
+        session = self.get_session()
+        session.expire_all()
+        stmt = select(AuditLog).filter_by(tenant_id=self._tenant_id).order_by(AuditLog.timestamp)
+        rows = list(session.scalars(stmt).all())
+        if operation_substring is None:
+            return rows
+        return [row for row in rows if operation_substring in (row.operation or "")]
 
     def get_rest_client(self) -> Any:
         """Return the FastAPI TestClient. NO auth dependency override.

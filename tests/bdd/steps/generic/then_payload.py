@@ -129,14 +129,18 @@ def then_has_referrals(ctx: dict) -> None:
         actual_urls.add(url_str)
         assert _referral_capabilities(ref) is not None, f"Referral missing capabilities: {ref}"
 
+    # ONE comparison, every transport. The e2e branch this replaces re-checked that each
+    # returned URL starts with "http" — which the loop above already asserts — and skipped
+    # the only assertion that can fail: that the agent the Given configured is ACTUALLY
+    # referred. It was written when the Given wrote nothing anywhere, so over e2e there was
+    # no expectation to compare against. The Given now seeds the ``creative_agents`` row
+    # production reads, in the per-test database in process and in the live server's own
+    # over e2e_rest, so the same comparison holds on both.
     given_agents = ctx.get("creative_agent_referrals", [])
-    if given_agents and not _is_e2e(ctx):
+    if given_agents:
         expected_urls = {str(a.agent_url) for a in given_agents}
         missing = expected_urls - actual_urls
         assert not missing, f"Given agent URLs not found in response: {missing}. Response contains: {actual_urls}"
-    elif _is_e2e(ctx):
-        for url_str in actual_urls:
-            assert url_str.startswith("http"), f"E2E referral URL should be http/https, got: {url_str!r}"
 
 
 @then("each referral should include the agent URL and supported capabilities")

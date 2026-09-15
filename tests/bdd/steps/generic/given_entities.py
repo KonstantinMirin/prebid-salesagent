@@ -103,13 +103,35 @@ def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
 
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
-    """Seller has additional creative agent referrals."""
+    """One extra creative agent, seeded as the operator ROW production reads.
+
+    ``creative_agents`` on the response is built from
+    ``registry._get_tenant_agents(tenant_id)`` (src/core/tools/creative_formats.py), and
+    that method reads the tenant's enabled ``creative_agents`` rows through
+    ``CreativeAgentRepository``. A referral is therefore ordinary operator
+    configuration, and a factory row is ONE mechanism that realizes this sentence in both
+    worlds -- in process the env's factories write the per-test database, over e2e_rest
+    they write the live server's own -- so no ``@realize_e2e`` branch is needed. Same
+    shape, and the same reason, as the UC-010 channel Given.
+
+    It used to put a DICT in ``ctx`` and write nothing anywhere. Nothing realized it, so
+    the response carried the default agent alone (or, in process, nothing at all), and the
+    comparison in ``then_has_referrals`` -- ``{str(a.agent_url) for a in given_agents}`` --
+    would have been an ``AttributeError`` on a dict rather than an assertion. The ctx value
+    is the ROW.
+
+    No ``capabilities`` here: production advertises
+    ``ADVERTISED_CREATIVE_AGENT_CAPABILITIES`` for every referral it emits, so a per-agent
+    list in the Given would have been a number this step invented and nothing read.
+    """
+    from tests.factories import CreativeAgentFactory
+
+    env = ctx["env"]
+    tenant, _principal = env.setup_default_data()
     ctx["creative_agent_referrals"] = [
-        {
-            "agent_url": "https://extra-creatives.example.com",
-            "capabilities": ["display", "video"],
-        },
+        CreativeAgentFactory(tenant=tenant, agent_url="https://extra-creatives.example.com/mcp")
     ]
+    env._commit_factory_data()
 
 
 @given("no creative agents have any registered formats")
