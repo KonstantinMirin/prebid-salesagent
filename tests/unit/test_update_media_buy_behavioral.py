@@ -27,7 +27,6 @@ from src.adapters.base import AdapterUpdateResult
 from src.core.errors.codes import ErrorCode
 from src.core.exceptions import (
     AdCPAdapterError,
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPCapabilityNotSupportedError,
@@ -78,28 +77,15 @@ def _make_mock_currency_limit(max_daily=None):
 
 
 # ---------------------------------------------------------------------------
-# HIGH_RISK Test 1: Principal not found
-# BDD: T-UC-003-ext-a-not-found
+# DELETED: test_principal_not_found_returns_error (BDD: T-UC-003-ext-a-not-found).
+# It configured ``env.mock["principal"].return_value = None`` and expected
+# _update_media_buy_impl to raise AUTH_INVALID. Neither half can happen: a protected
+# tool's ``ResolvedIdentity.principal`` is ``InstanceOf[Principal]``, REQUIRED
+# (src/core/resolved_identity.py:124), so the resolver has already loaded the row before
+# the tool runs and there is no principal lookup left in the env to stub; and AUTH_INVALID
+# is minted by the resolver alone, banned in a tool by TID251 in ruff-boundary.toml. See
+# the same removal, with the same reasoning, in tests/unit/test_get_media_buys.py:427.
 # ---------------------------------------------------------------------------
-
-
-def test_principal_not_found_returns_error():
-    """When auth resolves to a non-existent principal, impl returns
-    UpdateMediaBuyError with code='principal_not_found'."""
-    with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-        # Principal ID resolves but the object doesn't exist in DB
-        env.mock["principal"].return_value = None
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            env.call_impl(media_buy_id="mb_001")
-        # The identifier is STRUCTURED now: it lives in details/field, not in prose.
-
-        assert exc_info.value.error_code == "AUTH_INVALID"
-        # _update_media_buy_impl wraps its body in the ``audit_workflow_step_failure_ctx`` context
-        # manager, so the raise propagates through it rather than via a per-site
-        # fail_step call; the exception type is asserted by ``pytest.raises`` above.
-        audit_calls = env.mock["ctx_mgr"].return_value.audit_workflow_step_failure_ctx.call_args_list
-        assert len(audit_calls) == 1
 
 
 def test_workflow_step_receives_the_request_model():
@@ -1935,64 +1921,25 @@ class TestUC003ManualApproval:
 # ---------------------------------------------------------------------------
 
 
-class TestUC003ExtA:
-    """Authentication error obligations."""
-
-    def test_no_principal_in_context(self):
-        """Missing principal_id raises typed AdCPAuthenticationError.
-
-        Covers: UC-003-EXT-A-01
-        """
-        with MediaBuyUpdateEnv(principal_id=None, tenant_id="tenant_test") as env:
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_no_auth"
-            )
-
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                _update_media_buy_impl(req=req, identity=identity)
-
-            assert exc_info.value.error_code == "AUTH_MISSING"
-
-    def test_principal_not_found_in_database(self):
-        """Principal ID exists but no DB record raises AdCPAuthenticationError.
-
-        Covers: UC-003-EXT-A-02
-        """
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            env.mock["principal"].return_value = None
-
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_no_principal",
-            )
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                _update_media_buy_impl(req=req, identity=identity)
-
-            assert exc_info.value.error_code == "AUTH_INVALID"
-
-    def test_state_unchanged_on_auth_failure(self):
-        """No records modified when authentication fails.
-
-        Covers: UC-003-EXT-A-03
-        """
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            env.mock["principal"].return_value = None
-
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"}, idempotency_key="test-idem-key-0001", media_buy_id="mb_auth_fail"
-            )
-            with pytest.raises(AdCPAuthenticationError) as exc_info:
-                _update_media_buy_impl(req=req, identity=identity)
-
-            assert exc_info.value.error_code == "AUTH_INVALID"
-            # No adapter call
-            env.mock["adapter"].return_value.update_media_buy.assert_not_called()
-            # No DB writes through UoW
-            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
+# DELETED: class TestUC003ExtA (test_no_principal_in_context / UC-003-EXT-A-01,
+# test_principal_not_found_in_database / UC-003-EXT-A-02, test_state_unchanged_on_auth_failure
+# / UC-003-EXT-A-03). All three asserted that _update_media_buy_impl itself raises an auth
+# refusal — AUTH_MISSING for an identity built with ``principal_id=None``, AUTH_INVALID for a
+# stubbed-away principal row. A protected tool cannot reach either state:
+#
+#   * ``ResolvedIdentity.principal`` is ``InstanceOf[Principal]`` and REQUIRED
+#     (src/core/resolved_identity.py:124) — only ``PublicIdentity.principal`` is optional, so
+#     an identity handed to this tool always carries a principal the resolver already loaded;
+#   * AUTH_MISSING and AUTH_INVALID are minted by the resolver ALONE, banned anywhere else by
+#     TID251 in ruff-boundary.toml, so an auth refusal cannot originate in an ``_impl`` by
+#     design — it is decided once, where the credential is read.
+#
+# The EXT-A obligations are graded where the refusal is actually decided: the resolver mints
+# it for every tool and transport at once, and the wire shape is asserted by the
+# transport-blind auth scenarios rather than once per tool. The "no records modified" half of
+# EXT-A-03 survives for a REACHABLE refusal in TestUC003ExtC below, which asserts the same
+# no-adapter-call / no-update_fields pair on an ownership mismatch — the authorization error
+# a tool may raise.
 
 
 # ---------------------------------------------------------------------------

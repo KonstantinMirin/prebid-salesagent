@@ -126,21 +126,26 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         # not-found raise is the real typed error, not a bare MagicMock.
         _mb_repo = self._uow_instance.media_buys
 
-        def _get_by_id_or_raise(media_buy_id: str, *, context: Any = None) -> Any:
+        # Both stubs mirror the real helpers EXACTLY (src/core/database/repositories/
+        # media_buy.py:77, :199): positional ids only, and the typed details model. They
+        # used to take a ``context=`` keyword and forward it to the exception; a context is
+        # written by the boundary alone now, the constructor takes no such argument, and a
+        # stub that accepts one can only produce a call production would refuse.
+        def _get_by_id_or_raise(media_buy_id: str) -> Any:
             media_buy = _mb_repo.get_by_id(media_buy_id)
             if media_buy is None:
                 from src.core.exceptions import AdCPMediaBuyNotFoundError
 
-                raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id), context=context)
+                raise AdCPMediaBuyNotFoundError(details=EntityRefDetails(media_buy_id=media_buy_id))
             return media_buy
 
-        def _get_package_or_raise(media_buy_id: str, package_id: str, *, context: Any = None) -> Any:
+        def _get_package_or_raise(media_buy_id: str, package_id: str) -> Any:
             package = _mb_repo.get_package(media_buy_id, package_id)
             if package is None:
                 from src.core.exceptions import AdCPPackageNotFoundError
 
                 raise AdCPPackageNotFoundError(
-                    details={"package_id": package_id, "media_buy_id": media_buy_id}, context=context
+                    details=EntityRefDetails(package_id=package_id, media_buy_id=media_buy_id),
                 )
             return package
 
