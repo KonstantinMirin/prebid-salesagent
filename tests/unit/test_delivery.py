@@ -30,9 +30,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import MediaBuyStatus
-from src.core.testing_hooks import AdCPTestContext
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPValidationError
+from src.core.exceptions import AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
@@ -67,20 +66,20 @@ _PATCH_PREFIX = "src.core.tools.media_buy_delivery"
 def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
-    testing_context: AdCPTestContext | None = None,
 ) -> ResolvedIdentity:
     """Build a test ResolvedIdentity via the canonical factory.
 
     Delegates to PrincipalFactory.make_identity (the single source of truth
     per tests/CLAUDE.md) instead of constructing ResolvedIdentity inline.
-    A custom testing_context override is applied on top when provided.
-    """
-    from tests.factories import PrincipalFactory
 
-    identity = PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
-    if testing_context is not None:
-        identity = identity.model_copy(update={"testing_context": testing_context})
-    return identity
+    The ``testing_context`` parameter is gone with the channel it carried: commit
+    a1b79d22d deleted ``src/core/testing_hooks`` and took the testing context off the
+    identity ("requests carry no testing headers"), so there is nothing to override and
+    nothing downstream that would read one. The ``model_copy`` that applied it was also
+    the one thing ``.ast-grep/rules/resolved-identity-constructed-only-by-its-owners.yml``
+    forbids of an identity.
+    """
+    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
 
 
 def _make_mock_media_buy(
@@ -543,10 +542,12 @@ class TestDeliveryStatusFilter:
         req = GetMediaBuyDeliveryRequest()
         identity = _make_identity()
 
+        # "principal_obj" and "tenant" are no longer patch entries: the principal and the
+        # tenant are carried BY the identity (the tool reads identity.principal /
+        # identity.tenant and looks up neither), so _standard_patches has nothing to
+        # stand in for. The patches that remain are the collaborators the tool calls.
         with (
-            patches["principal_obj"],
             patches["adapter"],
-            patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
@@ -683,61 +684,17 @@ class TestDeliveryStatusFilter:
 
         assert len(result) == 0
 
-    def test_simulated_clock_filter_matches_reported_status(self):
-        """status_filter resolves against the simulated clock, not the real one.
-
-        Regression (#1545 O2): the filter path used the real reference_date while
-        the display path used mock_time, so a buy the tool would report as
-        "completed" under mock_time was excluded by a status_filter=["completed"]
-        query (and emitted a spurious MEDIA_BUY_NOT_FOUND). Filter and report must
-        agree.
-        """
-        from src.core.tools.media_buy_delivery import _get_target_media_buys
-
-        ref_date = date(2025, 2, 15)  # real clock: inside the flight window
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_sim",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        mock_req = MagicMock()
-        mock_req.media_buy_ids = ["mb_sim"]
-        mock_req.status_filter = [MediaBuyStatus.completed]
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-
-        # Simulated clock strictly past the flight window -> resolves "completed".
-        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
-        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
-
-        assert [buy_id for buy_id, _ in result] == ["mb_sim"]
-
-    def test_simulated_clock_filter_excludes_non_matching_status(self):
-        """The simulated clock also excludes buys whose simulated status differs.
-
-        Same buy as above under mock_time past flight end resolves to "completed",
-        so a status_filter=["active"] query must NOT return it.
-        """
-        from src.core.tools.media_buy_delivery import _get_target_media_buys
-
-        ref_date = date(2025, 2, 15)
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_sim",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        mock_req = MagicMock()
-        mock_req.media_buy_ids = ["mb_sim"]
-        mock_req.status_filter = [MediaBuyStatus.active]
-        mock_repo = MagicMock()
-        mock_repo.get_by_principal.return_value = [buy]
-
-        sim_ctx = AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC))
-        result = _get_target_media_buys(mock_req, "test_principal", mock_repo, ref_date, sim_ctx)
-
-        assert result == []
+    # test_simulated_clock_filter_matches_reported_status and
+    # test_simulated_clock_filter_excludes_non_matching_status are REMOVED, not ported.
+    # Their subject was the simulated clock: both passed a fifth argument (an
+    # AdCPTestContext carrying mock_time) to _get_target_media_buys and asserted that the
+    # status filter resolved against it. Commit a1b79d22d deleted the whole testing-hook
+    # channel -- src/core/testing_hooks is gone, a request carries no x-mock-time header,
+    # resolve_canonical_status lost its simulate parameter and _get_target_media_buys now
+    # takes exactly (req, principal_id, repo, reference_date). There is no simulated clock
+    # to disagree with the real one, so the #1545 O2 regression they guarded (filter path
+    # on the real date, display path on mock_time) is unreachable by construction. The
+    # sibling cases above still grade the filter itself against reference_date.
 
     def test_valid_status_enum_values_accepted(self):
         """UC-004-FILT-07: valid MediaBuyStatus enum values accepted by schema.
@@ -1138,78 +1095,33 @@ class TestDeliveryUpgradeCompat:
 
 
 # ===========================================================================
-# 8. Auth Errors (UC-004-EXT-A1, EXT-A2, EXT-B1)
+# 8. Auth Errors (UC-004-EXT-A1, EXT-A2, EXT-B1) — REMOVED, not ported
 # ===========================================================================
-
-
-class TestDeliveryAuthErrors:
-    """UC-004-EXT-A/B: authentication and principal errors."""
-
-    def test_missing_principal_id_returns_error(self):
-        """UC-004-EXT-A1: no principal_id raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
-        Covers: UC-004-EXT-A-01
-        """
-        identity = PrincipalFactory.make_identity(
-            principal_id="",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _get_media_buy_delivery_impl(req, identity)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
-    def test_principal_not_found_returns_error(self):
-        """UC-004-EXT-B1: principal ID not in tenant raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined authentication/authorization boundary).
-        Covers: UC-004-EXT-B-01
-        """
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-        identity = _make_identity(principal_id="ghost_principal")
-
-        with patch("src.core.auth.get_principal_object", return_value=None):
-            with pytest.raises(AdCPAuthenticationError) as _ei:
-                _get_media_buy_delivery_impl(req, identity)
-            # The identifier is STRUCTURED now: details/field, not prose.
-
-    def test_auth_failure_no_state_change(self):
-        """UC-004-EXT-A2: system state unchanged on auth failure (read-only op).
-
-        Spec: UNSPECIFIED (implementation-defined security boundary).
-        Delivery is a read-only operation. Auth failure must not cause any DB writes
-        or adapter calls. Verifies that get_adapter and _get_target_media_buys are never called.
-        Covers: UC-004-EXT-A-02
-        """
-        identity = PrincipalFactory.make_identity(
-            principal_id="",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None),
-        )
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_x"])
-
-        with (
-            patch(f"{_PATCH_PREFIX}.get_adapter") as mock_adapter,
-            patch(f"{_PATCH_PREFIX}._get_target_media_buys") as mock_target,
-        ):
-            with pytest.raises(AdCPAuthenticationError):
-                _get_media_buy_delivery_impl(req, identity)
-
-        # No adapter or DB calls occurred
-        mock_adapter.assert_not_called()
-        mock_target.assert_not_called()
-
-
+#
+# TestDeliveryAuthErrors held three cases (test_missing_principal_id_returns_error,
+# test_principal_not_found_returns_error, test_auth_failure_no_state_change) and all
+# three graded a re-check inside the tool: hand _get_media_buy_delivery_impl an identity
+# with no usable principal, or patch src.core.auth.get_principal_object to return None,
+# and expect AdCPAuthenticationError from the tool.
+#
+# That re-check is deliberately gone, and so is the thing it checked:
+#
+# * commit 47d57e5d6 deleted get_principal_object (with LazyTenantContext, the
+#   admin-token fallback and resolve_principal_or_raise), because the identity now
+#   CARRIES the Principal and TenantContext the resolver loaded — there is no second
+#   lookup for a test to stub, and the commit removed "the tests that pinned them";
+# * a protected tool declares ``identity: ResolvedIdentity``, which by type cannot be
+#   anonymous, and the resolver refuses a missing or rejected credential before the tool
+#   runs (critical pattern #5: "a tool never re-checks what the boundary decided").
+#   ``ruff-boundary.toml`` bans raising AdCPAuthRequiredError / AdCPAuthenticationError
+#   anywhere but the resolver, so the exception these cases expected cannot be raised
+#   from media_buy_delivery at all.
+#
+# So the obligation (an unauthenticated delivery read is refused, and nothing is read or
+# called on the way out) is not a delivery-tool obligation any more; it is the resolver's,
+# graded once there and on the wire by the transport-blind auth scenarios rather than
+# once per tool. Reinstating a tool-level version would require reinstating the re-check.
+#
 # ===========================================================================
 # 9. Media Buy Not Found (UC-004-EXT-C1, EXT-C2, EXT-C3)
 # ===========================================================================
@@ -1359,9 +1271,7 @@ class TestDeliveryInvalidDateRange:
         patches = _standard_patches(adapter=mock_adapter)
 
         with (
-            patches["principal_obj"],
             patches["adapter"],
-            patches["tenant"],
             patches["target_buys"] as mock_target,
             patches["pricing_options"],
             patches["uow"],
@@ -1880,14 +1790,23 @@ class TestDeliveryProtocol:
     """UC-004-MAIN: protocol envelope and schema completeness."""
 
     def test_protocol_envelope_status_completed(self):
-        """UC-004-MAIN-12: response wrapped in protocol envelope with status=completed.
+        """UC-004-MAIN-12: the response IS the protocol envelope, and says status=completed.
 
         Spec: https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/dist/schemas/3.0.0-beta.3/core/protocol-envelope.json
-        CONFIRMED: protocol envelope wraps task responses with status field.
-        Tests that ProtocolEnvelope.wrap correctly wraps a delivery response.
+        CONFIRMED: every response schema composes core/protocol-envelope.json at its root
+        with allOf, so the envelope's fields are part of the response's own contract.
         Covers: UC-004-MAIN-12
+
+        This used to call ``ProtocolEnvelope.wrap(payload=response, status="completed")``
+        and read the fields back off the wrapper. Both the wrapper and its module are gone
+        (commits d8a39a661, 1d04b782c, 0d3cab2d2): a root allOf reaches every branch
+        unconditionally, so a response does not get wrapped in an envelope -- it inherits
+        one, and the envelope status can no longer be chosen independently of the body.
+        The obligation survives the wrapper, so it is graded here against the response the
+        buyer actually receives: the field is at the ROOT of the wire body, not nested
+        under a ``payload`` key that no longer exists.
         """
-        from src.core.protocol_envelope import ProtocolEnvelope
+        from src.core.tools._wire import to_wire
 
         response = GetMediaBuyDeliveryResponse(
             reporting_period={"start": datetime(2025, 1, 1, tzinfo=UTC), "end": datetime(2025, 6, 30, tzinfo=UTC)},
@@ -1896,18 +1815,13 @@ class TestDeliveryProtocol:
             media_buy_deliveries=[],
         )
 
-        envelope = ProtocolEnvelope.wrap(
-            payload=response,
-            status="completed",
-            message="Retrieved delivery data.",
-        )
+        wire = to_wire(response)
 
-        assert envelope.status == "completed"
-        assert envelope.message == "Retrieved delivery data."
-        assert isinstance(envelope.payload, dict)
-        assert "aggregated_totals" in envelope.payload
-        assert "media_buy_deliveries" in envelope.payload
-        assert envelope.timestamp is not None
+        assert wire["status"] == "completed"
+        # The domain fields sit beside the envelope's, at the root.
+        assert "aggregated_totals" in wire
+        assert "media_buy_deliveries" in wire
+        assert "payload" not in wire
 
     def test_unpopulated_fields_handled_gracefully(self):
         """UC-004-MAIN-17: unpopulated optional fields are None, not errors.
@@ -2133,104 +2047,28 @@ class TestNotificationTypeTerminality:
         assert response.next_expected_at is None
 
 
-class TestTimeSimulationReachesFinalNotification:
-    """A time-simulation client can advance a non-serving buy to completed/final.
+class TestPersistedLifecycleIsAuthoritative:
+    """A non-serving buy reports the status the row holds, whatever the dates say.
 
-    Regression (finding #3): honoring the persisted lifecycle short-circuited
-    date refinement, so a buy created as pending_creatives (creation hardcodes
-    creatives_approved=False) could never reach "completed" under simulation and
-    the "final" delivery notification was unreachable. In simulation mode
-    (mock_time / jump_to_event) a non-terminal buy follows the simulated clock.
+    This class used to be ``TestTimeSimulationReachesFinalNotification`` and its first
+    three cases drove the delivery report from a SIMULATED clock — an ``AdCPTestContext``
+    carrying ``mock_time`` or ``jump_to_event``, reached in production through the
+    ``X-Mock-Time`` / ``X-Jump-To-Event`` request headers. That whole channel is gone
+    (commit a1b79d22d): ``src/core/testing_hooks`` is deleted, a request carries no
+    testing headers, the identity has no testing context, and ``apply_testing_hooks`` /
+    ``NextEventCalculator`` / ``TimeSimulator`` do not exist — so "a buy created as
+    pending_creatives can reach completed under simulation" is not a behaviour the
+    server has any more, and neither are the two naive-vs-aware ``TypeError``
+    regressions (#1545 K1) that only the simulated clock could reach.
+
+    The fourth case is the one that graded the real clock, and it is the whole
+    behaviour now: the persisted lifecycle is authoritative.
 
     Covers: UC-004-ALT-WEBHOOK-PUSH-REPORTING
     """
 
-    def test_simulated_clock_past_flight_yields_completed_and_final(self):
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_sim",
-            status="pending_creatives",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        # Simulated clock strictly past the flight window.
-        identity = _make_identity(testing_context=AdCPTestContext(mock_time=datetime(2025, 6, 1, tzinfo=UTC)))
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_sim"])
-
-        # Runs through the real apply_testing_hooks — the campaign-progress branch
-        # builds flight datetimes via _combine_utc, so the aware simulated clock no
-        # longer raises TypeError against them.
-        response = _run_impl_with_patches(
-            req,
-            identity=identity,
-            target_buys=[("mb_sim", buy)],
-        )
-
-        assert response.media_buy_deliveries[0].status == "completed"
-        assert enum_value(response.notification_type) == "final"
-
-    def test_mid_flight_mock_time_via_from_headers_does_not_raise(self):
-        """A mid-flight X-Mock-Time through the real header boundary succeeds.
-
-        Regression (#1545 K1 follow-up review): from_headers minted mock_time
-        NAIVE, and a *mid-flight* clock (0 < progress < 1) is the one that
-        reaches NextEventCalculator.calculate_next_event_time — whose
-        'next_event_time <= current_time' comparison against the aware flight
-        datetimes raised TypeError and 500'd the whole request. (A past-flight
-        clock never got there: progress 1.0 makes get_next_event return None.)
-        mock_time is now normalized to UTC-aware at the AdCPTestContext
-        construction boundary.
-        """
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_midflight",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 12, 31),
-        )
-        # The REAL header boundary — not a directly-constructed aware datetime.
-        ctx = AdCPTestContext.from_headers({"x-mock-time": "2025-06-01T00:00:00Z"})
-        identity = _make_identity(testing_context=ctx)
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_midflight"])
-
-        response = _run_impl_with_patches(
-            req,
-            identity=identity,
-            target_buys=[("mb_midflight", buy)],
-        )
-
-        assert response.media_buy_deliveries[0].status == "active"
-        assert enum_value(response.notification_type) == "scheduled"
-
-    def test_jump_to_event_only_does_not_raise(self):
-        """jump_to_event with no mock_time hits the real hook without a TypeError.
-
-        Regression (#1545 K1): the fallback simulated clock is always UTC-aware,
-        while campaign_info flight dates were built naive — the comparison in
-        TimeSimulator.calculate_campaign_progress raised
-        'can't compare offset-naive and offset-aware datetimes' and failed the
-        whole request. Reachable in production via an X-Jump-To-Event header alone.
-        """
-        buy = _make_mock_media_buy(
-            media_buy_id="mb_jump",
-            status="active",
-            start_date=date(2025, 1, 1),
-            end_date=date(2025, 3, 31),
-        )
-        identity = _make_identity(testing_context=AdCPTestContext(jump_to_event="campaign-complete"))
-
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_jump"])
-
-        response = _run_impl_with_patches(
-            req,
-            identity=identity,
-            target_buys=[("mb_jump", buy)],
-        )
-
-        assert response.media_buy_deliveries[0].media_buy_id == "mb_jump"
-
     def test_without_simulation_persisted_pending_status_is_authoritative(self):
-        """The same buy, queried normally, keeps its persisted pending status."""
+        """A pending buy, queried normally, keeps its persisted pending status."""
         buy = _make_mock_media_buy(
             media_buy_id="mb_real",
             status="pending_creatives",

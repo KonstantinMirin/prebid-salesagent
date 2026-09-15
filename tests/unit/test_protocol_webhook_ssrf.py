@@ -33,7 +33,6 @@ import pytest
 from adcp import create_mcp_webhook_payload
 from adcp.types import ReportingWebhook
 from adcp.webhooks import GeneratedTaskStatus
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.models import PushNotificationConfig
 from src.core.exceptions import AdCPUrlNotAllowedError
@@ -155,12 +154,22 @@ def _reporting_webhook(url: str) -> ReportingWebhook:
 
 
 def _identity() -> ResolvedIdentity:
+    """The authenticated caller these cases dispatch as.
+
+    ``human_review_required=False`` is the only tenant fact the SSRF cases depend on: a
+    seller that queues for review never reaches the adapter, so the refusal under test
+    would be graded against the wrong branch. It is passed as a tenant OVERRIDE because
+    the identity refuses a dict tenant at construction. The three other arguments this
+    call carried are gone with their subjects: ``protocol`` and ``testing_context``
+    (commit a1b79d22d removed the testing-hook channel and took the transport off the
+    identity — a request carries no testing headers and the identity names no protocol)
+    and ``auto_create_media_buys``, which stopped being a tenant field when the tenant
+    became typed (f3c46a970) and was silently ignored here from then on.
+    """
     return PrincipalFactory.make_identity(
         principal_id="principal_1",
         tenant_id="test_tenant",
-        protocol="mcp",
-        tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
-        testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
+        human_review_required=False,
     )
 
 

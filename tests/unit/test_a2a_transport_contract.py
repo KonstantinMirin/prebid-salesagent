@@ -23,11 +23,14 @@ from tests.factories.principal import PrincipalFactory
 from tests.helpers.agent_card import host_routes_to_no_tenant
 from tests.helpers.credentials import credential_headers
 
+# ``protocol="a2a"`` and the redundant ``tenant={...}`` are gone: the identity names no
+# transport since commit a1b79d22d took the testing-hook channel and the protocol off it,
+# and the factory builds the TenantContext for ``tenant_id`` itself (a dict is refused at
+# construction). What the A2A cases need from the identity is only that it IS an
+# authenticated caller, which is what ``make_identity`` means.
 _MOCK_IDENTITY = PrincipalFactory.make_identity(
     principal_id="test-principal",
     tenant_id="test-tenant",
-    tenant={"tenant_id": "test-tenant"},
-    protocol="a2a",
 )
 
 
@@ -48,16 +51,21 @@ def _advertised_skills() -> list[str]:
 
 ALL_SKILLS = _advertised_skills()
 
-# Derived, not hand-kept. ``ToolSpec.auth`` is the one place a tool says whether it needs a
-# caller, and the A2A gate reads that same field -- so a list written here could only ever
-# agree with the gate by coincidence, and this one did not: it claimed ``list_accounts`` was
-# auth-optional, while tests/integration/test_list_accounts.py graded the opposite behaviour
-# ("unauthenticated list_accounts raises AUTH_REQUIRED") from the same BR-RULE-055. The pin
-# settles it -- account/list-accounts-request.json describes "accounts accessible to the
-# authenticated agent" -- and the registry row already said ``auth="required"``.
-DISCOVERY_SKILLS = [s for s in ALL_SKILLS if TOOLS[s].auth == "optional"]
+# Derived, not hand-kept. ``ToolSpec.requires_credential()`` is the one place a tool says
+# whether it needs a caller, and the boundary asks the same method -- so a list written here
+# could only ever agree with the gate by coincidence, and this one did not: it claimed
+# ``list_accounts`` was auth-optional, while tests/integration/test_list_accounts.py graded
+# the opposite behaviour ("unauthenticated list_accounts raises AUTH_REQUIRED") from the same
+# BR-RULE-055. The pin settles it -- account/list-accounts-request.json describes "accounts
+# accessible to the authenticated agent" -- and the registry agreed all along.
+#
+# The ``auth="required"|"optional"`` literal this read is gone (commit 4a57d38be): the policy
+# is DERIVED from the implementation's identity annotation, and the row carries no second
+# statement of it. Asked with no tenant, the answer is the annotation's alone -- which is the
+# right question here, because these cases present no seller-specific brand policy.
+DISCOVERY_SKILLS = [s for s in ALL_SKILLS if not TOOLS[s].requires_credential()]
 
-AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if TOOLS[s].auth == "required"]
+AUTH_REQUIRED_SKILLS = [s for s in ALL_SKILLS if TOOLS[s].requires_credential()]
 
 # ---------------------------------------------------------------------------
 # Helpers

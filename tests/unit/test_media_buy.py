@@ -22,11 +22,9 @@ from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from pydantic import ValidationError
-from src.core.testing_hooks import AdCPTestContext
 
-from src.core.errors.codes import CODE_TABLE
+from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
 from src.core.exceptions import (
-    AdCPAuthenticationError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPConfigurationError,
@@ -127,33 +125,47 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
     return CreateMediaBuyRequest(**defaults)
 
 
+#: The confirmation instant every response built here carries. A literal, not ``now()``:
+#: these cases assert on response SHAPE, so one deterministic value keeps two of them from
+#: disagreeing, and a test is not speaking for the repository that owns the real column.
+_CONFIRMED_AT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
 def _make_success(**overrides) -> CreateMediaBuySuccess:
-    """Build a minimal valid CreateMediaBuySuccess response."""
-    defaults = {"media_buy_id": "mb_1", "packages": [{"package_id": "pkg_1"}]}
+    """Build a minimal valid CreateMediaBuySuccess response — the BUYER's envelope.
+
+    Was ``CreateMediaBuySuccess.carrier(...)``, a classmethod deleted when adapters moved
+    to result types (commit ecfdd7771): an adapter now returns
+    ``src.adapters.base.AdapterCreateResult`` and no wire model stands in for it, so the
+    only thing left for a wire model to be is the envelope a buyer receives. That is what
+    every case below asserts on, so this uses ``sync_success`` and passes ``confirmed_at``
+    and ``revision`` explicitly — neither carries a field default, which is what stops a
+    response from fabricating a value only a persisted row can supply.
+    """
+    defaults = {
+        "media_buy_id": "mb_1",
+        "packages": [{"package_id": "pkg_1"}],
+        "confirmed_at": _CONFIRMED_AT,
+        "revision": 1,
+    }
     defaults.update(overrides)
-    return CreateMediaBuySuccess.carrier(**defaults)
+    return CreateMediaBuySuccess.sync_success(**defaults)
 
 
 def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
-    testing_context: AdCPTestContext | None = None,
-    dry_run: bool = False,
 ) -> ResolvedIdentity:
-    """Build a ResolvedIdentity with default test values."""
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-        protocol="mcp",
-        testing_context=testing_context
-        or AdCPTestContext(
-            dry_run=dry_run,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
-    )
+    """Build a ResolvedIdentity with default test values.
+
+    ``testing_context`` and ``dry_run`` are gone with the channel they configured
+    (commit a1b79d22d): ``src/core/testing_hooks`` is deleted, a request carries no
+    testing headers, and the identity has no testing context — so does ``protocol``,
+    which the identity no longer names. The explicit ``tenant={"tenant_id": ...}`` is
+    dropped too: it said exactly what the factory builds for ``tenant_id`` anyway, and
+    the identity refuses a dict tenant at construction.
+    """
+    return PrincipalFactory.make_identity(principal_id=principal_id, tenant_id=tenant_id)
 
 
 def _mock_product(product_id: str = "prod_1", currency: str = "USD") -> MagicMock:
@@ -322,19 +334,17 @@ class TestCreateMediaBuyResponseShapes:
         assert resp.errors is not None
         assert len(resp.errors) == 1
 
-    def test_success_response_excludes_internal_fields(self):
-        """UC-002-R03: workflow_step_id excluded from serialized output.
-
-        Spec: UNSPECIFIED (implementation-defined internal field exclusion)
-        Ported from test_response_shapes.py::test_internal_fields_excluded
-        Covers: UC-002-MAIN-21
-        """
-        resp = _make_success(
-            media_buy_id="mb_123",
-            workflow_step_id="ws_abc",
-        )
-        dumped = resp.model_dump()
-        assert "workflow_step_id" not in dumped
+    # test_success_response_excludes_internal_fields (UC-002-R03) is REMOVED. It built a
+    # response with workflow_step_id="ws_abc" and asserted the key was absent from the
+    # dump. The field itself is gone (commit ecfdd7771 deleted workflow_step_id and
+    # implementation_date from the response models: a workflow step an adapter opens is
+    # tracked by the workflow tables, and a field that must not reach the wire has no
+    # spelling on a wire model). With the field undeclared the construction quietly drops
+    # the keyword, so the assertion could no longer fail for the reason it was written —
+    # it would pass against a model that never had the field at all. The live rule it
+    # stood for (a response serializes to the pinned shape by inheritance, internal
+    # fields declared Field(exclude=True) at their declaration) is graded in
+    # test_adcp_contract.py and test_architecture_schema_inheritance.py.
 
     def test_body_carries_status_beside_the_domain_fields(self):
         """The buyer receives ONE flat document: envelope fields at the root, not nested.
@@ -383,12 +393,14 @@ class TestCreateMediaBuyValidation:
             ]
         )
 
+        # human_review_required=False is the one tenant fact this case depends on, passed
+        # as a tenant override (the identity refuses a dict tenant). The other arguments
+        # are gone with their subjects: protocol and testing_context (a1b79d22d) and
+        # auto_create_media_buys, which stopped being a tenant field in f3c46a970.
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
+            human_review_required=False,
         )
 
         # Build a mock UoW that provides session via context manager
@@ -454,12 +466,14 @@ class TestCreateMediaBuyValidation:
         cl.max_daily_package_spend = Decimal("500")
         cl.min_package_budget = None
 
+        # human_review_required=False is the one tenant fact this case depends on, passed
+        # as a tenant override (the identity refuses a dict tenant). The other arguments
+        # are gone with their subjects: protocol and testing_context (a1b79d22d) and
+        # auto_create_media_buys, which stopped being a tenant field in f3c46a970.
         identity = PrincipalFactory.make_identity(
             principal_id="principal_1",
             tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "human_review_required": False, "auto_create_media_buys": True},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id="test-session"),
+            human_review_required=False,
         )
 
         # Build a mock UoW that provides session via context manager
@@ -1002,12 +1016,18 @@ class TestCreateMediaBuyCreativeValidation:
             ),
         ):
             session = MagicMock()
-            # First scalars call: creative lookup; second: product lookup
+            # The two lookups reach the session by DIFFERENT methods, because their
+            # repositories do: CreativeRepository.get_by_ids uses session.scalars(...),
+            # while ProductRepository.list_by_ids eager-loads pricing options and so goes
+            # through session.execute(...).unique().scalars().all(). Feeding both from one
+            # scalars side_effect list (the previous setup) left the product lookup reading
+            # an unconfigured MagicMock, which iterates EMPTY -- so the accepted-format set
+            # came back empty, the format check skipped every package, and this case passed
+            # nothing to assert on while claiming to grade a mismatch rejection.
             creative_result = MagicMock()
             creative_result.all.return_value = [mock_creative]
-            product_result = MagicMock()
-            product_result.all.return_value = [mock_product]
-            session.scalars.side_effect = [creative_result, product_result]
+            session.scalars.return_value = creative_result
+            session.execute.return_value.unique.return_value.scalars.return_value.all.return_value = [mock_product]
 
             with pytest.raises(AdCPValidationError) as exc_info:
                 _validate_creatives_before_adapter_call([package], "test_tenant", "test_principal", session=session)
@@ -1171,27 +1191,24 @@ class TestCreateMediaBuyStatusDetermination:
 
 
 class TestCreateMediaBuyImplAuth:
-    """UC-002 auth extension: identity and principal validation."""
+    """UC-002 auth extension: identity and tenant-setup validation.
 
-    @pytest.mark.asyncio
-    async def test_missing_principal_raises_auth_error(self):
-        """UC-002-A02: principal not found raises AdCPAuthenticationError.
+    test_missing_principal_raises_auth_error (UC-002-A02 / UC-002-EXT-I-02) is REMOVED.
+    It patched ``src.core.auth.get_principal_object`` to return None and expected
+    _create_media_buy_impl to raise AdCPAuthenticationError -- a second principal lookup
+    inside the tool, after the one that produced the identity it was handed.
 
-        Spec: UNSPECIFIED (implementation-defined principal resolution)
-        Covers: UC-002-EXT-I-02
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
+    get_principal_object no longer exists (commit 47d57e5d6 deleted it with
+    LazyTenantContext, resolve_principal_or_raise and the admin-token fallback): the
+    identity CARRIES the Principal the resolver loaded, so a tool reads
+    ``identity.principal`` and there is no lookup to make fail. A protected tool also
+    cannot mint the refusal any more -- ruff-boundary.toml bans raising
+    AdCPAuthenticationError outside the resolver -- so this case's subject is the
+    resolver's, graded there and on the wire, not once per tool.
 
-        identity = _make_identity()
-        req = _make_request()
-
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object", return_value=None),
-        ):
-            with pytest.raises(AdCPAuthenticationError) as _ei:
-                await _create_media_buy_impl(req, identity=identity)
-            # The identifier is STRUCTURED now: details/field, not prose.
+    The setup-incompleteness cases below are unaffected: those grade a SELLER-side
+    configuration refusal the tool does raise.
+    """
 
     @pytest.mark.asyncio
     async def test_setup_incomplete_raises_error(self):
@@ -1207,13 +1224,7 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
-        )
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         with (
             patch(
@@ -1252,13 +1263,7 @@ class TestCreateMediaBuyImplAuth:
         from src.services.setup_checklist_service import SetupIncompleteError
 
         req = _make_request()
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal",
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-            protocol="mcp",
-            testing_context=AdCPTestContext(dry_run=False, test_session_id=None),
-        )
+        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
 
         with (
             patch(
@@ -1357,42 +1362,18 @@ class TestIdempotencyKeyRequired:
 
 
 class TestCreateMediaBuyAdapterInteraction:
-    """UC-002 adapter call: _execute_adapter_media_buy_creation behavior."""
+    """UC-002 adapter call: _execute_adapter_media_buy_creation behavior.
 
-    def test_adapter_error_logged(self):
-        """UC-002-AD01: adapter returning CreateMediaBuyError logs each error.
-
-        Spec: UNSPECIFIED (implementation-defined adapter error logging)
-        Priority: P1
-        Type: unit
-        Source: UC-002, BR-RULE-020
-        Covers: UC-002-EXT-J-01
-        """
-        from src.core.schemas import Error
-        from src.core.tools.media_buy_create import _execute_adapter_media_buy_creation
-
-        error_response = CreateMediaBuyError(
-            status="failed", errors=[Error(code="BUDGET_EXCEEDED", message="Budget too high")]
-        )
-
-        mock_adapter = MagicMock()
-        mock_adapter.create_media_buy.return_value = error_response
-
-        mock_principal = MagicMock()
-        mock_principal.principal_id = "p1"
-
-        with patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter):
-            result = _execute_adapter_media_buy_creation(
-                request=_make_request(),
-                packages=[],
-                start_time=datetime.now(UTC),
-                end_time=datetime.now(UTC) + timedelta(days=7),
-                package_pricing_info={},
-                principal=mock_principal,
-            )
-
-        assert isinstance(result, CreateMediaBuyError)
-        assert len(result.errors) == 1
+    test_adapter_error_logged (UC-002-AD01 / UC-002-EXT-J-01) is REMOVED. It had the
+    mocked adapter RETURN a ``CreateMediaBuyError`` and asserted the function handed that
+    error back. An adapter has no error return any more: commit ecfdd7771 gave
+    ``create_media_buy`` the return type ``AdapterCreateResult``, a carrier with
+    ``extra="forbid"`` declaring exactly what the tool reads (media_buy_id, packages,
+    creative_deadline, platform_line_item_ids) — and no errors[]. An adapter reports
+    failure by RAISING, which is the branch the surviving case below grades: a wire error
+    model coming back from an adapter is not a case production can reach, and the
+    function would fail reading ``response.media_buy_id`` off it rather than returning it.
+    """
 
     def test_adapter_exception_propagates(self):
         """UC-002-AD02: adapter raising exception is re-raised.
@@ -1408,137 +1389,36 @@ class TestCreateMediaBuyAdapterInteraction:
         mock_adapter = MagicMock()
         mock_adapter.create_media_buy.side_effect = RuntimeError("GAM API timeout")
 
-        mock_principal = MagicMock()
-        mock_principal.principal_id = "p1"
-
+        # Two signature changes, both from the adapter-contract split (ecfdd7771 and
+        # a1b79d22d): the adapters read an AdapterCreateRequest projected from the buyer's
+        # DTO through one of its two constructors — nothing builds one by hand — and the
+        # function takes the one ResolvedIdentity rather than a loose principal, so the
+        # tenant and the principal cannot be handed over as a mismatched pair.
         with patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter):
             with pytest.raises(RuntimeError, match="GAM API timeout"):
                 _execute_adapter_media_buy_creation(
-                    request=_make_request(),
+                    request=AdapterCreateRequest.from_buyer_request(_make_request()),
                     packages=[],
                     start_time=datetime.now(UTC),
                     end_time=datetime.now(UTC) + timedelta(days=7),
                     package_pricing_info={},
-                    principal=mock_principal,
+                    identity=_make_identity(),
                 )
 
-    @pytest.mark.asyncio
-    async def test_dry_run_skips_adapter(self):
-        """UC-002-AD03: testing context dry_run=True never calls adapter.
-
-        Spec: UNSPECIFIED (implementation-defined testing/sandbox behavior)
-        Priority: P1
-        Type: unit
-        Source: UC-002
-
-        When dry_run=True, _create_media_buy_impl must NOT call
-        _execute_adapter_media_buy_creation. It should return a simulated
-        CreateMediaBuySuccess with a dry_run_ prefixed media_buy_id.
-        Covers: UC-002-MAIN-19
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        identity = _make_identity(dry_run=True)
-        req = _make_request()
-
-        # Build mock adapter that should NEVER be called
-        mock_adapter = MagicMock()
-        mock_adapter.manual_approval_required = False
-        mock_adapter.manual_approval_operations = []
-        mock_adapter.__class__.__name__ = "MockAdapter"
-        mock_adapter.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
-        mock_adapter.validate_media_buy_request.return_value = []
-
-        # Build mock product catalog matching the request's prod_1
-        mock_delivery_type = MagicMock()
-        mock_delivery_type.value = "guaranteed"
-
-        mock_schema_product = MagicMock()
-        mock_schema_product.product_id = "prod_1"
-        mock_schema_product.name = "Test Product"
-        mock_schema_product.delivery_type = mock_delivery_type
-        mock_schema_product.format_ids = []
-        mock_schema_product.auto_create = True
-        mock_schema_product.channels = []
-        mock_schema_product.property_list_id = None
-
-        # A real unpersisted row, shared between schema product and DB product: a bare
-        # MagicMock answers every attribute, so pricing_option_id came back as a Mock and
-        # matched nothing the request could name.
-        mock_pricing_option = PricingOptionFactory.build(min_spend_per_package=None)
-
-        # Set pricing_options on schema product for CPM calculation
-        mock_schema_product.pricing_options = [mock_pricing_option]
-
-        mock_db_product = MagicMock()
-        mock_db_product.product_id = "prod_1"
-        mock_db_product.pricing_options = [mock_pricing_option]
-        mock_db_product.auto_create = True
-        mock_db_product.channels = []
-        mock_db_product.property_list_id = None
-
-        mock_currency_limit = MagicMock()
-        mock_currency_limit.max_budget = Decimal("100000")
-        mock_currency_limit.currency_code = "USD"
-        mock_currency_limit.min_package_budget = None
-        mock_currency_limit.max_daily_package_spend = None
-
-        # Mock session with sequential query results
-        call_count = {"n": 0}
-
-        def scalars_side_effect(stmt):
-            result = MagicMock()
-            call_count["n"] += 1
-            n = call_count["n"]
-            if n == 1:
-                # Product query
-                result.all.return_value = [mock_db_product]
-                result.first.return_value = mock_db_product
-            elif n == 2:
-                # Currency limit query
-                result.all.return_value = [mock_currency_limit]
-                result.first.return_value = mock_currency_limit
-            else:
-                # Adapter config and others -> None
-                result.all.return_value = []
-                result.first.return_value = None
-            return result
-
-        mock_session = MagicMock()
-        mock_session.scalars.side_effect = scalars_side_effect
-
-        mock_uow = MagicMock()
-        mock_uow.idempotency_attempts.find_by_key.return_value = None  # keyed create probe -> miss
-        mock_uow.idempotency_attempts.count_inserts_since.return_value = (0, None)
-        mock_uow.idempotency_attempts.count_active.return_value = (0, None)
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=None)
-        mock_uow.session = mock_session
-        mock_uow.media_buys.get_by_principal.return_value = []
-
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete"),
-            patch("src.core.auth.get_principal_object", return_value=MagicMock()),
-            patch("src.core.tools.media_buy_create.get_adapter", return_value=mock_adapter),
-            patch("src.core.database.repositories.MediaBuyUoW", return_value=mock_uow),
-            patch("src.core.tools.products.get_product_catalog", return_value=[mock_schema_product]),
-            patch(
-                "src.core.tools.media_buy_create._execute_adapter_media_buy_creation",
-                side_effect=AssertionError("adapter must not be called in dry_run mode"),
-            ),
-            patch("src.core.tools.media_buy_create._validate_creatives_before_adapter_call"),
-            patch(
-                "src.core.tools.media_buy_create.process_and_upload_package_creatives", return_value=(req.packages, [])
-            ),
-        ):
-            result = await _create_media_buy_impl(req, identity=identity)
-
-            # Should return a simulated success without calling adapter
-            assert result is not None
-            response, status = result, result.status
-            assert status == "completed"
-            assert response.media_buy_id is not None
-            assert response.media_buy_id.startswith("dry_run_")
+    # test_dry_run_skips_adapter (UC-002-AD03 / UC-002-MAIN-19) is REMOVED. It drove
+    # _create_media_buy_impl with an identity whose testing context said dry_run=True and
+    # asserted the tool returned a simulated success with a "dry_run_" media_buy_id
+    # without reaching the adapter.
+    #
+    # create_media_buy has no dry-run mode any more. Commit a1b79d22d deleted the whole
+    # testing-hook channel: there is no AdCPTestContext, the identity carries no testing
+    # context, and "the only dry_run left is the request field on the sync_* tools,
+    # implemented as a unit-of-work rollback, and the operator previews in the admin UI".
+    # CreateMediaBuyRequest declares no dry_run field, media_buy_create contains no
+    # dry-run branch and mints no "dry_run_" id, so there is no way to ask for the
+    # behaviour and nothing left to skip the adapter. The surviving dry run — sync_creatives
+    # rolling its unit of work back — is a different mechanism on a different tool and is
+    # graded with that tool.
 
 
 # ===========================================================================
@@ -1662,8 +1542,12 @@ class TestUpdateMediaBuyResponseShapes:
         Ported from test_update_media_buy_affected_packages.py::test_response_serialization_includes_affected_packages
         Covers: UC-003-MAIN-09
         """
-        resp = UpdateMediaBuySuccess.carrier(
+        # The buyer's envelope, so sync_success with the row's revision — not the deleted
+        # carrier(), whose job (standing in for an adapter response) belongs to
+        # AdapterUpdateResult now.
+        resp = UpdateMediaBuySuccess.sync_success(
             media_buy_id="mb_1",
+            revision=1,
             affected_packages=[
                 AffectedPackage(package_id="pkg_1", paused=False),
             ],
@@ -1739,7 +1623,11 @@ class TestUpdateMediaBuyMainFlow:
         cl.max_daily_package_spend = Decimal("5000")
         cl.min_package_budget = None
 
-        adapter_result = UpdateMediaBuySuccess.carrier(
+        # What an adapter hands back is AdapterUpdateResult, not a wire model: commit
+        # ecfdd7771 moved the adapters to result types and deleted the carrier()
+        # classmethod that let a response stand in for one. The tool builds the buyer's
+        # UpdateMediaBuySuccess itself from the re-read row.
+        adapter_result = AdapterUpdateResult(
             media_buy_id="mb_resolved",
             affected_packages=[AffectedPackage(package_id="pkg_1", paused=False)],
         )
@@ -1831,10 +1719,8 @@ class TestUpdateMediaBuyPauseResume:
         )
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess.carrier(
-            media_buy_id="mb_1",
-            affected_packages=[],
-        )
+        # The adapter contract (see the note on the first of these), not a wire model.
+        adapter_result = AdapterUpdateResult(media_buy_id="mb_1", affected_packages=[])
 
         with (
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
@@ -1894,10 +1780,8 @@ class TestUpdateMediaBuyPauseResume:
         )
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess.carrier(
-            media_buy_id="mb_1",
-            affected_packages=[],
-        )
+        # The adapter contract (see the note on the first of these), not a wire model.
+        adapter_result = AdapterUpdateResult(media_buy_id="mb_1", affected_packages=[])
 
         with (
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
@@ -1956,10 +1840,8 @@ class TestUpdateMediaBuyPauseResume:
         )
         identity = _make_identity()
 
-        adapter_result = UpdateMediaBuySuccess.carrier(
-            media_buy_id="mb_1",
-            affected_packages=[],
-        )
+        # The adapter contract (see the note on the first of these), not a wire model.
+        adapter_result = AdapterUpdateResult(media_buy_id="mb_1", affected_packages=[])
 
         with (
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
@@ -2267,10 +2149,12 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.creatives.get_by_ids.return_value = [mock_c1, mock_c2]
             mock_uow.products.get_by_id.return_value = mock_product
 
-            # Existing-assignment lookup still goes through session.scalars.
-            assign_result = MagicMock()
-            assign_result.all.return_value = [mock_existing_assignment]
-            uow_session.scalars.side_effect = [assign_result]
+            # The existing-assignment read and the removal both go through the
+            # assignments REPOSITORY, not the raw session: a bare session.scalars stub (the
+            # previous setup) fed a lookup production no longer makes, so the tool saw no
+            # existing assignment, computed an empty removed set, and deleted nothing —
+            # the very behaviour this case grades, passed over silently.
+            mock_uow.assignments.get_by_media_buy_and_package.return_value = [mock_existing_assignment]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
@@ -2278,7 +2162,7 @@ class TestUpdateMediaBuyCreativeIds:
         assert result.affected_packages is not None
         assert len(result.affected_packages) >= 1
         # The old assignment should have been deleted (replacement semantics)
-        uow_session.delete.assert_called_with(mock_existing_assignment)
+        mock_uow.assignments.delete_row.assert_called_once_with(mock_existing_assignment)
 
     def test_creative_ids_not_found(self):
         """UC-003-CI02: nonexistent creative_ids returns creatives_not_found.
@@ -2617,22 +2501,25 @@ class TestUpdateMediaBuyCreativeIds:
             mock_uow.creatives.get_by_ids.return_value = [mock_c2, mock_c4]
             mock_uow.products.get_by_id.return_value = mock_product
 
-            # Existing-assignment lookup still goes through session.scalars.
-            assign_result = MagicMock()
-            assign_result.all.return_value = [mock_assign_c1, mock_assign_c2, mock_assign_c3]
-            uow_session.scalars.side_effect = [assign_result]
+            # Read and written through the assignments REPOSITORY, not the raw session —
+            # the same correction as test_creative_ids_replaces_all: a session.scalars
+            # stub fed a lookup production no longer makes, so the tool computed an empty
+            # existing set and this case's change-set assertions graded nothing.
+            mock_uow.assignments.get_by_media_buy_and_package.return_value = [
+                mock_assign_c1,
+                mock_assign_c2,
+                mock_assign_c3,
+            ]
 
             result = _update_media_buy_impl(req=req, identity=identity)
 
         assert isinstance(result, UpdateMediaBuySuccess)
         # c1 and c3 should be deleted (removed)
-        deleted_ids = {call.args[0].creative_id for call in uow_session.delete.call_args_list}
-        assert "c1" in deleted_ids
-        assert "c3" in deleted_ids
-        # c2 should NOT be deleted (unchanged)
-        assert "c2" not in deleted_ids
-        # c4 should be added (new)
-        assert uow_session.add.called
+        deleted_ids = {call.args[0].creative_id for call in mock_uow.assignments.delete_row.call_args_list}
+        assert deleted_ids == {"c1", "c3"}  # c2 is unchanged and must survive
+        # c4 is added, by creative_id rather than by a session.add of an ORM row
+        added_ids = {call.kwargs["creative_id"] for call in mock_uow.assignments.create.call_args_list}
+        assert added_ids == {"c4"}
 
 
 class TestUpdateMediaBuyIdentification:
@@ -2934,15 +2821,28 @@ class TestUpdateMediaBuyAdapterFailure:
     """UC-003 ext-o: adapter/workflow failure."""
 
     def test_adapter_network_error(self):
-        """UC-003-AF01: adapter failure returns activation_workflow_failed.
+        """UC-003-AF01: an adapter failure is not reported to the buyer as a success.
 
         Spec: UNSPECIFIED (implementation-defined adapter error handling)
         Priority: P1
         Type: unit
         Source: UC-003 ext-o, BR-RULE-020
         Covers: UC-003-EXT-O-01
+
+        The stimulus is a RAISE, not a returned error model. This case used to set
+        ``adapter.update_media_buy.return_value = UpdateMediaBuyError(...)``, a shape no
+        adapter produces: ``update_media_buy``'s return type is
+        ``src.adapters.base.AdapterUpdateResult`` (commit ecfdd7771), and production says
+        so at the call site -- "an adapter reports failure by raising; a returned result
+        is the success". So the old staging made the tool read media_buy_id and
+        affected_packages off an error object and answer the buyer with a SUCCESS, which
+        is exactly the defect this case exists to catch, arrived at by staging something
+        unreachable. ``AdCPAdapterError`` is the class a transient adapter fault raises
+        (the mock adapter's own injected "transient" failure raises it; the wire code is
+        SERVICE_UNAVAILABLE), and the tool does not swallow it: the boundary turns it into
+        the buyer's error envelope, which is where the wire shape is graded.
         """
-        from src.core.schemas import Error
+        from src.core.exceptions import AdCPAdapterError
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
@@ -2950,10 +2850,7 @@ class TestUpdateMediaBuyAdapterFailure:
         )
         identity = _make_identity()
 
-        adapter_error = UpdateMediaBuyError(
-            status="failed",
-            errors=[Error(code="ACTIVATION_WORKFLOW_FAILED", message="Network timeout")],
-        )
+        adapter_error = AdCPAdapterError()
 
         with (
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
@@ -2971,7 +2868,7 @@ class TestUpdateMediaBuyAdapterFailure:
             adapter = MagicMock()
             adapter.manual_approval_required = False
             adapter.manual_approval_operations = []
-            adapter.update_media_buy.return_value = adapter_error
+            adapter.update_media_buy.side_effect = adapter_error
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
@@ -2988,10 +2885,14 @@ class TestUpdateMediaBuyAdapterFailure:
             mock_uow.__exit__ = MagicMock(return_value=False)
             mock_uow_cls.return_value = mock_uow
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
-        assert len(result.errors) >= 1
+        # The failure travels as the typed error, so the boundary mints SERVICE_UNAVAILABLE
+        # (transient) for the buyer instead of a success carrying the buy's id.
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        # And the pause the adapter refused was not written to our row either.
+        mock_uow.media_buys.update_fields.assert_not_called()
 
     def test_no_db_changes_on_adapter_failure(self):
         """UC-003-AF02: adapter failure means no DB records updated.
@@ -3003,7 +2904,8 @@ class TestUpdateMediaBuyAdapterFailure:
         Source: UC-003 ext-o, BR-RULE-020
         Covers: UC-003-EXT-O-04
         """
-        from src.core.schemas import AdCPPackageUpdate, Error
+        from src.core.exceptions import AdCPAdapterError
+        from src.core.schemas import AdCPPackageUpdate
         from src.core.tools.media_buy_update import _update_media_buy_impl
 
         req = UpdateMediaBuyRequest(
@@ -3024,16 +2926,15 @@ class TestUpdateMediaBuyAdapterFailure:
         cl.max_daily_package_spend = Decimal("5000")
         cl.min_package_budget = None
 
-        # The advisory carries the CODE; the sentence is derived from CODE_TABLE
-        # (ADR-010), so authoring message="GAM API timeout" here would be silently
-        # discarded. That is test-only fiction anyway: no adapter in src/adapters/
-        # constructs UpdateMediaBuyError or Error(code=...) at all -- they RAISE,
-        # and the adapter's own diagnostic reaches the operator through the
-        # exception and the logs, not through a hand-built buyer-facing advisory.
-        adapter_error = UpdateMediaBuyError(
-            status="failed",
-            errors=[Error(code="SERVICE_UNAVAILABLE", details={"adapter": "gam"})],
-        )
+        # No adapter in src/adapters/ constructs UpdateMediaBuyError or Error(code=...) at
+        # all -- they RAISE, and since ecfdd7771 the return type says so: an adapter hands
+        # back AdapterUpdateResult, which has no errors[]. This case used to stage the
+        # returned-error-model shape and then assert the tool reported a failure; with the
+        # tool reading a result off that object it reported a SUCCESS instead. The faithful
+        # stimulus is the exception a transient adapter fault raises (SERVICE_UNAVAILABLE),
+        # and the diagnostic reaches the operator through the exception and the logs, never
+        # through a hand-built buyer-facing advisory.
+        adapter_error = AdCPAdapterError()
 
         with (
             patch("src.core.tools.media_buy_update.get_context_manager") as mock_ctx_mgr,
@@ -3052,7 +2953,7 @@ class TestUpdateMediaBuyAdapterFailure:
             adapter = MagicMock()
             adapter.manual_approval_required = False
             adapter.manual_approval_operations = []
-            adapter.update_media_buy.return_value = adapter_error
+            adapter.update_media_buy.side_effect = adapter_error
             mock_adapter.return_value = adapter
 
             mock_uow = MagicMock()
@@ -3071,12 +2972,29 @@ class TestUpdateMediaBuyAdapterFailure:
 
             _stub_media_buy_reads(mock_uow.media_buys, mock_buy)
 
-            result = _update_media_buy_impl(req=req, identity=identity)
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
 
-        assert isinstance(result, UpdateMediaBuyError)
-        ctx_mgr.audit_workflow_step_result.assert_called_once_with(
-            "step_1", ANY, status="failed", error_message=CODE_TABLE["SERVICE_UNAVAILABLE"].message
+        # Non-vacuity: the budget change really did reach the adapter, so what follows is
+        # about a failure AFTER the request was accepted, not an early rejection.
+        adapter.update_media_buy.assert_called_once_with(
+            media_buy_id="mb_1",
+            action="update_package_budget",
+            package_id="pkg_1",
+            budget=3000,
+            today=ANY,
         )
+        assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+        # Nothing was applied: the branch hands the change to the adapter before it writes
+        # anything, and the raise skips every write after it — including the success
+        # response's own row read. The tool never commits (the UoW owns the session and
+        # rolls back when the block raises), so the buy keeps its previous budget.
+        uow_session.commit.assert_not_called()
+        mock_uow.media_buys.update_fields.assert_not_called()
+        # And the in-flight workflow step is closed as failed rather than left open: the
+        # tool runs its whole body inside audit_workflow_step_failure_ctx, which records
+        # status="failed" with the same error the buyer receives and then re-raises.
+        ctx_mgr.audit_workflow_step_failure_ctx.assert_called_once_with(ANY)
 
 
 # ===========================================================================
@@ -3503,21 +3421,15 @@ class TestDeliveryImplDateRange:
 
 
 class TestDeliveryImplErrors:
-    """UC-004 extensions: auth, principal, adapter errors."""
+    """UC-004 extensions: adapter errors.
 
-    def test_principal_not_found_returns_error_response(self):
-        """UC-004-E02: principal not in DB raises AdCPAuthenticationError.
-
-        Spec: UNSPECIFIED (implementation-defined principal resolution)
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-
-        identity = _make_identity()
-
-        with patch("src.core.auth.get_principal_object", return_value=None):
-            req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_1"])
-            with pytest.raises(AdCPAuthenticationError):
-                _get_media_buy_delivery_impl(req, identity)
+    test_principal_not_found_returns_error_response (UC-004-E02) is REMOVED for the same
+    reason as TestCreateMediaBuyImplAuth's case above: it patched the deleted
+    ``src.core.auth.get_principal_object`` to make a second principal lookup fail inside
+    the tool. The identity carries the principal the resolver loaded (47d57e5d6), and a
+    protected tool may not raise the auth refusal at all (ruff-boundary.toml). The same
+    case in tests/unit/test_delivery.py went with it.
+    """
 
     def test_adapter_error_returns_error_code(self):
         """UC-004-E03: adapter failure RETURNS an advisory error (UC-004-EXT-F degrade).
@@ -3954,48 +3866,24 @@ class TestGetMediaBuysResponseShape:
         assert pkgs[1]["package_id"] == "pkg_2"
 
 
-class TestGetMediaBuysImplAuth:
-    """get_media_buys: authentication and principal checks."""
-
-    def test_missing_principal_raises_auth_missing(self):
-        """GMB-A02: no principal_id is a FATAL auth failure, so it raises.
-
-        Spec: CONFIRMED -- this was recorded as "UNSPECIFIED (implementation-defined
-        principal resolution)", and that assumption is what let the gap persist. It
-        IS specified: dist/docs/3.1.1/building/operating/transport-errors.mdx gives
-        the two layers different meanings (:206-207 -- envelope "the task failed",
-        payload errors[] "the task ran ... issues"), says a fatal failure SHOULD
-        populate both (:209), and names this exact shape in the client detection
-        order (:220): "a fatal task that surfaces errors only via the payload is a
-        conformance gap on the agent side".
-
-        The previous assertion (empty media_buys + payload errors[], HTTP 200,
-        isError false) pinned that gap. Nothing could be authorized, so the empty
-        list was never a result.
-
-        Priority: P0
-        Type: unit
-        Source: get_media_buys
-        Covers: #1651
-        """
-        from src.core.exceptions import AdCPAuthRequiredError
-        from src.core.tools.media_buy_list import _get_media_buys_impl
-
-        req = GetMediaBuysRequest()
-        identity = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id="tenant_1",
-            tenant={"tenant_id": "tenant_1", "adapter_type": "mock"},
-            protocol="mcp",
-            testing_context=None,
-        )
-
-        with pytest.raises(AdCPAuthRequiredError) as exc_info:
-            _get_media_buys_impl(req, identity=identity)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
-
-        # The identifier is STRUCTURED now: details/field, not prose.
+# TestGetMediaBuysImplAuth::test_missing_principal_raises_auth_missing (GMB-A02,
+# Covers: #1651) is REMOVED. It built an identity with principal_id=None and asserted
+# _get_media_buys_impl raised AdCPAuthRequiredError / AUTH_MISSING itself.
+#
+# Neither half of that is constructible now. A ResolvedIdentity ALWAYS carries a principal
+# (make_identity takes no None, and the resolver builds the type the tool's annotation
+# names), the in-tool guards that raised were removed with the rest of the re-checks when
+# the resolver became the one place a credential is judged (47d57e5d6), and
+# ruff-boundary.toml's TID251 ban forbids raising AdCPAuthRequiredError anywhere but the
+# resolver -- so media_buy_list cannot raise it even if a guard were written back in.
+#
+# The conformance obligation the case was written for (#1651: a fatal auth failure must
+# populate the ENVELOPE, not answer HTTP 200 with a payload-only errors[], per
+# transport-errors.mdx :206-220) is unchanged and is now graded where it is decided: the
+# resolver mints the refusal for every tool and every transport at once, and the wire
+# shape is asserted by the transport-blind auth scenarios rather than once per tool. What
+# made get_media_buys special was precisely that it open-coded the check and degraded
+# instead of raising; with the check gone it cannot diverge from its fifteen siblings.
 
 
 # ===========================================================================
@@ -4038,7 +3926,9 @@ class TestBRRule018AtomicResponse:
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/update-media-buy-response.json
         Covers: UC-003-EXT-O-05
         """
-        resp = UpdateMediaBuySuccess.carrier(media_buy_id="mb_1")
+        # sync_success, not the deleted carrier(): this is the buyer's envelope, and
+        # ``revision`` is the row's value rather than a placeholder a response may invent.
+        resp = UpdateMediaBuySuccess.sync_success(media_buy_id="mb_1", revision=1)
         dumped = resp.model_dump()
         assert dumped.get("errors") is None
 
@@ -4057,108 +3947,52 @@ class TestBRRule018AtomicResponse:
 
 
 class TestBRRule043ContextEcho:
-    """BR-RULE-043: context object echoed back in responses."""
+    """BR-RULE-043: the three media-buy requests accept a buyer's context object.
 
-    def test_create_echoes_context(self):
-        """BR-043-01: context from request appears in response.
+    This class held three cases (create / delivery / get_media_buys) and each graded the
+    ECHO half of BR-RULE-043 by building the response with ``context=`` itself, or by
+    expecting an ``_impl`` to copy the request's context onto what it returned.
 
-        Spec: CONFIRMED -- context.json: "echoed unchanged in responses"; present in request and response schemas
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/context.json
-        Priority: P1
-        Type: unit
-        Source: BR-RULE-043
-        Covers: BR-RULE-043-01
-        """
-        context_obj = {"conversation_id": "conv_123", "agent_id": "buyer_agent"}
+    Neither is possible now, by design. ``context`` is written by the boundary ALONE
+    (``src/core/tools/_boundary._served``, through ``object.__setattr__``): ``AdcpResponse``
+    refuses the field on construction AND on assignment, ``ruff-boundary.toml`` bans the
+    ``context=`` keyword outside the boundary and the schemas, and a tool therefore has no
+    echo to perform -- the boundary stamps the buyer's context onto every response, once,
+    for every transport. So a response-side echo test at this level cannot construct its
+    subject, and if it could it would be grading a copy of the boundary rather than the
+    boundary. That half is graded where the writer is:
+    tests/unit/test_response_context_is_boundary_owned.py pins both refusals and that the
+    boundary's own write still lands and serializes.
 
-        # Request accepts context
-        req = _make_request(context=context_obj)
-        assert req.context is not None
+    What remains here is the half that IS a property of these models: the pinned request
+    schemas declare ``context``, so the DTOs accept one. The strip in
+    ``_accepted_shape.deep_strip_to_schema`` keeps only declared fields, which makes this
+    a real check -- a request DTO that dropped the declaration would silently discard the
+    buyer's context before the boundary ever saw it, and the echo would go out empty.
+    """
 
-        # Success response echoes context
-        resp = _make_success(
-            media_buy_id="mb_1",
-            context=context_obj,
-        )
-        dumped = resp.model_dump()
-        assert dumped.get("context") is not None
-        assert dumped["context"]["conversation_id"] == "conv_123"
-
-        # Error response also echoes context
-        from src.core.schemas import Error
-
-        err_resp = CreateMediaBuyError(
-            status="failed",
-            errors=[Error(code="VALIDATION_ERROR", message="fail")],
-            context=context_obj,
-        )
-        err_dumped = err_resp.model_dump()
-        assert err_dumped.get("context") is not None
-        assert err_dumped["context"]["conversation_id"] == "conv_123"
-
-    def test_delivery_echoes_context(self):
-        """BR-043-02: context from request appears in delivery response.
-
-        Spec: CONFIRMED -- context.json: "echoed unchanged in responses"; present in delivery response
-        https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/context.json
-        Priority: P1
-        Type: unit
-        Source: BR-RULE-043
-        Covers: BR-RULE-043-01
-        """
-        context_obj = {"conversation_id": "conv_456", "request_id": "req_789"}
-
-        identity = _make_identity()
-        adapter_mock = MagicMock()
-
-        _PATCH = "src.core.tools.media_buy_delivery"
-        with (
-            patch(f"{_PATCH}.get_adapter", return_value=adapter_mock),
-            patch(f"{_PATCH}._get_target_media_buys", return_value=[]),
-            patch(
-                f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
+    @pytest.mark.parametrize(
+        ("label", "build"),
+        [
+            ("create_media_buy", lambda ctx: _make_request(context=ctx)),
+            (
+                "get_media_buy_delivery",
+                lambda ctx: GetMediaBuyDeliveryRequest(start_date="2025-01-01", end_date="2025-06-30", context=ctx),
             ),
-            patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
-        ):
-            mock_uow_inst = MagicMock()
-            mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
-            mock_uow_inst.__exit__ = MagicMock(return_value=False)
-            mock_uow_inst.media_buys = MagicMock()
-            mock_uow_cls.return_value = mock_uow_inst
+            ("get_media_buys", lambda ctx: GetMediaBuysRequest(context=ctx)),
+        ],
+    )
+    def test_request_carries_the_buyers_context(self, label, build):
+        """BR-043-01/02/03: each request declares ``context`` and keeps the value sent.
 
-            req = GetMediaBuyDeliveryRequest(
-                start_date="2025-01-01",
-                end_date="2025-06-30",
-                context=context_obj,
-            )
-            resp = _get_media_buy_delivery_impl(req, identity)
-
-        assert isinstance(resp, GetMediaBuyDeliveryResponse)
-        dumped = resp.model_dump()
-        assert dumped.get("context") is not None
-        assert dumped["context"]["conversation_id"] == "conv_456"
-
-    def test_get_media_buys_echoes_context(self):
-        """BR-043-03: context from request appears in get_media_buys response.
-
-        Spec: CONFIRMED -- context.json: "echoed unchanged in responses"
+        Spec: CONFIRMED -- context.json: "echoed unchanged in responses"; the field is
+        declared on every request and response schema.
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/core/context.json
-        Priority: P1
-        Type: unit
-        Source: BR-RULE-043
         Covers: BR-RULE-043-01
         """
-        context_obj = {"conversation_id": "conv_789", "agent_id": "test_agent"}
+        req = build({"conversation_id": f"conv_{label}", "agent_id": "buyer_agent"})
 
-        # GetMediaBuysRequest accepts context; response should echo it
-        req = GetMediaBuysRequest(context=context_obj)
         assert req.context is not None
-
-        # Build response with context
-        resp = GetMediaBuysResponse(
-            media_buys=[],
-            context=context_obj,
-        )
-        dumped = resp.model_dump()
-        assert dumped.get("context") is not None
-        assert dumped["context"]["conversation_id"] == "conv_789"
+        # The VALUE survives, not merely the key: a declaration that parsed to an empty
+        # object would leave the boundary nothing to echo.
+        assert req.context.conversation_id == f"conv_{label}"
