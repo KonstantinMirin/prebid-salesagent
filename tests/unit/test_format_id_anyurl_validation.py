@@ -11,7 +11,7 @@ place that turns a reference of any shape into a comparison key.
 from pydantic import AnyUrl
 
 from src.core.format_resolver import format_display, format_identity_or_none
-from src.core.schemas import FormatId
+from src.core.schemas import FormatId, FormatIdentity
 
 # The CANONICAL form: an empty path renders as "/" (algorithm step 5).
 AGENT_INPUT = "https://creative.adcontextprotocol.org"
@@ -19,13 +19,19 @@ AGENT = "https://creative.adcontextprotocol.org/"
 
 
 def test_anyurl_agent_url_does_not_raise_and_ignores_a_trailing_slash():
-    """A trailing slash is not part of the identity, and AnyUrl is not string-mangled."""
+    """A trailing slash is not part of the identity, and AnyUrl is not string-mangled.
+
+    The expectation is a ``FormatIdentity``, never a ``tuple[str, str]``. The comparison
+    key is a distinct type precisely so a hand-built tuple cannot stand in for it
+    (``src/core/schemas/_base.py``: a raw tuple has the identical static type and differs
+    only in value, so nothing could say the key skipped the spec's canonicalization).
+    """
     with_slash = FormatId(agent_url=AGENT, id="display_300x250")
     without_slash = FormatId(agent_url=AGENT_INPUT, id="display_300x250")
 
     assert isinstance(with_slash.agent_url, AnyUrl), "FormatId must keep agent_url typed"
 
-    assert format_identity_or_none(with_slash) == (AGENT, "display_300x250")
+    assert format_identity_or_none(with_slash) == FormatIdentity(agent_url=AGENT, id="display_300x250")
     assert format_identity_or_none(with_slash) == format_identity_or_none(without_slash)
 
 
@@ -61,4 +67,4 @@ def test_case_port_and_fragment_are_canonicalized_away():
     """What a trim could never do, and what the pin's canonical form requires."""
     noisy = {"agent_url": "https://Creative.AdContextProtocol.org:443/#section", "id": "d"}
 
-    assert format_identity_or_none(noisy) == (AGENT, "d")
+    assert format_identity_or_none(noisy) == FormatIdentity(agent_url=AGENT, id="d")

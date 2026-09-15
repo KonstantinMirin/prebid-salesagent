@@ -47,9 +47,20 @@ class TestA2AWrapperPncJsonSerialization:
 
     @pytest.mark.asyncio
     async def test_a2a_wrapper_url_is_plain_str_not_anyurl(self):
-        """Covers: UC-002-TRANSPORT-PNC-SERIALIZATION-02"""
-        from adcp import PushNotificationConfig
+        """Covers: UC-002-TRANSPORT-PNC-SERIALIZATION-02
 
+        The typed model is the DTO's OWN slot type, ``src.core.schemas.notification``'s
+        narrowing of ``core/push-notification-config.json``, not the bare generated class.
+        Pydantic validates a model-typed slot by INSTANCE, so a generated-parent instance
+        is refused where the subtype is declared — the same identity rule that made
+        ``sync_accounts`` refuse every authenticated registration (notification.py module
+        docstring). Nothing in ``src/`` hands the parent class in: a buyer sends JSON, which
+        arrives as a dict (graded by the sibling case below), and every in-process caller
+        types the local model (``src/core/schema_helpers.py:66``). It still holds ``url`` as
+        an ``AnyUrl`` and ``schemes`` as enum members, which is the gh-#1377 risk these
+        cases exist for.
+        """
+        from src.core.schemas import PushNotificationConfig
         from src.core.webhooks.registration import accept_push_notification_config
 
         pnc = PushNotificationConfig(
@@ -96,9 +107,12 @@ class TestA2AWrapperPncJsonSerialization:
 
     @pytest.mark.asyncio
     async def test_a2a_wrapper_enum_schemes_are_plain_strings(self):
-        """Covers: UC-002-TRANSPORT-PNC-SERIALIZATION-02"""
-        from adcp import PushNotificationConfig
+        """Covers: UC-002-TRANSPORT-PNC-SERIALIZATION-02
 
+        Same slot type as the url case above: the DTO declares the local narrowing, and
+        ``schemes`` on it is a list of ``AuthenticationScheme`` members.
+        """
+        from src.core.schemas import PushNotificationConfig
         from src.core.webhooks.registration import accept_push_notification_config
 
         pnc = PushNotificationConfig(
@@ -107,6 +121,9 @@ class TestA2AWrapperPncJsonSerialization:
         )
         forwarded = await capture_a2a_forwarded_pnc(pnc)
         assert forwarded is not None
+        assert type(forwarded.authentication.schemes[0]) is not str, (
+            "the model must still hold an enum member — otherwise this case grades nothing"
+        )
 
         scheme = accept_push_notification_config(forwarded).to_columns()["authentication_type"]
         assert type(scheme) is str, f"authentication_type must be a PLAIN str, got {type(scheme).__name__!r}"

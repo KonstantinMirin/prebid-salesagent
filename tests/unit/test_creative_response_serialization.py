@@ -145,16 +145,26 @@ def test_sync_creative_result_excludes_internal_fields():
     assert result.review_feedback == "Looks good"
 
 
-def test_sync_creative_result_excludes_empty_lists():
-    """model_dump() omits changes, errors, warnings when empty."""
-    result = SyncCreativeResult(
-        creative_id="c_2",
-        action=CreativeAction.updated,
-        changes=[],
-        errors=[],
-        warnings=[],
-    )
+def test_sync_creative_result_omits_unset_optional_arrays():
+    """model_dump() omits changes, errors and warnings when the tool populated none of them.
+
+    Pinned ``creative/sync-creatives-response.json``, the per-creative item: ``required``
+    is ``["creative_id", "action"]``, so all three arrays are OPTIONAL and their absence is
+    spec-valid. The item's one conditional obligation is on a different field — ``status``
+    "MUST be omitted when action is failed or deleted" — and the schema carries that as an
+    ``if/then``; ``changes``/``errors``/``warnings`` carry no such clause. This seller
+    spells the absence as ``None`` (the parent's default, see ``SyncCreativeResult``), and
+    ``exclude_none`` omits it on model_dump, model_dump_json and structured_content alike.
+
+    This case used to pass ``changes=[]``/``errors=[]``/``warnings=[]`` and demand the
+    empty lists be stripped. Nothing in the pin asks for that, and stripping a field by its
+    VALUE would need the per-class "last word" wire hook CLAUDE.md pattern #4 deleted — a
+    field that must not reach the wire is ``Field(exclude=True)`` at its declaration, which
+    is unconditional.
+    """
+    result = SyncCreativeResult(creative_id="c_2", action=CreativeAction.updated)
     dumped = result.model_dump()
+    assert dumped["creative_id"] == "c_2"
     assert "changes" not in dumped
     assert "errors" not in dumped
     assert "warnings" not in dumped
@@ -171,7 +181,7 @@ def test_sync_creative_result_keeps_populated_lists():
     dumped = result.model_dump()
     assert dumped["changes"] == ["name"]
     assert dumped["warnings"] == ["provenance missing"]
-    assert "errors" not in dumped  # still empty → omitted
+    assert "errors" not in dumped  # unset → None → omitted by exclude_none
 
 
 # REMOVED: test_sync_creative_result_model_dump_internal. Its whole subject was the
@@ -179,7 +189,7 @@ def test_sync_creative_result_keeps_populated_lists():
 # path is a shape that exists on one path and not the others). Everything it asserted is
 # graded above: creative_id and changes on the wire by
 # test_sync_creative_result_excludes_internal_fields and
-# test_sync_creative_result_excludes_empty_lists, and the internal half of the split by the
+# test_sync_creative_result_keeps_populated_lists, and the internal half of the split by the
 # two attribute assertions added to the former.
 
 
