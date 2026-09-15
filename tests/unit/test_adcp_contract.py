@@ -565,7 +565,17 @@ class TestAdCPContract:
             estimated_exposures=50000,
             publisher_properties=[
                 create_test_publisher_properties_by_tag(publisher_domain="test.com")
-            ],  # Required per AdCP spec
+            ],  # Required per AdCP spec,
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities={
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
         )
 
         # Verify AdCP-compliant response includes PR #79 fields
@@ -593,7 +603,17 @@ class TestAdCPContract:
             ],
             publisher_properties=[
                 create_test_publisher_properties_by_tag(publisher_domain="test.com")
-            ],  # Required per AdCP spec
+            ],  # Required per AdCP spec,
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities={
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
         )
 
         adcp_response = non_guaranteed_product.model_dump()
@@ -657,6 +677,16 @@ class TestAdCPContract:
                     "price_guidance": {"p50": 5.0},
                 }
             ],
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities={
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
         )
 
         adcp_response = product_with_properties.model_dump()
@@ -686,6 +716,16 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities={
+                    "available_reporting_frequencies": ["daily"],
+                    "expected_delay_minutes": 60,
+                    "timezone": "UTC",
+                    "supports_webhooks": True,
+                    "available_metrics": ["impressions", "clicks"],
+                    "date_range_support": "date_range",
+                },
                 # Missing publisher_properties
             )
 
@@ -839,6 +879,16 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities={
+                    "available_reporting_frequencies": ["daily"],
+                    "expected_delay_minutes": 60,
+                    "timezone": "UTC",
+                    "supports_webhooks": True,
+                    "available_metrics": ["impressions", "clicks"],
+                    "date_range_support": "date_range",
+                },
             )
             # delivery_type is an enum, check its value
             assert product.delivery_type.value in valid_delivery_types
@@ -863,6 +913,16 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities={
+                    "available_reporting_frequencies": ["daily"],
+                    "expected_delay_minutes": 60,
+                    "timezone": "UTC",
+                    "supports_webhooks": True,
+                    "available_metrics": ["impressions", "clicks"],
+                    "date_range_support": "date_range",
+                },
             )
 
     def test_adcp_response_excludes_internal_fields(self):
@@ -892,6 +952,16 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities={
+                    "available_reporting_frequencies": ["daily"],
+                    "expected_delay_minutes": 60,
+                    "timezone": "UTC",
+                    "supports_webhooks": True,
+                    "available_metrics": ["impressions", "clicks"],
+                    "date_range_support": "date_range",
+                },
             )
         ]
 
@@ -2399,6 +2469,16 @@ class TestAdCPContract:
                     rate=10.0,
                 )
             ],
+            # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+            # carries no default, so a construction that omits it cannot validate.
+            reporting_capabilities={
+                "available_reporting_frequencies": ["daily"],
+                "expected_delay_minutes": 60,
+                "timezone": "UTC",
+                "supports_webhooks": True,
+                "available_metrics": ["impressions", "clicks"],
+                "date_range_support": "date_range",
+            },
         )
         assert len(product_with_properties.publisher_properties) == 1
         # publisher_properties is a discriminated union with RootModel wrapper (adcp 2.14.0+)
@@ -2426,6 +2506,16 @@ class TestAdCPContract:
                         rate=10.0,
                     )
                 ],
+                # reporting_capabilities is required on the pinned Product (AdCP 3.1.1) and
+                # carries no default, so a construction that omits it cannot validate.
+                reporting_capabilities={
+                    "available_reporting_frequencies": ["daily"],
+                    "expected_delay_minutes": 60,
+                    "timezone": "UTC",
+                    "supports_webhooks": True,
+                    "available_metrics": ["impressions", "clicks"],
+                    "date_range_support": "date_range",
+                },
                 # Missing publisher_properties - should fail
             )
 

@@ -58,6 +58,7 @@ from src.core.schemas import GetProductsRequest
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import IntegrationEnv
+from tests.helpers.credentials import credential_headers
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -107,12 +108,14 @@ async def _call_get_products(
     from src.core.resolved_identity import TransportProtocol
     from src.core.tools._boundary import invoke_tool
 
-    # x-adcp-tenant carries the tenant the credential addresses, because the principal
-    # lookup is tenant-scoped; Authorization carries the credential the factory principal
-    # answers to. An anonymous case presents the tenant and no credential.
-    headers = {"x-adcp-tenant": tenant_id}
-    if principal_id is not None:
-        headers["Authorization"] = f"Bearer {plaintext_token_for(principal_id)}"
+    # Through credential_headers, the one producer of a test's credential headers: a change
+    # in what production reads off the wire stays one edit. It carries x-adcp-tenant because
+    # the principal lookup is tenant-scoped, and omits Authorization when there is no
+    # principal, so an anonymous case presents the tenant and no credential.
+    headers = credential_headers(
+        token=plaintext_token_for(principal_id) if principal_id is not None else None,
+        tenant=tenant_id,
+    )
     if brand is _BRAND_DEFAULT:
         brand = {"domain": "testbrand.com"}
 
