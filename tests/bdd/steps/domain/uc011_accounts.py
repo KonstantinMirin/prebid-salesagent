@@ -270,18 +270,32 @@ def _make_governance_agent(url: str = "https://compliance.example.com/check") ->
     return GovernanceAgent(url=url).model_dump(mode="json")
 
 
-def _sync_pre_create(ctx: dict, brand_domain: str, operator: str, billing: str, **extra: Any) -> None:
+def _sync_pre_create(
+    ctx: dict,
+    brand_domain: str,
+    operator: str,
+    billing: str,
+    *,
+    idempotency_key: str | None = None,
+    **extra: Any,
+) -> None:
     """Pre-create an account via sync so it exists for update/unchanged tests.
 
     Extra kwargs (e.g., payment_terms, governance_agents) are merged into the account entry.
     Captures original field values in ctx["original_field_values"] for later
     "unchanged from the original" assertions.
+
+    ``idempotency_key`` names the key this first request SPENDS, for the one Given whose
+    subject is the key rather than the account: a fresh key per call is what every other
+    caller wants, but the conflict scenario needs the second request to arrive on a key the
+    replay cache already holds a payload hash for. Keyword-only so it cannot be mistaken for
+    an entry field by ``**extra``.
     """
     from src.core.schemas.account import SyncAccountsRequest
 
     entry: dict[str, Any] = {"brand": {"domain": brand_domain}, "operator": operator, "billing": billing}
     entry.update(extra)
-    req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
+    req = SyncAccountsRequest(idempotency_key=idempotency_key or fresh_idempotency_key(), accounts=[entry])
     dispatch_request(ctx, req=req)
     error = ctx.get("error")
     assert error is None, f"Given: pre-create sync for {brand_domain!r} failed: {error!r}"
@@ -1325,6 +1339,64 @@ def when_sync_accounts_carrying_key_and_table(ctx: dict, key: str, datatable: An
     /properties/idempotency_key).
     """
     _dispatch_sync_table(ctx, datatable, idempotency_key=key)
+
+
+@given(parsers.parse('idempotency_key "{key}" was already spent syncing brand domain "{domain}"'))
+def given_key_already_spent(ctx: dict, key: str, domain: str) -> None:
+    """SPEND *key* on a real, successful sync of *domain*, so the replay cache holds its hash.
+
+    Not a seeded row: the first request goes through the same transport and the same boundary
+    as the second, so the payload hash the conflict is detected against is the one production
+    computed (``_boundary._invoke`` -> ``canonical_request_hash`` -> ``cache_success``). A
+    hand-written cache row would be this test asserting its own idea of the canonical form.
+
+    The account this creates is also the FIXTURE the final Then reads: the conflict must leave
+    it standing and must not add the second payload's account
+    (security.mdx#idempotency rule 5, "Sellers MUST NOT silently apply the second request").
+
+    Nothing is stashed on ``ctx``: the key and the domain are both named again by the When and
+    the Then, so a ctx slot here would be a claim no one reads.
+    """
+    _sync_pre_create(ctx, domain, domain, "operator", idempotency_key=key)
+
+
+@when(parsers.parse('the Buyer Agent re-sends sync_accounts with idempotency_key "{key}" and brand domain "{domain}"'))
+def when_resend_sync_with_spent_key(ctx: dict, key: str, domain: str) -> None:
+    """Re-send sync_accounts on *key* with a DIFFERENT accounts array.
+
+    The only thing that differs from the Given's request is the brand domain, which is inside
+    the canonical payload -- so the two requests hash differently under one key, which is the
+    precondition security.mdx#idempotency rule 5 attaches IDEMPOTENCY_CONFLICT to.
+
+    Goes through ``_sync_raw`` because the seller is expected to REFUSE: building a
+    ``SyncAccountsRequest`` first would be fine here (the payload is conformant), but the
+    negative-path dispatch is the one that reports an unexpected acceptance as a plain
+    success rather than an unparseable response.
+    """
+    _sync_raw(
+        ctx,
+        idempotency_key=key,
+        accounts=[{"brand": {"domain": domain}, "operator": domain, "billing": "operator"}],
+    )
+
+
+@then(parsers.parse('the seller holds an account for brand domain "{kept}" and none for "{refused}"'))
+def then_seller_holds_only_kept_domain(ctx: dict, kept: str, refused: str) -> None:
+    """Assert the refused payload was not applied, and that the accepted one still is.
+
+    BOTH halves are asserted, because an absence alone is not falsifiable here: a scenario
+    whose Given never ran would satisfy "no account for *refused*" against an empty database.
+    Naming *kept* too means the step can only pass on the state the spec requires -- the first
+    request's account present, the second's never created.
+    """
+    domains = [a["domain"] for a in _persisted_accounts(ctx)]
+    assert kept in domains, (
+        f"expected the already-synced account for {kept!r} to still be on the seller; found {domains}"
+    )
+    assert refused not in domains, (
+        f"{refused!r} was persisted, so the seller APPLIED the conflicting payload instead of "
+        f"refusing it (security.mdx#idempotency rule 5). Accounts held: {domains}"
+    )
 
 
 @when(parsers.parse('the Buyer Agent sends a sync_accounts request with governance_agents for brand "{domain}"'))
