@@ -92,8 +92,12 @@ class TestCreativeListingBoundary:
         response = c.model_dump()
         assert "principal_id" not in response, "principal_id must not leak into AdCP response"
 
-    def test_creative_principal_id_present_in_internal_dump(self):
-        """principal_id must be present in model_dump_internal() for DB storage."""
+    def test_creative_principal_id_present_on_the_model(self):
+        """principal_id is carried on the model even though it never reaches the wire.
+
+        The attribute IS what existing means for a ``Field(exclude=True)`` field; there is
+        no second dump shape to read it out of (CLAUDE.md pattern 4 — one serializer seat).
+        """
         from src.core.schemas import Creative, FormatId
 
         c = Creative(
@@ -102,8 +106,7 @@ class TestCreativeListingBoundary:
             format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
             principal_id="p1",
         )
-        internal = c.model_dump_internal()
-        assert internal.get("principal_id") == "p1"
+        assert c.principal_id == "p1"
 
 
 class TestPaginationCursorBased:

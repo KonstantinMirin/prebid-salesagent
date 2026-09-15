@@ -87,32 +87,20 @@ class AdCPSchemaContractValidator:
                 f"Internal field '{field}' should not appear in {schema_class.__name__} AdCP output"
             )
 
-        # Step 5: Test internal output (if available)
-        if hasattr(model_instance, "model_dump_internal"):
-            internal_output = model_instance.model_dump_internal()
+        # Step 5: Every field handed in is CARRIED on the model, internal ones included.
+        # The attribute is what existing means for a Field(exclude=True) field; there is no
+        # second, internal dump to read it out of (CLAUDE.md pattern 4 — one serializer
+        # seat). This used to branch on hasattr(model_instance, "model_dump_internal").
+        declared = set(type(model_instance).model_fields)
+        for field in test_data:
+            # Declared first: reading the attribute of a deprecated alias would warn.
+            assert field in declared or hasattr(model_instance, field), (
+                f"Field '{field}' was handed to {schema_class.__name__} but is not carried on the model"
+            )
 
-            # Internal output should include all fields except those with exclude=True
-            # (like implementation_config which is truly internal-only)
-            for field in test_data.keys():
-                # Skip fields that are excluded from serialization
-                if field in internal_only_fields:
-                    # Check if field actually appears in internal output
-                    # Some internal fields are excluded (exclude=True), some are just not in AdCP spec
-                    if field in internal_output:
-                        # Field is internal but included in internal serialization
-                        pass
-                    else:
-                        # Field has exclude=True and won't appear in any serialization
-                        continue
-                assert field in internal_output, (
-                    f"Field '{field}' missing from internal output of {schema_class.__name__}"
-                )
-
-        # Step 6: Test roundtrip conversion safety
-        if hasattr(model_instance, "model_dump_internal"):
-            internal_dict = model_instance.model_dump_internal()
-        else:
-            internal_dict = model_instance.model_dump()
+        # Step 6: Test roundtrip conversion safety. One dump shape, so the document that
+        # reconstructs is the one that goes on the wire.
+        wire_dict = model_instance.model_dump()
 
         # Filter out computed properties and extra fields before reconstruction
         # Get valid field names from schema
@@ -122,7 +110,7 @@ class AdCPSchemaContractValidator:
         # each nested object too. This is complex, so we'll use mode='python' which is more lenient.
         try:
             # Try strict reconstruction first
-            reconstructed_model = schema_class(**internal_dict)
+            reconstructed_model = schema_class(**wire_dict)
         except Exception:
             # If that fails, skip the roundtrip test for this schema
             # (happens with complex nested objects with computed properties)

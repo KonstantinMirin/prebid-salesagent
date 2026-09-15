@@ -62,7 +62,7 @@ def test_get_creatives_response_excludes_internal_fields():
 
 
 def test_creative_optional_fields_still_included():
-    """Test model_dump_internal() returns internal fields when present."""
+    """A public optional field is on the wire; an internal field is on the model only."""
     creative = make_test_creative(
         creative_id="test_with_optional",
         name="Test Creative",
@@ -80,10 +80,9 @@ def test_creative_optional_fields_still_included():
     # Internal fields still excluded
     assert "principal_id" not in creative_data, "Internal field principal_id should be excluded"
 
-    # Internal fields accessible via model_dump_internal()
-    internal_data = creative.model_dump_internal()
-    assert "principal_id" in internal_data
-    assert internal_data["principal_id"] == "principal_123"
+    # A Field(exclude=True) field EXISTS on the model — the attribute is what existing
+    # means, and there is no second dump shape to read it out of (CLAUDE.md pattern 4).
+    assert creative.principal_id == "principal_123"
 
 
 @pytest.mark.parametrize("null_field", ["alt_text", "provenance"])
@@ -140,6 +139,10 @@ def test_sync_creative_result_excludes_internal_fields():
     assert dumped["status"] == "pending_review"
     assert "internal_status" not in dumped
     assert "review_feedback" not in dumped
+    # The other half of the split: both fields EXIST on the model. The attribute is what
+    # existing means — there is no second dump shape (CLAUDE.md pattern 4).
+    assert result.internal_status == "pending_review"
+    assert result.review_feedback == "Looks good"
 
 
 def test_sync_creative_result_excludes_empty_lists():
@@ -171,24 +174,13 @@ def test_sync_creative_result_keeps_populated_lists():
     assert "errors" not in dumped  # still empty → omitted
 
 
-def test_sync_creative_result_model_dump_internal():
-    """model_dump_internal() drops user-passed exclude but Field(exclude=True) still applies.
-
-    The method ensures no additional user excludes are applied. Internal fields
-    with exclude=True on the Field are still excluded by Pydantic.
-    """
-    result = SyncCreativeResult(
-        creative_id="c_4",
-        action=CreativeAction.created,
-        changes=["name"],
-        internal_status="approved",
-        review_feedback="Auto-approved",
-    )
-    internal = result.model_dump_internal()
-    # model_dump_internal drops user exclude param, but Field(exclude=True) persists
-    assert internal["creative_id"] == "c_4"
-    # changes/errors/warnings are NOT excluded by Field definition, so they appear
-    assert internal["changes"] == ["name"]
+# REMOVED: test_sync_creative_result_model_dump_internal. Its whole subject was the
+# ``model_dump_internal`` seat, which is gone (CLAUDE.md pattern 4 — a per-class second dump
+# path is a shape that exists on one path and not the others). Everything it asserted is
+# graded above: creative_id and changes on the wire by
+# test_sync_creative_result_excludes_internal_fields and
+# test_sync_creative_result_excludes_empty_lists, and the internal half of the split by the
+# two attribute assertions added to the former.
 
 
 # ── SyncCreativesResponse __str__ ────────────────────────────────────────

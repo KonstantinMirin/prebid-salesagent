@@ -621,8 +621,6 @@ class TestListCreativesResponseShape:
 
         c = data["creatives"][0]
         assert_field_type(c, "creative_id", str)
-        # In adcp 3.6.0, name/status/created_date/updated_date are internal-only
-        # and excluded from model_dump (they appear in model_dump_internal)
         assert_field_type(c, "format_id", dict)
 
         assert c["creative_id"] == "creative_001"

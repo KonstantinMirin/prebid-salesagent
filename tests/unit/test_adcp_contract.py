@@ -935,7 +935,6 @@ class TestAdCPContract:
                 "auto_intenders_q1_2025",
                 "high_income_households",
             ],
-            key_value_pairs={"custom_audience_1": "abc123", "lookalike_model": "xyz789"},
         )
 
         # Verify signals are supported in Targeting schema
@@ -945,7 +944,9 @@ class TestAdCPContract:
             "auto_intenders_q1_2025",
             "high_income_households",
         ]
-        assert targeting.key_value_pairs is not None
+        # ``key_value_pairs`` was seeded and asserted here. Targeting no longer declares it
+        # (src/core/schemas/_base.py — the pin declares no managed-only field), and the
+        # subject of this test is signal support, which the assertion above grades.
 
     def test_creative_adcp_compliance(self):
         """Test that Creative model complies with AdCP listing Creative schema.
@@ -954,7 +955,7 @@ class TestAdCPContract:
         - Public model_dump() contains: creative_id, format_id, name, status,
           created_date, updated_date, assets, tags (listing schema fields)
         - Internal fields (principal_id) are excluded from model_dump()
-          but available via model_dump_internal()
+          but carried on the model as attributes
         """
 
         # Test creating a Creative with all fields (some public, some internal)
@@ -995,14 +996,12 @@ class TestAdCPContract:
         assert adcp_response["format_id"]["id"] == "display_300x250", "Format ID should be display_300x250"
         assert "agent_url" in adcp_response["format_id"], "format_id should have agent_url"
 
-        # Test internal model_dump includes all fields
-        internal_response = creative.model_dump_internal()
-        assert "principal_id" in internal_response, "principal_id missing from internal response"
-        assert "status" in internal_response, "status missing from internal response"
-
-        # Verify internal response has principal_id that external doesn't
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert "principal_id" in internal_only_fields, "principal_id should be internal-only"
+        # The internal half of the split: principal_id is CARRIED on the model, and the
+        # attribute is what existing means for a Field(exclude=True) field. There is no
+        # second dump shape to read it out of (CLAUDE.md pattern 4 — one serializer seat).
+        assert creative.principal_id == "test_principal", "principal_id must be carried on the model"
+        # status is on BOTH: a spec field, so the attribute and the wire agree.
+        assert creative.status == adcp_response["status"]
 
     def test_signal_adcp_compliance(self):
         """Test that Signal model complies with AdCP get-signals-response schema."""
@@ -1087,22 +1086,19 @@ class TestAdCPContract:
         assert signal.signal_agent_segment_id == "signal_auto_intenders_q1_2025", "Primary ID should work"
         assert signal.signal_type == "marketplace", "signal_type field should work"
 
-        # Test internal model_dump includes all fields
-        internal_response = signal.model_dump_internal()
+        # The internal half of the split: every Field(exclude=True) field is CARRIED on the
+        # model, and the attribute is what existing means. There is no second dump shape to
+        # read them out of (CLAUDE.md pattern 4 — one serializer seat).
         for field in internal_fields:
-            assert field in internal_response, f"Internal field '{field}' missing from internal response"
+            assert getattr(signal, field) is not None, f"Internal field '{field}' not carried on the model"
+        assert signal.deployments[0].scope == "account-specific", "deployment scope not carried on the model"
 
         # Verify field count expectations (flexible to allow AdCP spec evolution)
         assert len(adcp_response) >= 8, f"AdCP response should have at least 8 core fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
 
-        # Verify internal response has more fields than external (due to internal fields)
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 3, (
-            f"Expected at least 3 internal-only fields, got {len(internal_only_fields)}"
-        )
+        # Every internal name is off the wire while the attribute above holds it — the split
+        # itself, asserted with the two mechanisms that survive.
+        assert not set(internal_fields) & set(adcp_response), "an internal field reached the wire"
 
     def test_package_adcp_compliance(self):
         """Test that Package model complies with AdCP package schema."""
@@ -1234,11 +1230,6 @@ class TestAdCPContract:
             device_type_any_of=["desktop", "mobile", "tablet"],
             os_any_of=["windows", "macos", "ios", "android"],
             browser_any_of=["chrome", "firefox", "safari"],
-            key_value_pairs={"aee_segment": "high_value", "aee_score": "0.85"},  # Managed-only
-            tenant_id="test_tenant",  # Internal
-            created_at=datetime.now(),  # Internal
-            updated_at=datetime.now(),  # Internal
-            metadata={"campaign_type": "awareness"},  # Internal
         )
 
         # Verify isinstance — Targeting IS a TargetingOverlay
@@ -1263,16 +1254,13 @@ class TestAdCPContract:
             if getattr(targeting, field) is not None:
                 assert field in adcp_response, f"AdCP optional field '{field}' missing from response"
 
-        # Verify managed and internal fields are excluded from AdCP response
-        managed_internal_fields = [
-            "key_value_pairs",  # Managed-only field
-            "tenant_id",
-            "created_at",
-            "updated_at",
-            "metadata",  # Internal fields
-        ]
-        for field in managed_internal_fields:
-            assert field not in adcp_response, f"Managed/internal field '{field}' exposed in AdCP response"
+        # Targeting declares NO internal field, so it has no internal/wire split to grade.
+        # key_value_pairs, tenant_id, created_at, updated_at and metadata were all removed
+        # from the model (src/core/schemas/_base.py — the pinned core/targeting.json
+        # declares no managed-only field, and a seller-side value that must persist belongs
+        # on a repository-owned carrier). An undeclared key is now refused on construction
+        # in dev, so the wire shape is exactly what the fields declare.
+        assert not set(adcp_response) - set(Targeting.model_fields), "Targeting dumped a field it does not declare"
 
         # Verify v3 geo structure
         if adcp_response.get("geo_countries"):
@@ -1295,27 +1283,8 @@ class TestAdCPContract:
             for browser in adcp_response["browser_any_of"]:
                 assert browser in valid_browsers, f"Invalid browser: {browser}"
 
-        # Test internal model_dump includes all fields
-        internal_response = targeting.model_dump_internal()
-        for field in managed_internal_fields:
-            assert field in internal_response, f"Managed/internal field '{field}' missing from internal response"
-
-        # Test managed fields are accessible internally
-        assert internal_response["key_value_pairs"]["aee_segment"] == "high_value", (
-            "Managed field should be in internal response"
-        )
-
         # Verify field count expectations (flexible - targeting has many optional fields)
         assert len(adcp_response) >= 9, f"AdCP response should have at least 9 fields, got {len(adcp_response)}"
-        assert len(internal_response) >= len(adcp_response), (
-            "Internal response should have at least as many fields as external response"
-        )
-
-        # Verify internal response has more fields than external (due to managed/internal fields)
-        internal_only_fields = set(internal_response.keys()) - set(adcp_response.keys())
-        assert len(internal_only_fields) >= 4, (
-            f"Expected at least 4 internal/managed-only fields, got {len(internal_only_fields)}"
-        )
 
     def test_budget_adcp_compliance(self):
         """Test that Budget model complies with AdCP budget schema."""
