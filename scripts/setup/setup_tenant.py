@@ -183,10 +183,6 @@ Copy and use with:
    uvx adcp http://localhost:8080/mcp/ --auth {principal_token} list_tools
 {gam_note}
 
-Token Types Explained:
-   - Principal Token: Used for MCP/A2A API calls (advertisers use this)
-   - Admin Token: Used for Admin UI management (internal use only)
-
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Access Control:

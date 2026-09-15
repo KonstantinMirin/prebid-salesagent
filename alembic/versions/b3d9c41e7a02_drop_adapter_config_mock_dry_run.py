@@ -1,7 +1,7 @@
 """drop adapter_config.mock_dry_run
 
 Revision ID: b3d9c41e7a02
-Revises: f7c3a9d21b64
+Revises: e4b7c2a91f05
 Create Date: 2026-09-14 09:00:00.000000
 
 """

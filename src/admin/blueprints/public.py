@@ -280,9 +280,15 @@ def provision_tenant():
 
             logger.info(f"New tenant self-provisioned: {tenant_id} by {user_email}")
 
-            flash(f"Your demo advertiser's API token, shown only now: {demo_token}", "success")
-            # Redirect to completion page
-            return redirect(url_for("public.signup_complete", tenant_id=tenant_id))
+            # The plaintext token is rendered into THIS response body and stored nowhere.
+            # A flash would put it in the signed session cookie, so it would leave the
+            # server in a Set-Cookie header — and in production that cookie is
+            # HTTPONLY=False, SAMESITE="None" and shared across subdomains
+            # (src/admin/app.py:126-136), which makes a flashed credential readable by
+            # any script on the domain and sent on cross-site requests. So there is no
+            # flash, no session stash and no redirect: rendering here is what keeps the
+            # credential in the response body alone.
+            return render_template("signup_complete.html", tenant=new_tenant, api_token=demo_token)
 
     except Exception as e:
         logger.error(f"Error provisioning tenant: {e}", exc_info=True)
