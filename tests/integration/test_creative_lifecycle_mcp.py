@@ -20,7 +20,6 @@ from adcp.types import AccountReference, CreativeFilters
 from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
-from src.core.config_loader import set_current_tenant
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
     Creative as DBCreative,
@@ -30,12 +29,14 @@ from src.core.database.models import (
     MediaBuy,
     Principal,
 )
+from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
 from src.core.schemas import CreateMediaBuyRequest, ListCreativesResponse, SyncCreativesRequest, SyncCreativesResponse
 from src.core.schemas.creative import ListCreativesRequest
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
+from tests.helpers.envelope_assertions import raises_adcp
 from tests.utils.database_helpers import create_tenant_with_timestamps, get_utc_now
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -66,41 +67,39 @@ def _list_creatives(**kwargs):
     """
     import asyncio
 
+    from src.core.resolved_identity import TransportProtocol
     from src.core.tools._boundary import invoke_tool
 
-    identity = kwargs.pop("identity", None)
+    headers = kwargs.pop("headers")
     kwargs.pop("ctx", None)
     internal = {name: kwargs.pop(name) for name in ("format", "page") if name in kwargs}
     req = ListCreativesRequest(**kwargs)
     if internal:
         req = req.model_copy(update=internal)
-    return asyncio.run(invoke_tool("list_creatives", req, identity))
+    return asyncio.run(invoke_tool("list_creatives", req, headers, TransportProtocol.MCP))
 
 
 def _sync_creatives(**kwargs):
     """Build a SyncCreativesRequest from flat fields, then dispatch it at the boundary.
 
-    ``invoke_tool`` is the path every transport takes -- account resolution and the
-    idempotency probe included -- so a call site here reaches production the way a buyer
-    does. This module's call sites stay flat.
+    ``invoke_tool`` is the path every transport takes -- identity resolution, account
+    resolution and the idempotency probe included -- so a call site here reaches production
+    the way a buyer does. It takes the request's HEADERS, never an identity: the resolver
+    is their one reader. This module's call sites stay flat.
     """
     import asyncio
 
+    from src.core.resolved_identity import TransportProtocol
     from src.core.tools._boundary import invoke_tool
 
-    identity = kwargs.pop("identity", None)
+    headers = kwargs.pop("headers")
     kwargs.pop("ctx", None)
-    return asyncio.run(invoke_tool("sync_creatives", SyncCreativesRequest(**kwargs), identity))
+    return asyncio.run(invoke_tool("sync_creatives", SyncCreativesRequest(**kwargs), headers, TransportProtocol.MCP))
 
 
-class MockContext:
-    """Mock FastMCP Context for testing."""
-
-    def __init__(self, auth_token="test-token-123"):
-        if auth_token is None:
-            self.meta = {"headers": {}}  # No auth header for testing optional auth
-        else:
-            self.meta = {"headers": credential_headers(token=auth_token)}
+# (Deleted) MockContext stood in for a FastMCP Context so a test could hand one to a tool.
+# Nothing takes a Context: a transport hands the boundary the request's headers, and the
+# tests here present theirs through ``credential_headers``.
 
 
 @pytest.mark.requires_db
@@ -111,17 +110,16 @@ class TestCreativeLifecycleMCP:
         """Import MCP tools to avoid module-level database initialization."""
         return _sync_creatives, _list_creatives
 
-    def _make_identity(self, tenant_id=None, principal_id=None, tenant_overrides=None):
-        """Create a ResolvedIdentity for tests, using stored test data as defaults."""
-        tid = tenant_id or self.test_tenant_id
-        pid = principal_id or self.test_principal_id
-        tenant_dict = {"tenant_id": tid}
-        if tenant_overrides:
-            tenant_dict.update(tenant_overrides)
-        return PrincipalFactory.make_identity(
-            principal_id=pid,
-            tenant_id=tid,
-            tenant=tenant_dict,
+    def _headers(self, tenant_id=None, principal_id=None):
+        """The headers a call arrives with, for the tenant and principal this file seeds.
+
+        The boundary takes headers and resolves the caller itself, so a test states the
+        credential and the seller and nothing else -- the tenant it reads is the ROW this
+        fixture wrote (``approval_mode="auto-approve"``), not an in-memory override.
+        """
+        return credential_headers(
+            token=plaintext_token_for(principal_id or self.test_principal_id),
+            tenant=tenant_id or self.test_tenant_id,
         )
 
     @pytest.fixture(autouse=True)
@@ -287,11 +285,6 @@ class TestCreativeLifecycleMCP:
         _seed_account("creative_test", ("test_advertiser",))
 
     @pytest.fixture
-    def mock_context(self):
-        """Create mock FastMCP context."""
-        return MockContext()
-
-    @pytest.fixture
     def sample_creatives(self):
         """Sample creative data for testing.
 
@@ -324,7 +317,9 @@ class TestCreativeLifecycleMCP:
         """Test sync_creatives creates new creatives successfully."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
-        identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
+        # The seeded tenant row is already approval_mode="auto-approve", and the resolver
+        # reads that row -- an in-memory override would not reach production anyway.
+        headers = self._headers()
 
         # Call sync_creatives tool (uses default patch=False for full upsert)
         response = core_sync_creatives_tool(
@@ -336,7 +331,7 @@ class TestCreativeLifecycleMCP:
             # that sync_creatives honours the key.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
 
         # Verify response structure (AdCP-compliant domain response)
@@ -400,14 +395,14 @@ class TestCreativeLifecycleMCP:
             }
         ]
 
-        identity = self._make_identity()
+        headers = self._headers()
 
         # Upsert with patch=False (default): full replacement
         response = core_sync_creatives_tool(
             creatives=updated_creative_data,
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
 
         # Verify response (domain response has creatives list, not summary/results)
@@ -436,7 +431,7 @@ class TestCreativeLifecycleMCP:
         creative_data = sample_creatives[:1]
         creative_id = creative_data[0]["creative_id"]
 
-        identity = self._make_identity()
+        headers = self._headers()
 
         # Use spec-compliant assignments dict: creative_id -> package_ids
         response = core_sync_creatives_tool(
@@ -448,7 +443,7 @@ class TestCreativeLifecycleMCP:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
 
         # Verify response structure
@@ -474,7 +469,7 @@ class TestCreativeLifecycleMCP:
         creative_data = sample_creatives[:1]
         creative_id = creative_data[0]["creative_id"]
 
-        identity = self._make_identity()
+        headers = self._headers()
 
         # Use spec-compliant assignments dict
         response = core_sync_creatives_tool(
@@ -483,7 +478,7 @@ class TestCreativeLifecycleMCP:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
 
         # Verify response structure
@@ -521,13 +516,13 @@ class TestCreativeLifecycleMCP:
             },
         ]
 
-        identity = self._make_identity()
+        headers = self._headers()
 
         response = core_sync_creatives_tool(
             creatives=invalid_creatives,
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
 
         # Should sync valid creative but fail on invalid one
@@ -580,10 +575,9 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        identity = self._make_identity()
-        set_current_tenant({"tenant_id": self.test_tenant_id})
+        headers = self._headers()
 
-        response = core_list_creatives_tool(identity=identity)
+        response = core_list_creatives_tool(headers=headers)
 
         # Verify response structure
         assert isinstance(response, ListCreativesResponse)
@@ -630,11 +624,10 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        identity = self._make_identity()
-        set_current_tenant({"tenant_id": self.test_tenant_id})
+        headers = self._headers()
 
         # Test approved filter
-        response = core_list_creatives_tool(filters=CreativeFilters(statuses=["approved"]), identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(statuses=["approved"]), headers=headers)
         assert len(response.creatives) == 3
         # Check status field (handle both dict, object, and enum)
         for c in response.creatives:
@@ -647,7 +640,7 @@ class TestCreativeLifecycleMCP:
             assert status_val == "approved"
 
         # Test pending_review filter (correct AdCP status value)
-        response = core_list_creatives_tool(filters=CreativeFilters(statuses=["pending_review"]), identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(statuses=["pending_review"]), headers=headers)
         assert len(response.creatives) == 2
         # Check status field (handle both dict, object, and enum)
         for c in response.creatives:
@@ -696,18 +689,17 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        identity = self._make_identity()
-        set_current_tenant({"tenant_id": self.test_tenant_id})
+        headers = self._headers()
 
         # Test created_after filter. AdCP 3.1.1 puts both dates inside `filters`
         # (core/creative-filters.json) as real date-times; the flat ISO-string aliases the
         # builder used to parse are gone.
         cutoff = now - timedelta(days=5)
-        response = core_list_creatives_tool(filters=CreativeFilters(created_after=cutoff), identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(created_after=cutoff), headers=headers)
         assert len(response.creatives) == 2  # Only recent creatives
 
         # Test created_before filter
-        response = core_list_creatives_tool(filters=CreativeFilters(created_before=cutoff), identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(created_before=cutoff), headers=headers)
         assert len(response.creatives) == 2  # Only old creatives
 
     def test_list_creatives_with_search(self):
@@ -750,11 +742,10 @@ class TestCreativeLifecycleMCP:
             session.add_all(creatives)
             session.commit()
 
-        identity = self._make_identity()
-        set_current_tenant({"tenant_id": self.test_tenant_id})
+        headers = self._headers()
 
         # Search for "Holiday"
-        response = core_list_creatives_tool(filters=CreativeFilters(name_contains="Holiday"), identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(name_contains="Holiday"), headers=headers)
         assert len(response.creatives) == 2
         # Check name field (handle both dict and object)
         for c in response.creatives:
@@ -762,7 +753,7 @@ class TestCreativeLifecycleMCP:
             assert "Holiday" in name_val
 
         # Search for "Banner"
-        response = core_list_creatives_tool(filters=CreativeFilters(name_contains="Banner"), identity=identity)
+        response = core_list_creatives_tool(filters=CreativeFilters(name_contains="Banner"), headers=headers)
         assert len(response.creatives) == 2
         # Check name field (handle both dict and object)
         for c in response.creatives:
@@ -810,12 +801,11 @@ class TestCreativeLifecycleMCP:
             session.add(assignment)
             session.commit()
 
-        identity = self._make_identity()
-        set_current_tenant({"tenant_id": self.test_tenant_id})
+        headers = self._headers()
 
         # Filter by media_buy_id - should only return assigned creative
         response = core_list_creatives_tool(
-            filters=CreativeFilters(media_buy_ids=[self.test_media_buy_id]), identity=identity
+            filters=CreativeFilters(media_buy_ids=[self.test_media_buy_id]), headers=headers
         )
         assert len(response.creatives) == 1
         creative = response.creatives[0]
@@ -825,34 +815,29 @@ class TestCreativeLifecycleMCP:
     def test_sync_creatives_authentication_required(self, sample_creatives):
         """Test sync_creatives requires proper authentication."""
         core_sync_creatives_tool, _ = self._import_mcp_tools()
-        mock_context = MockContext("invalid-token")
 
-        # Test that invalid auth token fails
-        # Authentication errors manifest as various exception types (ToolError, ValueError, etc.)
-        from fastmcp.exceptions import ToolError
+        # A credential that resolves to no principal. The boundary answers with the wire
+        # refusal and raises AdcpFailure carrying it, so the CODE is what this grades --
+        # presented-but-rejected is AUTH_INVALID (v3.1.1 error-code.json).
+        with raises_adcp(AdCPAuthenticationError):
+            core_sync_creatives_tool(
+                creatives=sample_creatives,
+                idempotency_key=f"sync-{uuid4().hex}",
+                account=AccountReference(root={"account_id": ACCOUNT_ID}),
+                headers=credential_headers(token="invalid-token", tenant=self.test_tenant_id),
+            )
 
-        from src.core.exceptions import AdCPAuthenticationError
-
-        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
-            core_sync_creatives_tool(creatives=sample_creatives, ctx=mock_context)
-
-    def test_list_creatives_authentication_optional(self, mock_context):
-        """Test list_creatives authentication behavior."""
-        from fastmcp.exceptions import ToolError
-
-        from src.core.exceptions import AdCPAuthenticationError
-
+    def test_list_creatives_authentication_required(self):
+        """list_creatives refuses a rejected credential, and refuses none at all."""
         _, core_list_creatives_tool = self._import_mcp_tools()
 
-        # Test 1: Invalid token should raise error
-        mock_context = MockContext("invalid-token")
-        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
-            core_list_creatives_tool(ctx=mock_context)
+        # Presented and rejected -> AUTH_INVALID.
+        with raises_adcp(AdCPAuthenticationError):
+            core_list_creatives_tool(headers=credential_headers(token="invalid-token", tenant=self.test_tenant_id))
 
-        # Test 2: No token also requires auth (list_creatives is not anonymous)
-        mock_context_no_auth = MockContext(None)
-        with pytest.raises((ToolError, ValueError, RuntimeError, AdCPAuthenticationError)):
-            core_list_creatives_tool(ctx=mock_context_no_auth)
+        # None presented -> AUTH_MISSING: list_creatives is not a public tool.
+        with raises_adcp(AdCPAuthRequiredError):
+            core_list_creatives_tool(headers=credential_headers(tenant=self.test_tenant_id))
 
     def test_sync_creatives_missing_tenant(self, sample_creatives):
         """Test sync_creatives when tenant lookup succeeds even with approval_mode provided.
@@ -862,14 +847,16 @@ class TestCreativeLifecycleMCP:
         """
         core_sync_creatives_tool, _ = self._import_mcp_tools()
 
-        identity = self._make_identity(tenant_overrides={"approval_mode": "auto-approve"})
+        # The seeded tenant row is already approval_mode="auto-approve", and the resolver
+        # reads that row -- an in-memory override would not reach production anyway.
+        headers = self._headers()
 
         # The function works with tenant_id and approval_mode
         response = core_sync_creatives_tool(
             creatives=sample_creatives,
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
         assert isinstance(response, SyncCreativesResponse)
 
@@ -877,12 +864,11 @@ class TestCreativeLifecycleMCP:
         """Test list_creatives handles empty results gracefully."""
         _, core_list_creatives_tool = self._import_mcp_tools()
 
-        identity = self._make_identity()
-        set_current_tenant({"tenant_id": self.test_tenant_id})
+        headers = self._headers()
 
         # Query with filters that match nothing
         response = core_list_creatives_tool(
-            filters=CreativeFilters(statuses=["rejected"]), identity=identity
+            filters=CreativeFilters(statuses=["rejected"]), headers=headers
         )  # none exist
 
         assert len(response.creatives) == 0
@@ -895,15 +881,16 @@ class TestCreativeLifecycleMCP:
     # @T-UC-002-partition-creative-asset row missing_required_assets; the copy that stood
     # here still expected the retired CREATIVE_REJECTED and was deleted.
 
-    async def test_create_media_buy_with_creative_ids(self, mock_context, sample_creatives):
+    async def test_create_media_buy_with_creative_ids(self, sample_creatives):
         """Test create_media_buy accepts creative_ids in packages."""
         # First, sync creatives to have IDs to reference. Awaited directly rather than
         # through this module's ``_sync_creatives`` seam: that seam wraps the boundary in
         # asyncio.run for its many SYNC callers, and this is the one async test -- a second
         # loop inside the running one raises.
+        from src.core.resolved_identity import TransportProtocol
         from src.core.tools._boundary import invoke_tool
 
-        identity = self._make_identity(tenant_overrides={"approval_mode": "require-human"})
+        headers = self._headers()
         sync_response = await invoke_tool(
             "sync_creatives",
             SyncCreativesRequest(
@@ -911,7 +898,8 @@ class TestCreativeLifecycleMCP:
                 idempotency_key=f"sync-{uuid4().hex}",
                 account=AccountReference(root={"account_id": ACCOUNT_ID}),
             ),
-            identity,
+            headers,
+            TransportProtocol.MCP,
         )
         assert len(sync_response.creatives) == 3
 
@@ -943,16 +931,7 @@ class TestCreativeLifecycleMCP:
         # Create media buy with creative_ids in packages
         creative_ids = [c["creative_id"] for c in sample_creatives]
 
-        # Build ResolvedIdentity instead of patching removed auth functions
-
-        identity = PrincipalFactory.make_identity(
-            principal_id=self.test_principal_id,
-            tenant_id=self.test_tenant_id,
-            tenant={"tenant_id": self.test_tenant_id, "approval_mode": "require-human"},
-        )
-
         with (
-            patch("src.core.auth.get_principal_object") as mock_principal,
             patch("src.core.tools.media_buy_create.get_adapter") as mock_adapter,
             patch("src.core.tools.products.get_product_catalog") as mock_catalog,
             patch("src.core.tools.media_buy_create.validate_setup_complete"),
@@ -960,22 +939,19 @@ class TestCreativeLifecycleMCP:
                 "src.core.tools.media_buy_create._validate_creatives_before_adapter_call"
             ),  # Skip creative validation
         ):
-            # Mock principal
-            from src.core.schemas import Principal as SchemaPrincipal
+            # No principal patch: the resolver loads the seeded row from the credential in
+            # ``headers``, so the caller is the real principal this fixture created.
 
-            mock_principal.return_value = SchemaPrincipal(
-                principal_id=self.test_principal_id,
-                name="Test Advertiser",
-                platform_mappings={"mock": {"id": "test"}},
-            )
-
-            # Mock adapter
-            from src.core.schemas import CreateMediaBuySuccess, Package
+            # Mock adapter. create_media_buy returns AdapterCreateResult -- the carrier
+            # the tool reads and never serializes (src/adapters/base.py) -- not the
+            # buyer's CreateMediaBuySuccess, which the tool builds from the written row.
+            from src.adapters.base import AdapterCreateResult
+            from src.core.schemas import Package
 
             mock_adapter_instance = mock_adapter.return_value
             mock_adapter_instance.get_supported_pricing_models.return_value = {"cpm", "vcpm", "cpc", "flat_rate"}
             mock_adapter_instance.validate_media_buy_request.return_value = []
-            mock_adapter_instance.create_media_buy.return_value = CreateMediaBuySuccess.carrier(
+            mock_adapter_instance.create_media_buy.return_value = AdapterCreateResult(
                 media_buy_id="test_buy_123",
                 packages=[
                     Package(
@@ -1058,7 +1034,8 @@ class TestCreativeLifecycleMCP:
                     po_number="PO-TEST-123",
                     idempotency_key=f"sync-{uuid4().hex}",
                 ),
-                identity,
+                headers,
+                TransportProtocol.MCP,
             )
 
             # create_media_buy returns the oneOf BRANCH itself; the protocol status is a

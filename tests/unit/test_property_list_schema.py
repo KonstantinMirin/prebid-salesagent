@@ -39,19 +39,10 @@ _XFAIL_NO_IMPL = pytest.mark.xfail(
 
 def _lazy_identity(tenant_id: str = "test_tenant", principal_id: str = "test_principal"):
     """Build a ResolvedIdentity for property list tests."""
-    from src.core.testing_hooks import AdCPTestContext
-
     return PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
     )
 
 

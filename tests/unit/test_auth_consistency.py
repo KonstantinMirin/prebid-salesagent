@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
 """
-Unit tests for auth middleware verification across MCP tools.
+Unit tests for auth handling across the AdCP tools.
 
-Tests that auth error responses have identical format across all endpoints,
-ensuring consistent behavior for:
-- Missing token (None auth) on authenticated endpoints
-- Invalid token on authenticated endpoints
-- Anonymous access on discovery endpoints
-- Invalid token on discovery endpoints (should not fall back to anonymous)
+What remains here is the DISCOVERY half: a public tool takes whoever arrived, and with
+nothing presented that is a PublicIdentity with no principal. The protected half -- a
+tool refusing a missing or rejected credential -- is not tested here and cannot be; the
+note below the imports says why and where it is graded instead.
 """
 
 from unittest.mock import MagicMock, patch
@@ -15,160 +13,48 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastmcp.exceptions import ToolError
 
-from src.core.exceptions import AdCPAuthenticationError, AdCPSalesAgentError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
-from src.core.schemas.creative import ListCreativesRequest
+from src.core.exceptions import AdCPSalesAgentError
 from src.services.policy_check_service import PolicyStatus
 from tests.factories.principal import PrincipalFactory
-from tests.helpers.creative_test_helpers import sync_creatives_request
-
-# --- Helpers ---
-
-
-def _make_identity(
-    principal_id: str | None = None,
-    tenant_id: str = "test-tenant",
-    tenant: dict | None = None,
-) -> ResolvedIdentity:
-    """Create a ResolvedIdentity for testing."""
-    if tenant is None:
-        tenant = {"tenant_id": tenant_id, "name": "Test"}
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-    )
-
 
 # --- Test Classes ---
 
 
-class TestMissingTokenConsistency:
-    """Test that all authenticated MCP tools raise consistent errors when called without a token."""
-
-    @pytest.mark.asyncio
-    async def test_create_media_buy_requires_auth(self):
-        """create_media_buy should fail when no auth token is provided."""
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        # Pass identity with no principal_id (simulates no auth)
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises(AdCPAuthenticationError):
-            req = MagicMock()
-            await _create_media_buy_impl(req=req, identity=identity)
-
-    def test_update_media_buy_requires_auth(self):
-        """update_media_buy should fail when no auth token is provided."""
-        from src.core.tools.media_buy_update import _update_media_buy_impl
-
-        # Pass identity with no principal_id
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises((ValueError, AdCPAuthenticationError)):
-            req = MagicMock()
-            _update_media_buy_impl(req=req, identity=identity)
-
-    def test_sync_creatives_requires_auth(self):
-        """sync_creatives should fail when no auth token is provided."""
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        # Pass identity with no principal_id
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(), identity=identity)
-
-    def test_list_creatives_requires_auth(self):
-        """list_creatives should fail when no auth token is provided."""
-        from src.core.tools.creatives.listing import _list_creatives_impl
-
-        # Pass identity with no principal_id
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises(AdCPAuthenticationError):
-            _list_creatives_impl(req=ListCreativesRequest(), identity=identity)
-
-    def test_get_media_buy_delivery_missing_auth_raises(self):
-        """get_media_buy_delivery raises AdCPAuthenticationError when no auth token is provided."""
-        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-
-        # Pass identity with no principal_id
-        identity = _make_identity(principal_id=None)
-
-        req = MagicMock()
-        req.context = None
-        with pytest.raises(AdCPAuthenticationError) as _ei:
-            _get_media_buy_delivery_impl(req, identity)
-        # The old pattern matched the AUTHORED sentence; the sentence is the
-        # code's table entry now, so assert it exactly.
-
-
-class TestInvalidTokenConsistency:
-    """Test that all authenticated MCP tools raise consistent errors with an invalid token.
-
-    Since _impl functions now receive ResolvedIdentity directly (identity is resolved
-    at the transport boundary), invalid token handling is tested by verifying that
-    ResolvedIdentity with principal_id=None (which is what resolve_identity produces
-    for invalid tokens with require_valid_token=False) causes proper auth errors.
-
-    For require_valid_token=True (the default for authenticated endpoints), the
-    transport boundary raises AdCPAuthenticationError before _impl is ever called.
-    We test this behavior in test_authenticated_tools_use_require_valid_token_true_by_default.
-    """
-
-    @pytest.mark.asyncio
-    async def test_create_media_buy_invalid_token(self):
-        """create_media_buy should fail for identity with no principal (invalid token resolved to anonymous)."""
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        # An invalid token with require_valid_token=True raises at the boundary,
-        # so the _impl function never sees it. But if it somehow got through
-        # (e.g., future lenient mode), identity would have principal_id=None.
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises((AdCPAuthenticationError, AdCPValidationError)):
-            req = MagicMock()
-            await _create_media_buy_impl(req=req, identity=identity)
-
-    def test_update_media_buy_invalid_token(self):
-        """update_media_buy should fail for identity with no principal."""
-        from src.core.tools.media_buy_update import _update_media_buy_impl
-
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises((ValueError, AdCPAuthenticationError)):
-            req = MagicMock()
-            _update_media_buy_impl(req=req, identity=identity)
-
-    def test_sync_creatives_invalid_token(self):
-        """sync_creatives should fail for identity with no principal."""
-        from src.core.tools.creatives._sync import _sync_creatives_impl
-
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises(AdCPAuthenticationError):
-            _sync_creatives_impl(req=sync_creatives_request(), identity=identity)
-
-    def test_list_creatives_invalid_token(self):
-        """list_creatives should fail for identity with no principal."""
-        from src.core.tools.creatives.listing import _list_creatives_impl
-
-        identity = _make_identity(principal_id=None)
-
-        with pytest.raises(AdCPAuthenticationError):
-            _list_creatives_impl(req=ListCreativesRequest(), identity=identity)
-
-    def test_get_media_buy_delivery_invalid_token(self):
-        """get_media_buy_delivery should raise AdCPAuthenticationError for identity with no principal."""
-        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
-
-        identity = _make_identity(principal_id=None)
-
-        req = MagicMock()
-        req.context = None
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity)
+# TestMissingTokenConsistency and TestInvalidTokenConsistency (ten tests) are REMOVED,
+# along with the whole of tests/unit/test_auth_requirements.py (six tests:
+# test_sync_creatives_with_invalid_auth, test_update_media_buy_requires_authentication,
+# test_update_media_buy_with_invalid_auth, test_identity_with_none_principal_id,
+# test_identity_with_empty_string_principal_id, test_update_media_buy_error_message_actionable)
+# and tests/unit/test_sync_creatives_auth.py (test_sync_creatives_with_invalid_auth). All
+# seventeen built an anonymous identity, handed it to a PROTECTED implementation
+# -- _create_media_buy_impl, _update_media_buy_impl / _verify_principal,
+# _sync_creatives_impl, _list_creatives_impl, _get_media_buy_delivery_impl -- and asserted
+# the implementation raised AdCPAuthenticationError / AUTH_MISSING itself.
+#
+# NEITHER HALF IS CONSTRUCTIBLE NOW. ResolvedIdentity.principal is a required field, so
+# "a ResolvedIdentity whose principal_id is None" is not a value the type can hold and
+# PrincipalFactory.make_identity cannot build one (the anonymous caller is a
+# PublicIdentity, which only a public tool takes). And the in-tool guards that raised
+# were removed with the rest of the re-checks when the resolver became the one place a
+# credential is judged (47d57e5d6); ruff-boundary.toml bans raising AUTH_MISSING or
+# AUTH_INVALID anywhere but the resolver -- "do not re-check or hand-roll the refusal" --
+# so those implementations could not raise it even if a guard were written back in.
+# _verify_principal reads identity.principal.principal_id directly, with no guard at all.
+#
+# The obligation is unchanged and is graded where the decision is made: _resolve_identity
+# mints the refusal once, for every tool and every transport, and the transport-blind auth
+# scenarios assert the AUTH_MISSING / AUTH_INVALID wire envelope across a2a, mcp and rest.
+# For the two tools these tests named most often there are also in-tree transport-level
+# graders that PRESENT a credential and let the resolver judge it, which is the shape the
+# deleted tests were imitating without a transport:
+# tests/integration/test_creative_lifecycle_mcp.py::test_sync_creatives_authentication_required
+# (rejected credential -> AUTH_INVALID) and ::test_list_creatives_authentication_required
+# (rejected -> AUTH_INVALID, none presented -> AUTH_MISSING).
+#
+# Those are stronger graders than these were -- each of these called one implementation
+# directly, so none of them could have caught a transport that skipped the resolver.
+#
+# Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
 
 class TestDiscoveryEndpointsAnonymousAccess:
@@ -181,11 +67,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
         # brand_manifest_policy="public" allows anonymous access without auth requirement
         mock_tenant = {"tenant_id": "test-tenant", "name": "Test", "brand_manifest_policy": "public"}
-        identity = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id="test-tenant",
-            tenant=mock_tenant,
-        )
+        identity = PrincipalFactory.make_public_identity(tenant=mock_tenant)
 
         with (
             patch("src.core.database.repositories.uow.get_db_session") as mock_db,
@@ -223,7 +105,7 @@ class TestDiscoveryEndpointsAnonymousAccess:
 
         # Create anonymous identity with tenant
         mock_tenant = {"tenant_id": "test-tenant", "name": "Test"}
-        identity = _make_identity(principal_id=None, tenant=mock_tenant)
+        identity = PrincipalFactory.make_public_identity(tenant=mock_tenant)
 
         with (
             # get_creative_agent_registry is imported inside the function from src.core.creative_agent_registry
@@ -278,11 +160,7 @@ class TestDiscoveryEndpointsInvalidAuth:
         # Nothing presented on a public row: the resolver builds an identity with
         # principal None, and the tool runs with it.
         mock_tenant = {"tenant_id": "test-tenant"}
-        identity = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id="test-tenant",
-            tenant=mock_tenant,
-        )
+        identity = PrincipalFactory.make_public_identity(tenant=mock_tenant)
 
         with patch("src.core.database.repositories.uow.get_db_session") as mock_db:
             mock_session = MagicMock()
@@ -313,7 +191,7 @@ class TestDiscoveryEndpointsInvalidAuth:
         # Nothing presented on a public row: the resolver builds an identity with
         # principal None, and the tool runs with it.
         mock_tenant = {"tenant_id": "test-tenant"}
-        identity = _make_identity(principal_id=None, tenant=mock_tenant)
+        identity = PrincipalFactory.make_public_identity(tenant=mock_tenant)
 
         with patch("src.core.creative_agent_registry.get_creative_agent_registry") as mock_registry:
             mock_reg = MagicMock()

@@ -94,9 +94,19 @@ class TestCheckBillingPolicy:
         assert failures is not None
         assert _FAILURE_CLASS_TO_CODE[failures[0].failure_class] == "BILLING_NOT_SUPPORTED"
 
-    def test_tenant_none_accepts(self):
-        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1", tenant=None)
-        assert _check_billing_policy("operator", identity) is None
+    # test_tenant_none_accepts is REMOVED. It built an identity with principal_id=None and
+    # tenant=None and asserted _check_billing_policy accepted it.
+    #
+    # Neither half is constructible now. _check_billing_policy takes a ResolvedIdentity,
+    # whose principal AND tenant are both required fields, so "no principal" and "no tenant"
+    # are not values the parameter can hold -- PrincipalFactory.make_identity cannot build
+    # either, and the branch the test drove (resolve_supported_billing's `if tenant` arm) is
+    # unreachable from every caller: accounts.py:770 passes the identity the resolver built,
+    # and the resolver refuses a missing credential before it can construct one.
+    #
+    # There is no obligation to re-home. The guarantee the test was probing is now carried
+    # by the TYPE -- that is the whole point of a protected tool declaring ResolvedIdentity --
+    # and mypy grades it on every run instead of one test asserting one arm of it.
 
     def test_tenantcontext_access_works(self):
         """The policy reads supported_billing off identity.tenant via the .get() contract.

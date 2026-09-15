@@ -32,7 +32,6 @@ def test_creative_accepts_format_id_object():
     format_id = FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250")
     creative = Creative(
         creative_id="c1",
-        variants=[],
         name="Test Creative",
         format_id=format_id,
         assets=build_assets(image_spec("banner_image", url="https://example.com/creative.jpg", width=300, height=250)),
@@ -52,7 +51,6 @@ def test_creative_from_dict_with_format_id_object():
     """Test Creative can be created from dict with format_id as object."""
     data = {
         "creative_id": "c1",
-        "variants": [],
         "name": "Test Creative",
         "format_id": {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         "assets": build_assets(

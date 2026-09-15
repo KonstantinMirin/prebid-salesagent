@@ -131,7 +131,8 @@ class TestTenantManagementAPIIntegration:
         assert "tenant_id" in data
         assert data["name"] == "Test Sports Publisher"
         assert data["subdomain"] == "test-sports"
-        assert "admin_token" in data
+        # "admin_token" is no longer returned: 84a86e019 dropped the tenant admin
+        # credential, so the create response carries only the principal token below.
         assert "admin_ui_url" in data
         assert "default_principal_token" in data
 

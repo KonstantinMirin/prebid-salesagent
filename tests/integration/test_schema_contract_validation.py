@@ -25,12 +25,15 @@ import pytest
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 # V3: Consolidated pricing types - CpmAuctionPricingOption/CpmFixedRatePricingOption → CpmPricingOption
-# Use fixed_price for fixed-rate, floor_price for auction
-from adcp import CpmPricingOption
+# Use fixed_price for fixed-rate, floor_price for auction.
+# The LOCAL subclass, not ``adcp.CpmPricingOption``: ``Product.pricing_options`` is the
+# local ``PricingOption`` RootModel, whose union members are the local subclasses and which
+# refuses an SDK instance by design (tests/unit/test_pricing_option_schemas.py).
 from adcp.types.generated_poc.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import (
     Budget,
     Creative,
@@ -40,6 +43,7 @@ from src.core.schemas import (
     SignalDeployment,
     Targeting,
 )
+from src.core.schemas.pricing import CpmPricingOption
 from tests.factories.creative_asset import build_assets, image_spec, video_spec
 
 
@@ -206,6 +210,7 @@ class TestProductSchemaContract:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "brief_relevance": "Highly relevant for display advertising",
+            "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
                 # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
                 CpmPricingOption(
@@ -232,8 +237,10 @@ class TestProductSchemaContract:
             "pricing_options",
         }
 
-        # Internal-only fields that should not appear in AdCP output
-        internal_only_fields = {"expires_at", "implementation_config", "targeting_template"}
+        # Internal-only fields that should not appear in AdCP output.
+        # NOT expires_at: core/product.json declares it, so it belongs on the wire. The
+        # model carried a strip for it once and the strip was removed for that reason.
+        internal_only_fields = {"implementation_config", "targeting_template"}
 
         validator.validate_schema_contract(Product, test_data, adcp_spec_fields, internal_only_fields)
 
@@ -253,6 +260,7 @@ class TestProductSchemaContract:
             "publisher_properties": [
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
+            "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
                 # V3: CpmPricingOption with floor_price (replaces CpmAuctionPricingOption)
                 CpmPricingOption(
@@ -303,6 +311,7 @@ class TestProductSchemaContract:
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
             "brief_relevance": "Perfect match for multi-format campaign requirements",
+            "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
                 # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
                 CpmPricingOption(
@@ -335,6 +344,7 @@ class TestProductSchemaContract:
             "publisher_properties": [
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
+            "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
                 # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
                 CpmPricingOption(
@@ -556,6 +566,7 @@ class TestGetProductsResponseContract:
                 publisher_properties=[
                     {"publisher_domain": "example.com", "selection_type": "all"}
                 ],  # Required per AdCP spec
+                reporting_capabilities=default_reporting_capabilities(),
                 pricing_options=[
                     # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
                     CpmPricingOption(
@@ -579,6 +590,7 @@ class TestGetProductsResponseContract:
                 publisher_properties=[
                     {"publisher_domain": "example.com", "selection_type": "all"}
                 ],  # Required per AdCP spec
+                reporting_capabilities=default_reporting_capabilities(),
                 pricing_options=[
                     # V3: CpmPricingOption with floor_price (replaces CpmAuctionPricingOption)
                     CpmPricingOption(
@@ -635,6 +647,7 @@ class TestSchemaEvolutionSafety:
             "publisher_properties": [
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
+            "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
                 # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
                 CpmPricingOption(
@@ -671,6 +684,7 @@ class TestSchemaEvolutionSafety:
             "publisher_properties": [
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
+            "reporting_capabilities": default_reporting_capabilities(),
             "pricing_options": [
                 # V3: CpmPricingOption with floor_price (replaces CpmAuctionPricingOption)
                 CpmPricingOption(
@@ -708,6 +722,7 @@ class TestSchemaEvolutionSafety:
             publisher_properties=[
                 {"publisher_domain": "example.com", "selection_type": "all"}
             ],  # Required per AdCP spec
+            reporting_capabilities=default_reporting_capabilities(),
             pricing_options=[
                 # V3: CpmPricingOption with fixed_price (replaces CpmFixedRatePricingOption)
                 CpmPricingOption(

@@ -22,7 +22,6 @@ from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import (
     Budget,
     CreateMediaBuyRequest,
-    CreateMediaBuyResponse,
     Creative,
     CreativeApprovalStatus,
     CreativeAssignment,
@@ -1715,143 +1714,31 @@ class TestAdCPContract:
             f"Response should have at least {len(required_fields)} required fields, got {len(adcp_response)}"
         )
 
-    def test_create_media_buy_response_adcp_compliance(self):
-        """Test that CreateMediaBuyResponse complies with AdCP create-media-buy-response schema.
-
-        Per AdCP PR #186, responses use oneOf discriminator for atomic semantics.
-        Success responses have media_buy_id + packages, error responses have errors array.
-        """
-        # Create success response with domain fields only (per AdCP PR #113)
-        # Protocol fields (status, task_id, message) are added by transport layer
-        # Note: creative_deadline must be timezone-aware datetime (adcp 2.0.0)
-        # Note: packages in response require package_id and paused field (adcp 2.12.0+)
-        from src.core.schemas import CreateMediaBuyError, CreateMediaBuySuccess
-
-        # confirmed_at/revision carry no model default -- they are columns the repository
-        # owns -- so this buyer-facing envelope passes them explicitly. Neither value is
-        # asserted below; the subject is the oneOf branch's field set.
-        successful_response = CreateMediaBuySuccess.sync_success(
-            media_buy_id="mb_12345",
-            packages=[{"package_id": "pkg_1", "paused": False}],
-            creative_deadline=datetime.now(UTC) + timedelta(days=7),
-            confirmed_at=datetime.now(UTC),
-            revision=1,
-        )
-
-        # Test successful response AdCP compliance
-        adcp_response = successful_response.model_dump()
-
-        # Verify required AdCP domain fields present and non-null
-        required_fields = []
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify optional AdCP domain fields that were set are present with valid values
-        # Per AdCP spec, optional fields with None values are omitted (not present with null)
-        assert "media_buy_id" in adcp_response, "media_buy_id was set, should be present"
-        assert isinstance(adcp_response["media_buy_id"], str), "media_buy_id must be string"
-        assert len(adcp_response["media_buy_id"]) > 0, "media_buy_id must not be empty"
-
-        assert "packages" in adcp_response, "packages was set, should be present"
-        assert isinstance(adcp_response["packages"], list), "packages must be array"
-
-        assert "creative_deadline" in adcp_response, "creative_deadline was set, should be present"
-
-        # Per oneOf constraint: success responses cannot have errors field
-        assert "errors" not in adcp_response, "Success response cannot have errors field"
-
-        # Test error response (oneOf error branch)
-        error_response = CreateMediaBuyError(
-            status="failed",
-            errors=[{"code": "test_error", "message": "test error"}],
-        )
-        adcp_error = error_response.model_dump()
-        assert "errors" in adcp_error, "Error response must have errors field"
-        assert isinstance(adcp_error["errors"], list), "errors must be array"
-        assert len(adcp_error["errors"]) > 0, "errors array must not be empty"
-
-        # Per oneOf constraint: error responses cannot have success fields
-        assert "media_buy_id" not in adcp_error, "Error response cannot have media_buy_id"
-        assert "packages" not in adcp_error, "Error response cannot have packages"
-
-        # Test that Union type works for type hints
-
-        success_via_union: CreateMediaBuyResponse = CreateMediaBuySuccess.sync_success(
-            media_buy_id="mb_union",
-            packages=[],
-            confirmed_at=datetime.now(UTC),
-            revision=1,
-        )
-        error_via_union: CreateMediaBuyResponse = CreateMediaBuyError(
-            status="failed",
-            errors=[{"code": "test", "message": "test"}],
-        )
-
-        # Verify Union type assignments work
-        assert isinstance(success_via_union, CreateMediaBuySuccess)
-        assert isinstance(error_via_union, CreateMediaBuyError)
-
-        # Verify field count for success response
-        assert len(adcp_response) >= 3, (
-            f"CreateMediaBuySuccess should have at least 3 required fields, got {len(adcp_response)}"
-        )
-
-    def test_update_media_buy_response_adcp_compliance(self):
-        """Test that UpdateMediaBuyResponse complies with AdCP update-media-buy-response schema.
-
-        Per AdCP PR #186, responses use oneOf discriminator for atomic semantics.
-        Success responses have media_buy_id, error responses have errors array.
-        """
-        # Create successful update response (oneOf success branch)
-        # Note: implementation_date must be timezone-aware datetime (adcp 2.0.0)
-        # Note: affected_packages now uses full Package type with paused field (adcp 2.12.0+)
-        from src.core.schemas import UpdateMediaBuyError, UpdateMediaBuySuccess
-
-        # revision carries no model default -- it is the column the repository owns.
-        response = UpdateMediaBuySuccess.sync_success(
-            media_buy_id="buy_123",
-            implementation_date=datetime.now(UTC) + timedelta(hours=1),
-            affected_packages=[{"package_id": "pkg_1", "paused": False}],
-            revision=1,
-        )
-
-        # Test AdCP-compliant response
-        adcp_response = response.model_dump()
-
-        # Verify required AdCP fields present and non-null
-        required_fields = ["media_buy_id"]
-        for field in required_fields:
-            assert field in adcp_response, f"Required AdCP field '{field}' missing from response"
-            assert adcp_response[field] is not None, f"Required AdCP field '{field}' is None"
-
-        # Verify affected_packages if provided
-        if "affected_packages" in adcp_response:
-            assert isinstance(adcp_response["affected_packages"], list), "affected_packages must be array"
-
-        # Note: implementation_date and affected_packages are internal fields
-        # excluded by model_dump() per AdCP PR #113
-        # They are only included in model_dump_internal() for database storage
-
-        # Per oneOf constraint: success responses cannot have errors field
-        assert "errors" not in adcp_response, "Success response cannot have errors field"
-
-        # Test error response (oneOf error branch)
-        error_response = UpdateMediaBuyError(
-            status="failed",
-            errors=[{"code": "update_failed", "message": "Update operation failed"}],
-        )
-        adcp_error = error_response.model_dump()
-        assert "errors" in adcp_error, "Error response must have errors field"
-        assert len(adcp_error["errors"]) > 0, "errors array must not be empty"
-
-        # Per oneOf constraint: error responses cannot have success fields
-        assert "media_buy_id" not in adcp_error, "Error response cannot have media_buy_id"
-
-        # Verify field count for success response (media_buy_id required)
-        assert len(adcp_response) >= 2, (
-            f"UpdateMediaBuySuccess should have at least 2 required fields, got {len(adcp_response)}"
-        )
+    # REMOVED: test_create_media_buy_response_adcp_compliance and
+    # test_update_media_buy_response_adcp_compliance. Both were field-PRESENCE contracts
+    # over fields this model INHERITS -- media_buy_id, packages, creative_deadline,
+    # affected_packages and revision are all declared by the adcp parent, not redeclared
+    # here -- so they asserted that Python inheritance works. CLAUDE.md states the rule:
+    # "There is deliberately no suite comparing a model's field set to the pinned schema."
+    #
+    # The create case had already rotted past the point of grading anything: it read
+    # ``required_fields = []`` and then looped over it, so both of its carefully-worded
+    # assertions ("Required AdCP field 'X' missing from response") had never once
+    # executed. Its remaining checks were presence/type plus ``len(adcp_response) >= 3``,
+    # a floor nothing can trip.
+    #
+    # Where the obligations live now:
+    #   - the parent's TYPED annotations (account, sandbox, creative_deadline,
+    #     valid_actions, context):
+    #     TestSchemaMatchesLibrary::test_create_media_buy_success_inherits_parent_typed_annotations
+    #     -- derived from the library parent per field, so it grades drift rather than presence;
+    #   - the success branch carrying no ``errors`` key:
+    #     tests/unit/test_property_list_unsupported_advisory.py::TestSuccessEnvelopeErrorsField
+    #     (``errors`` is OUR field, absent from the library parent, so that one can fail);
+    #   - no key outside the pin on the wire:
+    #     tests/integration/test_a2a_response_compliance.py (the pinned create/update roots
+    #     leave additionalProperties unset, so schema validation cannot see a stray key --
+    #     that oracle is the only thing that can).
 
     def test_get_media_buy_delivery_request_adcp_compliance(self):
         """Test that GetMediaBuyDeliveryRequest complies with AdCP get-media-buy-delivery-request schema."""

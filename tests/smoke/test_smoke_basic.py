@@ -5,8 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.factories.principal import plaintext_token_for
-
 _REPO_INVARIANTS_HOOK = Path(__file__).resolve().parents[2] / ".pre-commit-hooks" / "check_repo_invariants.py"
 _spec = importlib.util.spec_from_file_location("check_repo_invariants", _REPO_INVARIANTS_HOOK)
 assert _spec and _spec.loader
@@ -85,12 +83,16 @@ class TestConfiguration:
 
     @pytest.mark.smoke
     def test_config_loader_imports(self):
-        """Test that config loader can be imported."""
-        from src.core.config_loader import load_config, set_current_tenant
+        """Test that config loader can be imported.
 
-        # Functions should exist and be callable
-        assert callable(load_config)
-        assert callable(set_current_tenant)
+        ``load_config`` and ``set_current_tenant`` are both gone -- the ambient tenant
+        ContextVar with its setter (commit 76c2a96fb), and the file-based config loader
+        before it. What the module still owns is tenant LOOKUP, which the resolver calls.
+        """
+        from src.core.config_loader import get_tenant_by_id, tenant_id_for
+
+        assert callable(get_tenant_by_id)
+        assert callable(tenant_id_for)
 
 
 class TestCriticalPaths:
@@ -98,11 +100,18 @@ class TestCriticalPaths:
 
     @pytest.mark.smoke
     def test_principal_auth_logic(self):
-        """Test principal authentication logic exists."""
-        from src.core.auth import get_principal_from_token
+        """Principal resolution exists, and lives in ONE place.
 
-        # Function should exist and be callable
-        assert callable(get_principal_from_token)
+        ``src.core.auth.get_principal_from_token`` is gone: resolving a caller from a
+        request is the resolver's job (``_resolve_identity``), and a stored id resolves
+        through ``identity_of`` -- both in ``src/core/resolved_identity.py``. A smoke
+        check that imports a second resolver would be asserting the shape the refactor
+        removed.
+        """
+        from src.core.resolved_identity import _resolve_identity, identity_of
+
+        assert callable(_resolve_identity)
+        assert callable(identity_of)
 
     @pytest.mark.smoke
     def test_adapter_factory_pattern(self):
@@ -111,8 +120,7 @@ class TestCriticalPaths:
         from src.core.schemas import Principal
 
         # Create a test principal
-        principal = Principal.with_token(
-            plaintext_token_for("test"),
+        principal = Principal(
             principal_id="test",
             name="Test",
             platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},

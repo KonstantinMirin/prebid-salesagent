@@ -64,7 +64,6 @@ from src.core.exceptions import AdCPSalesAgentError
 from src.core.schemas import Principal, ReportingPeriod
 from src.core.security.egress.attempts import OutboundDeliveryFailed
 from src.core.security.outbound_http import OutboundError
-from tests.factories.principal import plaintext_token_for
 from tests.harness._base import IntegrationEnv
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
@@ -104,8 +103,7 @@ class _BareEnv(IntegrationEnv):
 
 def _principal(adapter: str, mappings: dict[str, Any] | None = None) -> Principal:
     """A real ``Principal`` carrying an advertiser id for *adapter*."""
-    return Principal.with_token(
-        plaintext_token_for("test_principal"),
+    return Principal(
         principal_id="test_principal",
         name="Test Buyer",
         platform_mappings=mappings or {adapter: {"advertiser_id": "123"}},
@@ -217,8 +215,7 @@ def _mock_ad_server(origin: LocalOrigin):
     """A mock adapter configured to post its HITL completion webhook at *origin*."""
     from src.adapters.mock_ad_server import MockAdServer
 
-    principal = Principal.with_token(
-        plaintext_token_for("test_principal"),
+    principal = Principal(
         principal_id="test_principal",
         name="Test Buyer",
         platform_mappings={
@@ -500,27 +497,19 @@ def test_base_workflow_slack_notification_reaches_the_origin_once(local_origin_t
     either.
     """
     from src.adapters.base_workflow import BaseWorkflowManager
-    from src.core.config_loader import current_tenant
+    from tests.factories import TenantFactory
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     local_origin_tls.respond_with(200, body=b"ok")
 
-    # The tenant context is a ContextVar, so it is reset explicitly rather than
-    # left behind for whichever test this worker runs next.
-    token = current_tenant.set(
-        {
-            "tenant_id": "test_tenant",
-            "name": "Test Tenant",
-            "slack_webhook_url": local_origin_tls.base_url,
-            "slack": {"webhook_url": local_origin_tls.base_url},
-        }
-    )
-    try:
-        manager = BaseWorkflowManager(tenant_id="test_tenant")
-        manager._send_workflow_notification("step_1", {"platform": "mock", "automation_mode": "manual"})
-    finally:
-        current_tenant.reset(token)
+    # The notifier loads its tenant BY ID (``TenantContext.load``), so the webhook is
+    # configured on the ROW -- the ambient tenant ContextVar this used to set is deleted.
+    with _BareEnv():
+        TenantFactory(tenant_id="workflow_slack_tenant", slack_webhook_url=local_origin_tls.base_url)
+
+    manager = BaseWorkflowManager(tenant_id="workflow_slack_tenant")
+    manager._send_workflow_notification("step_1", {"platform": "mock", "automation_mode": "manual"})
 
     assert local_origin_tls.hits == 1
 
@@ -612,20 +601,18 @@ def test_gam_callback_flashes_googles_rejection_on_a_400(local_origin_tls, monke
     from a real socket arrives there as an ``OutboundError`` whose
     ``http_status`` is 400. Only the second claim survives the extraction.
     """
-    from src.core import config
-    from src.core.config import GAMOAuthConfig
+    from src.core.config import get_settings
 
     allow_local_origin(monkeypatch)
     fast_backoff(monkeypatch)
     _point_google_token_url_at(local_origin_tls, monkeypatch)
     local_origin_tls.respond_with(400, body=b'{"error": "invalid_grant"}')
-    # Real credentials object, not a mock: the view reads ``client_id`` and
-    # ``client_secret`` off it and puts both on the wire.
-    monkeypatch.setattr(
-        config,
-        "get_gam_oauth_config",
-        lambda: GAMOAuthConfig(client_id=_GOOGLE_CLIENT_ID, client_secret=_GOOGLE_CLIENT_SECRET),
-    )
+    # The seller's own Google credentials are named facts on the settings object -- the
+    # GAMOAuthConfig carrier and its getter are gone, and the environment is read once
+    # (``load_settings``), so the values are set on the live settings the view reads.
+    auth = get_settings().auth
+    monkeypatch.setattr(auth, "gam_oauth_client_id", _GOOGLE_CLIENT_ID)
+    monkeypatch.setattr(auth, "gam_oauth_client_secret", _GOOGLE_CLIENT_SECRET)
 
     response = admin_client.get(f"/auth/gam/callback?code={_GOOGLE_AUTH_CODE}&state=gam_oauth_tenant")
 

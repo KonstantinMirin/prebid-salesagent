@@ -317,6 +317,11 @@ def _verify_principal(
 ) -> None:
     """Verify that the principal from identity owns the media buy.
 
+    OWNERSHIP ONLY. It does not check whether there IS a principal, and must not: the
+    parameter is a ``ResolvedIdentity``, whose ``principal`` is a required field, so the
+    resolver has already refused a missing or rejected credential before this can be
+    called. ``identity.principal.principal_id`` is read directly for that reason.
+
     Uses the provided repository for database access (no own session).
 
     Args:
@@ -325,7 +330,6 @@ def _verify_principal(
         repo: Tenant-scoped MediaBuyRepository for DB lookups
 
     Raises:
-        AdCPAuthenticationError: Missing principal
         AdCPMediaBuyNotFoundError: Media buy not found
         AdCPAuthorizationError: Principal doesn't own media buy
     """

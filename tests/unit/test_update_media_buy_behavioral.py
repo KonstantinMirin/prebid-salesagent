@@ -28,6 +28,7 @@ from src.core.errors.codes import ErrorCode
 from src.core.exceptions import (
     AdCPAdapterError,
     AdCPAuthenticationError,
+    AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPCapabilityNotSupportedError,
     AdCPCreativeNotFoundError,
@@ -37,7 +38,6 @@ from src.core.exceptions import (
 )
 from src.core.schemas import (
     Error,
-    UpdateMediaBuyError,
     UpdateMediaBuyRequest,
     UpdateMediaBuySubmitted,
     UpdateMediaBuySuccess,
@@ -2633,6 +2633,19 @@ class TestUC003ExtN:
         """Adapter privilege check blocks non-admin operations.
 
         Covers: UC-003-EXT-N-01
+
+        The stimulus is a RAISE, not a returned error model -- the same correction
+        ``test_media_buy.py::TestUpdateMediaBuyAdapterFailure::test_adapter_network_error``
+        records for its sibling. ``update_media_buy`` returns
+        ``src.adapters.base.AdapterUpdateResult`` (commit ecfdd7771) and production says
+        so at the call site: "an adapter reports failure by raising; a returned result is
+        the success". Staging a returned ``UpdateMediaBuyError`` therefore made the tool
+        read ``media_buy_id``/``affected_packages`` off an error object and answer the
+        buyer with a SUCCESS -- the defect this case exists to catch, reached by staging
+        something no adapter produces. ``AdCPAuthorizationError`` is the class the GAM
+        adapter actually raises for this refusal (``google_ad_manager.py`` guards its
+        admin-only actions with ``_is_admin_principal``); its wire code is
+        PERMISSION_DENIED.
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
@@ -2642,12 +2655,8 @@ class TestUC003ExtN:
             mock_scalars.first.return_value = mock_cl
             mock_session.scalars.return_value = mock_scalars
 
-            # Adapter returns error for insufficient privileges
-            from src.core.schemas import Error as AdCPErrorModel
-
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuyError(
-                status="failed", errors=[AdCPErrorModel(code="AUTH_REQUIRED", message="Admin required")]
-            )
+            # The adapter refuses an admin-only action for a non-admin principal.
+            env.mock["adapter"].return_value.update_media_buy.side_effect = AdCPAuthorizationError()
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -2656,9 +2665,15 @@ class TestUC003ExtN:
                 media_buy_id="mb_priv",
                 packages=[{"package_id": "pkg_1", "budget": 5000.0}],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuyError)
+            with pytest.raises(AdCPAuthorizationError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+
+            # The refusal travels as the typed error, so the boundary mints
+            # PERMISSION_DENIED for the buyer instead of a success carrying the buy's id.
+            assert exc_info.value.error_code == "PERMISSION_DENIED"
+            # And nothing the adapter refused was written to our row.
+            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2670,9 +2685,15 @@ class TestUC003ExtO:
     """Adapter and workflow failure obligations."""
 
     def test_adapter_quota_error(self):
-        """Adapter API quota error returns activation_workflow_failed.
+        """Adapter API quota error reaches the buyer as a transient failure.
 
         Covers: UC-003-EXT-O-02
+
+        A RAISE, not a returned error model -- see
+        ``test_non_admin_principal_rejected`` above for why a returned
+        ``UpdateMediaBuyError`` answered the buyer with a SUCCESS. ``AdCPAdapterError``
+        is the class a transient adapter fault raises; its wire code is
+        SERVICE_UNAVAILABLE.
         """
         with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
             mock_session = env.mock["uow"].return_value.session
@@ -2682,12 +2703,8 @@ class TestUC003ExtO:
             mock_scalars.first.return_value = mock_cl
             mock_session.scalars.return_value = mock_scalars
 
-            # Adapter returns error
-            from src.core.schemas import Error
-
-            env.mock["adapter"].return_value.update_media_buy.return_value = UpdateMediaBuyError(
-                status="failed", errors=[Error(code="SERVICE_UNAVAILABLE", message="Quota exceeded")]
-            )
+            # The ad server refuses the call: quota exhausted.
+            env.mock["adapter"].return_value.update_media_buy.side_effect = AdCPAdapterError()
 
             identity = env.identity
             req = UpdateMediaBuyRequest(
@@ -2696,9 +2713,12 @@ class TestUC003ExtO:
                 media_buy_id="mb_quota",
                 packages=[{"package_id": "pkg_1", "budget": 5000.0}],
             )
-            result = _update_media_buy_impl(req=req, identity=identity)
 
-            assert isinstance(result, UpdateMediaBuyError)
+            with pytest.raises(AdCPAdapterError) as exc_info:
+                _update_media_buy_impl(req=req, identity=identity)
+
+            assert exc_info.value.error_code == "SERVICE_UNAVAILABLE"
+            env.mock["uow"].return_value.media_buys.update_fields.assert_not_called()
 
     def test_workflow_creation_failure(self):
         """Workflow step creation failure during manual approval.
@@ -2857,45 +2877,13 @@ class TestUC003StateMachine:
 
             assert isinstance(result, UpdateMediaBuySuccess)
 
-    def test_post_action_status_derived_from_db(self):
-        """After a successful pause, valid_actions reflects the DB status, not a hardcode.
-
-        Pre-fix: ``_post_action_status = "paused" if req.paused else "active"`` always
-        used the requested action regardless of what actually happened. Post-fix: the
-        DB status is re-read and used for valid_actions.
-        """
-        with MediaBuyUpdateEnv(principal_id="principal_test", tenant_id="tenant_test") as env:
-            # Initial DB state: active (passes precondition).
-            active_mb = _make_mock_media_buy("mb_post_action", status="active")
-            # Post-pause DB state: a publisher-specific status the hardcode would never produce.
-            # ``valid_actions_for_status('pending_creatives')`` returns
-            # ``['cancel', 'update_budget', 'update_dates', 'update_packages',
-            #    'add_packages', 'sync_creatives']`` (no 'pause' or 'resume') — the
-            # hardcode would return ``valid_actions_for_status('paused')`` and miss
-            # 'sync_creatives' and 'add_packages'.
-            post_action_mb = _make_mock_media_buy("mb_post_action", status="pending_creatives")
-            env.mock["uow"].return_value.media_buys.get_by_id.side_effect = [
-                active_mb,  # state-machine precondition
-                post_action_mb,  # post-action status lookup (the line-421 fix)
-            ]
-
-            env.mock["adapter"].return_value.update_media_buy.return_value = AdapterUpdateResult(
-                media_buy_id="mb_post_action",
-                affected_packages=[],
-            )
-
-            identity = env.identity
-            req = UpdateMediaBuyRequest(
-                account={"account_id": "acct_test"},
-                idempotency_key="test-idem-key-0001",
-                media_buy_id="mb_post_action",
-                paused=True,
-            )
-            result = _update_media_buy_impl(req=req, identity=identity)
-
-            assert isinstance(result, UpdateMediaBuySuccess)
-            action_values = {getattr(a, "value", a) for a in (result.valid_actions or [])}
-            assert "sync_creatives" in action_values, (
-                "valid_actions must reflect the DB-derived post-action status "
-                f"('pending_creatives'), not the hardcoded ('paused'). Got: {action_values}"
-            )
+    # REMOVED: test_post_action_status_derived_from_db. Its outcome -- valid_actions
+    # reflecting the DB-derived post-action status rather than the requested action -- is
+    # graded on real wire bytes by @T-UC-003-ext-scheduled-status in
+    # BR-UC-002-media-buy-status-dual-emit.feature ("update_media_buy on a scheduled buy
+    # normalizes status and reports valid_actions"), whose Thens assert
+    # ``the wire media_buy_status should be "pending_start"`` and
+    # ``the wire valid_actions should include "update_budget"/"cancel"``. Measured in run
+    # innet_150926_1232: PASSED on a2a, mcp and rest (bdd_inprocess) and on e2e_rest
+    # (bdd_e2e). The scenario drives a status the old hardcode could never produce, so it
+    # grades the same fix strictly better than a mocked DB read could.

@@ -23,7 +23,6 @@ import pytest
 from tests.helpers.adcp_factories import (
     create_test_cpm_pricing_option,
     create_test_format,
-    create_test_package,
     create_test_product,
 )
 
@@ -178,44 +177,16 @@ class TestGetProductsResponseShape:
 class TestCreateMediaBuyResponseShape:
     """Verify the serialized shape of CreateMediaBuySuccess."""
 
-    def test_minimal_success_response(self):
-        """Minimal success response has required fields."""
-        from src.core.schemas import CreateMediaBuySuccess
-
-        resp = CreateMediaBuySuccess.sync_success(
-            media_buy_id="buy_001",
-            packages=[],
-            confirmed_at=_CONFIRMED_AT,
-            revision=_REVISION,
-        )
-        data = resp.model_dump(mode="json")
-
-        assert_field_type(data, "media_buy_id", str)
-        assert_field_type(data, "packages", list)
-
-        assert data["media_buy_id"] == "buy_001"
-
-    def test_success_response_with_packages(self):
-        """Response with packages has correct nested package structure."""
-        from src.core.schemas import CreateMediaBuySuccess
-
-        package = create_test_package(
-            package_id="pkg_001",
-            product_id="prod_1",
-        )
-        resp = CreateMediaBuySuccess.sync_success(
-            media_buy_id="buy_002",
-            packages=[package],
-            confirmed_at=_CONFIRMED_AT,
-            revision=_REVISION,
-        )
-        data = resp.model_dump(mode="json")
-
-        assert len(data["packages"]) == 1
-
-        pkg = data["packages"][0]
-        assert_field_type(pkg, "package_id", str)
-        assert pkg["package_id"] == "pkg_001"
+    # REMOVED: test_minimal_success_response and test_success_response_with_packages.
+    # Both asserted the PRESENCE and TYPE of media_buy_id and packages, which this model
+    # INHERITS from the adcp parent (verified off the live MRO: neither is redeclared
+    # here), so they asserted that Python inheritance works -- the comparison CLAUDE.md
+    # says this repo deliberately does not make. The value assertions read back the
+    # literals the test had just passed in.
+    #
+    # What survives below is the case that CAN fail: the exclusion is OURS. The SDK
+    # parent is extra="allow", this class is extra="ignore", and only the latter keeps an
+    # undeclared seller-internal key off the wire.
 
     def test_internal_fields_excluded(self):
         """An undeclared seller-internal key does not reach the buyer.
@@ -566,42 +537,14 @@ class TestListCreativeFormatsResponseShape:
 class TestUpdateMediaBuyResponseShape:
     """Verify the serialized shape of UpdateMediaBuySuccess."""
 
-    def test_minimal_success_response(self):
-        """Minimal success response has required fields."""
-        from src.core.schemas import UpdateMediaBuySuccess
-
-        resp = UpdateMediaBuySuccess.sync_success(
-            media_buy_id="buy_100",
-            revision=_REVISION,
-        )
-        data = resp.model_dump(mode="json")
-
-        assert_field_type(data, "media_buy_id", str)
-
-        assert data["media_buy_id"] == "buy_100"
-
-    def test_success_response_with_packages(self):
-        """Response with affected_packages has correct nested package structure."""
-        from src.core.schemas import AffectedPackage, UpdateMediaBuySuccess
-
-        package = AffectedPackage(
-            package_id="pkg_001",
-            paused=False,
-        )
-        resp = UpdateMediaBuySuccess.sync_success(
-            media_buy_id="buy_101",
-            affected_packages=[package],
-            revision=_REVISION,
-        )
-        data = resp.model_dump(mode="json")
-
-        assert_field_type(data, "affected_packages", list)
-        assert len(data["affected_packages"]) == 1
-
-        pkg = data["affected_packages"][0]
-        assert_field_type(pkg, "package_id", str)
-        assert_field_type(pkg, "paused", bool)
-        assert pkg["package_id"] == "pkg_001"
+    # REMOVED: test_minimal_success_response and test_success_response_with_packages, for
+    # the reason given in TestCreateMediaBuyResponseShape above -- media_buy_id,
+    # affected_packages, and the nested package_id/paused are all inherited, so presence
+    # and type assertions on them cannot fail. Neither case asserted a LOCAL field of our
+    # AffectedPackage subclass, which is the part the nested serializer actually decides.
+    #
+    # test_internal_fields_excluded stays: changes_applied and buyer_package_ref are ours,
+    # declared with Field(exclude=True), and their absence from the dump is our behavior.
 
     def test_internal_fields_excluded(self):
         """Internal fields (changes_applied, buyer_package_ref) are excluded.
@@ -663,7 +606,6 @@ class TestListCreativesResponseShape:
 
         creative = Creative(
             creative_id="creative_001",
-            variants=[],
             name="Premium Banner",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
         )
@@ -722,7 +664,6 @@ class TestListCreativesResponseShape:
 
         creative = Creative(
             creative_id="creative_002",
-            variants=[],
             name="Confidential Ad",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
             principal_id="principal_secret_123",
@@ -743,7 +684,6 @@ class TestListCreativesResponseShape:
 
         creative = Creative(
             creative_id="creative_003",
-            variants=[],
             name="Video Ad",
             format_id={"agent_url": "https://creative.adcontextprotocol.org", "id": "video_1920x1080"},
         )
@@ -793,12 +733,13 @@ class TestSerializationConsistency:
                 ).ListCreativeFormatsResponse(formats=[create_test_format()]),
                 id="list_creative_formats",
             ),
-            pytest.param(
-                lambda: __import__(
-                    "src.core.schemas", fromlist=["UpdateMediaBuySuccess"]
-                ).UpdateMediaBuySuccess.sync_success(media_buy_id="mb_test", affected_packages=[], revision=_REVISION),
-                id="update_media_buy",
-            ),
+            # REMOVED: the update_media_buy param. An update_media_buy success response is
+            # serialized on a REAL wire and schema-validated by a scenario that passes on
+            # all four transports -- @T-UC-003-ext-scheduled-status ("update_media_buy on
+            # a scheduled buy normalizes status and reports valid_actions") PASSED on a2a,
+            # mcp and rest (bdd_inprocess) and on e2e_rest (bdd_e2e) in run
+            # innet_150926_1232. A wire round-trip proves JSON-native types by
+            # construction; this param proved it once through a constructor.
             pytest.param(
                 lambda: __import__("src.core.schemas", fromlist=["ListCreativesResponse"]).ListCreativesResponse(
                     creatives=[],

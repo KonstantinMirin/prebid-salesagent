@@ -16,13 +16,11 @@ import pytest
 
 from src.core.exceptions import AdCPConfigurationError
 from src.core.schemas import Principal
-from tests.factories.principal import plaintext_token_for
 
 
 def _make_principal() -> Principal:
     """Create a minimal Principal for adapter construction."""
-    return Principal.with_token(
-        plaintext_token_for("test_principal"),
+    return Principal(
         principal_id="test_principal",
         name="Test Principal",
         platform_mappings={},
@@ -92,11 +90,19 @@ class TestAdapterTenantIdValidation:
             )
 
     def test_gam_adapter_accepts_valid_tenant_id(self):
-        """GoogleAdManager with valid tenant_id should initialize without error."""
+        """GoogleAdManager with valid tenant_id should initialize without error.
+
+        The service account document has to be one google.auth can parse: the adapter
+        builds its credentials at construction, and the ``"{}"`` that stood here was only
+        ever accepted because a dry-run adapter skipped that step (no adapter carries that
+        flag now). The refusal cases above still pass ``"{}"`` -- they raise on the tenant
+        id before any credential is read.
+        """
         from src.adapters.google_ad_manager import GoogleAdManager
+        from tests.helpers.gam_credentials import service_account_json
 
         adapter = GoogleAdManager(
-            config={"service_account_json": "{}"},
+            config={"service_account_json": service_account_json()},
             principal=_make_principal(),
             network_code="12345",
             tenant_id="valid_tenant",

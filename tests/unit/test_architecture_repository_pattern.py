@@ -352,7 +352,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_metrics_calculation"),
     ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
-    # tests/integration/test_tenant_isolation_breach_fix.py
     # tests/integration/test_tenant_isolation_fix.py
     # tests/integration/test_tenant_management_api_integration.py
     # mock_api_key_auth fixed — stores the API key digest through
@@ -391,8 +390,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_admin_ui_data_validation.py", "test_media_buys_list_no_duplicates_with_packages"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_media_buys_list_shows_all_statuses"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_workflows_list_no_duplicate_steps"),
-    # tests/integration/test_create_media_buy_roundtrip.py
-    ("tests/integration/test_create_media_buy_roundtrip.py", "setup_test_tenant"),
     # tests/integration/test_create_media_buy_v24.py
     ("tests/integration/test_create_media_buy_v24.py", "setup_test_tenant"),
     # tests/integration/test_creative_lifecycle_mcp.py
@@ -406,10 +403,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # tests/integration/test_get_products_filters.py — migrated to factories
     # tests/integration/test_get_products_format_id_filter.py — migrated to factories
     # tests/integration/test_mcp_endpoints_comprehensive.py — requires_server suite removed (#1233 D11)
-    # tests/integration/test_mcp_tool_roundtrip_validation.py
-    ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
-    # tests/integration/test_mcp_tools_audit.py
-    ("tests/integration/test_mcp_tools_audit.py", "test_tenant_id"),
     # tests/integration/test_minimum_spend_validation.py
     ("tests/integration/test_minimum_spend_validation.py", "setup_test_data"),
     ("tests/integration/test_minimum_spend_validation.py", "test_no_minimum_when_not_set"),
@@ -716,8 +709,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_adapter_config_repository.py", "test_has_gam_credentials_service_account"),
     ("tests/integration/test_adapter_config_repository.py", "test_update_custom_targeting_keys_raises_when_missing"),
     ("tests/integration/test_adapter_factory.py", "setup_adapters"),
-    ("tests/integration/test_adapter_factory.py", "test_gam_adapter_requires_network_code"),
-    ("tests/integration/test_adapter_factory.py", "test_get_adapter_instantiates_all_adapter_types"),
     ("tests/integration/test_admin_ui_data_validation.py", "_bind_factories_for_sizes"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_dashboard_media_buy_count_accurate"),
     ("tests/integration/test_admin_ui_data_validation.py", "test_inventory_browser_no_duplicate_ad_units"),
@@ -738,7 +729,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_audit_decorator.py", "test_decorator_skips_logging_without_tenant_id"),
     ("tests/integration/test_audit_decorator.py", "test_decorator_truncates_long_values"),
     ("tests/integration/test_context_persistence.py", "test_simplified_context"),
-    ("tests/integration/test_create_media_buy_roundtrip.py", "setup_test_tenant"),
     ("tests/integration/test_create_media_buy_v24.py", "setup_test_tenant"),
     ("tests/integration/test_creative_assignment_principal_id.py", "_query_assignments"),
     ("tests/integration/test_creative_assignment_principal_id.py", "ca_creatives"),
@@ -909,7 +899,13 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_manual_approval_enriches_concept_and_is_filterable",
     ),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_multiple_packages_all_persisted"),
-    ("tests/integration/test_execute_approved_platform_ids.py", "test_no_platform_line_item_ids_attr"),
+    # Re-keyed, not added: this pre-existing violation was allowlisted as
+    # "test_no_platform_line_item_ids_attr" and the test was renamed to
+    # "test_omitted_platform_line_item_ids" (the attribute it named can no longer be
+    # absent — AdapterCreateResult declares platform_line_item_ids with
+    # default_factory=dict). Same violation, same count; this allowlist is keyed on the
+    # test NAME, so a rename has to re-point the entry in the same change.
+    ("tests/integration/test_execute_approved_platform_ids.py", "test_omitted_platform_line_item_ids"),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_platform_line_item_ids_persisted_after_approval"),
     ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
     ("tests/integration/test_format_conversion_approval.py", "test_currency_limit"),
@@ -926,8 +922,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_format_conversion_approval.py", "test_tenant"),
     ("tests/integration/test_format_conversion_approval.py", "test_valid_format_id_dict_conversion"),
     ("tests/integration/test_format_conversion_approval.py", "test_valid_format_reference_dict_conversion"),
-    ("tests/integration/test_gam_adapter_auth.py", "_load_principal"),
-    ("tests/integration/test_gam_adapter_auth.py", "_set_tenant_context"),
     ("tests/integration/test_gam_adapter_auth.py", "oauth_tenant"),
     ("tests/integration/test_gam_adapter_auth.py", "sa_tenant"),
     ("tests/integration/test_gam_adapter_auth.py", "test_oauth_config_includes_refresh_token"),
@@ -1031,9 +1025,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ),
     ("tests/integration/test_inventory_profile_updates.py", "test_updating_profile_properties_affects_all_products"),
     ("tests/integration/test_inventory_tree_lazy_loading.py", "_bind_factories"),
-    ("tests/integration/test_mcp_tool_roundtrip_validation.py", "real_products_in_db"),
-    ("tests/integration/test_mcp_tool_roundtrip_validation.py", "test_tenant_id"),
-    ("tests/integration/test_mcp_tools_audit.py", "test_tenant_id"),
     ("tests/integration/test_media_buy_readiness.py", "test_completed_state"),
     ("tests/integration/test_media_buy_readiness.py", "test_draft_state_no_packages"),
     ("tests/integration/test_media_buy_readiness.py", "test_live_state"),
@@ -1187,11 +1178,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ),
     ("tests/integration/test_property_targeting_allowed_enforcement.py", "_seed_media_buy"),
     ("tests/integration/test_property_targeting_allowed_enforcement.py", "property_targeting_tenant"),
-    ("tests/integration/test_resolve_account.py", "test_natural_key_not_found_raises"),
-    ("tests/integration/test_resolve_account.py", "test_no_access_raises"),
-    ("tests/integration/test_resolve_account.py", "test_not_found_raises"),
-    ("tests/integration/test_resolve_account.py", "test_resolves_by_account_id"),
-    ("tests/integration/test_resolve_account.py", "test_resolves_by_natural_key"),
     ("tests/integration/test_schema_database_mapping.py", "test_database_field_access_validation"),
     ("tests/integration/test_schema_database_mapping.py", "test_database_json_field_handling"),
     ("tests/integration/test_schema_database_mapping.py", "test_schema_to_database_conversion_safety"),
@@ -1236,7 +1222,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_empty_tenant"),
     ("tests/integration/test_tenant_dashboard.py", "test_dashboard_with_media_buys"),
     ("tests/integration/test_tenant_dashboard.py", "test_tenant_config_building"),
-    ("tests/integration/test_tenant_isolation_breach_fix.py", "test_no_fallback_to_first_tenant"),
     ("tests/integration/test_tenant_management_api_integration.py", "mock_api_key_auth"),
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
     ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),

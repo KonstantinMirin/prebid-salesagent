@@ -7,7 +7,6 @@ from pydantic import ValidationError
 from src.adapters.base import AdapterCreateRequest
 from src.adapters.mock_ad_server import MockAdServer
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, PackageRequest, Principal
-from tests.factories.principal import plaintext_token_for
 
 pytestmark = pytest.mark.unit
 
@@ -45,16 +44,14 @@ def test_mock_ad_server_create_media_buy(sample_packages, mocker):
     when a create_media_buy request is received.
     """
     # Arrange
-    principal = Principal.with_token(
-        plaintext_token_for("test_principal"),
+    principal = Principal(
         principal_id="test_principal",
         name="Test Principal",
         platform_mappings={"mock": {"advertiser_id": "test_advertiser"}},
     )
 
-    # Mock get_current_tenant to avoid database access in unit test
-    mocker.patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"})
-
+    # No tenant patch: the adapter is given its tenant_id, and the ambient tenant
+    # ContextVar an adapter used to read is deleted.
     adapter = MockAdServer({}, principal, tenant_id="test_tenant")
     start_time = datetime.now(UTC)
     end_time = start_time + timedelta(days=30)

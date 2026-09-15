@@ -431,7 +431,9 @@ def sample_tenant(integration_db):
             "tenant_id": tenant.tenant_id,
             "name": tenant.name,
             "subdomain": tenant.subdomain,
-            "admin_token": tenant.admin_token,
+            # No admin_token: the tenant-level admin credential was dropped in 84a86e019
+            # (migration e4b7c2a91f05). Principal tokens are hashed and shown once; there
+            # is no tenant admin credential path left. No consumer read this key.
         }
 
 

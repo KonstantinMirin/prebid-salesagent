@@ -33,6 +33,7 @@ class TestAuthRemovalChanges:
     def test_pricing_filtering_for_anonymous_users(self):
         """Test that pricing data is filtered for anonymous users."""
         # Test the pricing filtering logic
+        from src.core.product_conversion import default_reporting_capabilities
         from src.core.schemas import Product
         from tests.helpers.adcp_factories import (
             create_test_cpm_pricing_option,
@@ -50,6 +51,7 @@ class TestAuthRemovalChanges:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },
+            reporting_capabilities=default_reporting_capabilities(),
             publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
             pricing_options=[
                 create_test_cpm_pricing_option(
@@ -101,6 +103,7 @@ class TestAuthRemovalChanges:
 
     def test_authenticated_users_keep_pricing_data(self):
         """Test that authenticated users still get full pricing data."""
+        from src.core.product_conversion import default_reporting_capabilities
         from src.core.schemas import Product
         from tests.helpers.adcp_factories import (
             create_test_cpm_pricing_option,
@@ -118,6 +121,7 @@ class TestAuthRemovalChanges:
                 "provider": "test_provider",
                 "notes": "Test measurement",
             },
+            reporting_capabilities=default_reporting_capabilities(),
             publisher_properties=[create_test_publisher_properties_by_tag(publisher_domain="test.com")],
             pricing_options=[
                 create_test_cpm_pricing_option(

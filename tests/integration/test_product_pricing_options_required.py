@@ -26,8 +26,6 @@ from tests.factories.principal import plaintext_token_for
 @pytest.mark.requires_db
 def test_get_product_catalog_loads_pricing_options(integration_db):
     """Test that get_product_catalog() loads pricing_options relationship."""
-    from src.core.config_loader import set_current_tenant
-
     # Create test tenant with valid domain (no underscores)
     unique_id = str(uuid.uuid4())[:8].replace("_", "")  # Remove underscores
     now = datetime.now(UTC)
@@ -57,13 +55,8 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
         session.add(principal)
         session.commit()
 
-        # Set up context
-        tenant_config = {
-            "tenant_id": tenant.tenant_id,
-            "name": tenant.name,
-            "adapter_id": tenant.ad_server,
-        }
-        set_current_tenant(tenant_config)
+        # No ambient tenant to set up: get_product_catalog takes the tenant id.
+        catalog_tenant_id = tenant.tenant_id
 
         # Create a product with pricing options
         product = ProductModel(
@@ -92,8 +85,8 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
         session.add(pricing_option)
         session.commit()
 
-    # Call get_product_catalog()
-    products = get_product_catalog()
+    # Call get_product_catalog() for the tenant just seeded
+    products = get_product_catalog(catalog_tenant_id)
 
     # Verify we got products back
     assert len(products) > 0, "Should return at least one product"

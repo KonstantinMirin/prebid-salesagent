@@ -16,7 +16,6 @@ from src.adapters.google_ad_manager import GUARANTEED_LINE_ITEM_TYPES, NON_GUARA
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product, Tenant
 from src.core.schemas import FormatId, MediaPackage, Principal
-from tests.factories.principal import plaintext_token_for
 from tests.integration.conftest import create_test_product_with_pricing
 
 # Default agent URL for creating FormatId objects
@@ -181,8 +180,7 @@ class TestGAMPackageTypes:
 
     def test_principal_configuration(self):
         """Test principal object creation for GAM integration."""
-        principal = Principal.with_token(
-            plaintext_token_for("test_advertiser"),
+        principal = Principal(
             principal_id="test_advertiser",
             name="Test Advertiser",
             platform_mappings={"google_ad_manager": {"advertiser_id": "123456"}},

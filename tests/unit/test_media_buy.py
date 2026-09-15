@@ -2817,6 +2817,55 @@ class TestUpdateMediaBuyManualApproval:
         assert dumped.get("implementation_date") is None
 
 
+# REMOVED: tests/integration/test_create_media_buy_roundtrip.py, whole file.
+#
+# Two of its three cases went first, their subject deleted with the testing-hook channel
+# (``src/core/testing_hooks.py``, commit a1b79d22d). The survivor graded a
+# ``model_dump()`` -> reconstruct round-trip, kept on the argument that it covers the
+# ``confirmed_at``-under-``exclude_none`` retention that GH #1900 is about. Measured, that
+# argument does not hold: @T-UC-002-v31-success-revision-and-actions ("v3.1 sync success
+# response carries revision, confirmed_at, valid_actions") asserts
+# ``the response should include "confirmed_at" as an ISO 8601 timestamp`` on the real wire
+# and PASSED on a2a, mcp and rest (bdd_inprocess) and on e2e_rest (bdd_e2e) in run
+# innet_150926_1232 -- four transports, against one constructor.
+#
+# What the round-trip alone proved -- that a response re-validates from its own dump -- is
+# a property no production path relies on now that the testing-hooks filtering it was
+# written for is gone. Its DB fixture had also stopped being used by the one surviving
+# test. (Neither the deleted test nor any scenario grades a NULL ``confirmed_at`` on a
+# CREATE success; the nearest passing coverage is the get_media_buys item,
+# ``test_a_buy_that_was_never_confirmed_still_carries_confirmed_at_as_null[e2e_rest-draft]``.
+# That gap is pre-existing -- the deleted test passed a real datetime and never reached it.)
+
+
+# REMOVED: tests/unit/test_approval_error_handling.py and
+# tests/unit/test_approval_error_handling_core.py (8 tests), deleted whole rather than
+# repaired. The note lives here because this is the surviving unit file for these tools.
+#
+# Their PREMISE is gone. Both files documented one bug -- "'CreateMediaBuyError' object
+# has no attribute 'media_buy_id'" -- which occurred when the ADAPTER returned an error
+# model and the tool then read a success field off it. An adapter now returns
+# ``src.adapters.base.AdapterCreateResult`` or RAISES (commit ecfdd7771; production says
+# so at the call site, and ``test_adapter_network_error`` below is the case that grades
+# it), so the wire error and success models are no longer anything an adapter can hand
+# back. The path cannot occur, which is why the files could not be brought back to
+# grading anything by fixing them.
+#
+# And their assertions could not fail regardless: ``hasattr`` on fields the models
+# INHERIT from the adcp parent (media_buy_id is not redeclared in either class),
+# ``isinstance`` distinguishing two unrelated classes, and ``len(errors) == 1`` after
+# constructing with one error.
+#
+# The one live assertion in the eight -- that ``Error.message`` is derived from
+# CODE_TABLE and discards a caller-supplied string -- is graded in 49 other places,
+# including exact-equality forms at ``tests/unit/test_delivery.py`` and
+# ``tests/unit/test_sync_response_account_contract.py``. The surviving wire use of
+# ``CreateMediaBuyError`` (embedded in the seller-rejection webhook) is graded
+# end-to-end by ``tests/integration/test_admin_media_buy_reject_webhook.py``, which
+# drives the real admin reject route and asserts the embedded code, recovery and
+# rejection reason on the captured body.
+
+
 class TestUpdateMediaBuyAdapterFailure:
     """UC-003 ext-o: adapter/workflow failure."""
 

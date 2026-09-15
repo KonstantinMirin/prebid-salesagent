@@ -168,14 +168,13 @@ class TestBoundaryNegotiatesForEveryTool:
 
         Two negotiators would drift, and the boundary's is the one every tool crosses.
         """
-        from src.core.config_loader import current_tenant
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        current_tenant.set(None)
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
-        # Reached directly, past the boundary, the implementation just answers.
-        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        # Reached directly, past the boundary, the implementation just answers. The
+        # caller is anonymous and names no seller: a PublicIdentity with neither.
+        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_public_identity(tenant=None))
         assert response.adcp.supported_versions is not None
 
 
@@ -186,18 +185,15 @@ class TestBuildAdcpBlockDry:
     """
 
     def test_minimal_no_tenant_response_declares_derived_supported_versions(self):
-        from src.core.config_loader import current_tenant
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
         from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
 
-        current_tenant.set(None)
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_identity(principal_id=None, tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
 
         assert response.adcp.supported_versions is not None
         assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS
 
     def test_full_tenant_response_declares_same_derived_supported_versions(self):
-        from src.core.config_loader import current_tenant
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
         from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
         from tests.unit.test_get_adcp_capabilities import (
@@ -206,13 +202,9 @@ class TestBuildAdcpBlockDry:
         )
 
         identity = _make_capabilities_identity(principal_id=None, tenant_id="test-tenant-version-negotiation")
-        current_tenant.set(identity.tenant)
 
-        try:
-            with _patch_capabilities_deps(adapter=None):
-                response = _get_adcp_capabilities_impl(None, identity)
+        with _patch_capabilities_deps(adapter=None):
+            response = _get_adcp_capabilities_impl(None, identity)
 
-            assert response.adcp.supported_versions is not None
-            assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS
-        finally:
-            current_tenant.set(None)
+        assert response.adcp.supported_versions is not None
+        assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS

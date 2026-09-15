@@ -19,7 +19,7 @@ import pytest
 from adcp.types import MediaBuyStatus
 from pydantic import RootModel
 
-from src.core.exceptions import AdCPAuthRequiredError, AdCPPersistedStateError
+from src.core.exceptions import AdCPPersistedStateError
 from src.core.schemas import (
     ApprovalStatus,
     CreativeApproval,
@@ -427,30 +427,23 @@ class TestGetMediaBuysImpl:
         assert len(response.media_buys) == 1
         assert response.media_buys[0].media_buy_id == "buy_active"
 
-    def test_missing_principal_raises_rather_than_degrading(self):
-        """An identity with no principal_id is a FATAL auth failure, so it raises.
-
-        This test previously asserted the opposite -- empty media_buys plus a
-        payload-level errors[] entry, HTTP 200, no adcp_error. That shape is
-        named as non-conformant by the pinned spec
-        (dist/docs/3.1.1/building/operating/transport-errors.mdx): the two layers
-        mean different things (:206-207 -- envelope "the task failed", payload
-        errors[] "the task ran ... issues"), a fatal failure SHOULD populate both
-        (:209), and the client detection order calls out this exact shape (:220):
-        "a fatal task that surfaces errors only via the payload is a conformance
-        gap on the agent side".
-
-        Nothing could be authorized, so the empty list was never a result. The
-        requirement changed, and the test changes with it rather than the code
-        being bent back to a graded gap (#1651).
-        """
-        identity = make_identity(principal_id=None)
-
-        req = self._make_request()
-        with pytest.raises(AdCPAuthRequiredError) as exc_info:
-            _get_media_buys_impl(req, identity=identity)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
+    # test_missing_principal_raises_rather_than_degrading is REMOVED. It built an identity
+    # with principal_id=None and asserted _get_media_buys_impl raised
+    # AdCPAuthRequiredError / AUTH_MISSING itself. This is the same case
+    # tests/unit/test_media_buy.py:3869 already documents removing (GMB-A02, Covers: #1651)
+    # -- one copy of it survived here.
+    #
+    # Neither half is constructible now. A ResolvedIdentity ALWAYS carries a principal
+    # (the field is required and make_identity takes no None), and the in-tool guards that
+    # raised went with the rest of the re-checks when the resolver became the one place a
+    # credential is judged (47d57e5d6); ruff-boundary.toml's TID251 ban forbids raising
+    # AUTH_MISSING or AUTH_INVALID anywhere but the resolver.
+    #
+    # The conformance obligation is unchanged (#1651: a fatal auth failure must populate the
+    # ENVELOPE, not answer HTTP 200 with a payload-only errors[], per
+    # transport-errors.mdx :206-220) and is graded where it is decided: the resolver mints
+    # the refusal for every tool and every transport at once, and the wire shape is asserted
+    # by the transport-blind auth scenarios rather than once per tool.
 
     def test_snapshot_not_requested_when_false(self, patched_internals):
         """When include_snapshot=False, adapter.get_packages_snapshot not called."""

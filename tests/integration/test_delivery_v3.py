@@ -12,7 +12,6 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import (
@@ -52,13 +51,6 @@ def _make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant={"tenant_id": tenant_id, "name": "Test Tenant"},
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=False,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
-        ),
     )
 
 

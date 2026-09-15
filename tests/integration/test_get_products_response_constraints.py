@@ -88,8 +88,6 @@ class TestRelevanceThresholdIntegration:
 
         Covers: CONSTR-RELEVANCE-THRESHOLD-01
         """
-        from src.core.testing_hooks import AdCPTestContext
-
         from src.core.tenant_context import TenantContext
         from src.services.ai.agents.ranking_agent import ProductRanking, ProductRankingResult
 
@@ -113,14 +111,12 @@ class TestRelevanceThresholdIntegration:
                 ]
             )
 
+            # The identity carries the principal and the tenant, and nothing else: the
+            # transport and the testing context it used to carry are both gone.
             env._identity = PrincipalFactory.make_identity(
                 principal_id="p1",
                 tenant_id="thresh-t1",
                 tenant=TenantContext.load("thresh-t1"),
-                protocol="mcp",
-                testing_context=AdCPTestContext(
-                    dry_run=False, mock_time=None, jump_to_event=None, test_session_id=None
-                ),
             )
 
             with (

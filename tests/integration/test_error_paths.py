@@ -19,9 +19,16 @@ this file used to carry, and those are gone for good:
   "the invalid creative should have action failed";
 * invalid ``created_after`` -> ``tests/integration/test_creative_list_behavioral.py``
   ``test_invalid_created_after_raises`` (UC-006-EXT-C-01);
-* ``Error`` / ``CreateMediaBuyError`` constructibility smoke tests -> exercised
-  behaviorally by ``tests/unit/test_approval_error_handling.py`` and
-  ``tests/unit/test_adcp_contract.py``.
+* ``Error`` / ``CreateMediaBuyError`` constructibility smoke tests -> the two files this
+  line used to name are DELETED, because constructibility is not an obligation: both
+  ``tests/unit/test_approval_error_handling.py`` (whole file) and the two media-buy
+  response-compliance cases in ``tests/unit/test_adcp_contract.py`` asserted ``hasattr``
+  and field presence over fields the models INHERIT from the adcp parent, which cannot
+  fail. The surviving wire use of ``CreateMediaBuyError`` -- embedded in the
+  seller-rejection webhook -- is graded end-to-end by
+  ``tests/integration/test_admin_media_buy_reject_webhook.py``, and ``Error``'s
+  CODE_TABLE-derived message by the exact-equality assertions in
+  ``tests/unit/test_delivery.py`` and ``tests/unit/test_sync_response_account_contract.py``.
 
 What did NOT move is below. ``_envelope_response`` in src/app.py resolves identity
 best-effort from the request (``_best_effort_rest_identity``) purely so the REST

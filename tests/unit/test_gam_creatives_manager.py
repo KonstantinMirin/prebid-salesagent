@@ -5,7 +5,7 @@ Tests creative validation logic including 1x1 wildcard placeholder handling
 and line item matching for creative associations.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from src.adapters.gam.managers.creatives import GAMCreativesManager, _extract_product_id_from_package
 
@@ -204,88 +204,70 @@ def test_extract_product_id_from_package_empty_string():
 # =============================================================================
 
 
+def _associate(line_item_map, *, asset, placement_targeting_map=None):
+    """Run the association and return the stand-in LICA service it called.
+
+    A line item creative association exists only in GAM, so the LICA service is what
+    a unit test stands in for, and the call it receives is what these tests grade:
+    WHICH line item the creative was associated with.
+    """
+    lica_service = MagicMock()
+    manager = GAMCreativesManager(MagicMock(), "advertiser_123")
+    manager._associate_creative_with_line_items(
+        gam_creative_id="12345",
+        asset=asset,
+        line_item_map=line_item_map,
+        lica_service=lica_service,
+        placement_targeting_map=placement_targeting_map,
+    )
+    return lica_service
+
+
 def test_line_item_matching_exact_match():
     """Line item name exactly equals product_id (default template)."""
-    client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123")
-
-    # Asset with package assignment
     asset = {
         "creative_id": "creative_123",
         "package_assignments": [{"package_id": "pkg_prod_291a023d_f8d1c060_1", "weight": 100}],
     }
 
     # Line item map where name equals product_id (default template: {product_name})
-    line_item_map = {
-        "prod_291a023d": "7211798767",  # Line item name is just the product ID
-    }
+    lica_service = _associate({"prod_291a023d": "7211798767"}, asset=asset)
 
-    # Call the method (dry_run=True so it won't actually call GAM API)
-    manager._associate_creative_with_line_items(
-        gam_creative_id="12345",
-        asset=asset,
-        line_item_map=line_item_map,
-        lica_service=None,
-        placement_targeting_map=None,
+    lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+        [{"creativeId": "12345", "lineItemId": "7211798767"}]
     )
-
-    # In dry_run mode, it should log the association without error
-    # The test passes if no exception is raised and the method completes
 
 
 def test_line_item_matching_ends_with_product_id():
     """Line item name ends with ' - {product_id}' (custom template)."""
-    client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123")
-
     asset = {
         "creative_id": "creative_456",
         "package_assignments": [{"package_id": "pkg_prod_291a023d_f8d1c060_1", "weight": 100}],
     }
 
-    # Line item map where name ends with " - {product_id}"
-    line_item_map = {
-        "Campaign Name - prod_291a023d": "7211798768",
-    }
+    lica_service = _associate({"Campaign Name - prod_291a023d": "7211798768"}, asset=asset)
 
-    manager._associate_creative_with_line_items(
-        gam_creative_id="12345",
-        asset=asset,
-        line_item_map=line_item_map,
-        lica_service=None,
-        placement_targeting_map=None,
+    lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+        [{"creativeId": "12345", "lineItemId": "7211798768"}]
     )
 
 
 def test_line_item_matching_starts_with_product_id():
     """Line item name starts with '{product_id} ' (alternative template)."""
-    client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123")
-
     asset = {
         "creative_id": "creative_789",
         "package_assignments": [{"package_id": "pkg_prod_291a023d_f8d1c060_1", "weight": 100}],
     }
 
-    # Line item map where name starts with "{product_id} "
-    line_item_map = {
-        "prod_291a023d - Extra Info": "7211798769",
-    }
+    lica_service = _associate({"prod_291a023d - Extra Info": "7211798769"}, asset=asset)
 
-    manager._associate_creative_with_line_items(
-        gam_creative_id="12345",
-        asset=asset,
-        line_item_map=line_item_map,
-        lica_service=None,
-        placement_targeting_map=None,
+    lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+        [{"creativeId": "12345", "lineItemId": "7211798769"}]
     )
 
 
 def test_line_item_matching_no_match_logs_warning():
-    """When no line item matches, a warning should be logged."""
-    client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123")
-
+    """When no line item matches, nothing is associated and a warning is logged."""
     asset = {
         "creative_id": "creative_999",
         "package_assignments": [{"package_id": "pkg_prod_291a023d_f8d1c060_1", "weight": 100}],
@@ -298,26 +280,17 @@ def test_line_item_matching_no_match_logs_warning():
     }
 
     with patch("src.adapters.gam.managers.creatives.logger") as mock_logger:
-        manager._associate_creative_with_line_items(
-            gam_creative_id="12345",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-            placement_targeting_map=None,
-        )
+        lica_service = _associate(line_item_map, asset=asset)
 
-        # Should log a warning about not finding the line item
-        mock_logger.warning.assert_called()
-        warning_call = mock_logger.warning.call_args[0][0]
-        assert "Line item not found" in warning_call
-        assert "pkg_prod_291a023d_f8d1c060_1" in warning_call
+    # Nothing is associated, and the unmatched package is named in the warning
+    lica_service.createLineItemCreativeAssociations.assert_not_called()
+    mock_logger.warning.assert_called_once_with(
+        "Line item not found for package pkg_prod_291a023d_f8d1c060_1. line_item_map has 2 entries"
+    )
 
 
 def test_line_item_matching_multiple_packages():
-    """Test matching with multiple package assignments."""
-    client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123")
-
+    """Each package assignment is associated with its own line item, carrying its weight."""
     asset = {
         "creative_id": "creative_multi",
         "package_assignments": [
@@ -327,47 +300,36 @@ def test_line_item_matching_multiple_packages():
     }
 
     # Line item map with both products (using exact match format)
-    line_item_map = {
-        "prod_111111": "1001",
-        "prod_222222": "1002",
-    }
+    lica_service = _associate({"prod_111111": "1001", "prod_222222": "1002"}, asset=asset)
 
-    manager._associate_creative_with_line_items(
-        gam_creative_id="12345",
-        asset=asset,
-        line_item_map=line_item_map,
-        lica_service=None,
-        placement_targeting_map=None,
-    )
+    # One call per assignment; a non-default weight rides the association as GAM's
+    # manualCreativeRotationWeight.
+    assert lica_service.createLineItemCreativeAssociations.call_args_list == [
+        call([{"creativeId": "12345", "lineItemId": "1001", "manualCreativeRotationWeight": 50}]),
+        call([{"creativeId": "12345", "lineItemId": "1002", "manualCreativeRotationWeight": 50}]),
+    ]
 
 
-def test_line_item_matching_priority_ends_with_first():
-    """When multiple strategies could match, 'ends with' should be checked first."""
-    client_manager = MagicMock()
-    manager = GAMCreativesManager(client_manager, "advertiser_123")
+def test_line_item_matching_takes_the_first_matching_line_item():
+    """The first line item in the map that matches ANY strategy wins.
 
+    The three name strategies are tried per LINE ITEM, not per strategy across the
+    map, so when two names could both match the same product the map's order decides
+    — here the exact-match name comes first and takes it. This pins the behaviour
+    rather than the older intention that the more specific " - {product_id}" suffix
+    should be preferred; nothing asks GAM for two line items whose names collide this
+    way, so the ordering is unspecified rather than wrong.
+    """
     asset = {
         "creative_id": "creative_priority",
         "package_assignments": [{"package_id": "pkg_prod_291a023d_f8d1c060_1", "weight": 100}],
     }
 
-    # Line item map with multiple potential matches
-    # The "ends with" match should be preferred
-    line_item_map = {
-        "prod_291a023d": "exact_match_id",
-        "Campaign - prod_291a023d": "ends_with_match_id",
-    }
+    lica_service = _associate(
+        {"prod_291a023d": "exact_match_id", "Campaign - prod_291a023d": "ends_with_match_id"},
+        asset=asset,
+    )
 
-    with patch("src.adapters.gam.managers.creatives.logger") as mock_logger:
-        manager._associate_creative_with_line_items(
-            gam_creative_id="12345",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-            placement_targeting_map=None,
-        )
-
-        # Check that one of the matches was found (either is acceptable)
-        info_calls = [call[0][0] for call in mock_logger.info.call_args_list]
-        match_found = any("MATCH" in call for call in info_calls)
-        assert match_found, "Expected a MATCH log entry"
+    lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+        [{"creativeId": "12345", "lineItemId": "exact_match_id"}]
+    )

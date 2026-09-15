@@ -35,7 +35,6 @@ from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
 from src.core.schemas import CreateMediaBuyRequest, MediaPackage, Principal, Targeting
-from tests.factories.principal import plaintext_token_for
 
 
 class GAMAutomationTester:
@@ -51,9 +50,9 @@ class GAMAutomationTester:
         self.created_orders: list[str] = []
         self.test_tenant_id = "gam_test_tenant"
 
-        self.principal = Principal.with_token(
-            plaintext_token_for("test_advertiser"),
-            tenant_id=self.test_tenant_id,
+        # The schema Principal declares principal_id, name and platform_mappings, and
+        # nothing else: no credential, and no tenant (the identity carries the tenant).
+        self.principal = Principal(
             principal_id="test_advertiser",
             name="GAM Test Advertiser",
             platform_mappings={"gam_advertiser_id": advertiser_id},

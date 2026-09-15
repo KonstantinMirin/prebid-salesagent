@@ -45,7 +45,27 @@ class TestListAccountsNoTokenEmitsAuthMissing:
             # This is the regression: production currently emits the deprecated
             # AUTH_REQUIRED code (correctable) instead of the 3.1.1 AUTH_MISSING
             # code (correctable) for the absent-credential case.
+            # require_suggestion is the obligation inherited from
+            # tests/integration/test_auth_suggestion_parity.py, which is DELETED. That file
+            # graded "every AUTH_MISSING/AUTH_INVALID rejection carries a non-empty
+            # top-level suggestion" (#1417 round-8 items 3-4, #2092) by driving
+            # src/core/auth.py's own raise sites -- require_principal_id,
+            # resolve_principal_or_raise and require_tenant. All three are GONE: the
+            # resolver is the one place a credential is judged (47d57e5d6), and
+            # ruff-boundary.toml bans minting AUTH_MISSING / AUTH_INVALID anywhere else, so
+            # those helpers have no callers and no successors to drive.
+            #
+            # The obligation itself is unchanged and is graded LIVE by the BDD step
+            # then_error_code_with_suggestion, which asserts through the same
+            # assert_wire_error(require_suggestion=...) oracle across a2a, mcp and rest.
+            # Arming it here too costs nothing and puts the absent-credential case under it.
+            #
+            # This test does not currently reach that assertion: it fails one line up,
+            # because list_accounts answers an absent credential with 200 and an empty
+            # accounts[] instead of refusing it. That gap predates this change (it is the
+            # same failure the box run recorded) and is tracked by this file's docstring.
             result.assert_wire_error(
                 "AUTH_MISSING",
                 recovery="correctable",
+                require_suggestion=True,
             )

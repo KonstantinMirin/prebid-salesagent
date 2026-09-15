@@ -17,7 +17,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from src.adapters.google_ad_manager import GoogleAdManager
 from src.core.schemas import CreateMediaBuyRequest, FormatId, MediaPackage, Principal, Targeting
-from tests.factories.principal import plaintext_token_for
 
 # Default agent URL for creating FormatId objects
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -54,9 +53,9 @@ class SupportedTargetingTester:
             "implementation_config": {"targeted_ad_unit_ids": [self.test_config["test_ad_units"]["root_ad_unit_id"]]},
         }
 
-        self.principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
-            tenant_id="test_tenant",
+        # The schema Principal declares principal_id, name and platform_mappings, and
+        # nothing else: no credential, and no tenant (the identity carries the tenant).
+        self.principal = Principal(
             principal_id="test_principal",
             name="Supported Targeting Test",
             platform_mappings={

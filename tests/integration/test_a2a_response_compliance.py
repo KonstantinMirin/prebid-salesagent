@@ -22,8 +22,19 @@ deleted. The implementations write that sentence to ``message`` now, so it is gr
 the field, on a real dispatch — here for get_media_buys, and on the ``on_message_send``
 pipeline output in ``tests/integration/test_a2a_skill_invocation.py``.
 
-Replaces: test_a2a_response_message_fields.py (which tested the old incorrect behavior)
+REPLACED, and the replacement is now COMPLETE: test_a2a_response_message_fields.py is
+DELETED, not merely superseded. This header claimed to replace it while the file went on
+living in the tree, and it was still being repaired -- a carrier fix landed in it during
+the ecfdd7771 cleanup -- so someone was paying maintenance on tests this file had already
+declared obsolete. Both of its premises were gone: ``_stamp_a2a_protocol_fields``, the
+transport-side ``message`` stamp it was written against, survives nowhere in ``src/``, and
+``to_wire`` is ``model_dump(mode="json")`` and nothing else, so asserting that the message
+a caller set is the message that comes back asserts pydantic. Do not restore it from
+history; the obligations it named are graded here and in
+``tests/integration/test_a2a_skill_invocation.py`` on a real dispatch.
 """
+
+from datetime import UTC, datetime
 
 import pytest
 
@@ -43,7 +54,17 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 @pytest.mark.integration
 class TestA2ASpecCompliance:
-    """Test that A2A handlers return spec-compliant responses without extra fields."""
+    """Test that A2A handlers return spec-compliant responses without extra fields.
+
+    No case here passes ``context=``. Every one used to, and none of them asserted on
+    it: ``context`` is stamped by the boundary (``_boundary._served``) and ``AdcpResponse``
+    now REFUSES the keyword on construction, so a response built in a test carries none.
+    ``context`` stays in each ``spec_fields`` set below -- those sets are allowlists of
+    what the pin declares, compared as ``actual - spec_fields``, so a key the pin permits
+    and this construction does not produce costs nothing. What the oracle can no longer
+    see is a stray key riding IN on ``context``, and nothing can: the one writer is the
+    boundary.
+    """
 
     def test_get_products_spec_compliance(self):
         """Test get_products returns only spec-defined fields."""
@@ -52,12 +73,11 @@ class TestA2ASpecCompliance:
             "errors": None,
         }
 
-        ctx = {"user_id": "1234567890"}
         # `message` is set here and nowhere else in this class: it is the field whose
         # spec-standing changed, so one case has to carry it to prove it is ADMITTED by
         # the oracle rather than merely never produced. The rest leave it unset, where
         # exclude_none drops it and the field set is unaffected either way.
-        response = GetProductsResponse(**response_data, context=ctx, message="No products matched your requirements.")
+        response = GetProductsResponse(**response_data, message="No products matched your requirements.")
 
         # Check no extra fields.
         # SDK 5.7 adds cache_scope, replayed as protocol envelope defaults; `message` is
@@ -85,8 +105,7 @@ class TestA2ASpecCompliance:
             "dry_run": False,
         }
 
-        ctx = {"user_id": "1234567890"}
-        response = SyncCreativesResponse(**response_data, context=ctx)
+        response = SyncCreativesResponse(**response_data)
 
         # Check no extra fields.
         # status and replayed are protocol-envelope defaults (GH #1710) -- same pattern as
@@ -110,8 +129,7 @@ class TestA2ASpecCompliance:
             "creatives": [],
         }
 
-        ctx = {"user_id": "1234567890"}
-        response = ListCreativesResponse(**response_data, context=ctx)
+        response = ListCreativesResponse(**response_data)
 
         # Check no extra fields.
         # SDK 5.7 adds status, replayed as protocol envelope defaults.
@@ -140,8 +158,7 @@ class TestA2ASpecCompliance:
             "errors": None,
         }
 
-        ctx = {"user_id": "1234567890"}
-        response = ListCreativeFormatsResponse(**response_data, context=ctx)
+        response = ListCreativeFormatsResponse(**response_data)
 
         # Check no extra fields.
         # SDK 5.7 adds replayed as a protocol envelope default.
@@ -153,12 +170,18 @@ class TestA2ASpecCompliance:
         assert "success" not in response_fields
 
     def test_create_media_buy_spec_compliance(self):
-        """Test create_media_buy returns only spec-defined fields."""
-        ctx = {"user_id": "1234567890"}
-        response = CreateMediaBuySuccess.carrier(
+        """Test create_media_buy returns only spec-defined fields.
+
+        No ``context=``: it is stamped by the boundary (``_boundary._served``) and
+        ``AdcpResponse`` refuses it on construction, and this case never asserted on it.
+        ``confirmed_at``/``revision`` are passed because they carry no model default --
+        they are columns the repository owns -- and neither is asserted here either.
+        """
+        response = CreateMediaBuySuccess.sync_success(
             media_buy_id="mb-456",
             packages=[],  # Required field per AdCP spec
-            context=ctx,
+            confirmed_at=datetime(2026, 1, 1, tzinfo=UTC),
+            revision=1,
         )
 
         # Check response can be dumped (has all required fields)
@@ -173,11 +196,14 @@ class TestA2ASpecCompliance:
         assert "success" not in response_dict
 
     def test_update_media_buy_spec_compliance(self):
-        """Test update_media_buy returns only spec-defined fields."""
-        ctx = {"user_id": "1234567890"}
-        response = UpdateMediaBuySuccess.carrier(
+        """Test update_media_buy returns only spec-defined fields.
+
+        No ``context=`` and an explicit ``revision`` -- see
+        ``test_create_media_buy_spec_compliance``.
+        """
+        response = UpdateMediaBuySuccess.sync_success(
             media_buy_id="mb-456",
-            context=ctx,
+            revision=1,
         )
 
         response_dict = response.model_dump()
@@ -195,8 +221,7 @@ class TestA2ASpecCompliance:
         """
         from src.core.schemas import GetMediaBuysResponse
 
-        ctx = {"user_id": "1234567890"}
-        response = GetMediaBuysResponse(media_buys=[], context=ctx)
+        response = GetMediaBuysResponse(media_buys=[])
 
         # `status` reaches the wire through the composed protocol-envelope branch rather
         # than the root properties. `replayed` is an SDK 5.7 envelope default the pin
@@ -214,8 +239,7 @@ class TestA2ASpecCompliance:
         """
         from src.core.schemas import SyncAccountsResponse
 
-        ctx = {"user_id": "1234567890"}
-        response = SyncAccountsResponse(accounts=[], context=ctx)
+        response = SyncAccountsResponse(accounts=[])
 
         # `replayed` is the SDK 5.7 protocol-envelope default, accepted here on the same
         # footing as in get_media_buys above and legal only because this root sets
@@ -230,7 +254,6 @@ class TestA2ASpecCompliance:
 
         from src.core.schemas import AggregatedTotals
 
-        ctx = {"user_id": "1234567890"}
         response = GetMediaBuyDeliveryResponse(
             reporting_period={
                 "start": datetime.now(UTC).isoformat(),
@@ -244,7 +267,6 @@ class TestA2ASpecCompliance:
                 clicks=0,
                 media_buy_count=0,
             ),
-            context=ctx,
         )
 
         response_dict = response.model_dump()

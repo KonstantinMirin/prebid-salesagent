@@ -994,9 +994,9 @@ class TestSyncAccountsBrandIdRoundTrip:
     repr ``"root='brand_one'"``, not ``'brand_one'``. sync_accounts stringified it
     that way at four sites, persisting the mangled text into
     ``accounts.brand->>'brand_id'`` and looking the natural key up under the same
-    mangled value. ``_resolve_by_natural_key`` (account_helpers) always used
-    ``.root``, so a media buy referencing such an account by natural key could
-    never resolve it.
+    mangled value. The resolver's natural-key lookup (``_by_natural_key`` in
+    ``repositories/account_lookup``) always used ``.root``, so a media buy referencing
+    such an account by natural key could never resolve it.
 
     The natural key is brand.domain + brand.brand_id + operator + sandbox
     (BR-RULE-056), so this is a corruption of the key itself, not a cosmetic echo.
@@ -1008,8 +1008,8 @@ class TestSyncAccountsBrandIdRoundTrip:
             AccountReference,
             AccountReferenceByNaturalKey,
         )
-        from src.core.helpers.account_helpers import resolve_account
 
+        from src.core.database.repositories.account_lookup import find_account
         from src.core.database.repositories.uow import AccountUoW
 
         with AccountSyncEnv(tenant_id="sync_bid1", principal_id="agent_sync_bid") as env:
@@ -1052,9 +1052,8 @@ class TestSyncAccountsBrandIdRoundTrip:
             )
             with AccountUoW("sync_bid1") as uow:
                 assert uow.accounts is not None
-                resolved = resolve_account(ref, env.identity, uow.accounts)
-
-            assert resolved == created_account_id
+                # Read the id inside the unit of work: the row detaches when it closes.
+                assert find_account(uow.accounts, ref, env.identity.principal).account_id == created_account_id
 
     @pytest.mark.asyncio
     async def test_settings_update_by_natural_key_with_brand_id_applies(self, integration_db):

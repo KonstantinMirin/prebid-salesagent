@@ -39,7 +39,6 @@ import pytest
 from src.adapters.xandr import XandrAdapter
 from src.core.schemas import Principal
 from src.services.slack_notifier import SlackNotifier
-from tests.factories.principal import plaintext_token_for
 
 pytestmark = pytest.mark.unit
 
@@ -55,9 +54,7 @@ def _make_adapter_stand_in() -> SimpleNamespace:
     imports included — against the two attributes it reads, without pulling
     the unrelated full-adapter-construction gap into this fix's scope.
     """
-    principal = Principal.with_token(
-        plaintext_token_for("p1"), principal_id="p1", name="Test Advertiser", platform_mappings={}
-    )
+    principal = Principal(principal_id="p1", name="Test Advertiser", platform_mappings={})
     return SimpleNamespace(tenant_id="test_tenant", principal=principal)
 
 

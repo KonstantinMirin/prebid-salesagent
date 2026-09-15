@@ -9,86 +9,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.core.exceptions import AdCPAuthenticationError
-from tests.factories import PrincipalFactory
-
-
-class TestRequirePrincipalId:
-    """The require_principal_id entry guard (gh-1307).
-
-    Single source of truth for the "identity has no principal_id" guard that
-    every _impl runs at entry. Returns the validated principal_id or raises
-    AdCPAuthenticationError with one canonical message.
-    """
-
-    def test_returns_principal_id_when_present(self):
-        from src.core.auth import require_principal_id
-
-        identity = PrincipalFactory.make_identity(principal_id="p1", tenant_id="t1")
-
-        assert require_principal_id(identity) == "p1"
-
-    def test_raises_canonical_error_when_principal_id_is_none(self):
-        from src.core.auth import require_principal_id
-
-        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1")
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(identity)
-
-    def test_raises_canonical_error_when_principal_id_is_empty(self):
-        from src.core.auth import require_principal_id
-
-        identity = PrincipalFactory.make_identity(principal_id="", tenant_id="t1")
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(identity)
-
-    def test_preserves_context_kwarg_onto_the_exception(self):
-        from src.core.auth import require_principal_id
-
-        sentinel_context = {"request_id": "req-123"}
-        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1")
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_principal_id(identity, context=sentinel_context)
-
-        assert exc_info.value.context == sentinel_context
-
-
-class TestRequireTenant:
-    """The require_tenant entry guard (gh-1307).
-
-    Single source of truth for the "no tenant context available" guard — the
-    most-repeated _impl prologue. Returns identity.tenant or raises
-    AdCPAuthenticationError with one canonical, actionable message.
-    """
-
-    def test_returns_tenant_when_present(self):
-        from src.core.auth import require_tenant
-
-        identity = PrincipalFactory.make_identity(principal_id="p1", tenant_id="t1")
-
-        assert require_tenant(identity) == identity.tenant
-
-    def test_raises_canonical_error_when_tenant_is_none(self):
-        from src.core.auth import require_tenant
-
-        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1", tenant=None)
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(identity)
-
-    def test_preserves_context_kwarg_onto_the_exception(self):
-        from src.core.auth import require_tenant
-
-        sentinel_context = {"request_id": "req-456"}
-        identity = PrincipalFactory.make_identity(principal_id=None, tenant_id="t1", tenant=None)
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            require_tenant(identity, context=sentinel_context)
-
-        assert exc_info.value.context == sentinel_context
+# (Retired) TestRequirePrincipalId and TestRequireTenant graded two helpers in
+# src/core/auth.py that every _impl called at entry: one returned identity.principal_id or
+# raised AUTH_MISSING, the other did the same for identity.tenant. Both are deleted
+# (see the note at the end of src/core/auth.py). They re-checked inside every protected
+# tool what the resolver had already decided, which made them a SECOND minting site for
+# the refusal, and the branch they guarded was unreachable. The type carries the decision
+# now: a protected implementation takes ``ResolvedIdentity``, whose principal and tenant
+# are not optional, and reads them directly; a public one takes ``PublicIdentity`` and
+# branches on ``identity.principal``. The refusal itself is minted only by the resolver
+# (ruff-boundary.toml bans the two auth errors elsewhere) and graded on the wire.
+#
+# What remains in this module is the operator API-key helper, which is unrelated and live.
 
 
 class _FakeConfigStore:
@@ -199,13 +131,21 @@ class TestStoredApiKeyIsHashed:
 
 
 class TestRequireApiKeyAuth:
-    """Test the decorator factory."""
+    """Test the decorator factory.
+
+    ``require_api_key_auth`` takes ``setting=``: the name of the ``AuthSettings`` field
+    carrying the key, read per request off the settings object. It took ``env_var=`` and
+    read ``os.environ`` directly until the environment collapsed to one reader
+    (``src/core/config.py``), which is why these cases set the SETTING rather than a
+    variable -- the variable an operator sets is that field's name upper-cased, and the
+    503 body still names it.
+    """
 
     def test_missing_header_returns_401(self):
         """Request without the auth header returns 401."""
         from src.admin.auth_helpers import require_api_key_auth
 
-        decorator = require_api_key_auth(env_var="TEST_KEY", config_key="test_key", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="test_key", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -220,10 +160,11 @@ class TestRequireApiKeyAuth:
             assert resp.status_code == 401
 
     def test_unconfigured_key_returns_503(self):
-        """When no key is configured anywhere, returns 503."""
+        """When no key is configured anywhere, returns 503 naming the variable."""
         from src.admin.auth_helpers import require_api_key_auth
+        from src.core.config import get_settings
 
-        decorator = require_api_key_auth(env_var="UNCONFIGURED_KEY_XYZ", config_key="nonexistent", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="nonexistent", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -234,7 +175,10 @@ class TestRequireApiKeyAuth:
         app = Flask(__name__)
         app.add_url_rule("/test", view_func=protected_view)
 
-        with patch("src.admin.auth_helpers.get_db_session") as mock_db:
+        with (
+            patch.object(get_settings().auth, "sync_api_key", None),
+            patch("src.admin.auth_helpers.get_db_session") as mock_db,
+        ):
             mock_session = MagicMock()
             mock_session.scalars.return_value.first.return_value = None
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
@@ -243,12 +187,14 @@ class TestRequireApiKeyAuth:
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "any-key"})
                 assert resp.status_code == 503
+                assert "SYNC_API_KEY" in resp.get_json()["error"]
 
     def test_valid_key_passes_through(self):
         """Correct key allows request through."""
         from src.admin.auth_helpers import require_api_key_auth
+        from src.core.config import get_settings
 
-        decorator = require_api_key_auth(env_var="TEST_VALID_KEY", config_key="test_key", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="test_key", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -259,7 +205,7 @@ class TestRequireApiKeyAuth:
         app = Flask(__name__)
         app.add_url_rule("/test", view_func=protected_view)
 
-        with patch.dict("os.environ", {"TEST_VALID_KEY": "correct-key"}):
+        with patch.object(get_settings().auth, "sync_api_key", "correct-key"):
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "correct-key"})
                 assert resp.status_code == 200
@@ -267,8 +213,9 @@ class TestRequireApiKeyAuth:
     def test_wrong_key_returns_401(self):
         """Incorrect key returns 401."""
         from src.admin.auth_helpers import require_api_key_auth
+        from src.core.config import get_settings
 
-        decorator = require_api_key_auth(env_var="TEST_WRONG_KEY", config_key="test_key", header="X-Test-Key")
+        decorator = require_api_key_auth(setting="sync_api_key", config_key="test_key", header="X-Test-Key")
 
         @decorator
         def protected_view():
@@ -279,7 +226,7 @@ class TestRequireApiKeyAuth:
         app = Flask(__name__)
         app.add_url_rule("/test", view_func=protected_view)
 
-        with patch.dict("os.environ", {"TEST_WRONG_KEY": "correct-key"}):
+        with patch.object(get_settings().auth, "sync_api_key", "correct-key"):
             with app.test_client() as client:
                 resp = client.get("/test", headers={"X-Test-Key": "wrong-key"})
                 assert resp.status_code == 401

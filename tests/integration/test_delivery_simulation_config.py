@@ -21,7 +21,6 @@ from src.core.schemas.delivery import (
     DeliveryTotals,
     ReportingPeriod,
 )
-from tests.factories.principal import plaintext_token_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -118,9 +117,7 @@ class TestAdapterReadsSeededRow:
         )
         bound_factory_session.commit()
 
-        principal = Principal.with_token(
-            plaintext_token_for("p_int"), principal_id="p_int", name="Int Principal", platform_mappings={}
-        )
+        principal = Principal(principal_id="p_int", name="Int Principal", platform_mappings={})
         adapter = MockAdServer(config={}, principal=principal, tenant_id=tenant.tenant_id)
         # No in-memory entry: if the DB read failed, this would hit the random fallback.
         adapter._media_buys = {}
@@ -144,9 +141,7 @@ class TestAdapterReadsSeededRow:
         tenant = TenantFactory()
         bound_factory_session.commit()
 
-        principal = Principal.with_token(
-            plaintext_token_for("p_int2"), principal_id="p_int2", name="Int Principal 2", platform_mappings={}
-        )
+        principal = Principal(principal_id="p_int2", name="Int Principal 2", platform_mappings={})
         adapter = MockAdServer(config={}, principal=principal, tenant_id=tenant.tenant_id)
         adapter._media_buys = {}
 

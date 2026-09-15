@@ -17,6 +17,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, MediaBuy, Principal, Tenant
 from src.core.database.models import PricingOption as DBPricingOption
 from src.core.database.models import Product as ProductModel
+from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Principal as PrincipalSchema
 from src.core.schemas import Product
 from tests.helpers.adcp_factories import create_test_db_product
@@ -290,6 +291,7 @@ class TestSchemaFieldMapping:
                 }
             ],
             "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         product = Product(**product_data)
@@ -429,6 +431,7 @@ class TestSchemaFieldMapping:
                     }
                 ],
                 "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+                "reporting_capabilities": default_reporting_capabilities(),
             }
 
             # This should succeed without validation errors
@@ -480,6 +483,7 @@ class TestFieldAccessPatterns:
                 }
             ],
             "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         product = Product(**product_data)
@@ -536,6 +540,7 @@ class TestFieldAccessPatterns:
                 }
             ],
             "delivery_measurement": {"provider": "Test Provider", "notes": "Test measurement methodology"},
+            "reporting_capabilities": default_reporting_capabilities(),
         }
 
         product = Product(**product_data)

@@ -873,27 +873,25 @@ class TestMainFlowObligations:
             mapping = repo.get_latest_mapping_for_object("media_buy", result.media_buy_id)
             assert mapping is not None, "ObjectWorkflowMapping row was not persisted for the auto-approved media buy"
 
-    @pytest.mark.asyncio
-    async def test_authentication_extracts_principal_id(self):
-        """Authentication resolves principal_id from identity.
-
-        Covers: UC-002-MAIN-03
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        identity = PrincipalFactory.make_identity(
-            principal_id=None,  # No principal -> should fail
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant", "human_review_required": False},
-        )
-
-        req = _make_request()
-        from src.core.exceptions import AdCPAuthenticationError
-
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            await _create_media_buy_impl(req=req, identity=identity)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
+    # test_authentication_extracts_principal_id is REMOVED. It built an identity with
+    # principal_id=None and asserted _create_media_buy_impl raised
+    # AdCPAuthenticationError / AUTH_MISSING itself.
+    #
+    # Neither half is constructible now. create_media_buy is a PROTECTED tool: its
+    # implementation is annotated identity: AccountIdentity, a ResolvedIdentity whose
+    # principal and tenant are required fields, so "an identity with no principal" is not a
+    # value the parameter can hold and PrincipalFactory.make_identity cannot build one. The
+    # in-tool guard that raised went with the rest of the re-checks when the resolver became
+    # the one place a credential is judged (47d57e5d6), and ruff-boundary.toml bans raising
+    # AUTH_MISSING or AUTH_INVALID anywhere but the resolver.
+    #
+    # The obligation (UC-002-MAIN-03: the principal acted on is the one the credential
+    # resolved to) is graded where it is decided: _resolve_identity refuses a missing
+    # credential before the implementation
+    # runs, for every tool and every transport at once, and the transport-blind auth
+    # scenarios assert the AUTH_MISSING wire envelope across a2a, mcp and rest.
+    #
+    # Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
     @pytest.mark.asyncio
     async def test_tenant_setup_validation(self):
@@ -920,10 +918,9 @@ class TestMainFlowObligations:
 
         from src.services.setup_checklist_service import SetupIncompleteError
 
-        with (
-            patch("src.core.tools.media_buy_create.validate_setup_complete") as mock_validate,
-            patch("src.core.auth.get_principal_object"),
-        ):
+        # Only the setup gate is stubbed: the principal comes off the identity, so the
+        # second lookup this also patched has no call site left.
+        with patch("src.core.tools.media_buy_create.validate_setup_complete") as mock_validate:
             mock_validate.side_effect = SetupIncompleteError(
                 "Setup incomplete", missing_tasks=[{"name": "Configure Products", "description": "Add products"}]
             )
@@ -1649,27 +1646,24 @@ class TestExtensionObligations:
 
             assert exc_info.value.error_code == "REFERENCE_NOT_FOUND"
 
-    @pytest.mark.asyncio
-    async def test_authentication_always_required(self):
-        """create_media_buy always requires authentication (no anonymous path).
-
-        Covers: UC-002-EXT-I-03
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-
-        req = _make_request()
-
-        # Identity with no principal_id -> requires authentication
-        identity_no_principal = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id="test_tenant",
-            tenant={"tenant_id": "test_tenant"},
-        )
-        with pytest.raises(AdCPAuthenticationError) as exc_info:
-            await _create_media_buy_impl(req=req, identity=identity_no_principal)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
+    # test_authentication_always_required is REMOVED. It built an identity with
+    # principal_id=None and asserted _create_media_buy_impl raised
+    # AdCPAuthenticationError / AUTH_MISSING itself.
+    #
+    # Neither half is constructible now. create_media_buy is a PROTECTED tool: its
+    # implementation is annotated identity: AccountIdentity, a ResolvedIdentity whose
+    # principal and tenant are required fields, so "an identity with no principal" is not a
+    # value the parameter can hold and PrincipalFactory.make_identity cannot build one. The
+    # in-tool guard that raised went with the rest of the re-checks when the resolver became
+    # the one place a credential is judged (47d57e5d6), and ruff-boundary.toml bans raising
+    # AUTH_MISSING or AUTH_INVALID anywhere but the resolver.
+    #
+    # The obligation (UC-002-EXT-I-03: create_media_buy has no anonymous path) is graded where it
+    # is decided: _resolve_identity refuses a missing credential before the implementation
+    # runs, for every tool and every transport at once, and the transport-blind auth
+    # scenarios assert the AUTH_MISSING wire envelope across a2a, mcp and rest.
+    #
+    # Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
     def test_no_database_record_on_adapter_failure(self, integration_db):
         """When adapter fails, no database records are created.
@@ -1946,33 +1940,16 @@ class TestUpgradeObligations:
         req = _make_request(ext={"custom_field": "value", "custom_num": 42})
         assert req.ext is not None
 
-    def test_account_field_in_success_response(self):
-        """CreateMediaBuySuccess has account field (optional).
-
-        Covers: UC-002-UPG-07
-        """
-        assert "account" in CreateMediaBuySuccess.model_fields
-
-        from src.core.schemas import Package as RespPkg
-
-        # Verify account can be set on success
-        resp = CreateMediaBuySuccess.carrier(
-            media_buy_id="mb_1",
-            packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)],
-            account=None,  # Optional
-        )
-        assert resp.account is None
-
-    def test_sandbox_flag_in_success_response(self):
-        """CreateMediaBuySuccess has sandbox field (optional).
-
-        Covers: UC-002-UPG-09
-        """
-        assert "sandbox" in CreateMediaBuySuccess.model_fields
-
-        from src.core.schemas import Package as RespPkg
-
-        resp = CreateMediaBuySuccess.carrier(
-            media_buy_id="mb_1", packages=[RespPkg(package_id="p1", product_id="prod_1", budget=100)], sandbox=True
-        )
-        assert resp.sandbox is True
+    # REMOVED: test_account_field_in_success_response and
+    # test_sandbox_flag_in_success_response. Both asserted ``"<field>" in
+    # CreateMediaBuySuccess.model_fields`` and then read back the value the test had just
+    # passed. Verified off the live MRO: account and sandbox are declared by the adcp 6.6
+    # parent and are NOT redeclared here, so both cases asserted that Python inheritance
+    # works -- the comparison CLAUDE.md says this repo deliberately does not make.
+    #
+    # Already pinned, and pinned harder, by
+    # tests/unit/test_adcp_contract.py::TestSchemaMatchesLibrary::test_create_media_buy_success_inherits_parent_typed_annotations
+    # -- parametrized over exactly ["account", "sandbox", "creative_deadline",
+    # "valid_actions", "context"], comparing each local annotation to the library parent's,
+    # so it grades DRIFT rather than presence. The _base.py comment on these fields names
+    # that test as their pin.

@@ -8,8 +8,6 @@ Per development guidelines:
 
 from unittest.mock import MagicMock
 
-from tests.factories.principal import plaintext_token_for
-
 
 class TestInventoryAdapterRestrictions:
     """Test that inventory sync is restricted to GAM adapter only."""
@@ -20,8 +18,7 @@ class TestInventoryAdapterRestrictions:
         from src.core.schemas import Principal
 
         # Create mock principal (use schemas.Principal, not models.Principal)
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
+        principal = Principal(
             principal_id="test_principal",
             name="Test Advertiser",
             platform_mappings={},
@@ -62,8 +59,7 @@ class TestInventoryAdapterRestrictions:
         from src.adapters.mock_ad_server import MockAdServer
         from src.core.schemas import MediaPackage, Principal
 
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
+        principal = Principal(
             principal_id="test_principal",
             name="Test Advertiser",
             platform_mappings={},
@@ -84,13 +80,18 @@ class TestInventoryAdapterRestrictions:
             targeting_overlay=None,  # No targeting at all — Run of Site
         )
 
-        # Mock the request — _validate_media_buy_request only calls get_total_budget()
-        mock_request = MagicMock()
-        mock_request.get_total_budget.return_value = 5000.0
+        # The CARRIER the seam takes, not a MagicMock: validation reads
+        # ``request.total_budget`` -- one already-summed Decimal -- and a mock attribute
+        # stood in for that number until it was compared.
+        from decimal import Decimal
+
+        from src.adapters.base import AdapterCreateRequest
+
+        request = AdapterCreateRequest(total_budget=Decimal("5000"))
 
         # validate_media_buy_request should return no errors — inventory validation is skipped
         errors = adapter.validate_media_buy_request(
-            request=mock_request,
+            request=request,
             packages=[package],
             start_time=start_time,
             end_time=end_time,

@@ -114,7 +114,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
     )
 
     with (
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):
@@ -294,7 +293,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
     )
 
     with (
-        patch("src.core.config_loader.get_current_tenant", return_value={"tenant_id": "test_tenant"}),
         patch("src.core.helpers.adapter_helpers.get_adapter") as mock_get_adapter,
         patch("src.core.context_manager.get_context_manager") as mock_ctx_mgr,
     ):

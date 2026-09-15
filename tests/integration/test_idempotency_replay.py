@@ -58,20 +58,19 @@ def _make_request(idempotency_key, *, po_number="REPLAY-1"):
     )
 
 
-def _identity(tenant_id, principal_id):
-    from src.core.testing_hooks import AdCPTestContext
+def _headers(tenant_id, principal_id):
+    """The headers the retry arrives with, not an identity.
 
-    from tests.factories import PrincipalFactory
+    ``invoke_tool`` takes the request's HEADERS: the resolver is their one reader, and it
+    resolves the principal, the tenant and the account the request names — including the
+    grant that puts the cache probe in the same (agent, account, key) scope the seeded row
+    sits in. A test that built its own identity and handed it over skipped that step. The
+    credential is the one the factory principal answers to (``plaintext_token_for``).
+    """
+    from tests.factories.principal import plaintext_token_for
+    from tests.helpers.credentials import credential_headers
 
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        # The RESOLVED account. The boundary re-resolves it from the request and overwrites
-        # this with the same value; stating it here keeps the identity honest for the direct
-        # assertions below, which read the scope the seeded row sits in.
-        account_id=DEFAULT_TEST_ACCOUNT_ID,
-        testing_context=AdCPTestContext(test_session_id="replay_test"),
-    )
+    return credential_headers(token=plaintext_token_for(principal_id), tenant=tenant_id)
 
 
 class TestImplReplaysCachedSuccess:
@@ -79,6 +78,7 @@ class TestImplReplaysCachedSuccess:
 
     async def test_cached_success_replayed_verbatim(self, integration_db):
         from src.core.idempotency_canonical import canonical_request_hash
+        from src.core.resolved_identity import TransportProtocol
         from src.core.schemas._base import CreateMediaBuyResult, CreateMediaBuySuccess
         from src.core.tools._boundary import invoke_tool
 
@@ -96,7 +96,12 @@ class TestImplReplaysCachedSuccess:
             media_buy_id="mb_original_123",
         )
 
-        result = await invoke_tool("create_media_buy", _make_request(idem_key), _identity(tenant_id, principal_id))
+        result = await invoke_tool(
+            "create_media_buy",
+            _make_request(idem_key),
+            _headers(tenant_id, principal_id),
+            TransportProtocol.MCP,
+        )
 
         assert isinstance(result, CreateMediaBuyResult)
         assert isinstance(result, CreateMediaBuySuccess)
@@ -105,8 +110,10 @@ class TestImplReplaysCachedSuccess:
         assert result.replayed is True  # top-level replay marker, injected at replay time
 
     async def test_different_payload_same_key_raises_conflict(self, integration_db):
-        from src.core.exceptions import AdCPSalesAgentError
+        from src.core.exceptions import AdCPIdempotencyConflictError
+        from src.core.resolved_identity import TransportProtocol
         from src.core.tools._boundary import invoke_tool
+        from tests.helpers.envelope_assertions import raises_adcp
 
         idem_key = f"conflict-{uuid.uuid4().hex}"
         tenant_id = f"conflict_t_{uuid.uuid4().hex[:6]}"
@@ -116,11 +123,16 @@ class TestImplReplaysCachedSuccess:
         # Stored hash will NOT match the request's canonical hash → conflict.
         _seed_success(tenant_id, principal_id, idem_key, media_buy_id="mb_first", payload_hash="non-matching-hash")
 
-        with pytest.raises(AdCPSalesAgentError) as exc_info:
-            await invoke_tool("create_media_buy", _make_request(idem_key), _identity(tenant_id, principal_id))
-
-        exc = exc_info.value
-        assert exc.error_code == "IDEMPOTENCY_CONFLICT"
+        # The boundary answers a failure with a response and raises AdcpFailure carrying
+        # it, so the caller grades the buyer-facing CODE rather than the typed exception
+        # the raise site built (tests/CLAUDE.md § Error verification policy).
+        with raises_adcp(AdCPIdempotencyConflictError):
+            await invoke_tool(
+                "create_media_buy",
+                _make_request(idem_key),
+                _headers(tenant_id, principal_id),
+                TransportProtocol.MCP,
+            )
         # Read-oracle defense: the conflict must not leak the cached payload/id.
 
     async def test_invalid_cached_envelope_treated_as_miss(self, integration_db):
@@ -129,13 +141,14 @@ class TestImplReplaysCachedSuccess:
         Pins the schema-drift guard: a stored envelope from an older deploy that no
         longer validates must never surface as an internal error on a retry of a
         previously-successful call. The probe treats it as absent and re-executes
-        (here the bare request then fails downstream as a typed AdCPSalesAgentError — what
-        matters is it is neither a replay, a conflict, nor a raw ValidationError).
+        (here the bare request then fails downstream on its own account — what matters is
+        it is neither a replay, a conflict, nor a raw ValidationError).
         """
         from pydantic import ValidationError as PydanticValidationError
 
-        from src.core.exceptions import AdCPSalesAgentError
+        from src.core.exceptions import AdcpFailure
         from src.core.idempotency_canonical import canonical_request_hash
+        from src.core.resolved_identity import TransportProtocol
         from src.core.tools._boundary import invoke_tool
         from tests.helpers import LegacyCachedShape, seed_cached_success
 
@@ -154,11 +167,21 @@ class TestImplReplaysCachedSuccess:
             account_id=DEFAULT_TEST_ACCOUNT_ID,
         )
 
-        with pytest.raises(AdCPSalesAgentError) as exc_info:
-            await invoke_tool("create_media_buy", _make_request(idem_key), _identity(tenant_id, principal_id))
+        with pytest.raises(AdcpFailure) as exc_info:
+            await invoke_tool(
+                "create_media_buy",
+                _make_request(idem_key),
+                _headers(tenant_id, principal_id),
+                TransportProtocol.MCP,
+            )
 
-        assert not isinstance(exc_info.value, PydanticValidationError)
-        assert exc_info.value.error_code != "IDEMPOTENCY_CONFLICT"
+        failure = exc_info.value.response
+        assert failure.adcp_error is not None
+        # Re-executed, not replayed and not refused on the key: the failure is the fresh
+        # call's own. A raw pydantic ValidationError escaping the drifted envelope is the
+        # regression this pins, so the raise chain must not carry one either.
+        assert failure.adcp_error.code != "IDEMPOTENCY_CONFLICT"
+        assert not isinstance(exc_info.value.__cause__, PydanticValidationError)
 
     def test_unrelated_key_does_not_replay(self, integration_db):
         """A different idempotency_key on the same principal executes fresh — and caches itself."""

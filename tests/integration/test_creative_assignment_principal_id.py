@@ -20,16 +20,17 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.database.models import Tenant as TenantModel
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
+from src.core.schemas.account import Account
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory
 from tests.helpers.adcp_factories import create_test_format
 from tests.integration.media_buy_helpers import (
@@ -54,19 +55,23 @@ def _make_identity(
     principal_id: str,
     tenant_id: str,
     tenant: dict[str, Any],
-    dry_run: bool = False,
-) -> ResolvedIdentity:
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=AdCPTestContext(
-            dry_run=dry_run,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
+) -> AccountIdentity:
+    """The caller ``_create_media_buy_impl`` / ``_update_media_buy_impl`` take.
+
+    ``create-media-buy-request.json`` requires ``account``, so both implementations are
+    annotated ``AccountIdentity`` and read ``identity.account.account_id`` directly
+    (media_buy_create.py:2765). A plain ``ResolvedIdentity`` leaves that None, which is
+    why these cases failed with ``AttributeError: 'NoneType' object has no attribute
+    'account_id'`` — the identity was the wrong TYPE, not a missing grant. The row and the
+    grant behind this account come from the ``ca_account`` fixture below.
+    """
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            tenant=tenant,
         ),
+        Account(account_id=DEFAULT_TEST_ACCOUNT_ID, name="Test Account", status="active"),
     )
 
 
@@ -142,6 +147,23 @@ def ca_products(sample_products):
 
 
 @pytest.fixture
+def ca_account(factory_session, ca_tenant, ca_principal):
+    """The Account row the create request names, plus this principal's access to it.
+
+    ``media_buy_helpers._make_create_request`` sends
+    ``account={"account_id": "acct_test"}`` (DEFAULT_TEST_ACCOUNT_ID), and these cases run
+    the REAL ``_create_media_buy_impl``, so the row has to exist: ``media_buys`` carries a
+    composite FK to (tenant_id, account_id). The grant is the other half — resolution is
+    access-scoped, so a row without it fails indistinguishably from no row at all.
+
+    Both halves come from ``seed_default_account`` — the one get-or-create for this row,
+    shared with ``MediaBuyFactory``'s grant hook. ``factory_session`` is what binds the
+    shared session onto the factories it uses.
+    """
+    return seed_default_account(ca_tenant["tenant_id"], ca_principal["principal_id"])
+
+
+@pytest.fixture
 def ca_creatives(integration_db, ca_tenant, ca_principal):
     """Create test creatives required for creative_assignments FK."""
     creative_ids = ["c_regress_1", "c_regress_2"]
@@ -177,7 +199,7 @@ def ca_creatives(integration_db, ca_tenant, ca_principal):
 
 
 @pytest.fixture
-def ca_identity(ca_tenant, ca_principal):
+def ca_identity(ca_tenant, ca_principal, ca_account):
     return _make_identity(
         principal_id=ca_principal["principal_id"],
         tenant_id=ca_tenant["tenant_id"],
@@ -186,7 +208,7 @@ def ca_identity(ca_tenant, ca_principal):
 
 
 @pytest.fixture
-def ca_identity_with_approval(ca_tenant_with_approval, ca_principal):
+def ca_identity_with_approval(ca_tenant_with_approval, ca_principal, ca_account):
     return _make_identity(
         principal_id=ca_principal["principal_id"],
         tenant_id=ca_tenant_with_approval["tenant_id"],

@@ -25,7 +25,6 @@ sys.path.insert(0, str(project_root))
 
 from scripts.setup.setup_tenant import create_tenant, main
 from src.core.database.models import AdapterConfig, Tenant
-from tests.factories.principal import plaintext_token_for
 
 
 @pytest.mark.integration
@@ -55,7 +54,8 @@ class TestGAMTenantSetup:
             manual_approval = False
             auto_approve_all = False
             max_daily_budget = 15000
-            admin_token = "test_admin_token"
+            # admin_token dropped: nothing reads args.admin_token (84a86e019 removed the
+            # tenant admin credential), so the attribute was a dead assignment.
             authorized_domain = []
             admin_email = []
 
@@ -100,7 +100,7 @@ class TestGAMTenantSetup:
             manual_approval = False
             auto_approve_all = False
             max_daily_budget = 20000
-            admin_token = "test_admin_token_2"
+            # admin_token dropped — see the sibling Args above.
             authorized_domain = []
             admin_email = []
 
@@ -202,13 +202,19 @@ class TestGAMTenantSetup:
                 mock_network_service if svc == "NetworkService" else mock_user_service
             )
 
+            # The seller's own Google credentials are named facts on the settings object
+            # (``get_settings().auth``); the GAMOAuthConfig getter this patched is gone.
+            from src.core.config import get_settings
+
+            gam_auth = get_settings().auth
+
             with (
                 patch("src.admin.utils.helpers.is_super_admin", return_value=True),
-                patch("src.core.config.get_gam_oauth_config") as mock_config,
+                patch.object(gam_auth, "gam_oauth_client_id", "fake-id.apps.googleusercontent.com"),
+                patch.object(gam_auth, "gam_oauth_client_secret", "GOCSPX-fake-secret"),
                 patch("googleads.oauth2.GoogleRefreshTokenClient") as mock_oauth,
                 patch("googleads.ad_manager.AdManagerClient", return_value=mock_client),
             ):
-                mock_config.return_value = MagicMock(client_id="fake-id", client_secret="fake-secret")
                 mock_oauth_instance = MagicMock()
                 mock_oauth.return_value = mock_oauth_instance
 
@@ -238,8 +244,7 @@ class TestGAMTenantSetup:
         from src.core.schemas import Principal
 
         # Create principal with GAM platform mapping
-        principal = Principal.with_token(
-            plaintext_token_for("test_principal"),
+        principal = Principal(
             principal_id="test_principal",
             name="Test Advertiser",
             platform_mappings={"google_ad_manager": "12345"},

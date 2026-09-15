@@ -98,7 +98,6 @@ class TestDeliveryLoopErrorHandling:
         mock_uow.media_buys = mock_repo
 
         with (
-            patch("src.core.auth.get_principal_object", return_value=MagicMock()),
             patch("src.core.tools.media_buy_delivery.get_adapter", return_value=adapter),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
@@ -161,7 +160,6 @@ class TestBrandExtractionFromPydanticModel:
         )
 
         with (
-            patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
         ):
             mock_uow = MagicMock()
@@ -205,7 +203,6 @@ class TestAuditLogBrandFieldName:
         )
 
         with (
-            patch("src.core.tools.products.get_principal_object", return_value=None),
             patch("src.core.database.repositories.uow.ProductUoW") as mock_uow_cls,
             patch("src.core.tools.products.get_audit_logger") as mock_audit_logger,
         ):

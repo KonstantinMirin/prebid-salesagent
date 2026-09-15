@@ -21,17 +21,11 @@ from __future__ import annotations
 from datetime import date
 from unittest.mock import MagicMock
 
-import pytest
-
-from src.core.exceptions import AdCPAuthenticationError
-from src.core.schemas import GetMediaBuyDeliveryRequest
 from src.core.schemas.delivery import GetCreativeDeliveryResponse, GetMediaBuyDeliveryResponse
 from src.core.tools._media_buy_status import CANONICAL_STATUSES
 from src.core.tools.media_buy_delivery import (
-    _get_media_buy_delivery_impl,
     _resolve_delivery_status_filter,
 )
-from tests.factories.principal import PrincipalFactory
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-STATUS-FILTERED-DELIVERY-02
@@ -246,35 +240,25 @@ class TestNextExpectedAtSerialization:
 # ---------------------------------------------------------------------------
 
 
-class TestMissingPrincipalIdReturnsError:
-    """_get_media_buy_delivery_impl raises AdCPAuthenticationError when principal_id is missing.
-
-    Covers lines 91-93 of media_buy_delivery.py.
-    """
-
-    def test_none_principal_id_raises_auth_error(self):
-
-        identity = PrincipalFactory.make_identity(
-            principal_id=None,
-            tenant_id="t1",
-            tenant={"tenant_id": "t1"},
-        )
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
-
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity)
-
-    def test_empty_string_principal_id_raises_auth_error(self):
-
-        identity = PrincipalFactory.make_identity(
-            principal_id="",
-            tenant_id="t1",
-            tenant={"tenant_id": "t1"},
-        )
-        req = GetMediaBuyDeliveryRequest(media_buy_ids=["mb_001"])
-
-        with pytest.raises(AdCPAuthenticationError):
-            _get_media_buy_delivery_impl(req, identity)
+# TestMissingPrincipalIdReturnsError (test_none_principal_id_raises_auth_error and
+# test_empty_string_principal_id_raises_auth_error) is REMOVED. Both built an identity with
+# no usable principal_id -- None, and the empty string -- and asserted
+# _get_media_buy_delivery_impl raised AdCPAuthenticationError itself. The class docstring
+# cited "lines 91-93 of media_buy_delivery.py"; those lines are imports now.
+#
+# Neither half is constructible now. ResolvedIdentity.principal is a required field, so the
+# None case is not a value the type can hold, and the in-tool guard that raised for either
+# case went with the rest of the re-checks when the resolver became the one place a
+# credential is judged (47d57e5d6) -- ruff-boundary.toml bans raising AUTH_MISSING or
+# AUTH_INVALID anywhere but the resolver, so this implementation cannot raise it even if a
+# guard were written back in. The empty string is not a separate obligation either: the
+# resolver only builds an identity around a principal row it actually loaded.
+#
+# The obligation is graded where the refusal is minted -- once, for every tool and every
+# transport -- by the transport-blind auth scenarios asserting the AUTH_MISSING wire
+# envelope across a2a, mcp and rest.
+#
+# Same removal, same reason, as tests/unit/test_media_buy.py:3869.
 
 
 class TestStatusFilterRawString:

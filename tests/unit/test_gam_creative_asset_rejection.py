@@ -19,6 +19,7 @@ error must carry its message into the ``AssetStatus``.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -57,13 +58,18 @@ class TestCreativeAssetRejectionIsTyped:
 
 
 class TestRejectionReasonReachesAssetStatus:
-    def test_add_creative_assets_carries_rejection_message(self, manager):
+    def test_add_creative_assets_carries_rejection_message(self):
         """The per-asset handler must surface the rejection reason, not drop it.
 
         All three reaching surfaces show ``status.message`` to the operator /
         buyer on failure; a swallowed reason leaves them with an unactionable
         bare "failed".
         """
+        # Unlike the two rejection tests above, this one enters through
+        # ``add_creative_assets``, which asks the client manager for GAM's creative,
+        # LICA and line item services up front. The asset is rejected before any of
+        # them is used, so a stand-in client manager is enough.
+        manager = GAMCreativesManager(client_manager=MagicMock(), advertiser_id="adv-1")
         asset = {
             "creative_id": "cr_vid_2",
             "url": "https://cdn.example.com/spot.mp4",
@@ -71,7 +77,9 @@ class TestRejectionReasonReachesAssetStatus:
             "height": 480,
             "package_assignments": [],
         }
-        statuses = manager.add_creative_assets("order-1", [asset], datetime.now(UTC))
+        # The order id is numeric because production binds it as ``int(media_buy_id)``,
+        # the way a GAM order id is shaped.
+        statuses = manager.add_creative_assets("9911", [asset], datetime.now(UTC))
 
         assert len(statuses) == 1
         status = statuses[0]

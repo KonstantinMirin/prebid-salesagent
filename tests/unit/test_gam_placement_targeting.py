@@ -362,108 +362,76 @@ class TestCreativeTargetingsOnLineItem:
 
 
 class TestTargetingNameOnLICA:
-    """Test setting targetingName on LICAs."""
+    """Test setting targetingName on LICAs.
 
-    def test_associate_creative_with_placement_targeting_dry_run(self):
-        """Test _associate_creative_with_line_items sets targetingName in dry run."""
+    The association is a GAM call, so the LICA service is what these tests stand in
+    for and the association handed to it is what they grade (adcp#208).
+    """
+
+    @staticmethod
+    def _associate(asset, placement_targeting_map):
+        """Run the association against a stand-in LICA service and return it."""
         from src.adapters.gam.managers.creatives import GAMCreativesManager
 
-        # Create manager in dry_run mode
-        mock_client_manager = MagicMock()
-        manager = GAMCreativesManager(
-            client_manager=mock_client_manager,
-            advertiser_id="123",
+        lica_service = MagicMock()
+        manager = GAMCreativesManager(client_manager=MagicMock(), advertiser_id="123")
+        manager._associate_creative_with_line_items(
+            gam_creative_id="999",
+            asset=asset,
+            line_item_map={"TestLineItem - prod_abc": "12345"},
+            lica_service=lica_service,
+            placement_targeting_map=placement_targeting_map,
         )
+        return lica_service
 
-        # Test asset with placement_ids
+    def test_associate_creative_with_placement_targeting(self):
+        """The placement's targeting name rides the association."""
         asset = {
             "creative_id": "creative_1",
             "package_assignments": [{"package_id": "pkg_prod_abc_def_1", "weight": 100}],
             "placement_ids": ["homepage_atf"],
         }
-
-        # Line item map
-        line_item_map = {"TestLineItem - prod_abc": "12345"}
-
-        # Placement targeting map
         placement_targeting_map = {
             "homepage_atf": "homepage-above-fold",
             "article_inline": "article-inline",
         }
 
-        # Call method - should log but not make API calls
-        manager._associate_creative_with_line_items(
-            gam_creative_id="999",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-            placement_targeting_map=placement_targeting_map,
-        )
+        lica_service = self._associate(asset, placement_targeting_map)
 
-        # No exception means success in dry run mode
+        lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+            [{"creativeId": "999", "lineItemId": "12345", "targetingName": "homepage-above-fold"}]
+        )
 
     def test_associate_creative_without_placement_targeting(self):
-        """Test _associate_creative_with_line_items works without placement targeting."""
-        from src.adapters.gam.managers.creatives import GAMCreativesManager
-
-        mock_client_manager = MagicMock()
-        manager = GAMCreativesManager(
-            client_manager=mock_client_manager,
-            advertiser_id="123",
-        )
-
-        # Asset without placement_ids
+        """With no placement on the assignment, the association carries no targetingName."""
         asset = {
             "creative_id": "creative_1",
             "package_assignments": [{"package_id": "pkg_prod_abc_def_1", "weight": 100}],
         }
 
-        line_item_map = {"TestLineItem - prod_abc": "12345"}
+        lica_service = self._associate(asset, None)
 
-        # Call without placement_targeting_map
-        manager._associate_creative_with_line_items(
-            gam_creative_id="999",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-            placement_targeting_map=None,
+        lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+            [{"creativeId": "999", "lineItemId": "12345"}]
         )
-
-        # No exception means success
 
     def test_associate_creative_uses_first_placement_id(self):
-        """Test that when multiple placement_ids exist, first is used."""
-        from src.adapters.gam.managers.creatives import GAMCreativesManager
-
-        mock_client_manager = MagicMock()
-        manager = GAMCreativesManager(
-            client_manager=mock_client_manager,
-            advertiser_id="123",
-        )
-
-        # Asset with multiple placement_ids
+        """GAM allows one targetingName per association, so the first placement wins."""
         asset = {
             "creative_id": "creative_1",
             "package_assignments": [{"package_id": "pkg_prod_abc_def_1", "weight": 100}],
             "placement_ids": ["homepage_atf", "sidebar"],  # Two placements
         }
-
-        line_item_map = {"TestLineItem - prod_abc": "12345"}
         placement_targeting_map = {
             "homepage_atf": "homepage-above-fold",
             "sidebar": "sidebar-targeting",
         }
 
-        # Should use first placement_id
-        manager._associate_creative_with_line_items(
-            gam_creative_id="999",
-            asset=asset,
-            line_item_map=line_item_map,
-            lica_service=None,
-            placement_targeting_map=placement_targeting_map,
-        )
+        lica_service = self._associate(asset, placement_targeting_map)
 
-        # Would log warning about multiple placement_ids but use first
+        lica_service.createLineItemCreativeAssociations.assert_called_once_with(
+            [{"creativeId": "999", "lineItemId": "12345", "targetingName": "homepage-above-fold"}]
+        )
 
 
 class TestPlacementTargetingMapFlow:

@@ -23,11 +23,33 @@ import pytest
 from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
+from src.core.schemas.account import Account
+from src.core.tenant_context import TenantContext
+from tests.factories import AccountFactory
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.integration.conftest import add_required_setup_data, create_test_product_with_pricing
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.asyncio]
+
+_TENANT_ID = "test_tenant_v24"
+_ACCOUNT_ID = "acct_test"
+
+
+def _account_identity() -> AccountIdentity:
+    """The caller ``_create_media_buy_impl`` takes: the identity with the account inside.
+
+    ``create-media-buy-request.json`` requires ``account``, so the implementation is
+    annotated ``AccountIdentity``; the tenant is the committed ROW, which is what the
+    resolver would have loaded.
+    """
+    tenant = TenantContext.load(_TENANT_ID)
+    assert tenant is not None, "the setup fixture must have committed the tenant row"
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(principal_id="test_principal_v24", tenant_id=_TENANT_ID, tenant=tenant),
+        Account(account_id=_ACCOUNT_ID, name="Test Account", status="active"),
+    )
 
 
 @pytest.mark.integration
@@ -38,7 +60,6 @@ class TestCreateMediaBuyV24Format:
     @pytest.fixture
     def setup_test_tenant(self, integration_db):
         """Set up test tenant with product."""
-        from src.core.config_loader import set_current_tenant
         from src.core.database.models import CurrencyLimit
         from src.core.database.models import Principal as ModelPrincipal
         from src.core.database.models import Tenant as ModelTenant
@@ -144,18 +165,15 @@ class TestCreateMediaBuyV24Format:
             )
             session.add(currency_limit_gbp)
 
+            # The account every request below names. media_buys has a
+            # (tenant_id, account_id) foreign key, so the row must exist; in production
+            # the boundary resolves the reference and these tests call _impl directly.
+            session.add(AccountFactory.build(tenant_id="test_tenant_v24", account_id=_ACCOUNT_ID))
+
             session.commit()
 
-            # Set tenant context
-            set_current_tenant(
-                {
-                    "tenant_id": "test_tenant_v24",
-                    "name": "Test V24 Tenant",
-                    "ad_server": "mock",
-                    "auto_approve_format_ids": ["display_300x250"],
-                    "human_review_required": False,
-                }
-            )
+            # No ambient tenant to set: the tenant reaches the implementation on the
+            # identity each test builds, loaded from the row committed above.
 
             # Get pricing_option_ids for created products (needed for PackageRequest)
             # NOTE: pricing_option_id is auto-generated from pricing model details
@@ -209,9 +227,6 @@ class TestCreateMediaBuyV24Format:
             session.execute(delete(ModelTenant).where(ModelTenant.tenant_id == "test_tenant_v24"))
             session.commit()
 
-            # Clear global tenant context to avoid polluting other tests
-            set_current_tenant(None)
-
     async def test_create_media_buy_with_package_budget_mcp(self, setup_test_tenant):
         """Test MCP path with packages containing Budget objects.
 
@@ -230,12 +245,7 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        # Create identity for auth
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-        )
+        identity = _account_identity()
 
         # Call _impl with a CreateMediaBuyRequest object
         # This exercises the FULL serialization path including response_packages construction
@@ -296,12 +306,7 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        # Create identity for auth
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-        )
+        identity = _account_identity()
 
         req = CreateMediaBuyRequest(
             account={"account_id": "acct_test"},
@@ -368,12 +373,7 @@ class TestCreateMediaBuyV24Format:
             ),
         ]
 
-        # Create identity for auth
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-        )
+        identity = _account_identity()
 
         # Total budget is sum of all package budgets
         total_budget_value = sum(pkg.budget for pkg in packages)
@@ -414,12 +414,7 @@ class TestCreateMediaBuyV24Format:
             )
         ]
 
-        # Create identity for auth
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-        )
+        identity = _account_identity()
 
         req = CreateMediaBuyRequest(
             account={"account_id": "acct_test"},
@@ -450,12 +445,7 @@ class TestCreateMediaBuyV24Format:
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create identity for auth
-        identity = PrincipalFactory.make_identity(
-            principal_id="test_principal_v24",
-            tenant_id="test_tenant_v24",
-            tenant={"tenant_id": "test_tenant_v24"},
-        )
+        identity = _account_identity()
 
         # Standard AdCP format with explicit package
         # pricing_option_id format: {model}_{currency}_{fixed|auction}

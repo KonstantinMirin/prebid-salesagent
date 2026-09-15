@@ -15,10 +15,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from src.core.exceptions import AdCPAuthorizationError, AdCPSalesAgentError, AdCPValidationError
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import PublicIdentity, ResolvedIdentity
 from src.core.tenant_context import TenantContext
 from src.services.policy_check_service import PolicyCheckResult, PolicyStatus
 from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, TenantFactory
+from tests.harness._identity import make_identity
 from tests.harness.product import ProductEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -27,9 +28,14 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 def _lazy_identity(
     tenant_id: str,
     principal_id: str | None = "p1",
-) -> ResolvedIdentity:
-    """An identity carrying the tenant row the database holds for *tenant_id*."""
-    return PrincipalFactory.make_identity(
+) -> ResolvedIdentity | PublicIdentity:
+    """An identity carrying the tenant row the database holds for *tenant_id*.
+
+    Through the canonical harness helper, so ``principal_id=None`` builds the
+    ``PublicIdentity`` a public tool takes rather than a ``ResolvedIdentity`` whose
+    principal is None -- a shape the type no longer has.
+    """
+    return make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=TenantContext.load(tenant_id),

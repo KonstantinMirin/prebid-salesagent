@@ -38,7 +38,8 @@ Covers:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from sqlalchemy import select
@@ -63,7 +64,7 @@ DEFAULT_AGENT_URL = "https://test-agent.example.com"
 class _DataPreservationEnv(IntegrationEnv):
     """Integration env for data preservation tests.
 
-    Only patches get_creative_agent_registry and get_config.
+    Only patches get_creative_agent_registry.
     Intentionally does NOT patch run_async_in_sync_context so that
     preview_creative/build_creative calls actually execute through
     the real async runner (with mocked registry methods).
@@ -71,12 +72,43 @@ class _DataPreservationEnv(IntegrationEnv):
 
     EXTERNAL_PATCHES = {
         "registry": "src.core.creative_agent_registry.get_creative_agent_registry",
-        "config": "src.core.config.get_config",
     }
 
     def _configure_mocks(self) -> None:
-        """Minimal defaults — tests configure registry per-case."""
-        self.mock["config"].return_value = MagicMock(gemini_api_key=None)
+        """Minimal defaults — tests configure registry per-case.
+
+        These cases are all STATIC creatives, so the generative build must stay off. The
+        Gemini key is a named fact on the typed settings, read once from the ENVIRONMENT
+        (``src/core/config.py``), and the config getter this env used to patch is gone --
+        so "not configured" is pinned in the environment, the way CreativeSyncEnv pins it.
+        """
+        from src.core.config import load_settings
+
+        self._gemini_env = patch.dict(os.environ)
+        self._gemini_env.start()
+        self._guard("gemini_api_key_env", self._release_gemini_env)
+        os.environ.pop("GEMINI_API_KEY", None)
+        load_settings()
+
+    def set_gemini_api_key(self, value: str | None) -> None:
+        """Configure (or clear, with ``None``) the key the generative build reads.
+
+        "Is the key configured" is a state of the ENVIRONMENT, and the settings are
+        rebuilt from it -- the same seam ``CreativeSyncEnv.set_gemini_api_key`` uses.
+        """
+        from src.core.config import load_settings
+
+        if value is None:
+            os.environ.pop("GEMINI_API_KEY", None)
+        else:
+            os.environ["GEMINI_API_KEY"] = value
+        load_settings()
+
+    def _release_gemini_env(self) -> None:
+        from src.core.config import load_settings
+
+        self._gemini_env.stop()
+        load_settings()
 
     def call_impl(self, **kwargs):
         """Call _sync_creatives_impl with real DB and async execution.
@@ -127,8 +159,10 @@ def _setup_generative_registry(env: _DataPreservationEnv, format_id: str, output
     mock_registry.get_format = AsyncMock(return_value=mock_format)
     env.mock["registry"].return_value = mock_registry
 
-    # Enable Gemini API key for generative tests
-    env.mock["config"].return_value = MagicMock(gemini_api_key="test-gemini-key")
+    # Enable the Gemini key for the generative path: it is read off the settings, which
+    # are rebuilt from the environment, so the key is set there (the env's _guard restores
+    # both when the block exits).
+    env.set_gemini_api_key("test-gemini-key")
 
     return mock_registry
 

@@ -129,9 +129,34 @@ class TestWrapperCoercion:
             )
 
 
+# tests/unit/test_pricing_option_rootmodel.py is DELETED -- all four of its tests were
+# already graded, on the wire, by BR-UC-GET-PRODUCTS-pricing-options.feature, whose
+# outlines assert the EXACT pricing option dict the buyer receives per pricing model:
+# MEASURED passed:27 (fixed) + passed:9 (auction) + passed:3 (id lowercasing) + passed:3
+# (two options, distinct ids) in-process across a2a/mcp/rest, and passed:9 + 3 + 1 + 1
+# in-network, in the box run test-results/innet_150926_1232.
+#
+# The four were test_pricing_option_rootmodel_unwrapping, test_pricing_option_unwrap_helper,
+# test_legacy_pricing_option_id_generation and test_legacy_pricing_option_id_auction.
+#
+# Two of them could not have failed for the reason they claimed. Both built the value they
+# asserted IN THE TEST BODY -- one defined its own `def unwrap_po(po): return getattr(po,
+# "root", po)` and the other recomputed the id as
+# `f"{pricing_model}_{currency}_{is_fixed}"` -- and then asserted that the local
+# computation produced "cpm_usd_fixed". They graded the test's own arithmetic, not
+# production's; their docstrings pointed at "lines 1527-1531 of media_buy_create.py", which
+# no longer compute an id at all (it is a stored column now -- see that feature's own
+# comment on why).
+#
+# The remaining two asserted that the adcp library's PricingOption RootModel proxies
+# attributes from .root. That is library behavior, and the outcome that matters -- what the
+# buyer actually receives -- is pinned byte-for-byte by the scenarios above.
+
+
 class TestProductIntegration:
     @staticmethod
     def _product(pricing_options):
+        from src.core.product_conversion import default_reporting_capabilities
         from src.core.schemas import Product
 
         return Product(
@@ -143,6 +168,7 @@ class TestProductIntegration:
             publisher_properties=[{"selection_type": "all", "publisher_domain": "example.com"}],
             delivery_measurement={"provider": "test"},
             pricing_options=pricing_options,
+            reporting_capabilities=default_reporting_capabilities(),
             is_custom=False,
         )
 

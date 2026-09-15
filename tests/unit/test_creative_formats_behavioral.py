@@ -96,45 +96,14 @@ class TestSortOrderByName:
     from Format, so sorting is now by name only.
     """
 
-    def test_sort_order_by_name(self):
-        """Formats must be sorted alphabetically by name."""
-        formats = [
-            _make_format("v_zebra", "Zebra Ad"),
-            _make_format("d_alpha", "Alpha Banner"),
-            _make_format("v_alpha", "Alpha Video"),
-            _make_format("d_zebra", "Zebra Banner"),
-        ]
-
-        result = _call_impl(formats)
-
-        names = [f.name for f in result]
-        assert names == [
-            "Alpha Banner",
-            "Alpha Video",
-            "Zebra Ad",
-            "Zebra Banner",
-        ], f"Expected alphabetical ordering but got {names}"
-
-    def test_sort_order_across_many_formats(self):
-        """Sort order holds across many formats."""
-        formats = [
-            _make_format("n1", "Native B"),
-            _make_format("d1", "Display A"),
-            _make_format("v1", "Video C"),
-            _make_format("n2", "Native A"),
-            _make_format("d2", "Display B"),
-        ]
-
-        result = _call_impl(formats)
-
-        names = [f.name for f in result]
-        assert names == [
-            "Display A",
-            "Display B",
-            "Native A",
-            "Native B",
-            "Video C",
-        ], f"Expected alphabetical ordering but got {names}"
+    # test_sort_order_by_name is REMOVED for the same reason as its sibling above:
+    # @T-UC-005-inv-031-2-holds grades alphabetical ordering with an exact ordered list,
+    # MEASURED passed:3 (a2a/mcp/rest).
+    #
+    # TestSortOrderByName::test_sort_preserves_after_filtering is DELIBERATELY KEPT. The
+    # scenario requests "all formats with no filters", so it does not grade order AFTER a
+    # filter, and @T-UC-005-inv-031-1-holds ("Multiple filters combine as AND") is MEASURED
+    # xfailed -- it reports nothing. This unit test is the only verification of sort-after-filter.
 
     def test_sort_preserves_after_filtering(self):
         """Sort order is maintained even after filters reduce the set."""
@@ -159,14 +128,11 @@ class TestSortOrderByName:
 # ---------------------------------------------------------------------------
 
 
-class TestTypeFilterRemovedInAdcp312:
-    """T-UC-005-inv2-violated: Type filter removed in adcp 3.12."""
-
-    def test_empty_catalog_returns_empty(self):
-        """Empty catalog returns empty list."""
-        result = _call_impl([])
-        assert result == []
-
+# TestTypeFilterRemovedInAdcp312::test_empty_catalog_returns_empty is REMOVED: already
+# graded by @T-UC-005-empty-catalog ("Empty catalog when no agents have formats"), MEASURED
+# passed:3 (a2a/mcp/rest). The scenario is strictly stronger -- it asserts both "no formats
+# should be returned" AND "no error should be returned", where the unit test asserted only
+# the empty list.
 
 # ---------------------------------------------------------------------------
 # MEDIUM_RISK: Group asset filtering — T-UC-005-inv4-group
@@ -180,42 +146,16 @@ class TestAssetTypesFilterChecksGroupAssets:
     checks both individual asset_type AND nested assets within groups.
     """
 
-    def test_asset_types_filter_finds_type_in_group_assets(self):
-        """Format with group assets containing requested type should be included."""
-        # adcp 3.9: repeatable_group uses RepeatableAssetGroup, nested items use *FormatGroupAsset
-        from adcp.types import ImageFormatGroupAsset, RepeatableAssetGroup, TextFormatGroupAsset
-
-        group_asset = RepeatableAssetGroup(
-            item_type="repeatable_group",
-            asset_group_id="product_group",
-            required=True,
-            min_count=1,
-            max_count=5,
-            assets=[
-                ImageFormatGroupAsset(
-                    asset_id="product_image",
-                    required=True,
-                ),
-                TextFormatGroupAsset(
-                    asset_id="product_title",
-                    required=True,
-                ),
-            ],
-        )
-
-        format_with_group = Format(
-            format_id=FormatId(agent_url=DEFAULT_AGENT_URL, id="native_carousel"),
-            name="Native Carousel",
-            is_standard=True,
-            assets=[group_asset],
-        )
-
-        # Filter for "image" — should match via nested group asset
-        req = ListCreativeFormatsRequest(asset_types=["image"])
-        result = _call_impl([format_with_group], req)
-
-        assert len(result) == 1, "Group asset with image should match image filter"
-        assert result[0].name == "Native Carousel"
+    # test_asset_types_filter_finds_type_in_group_assets is REMOVED: already graded by
+    # @T-UC-005-inv-049-3-group ("BR-RULE-049 INV-3 edge - Group assets checked in addition to
+    # individual assets"), MEASURED passed:3 (a2a/mcp/rest). Same Given (a repeatable asset
+    # group containing image and text), same When (asset_types filter naming one member of the
+    # group), same Then (the format is returned).
+    #
+    # Its two siblings are KEPT. @T-UC-005-inv-049-3-group grades group INCLUSION only, and
+    # @T-UC-005-inv-049-3-violated grades exclusion for an INDIVIDUAL asset with a single
+    # format in the registry -- so group exclusion, and the mixed individual+group case, are
+    # graded by nothing.
 
     def test_asset_types_filter_excludes_group_without_match(self):
         """Format with group assets NOT containing requested type should be excluded."""
@@ -324,21 +264,22 @@ class TestPartitionFormatIdsNoMatch:
 class TestBoundaryDimensionExactMax:
     """T-UC-005-boundary-dimension: exact max boundary (inclusive)."""
 
-    def test_boundary_dimension_exact_max_width(self):
-        """Format with width=300 included when max_width=300 (inclusive boundary)."""
-        formats = [
-            _make_format(
-                "rect",
-                "Medium Rectangle",
-                renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            ),
-        ]
-
-        req = ListCreativeFormatsRequest(max_width=300)
-        result = _call_impl(formats, req)
-
-        assert len(result) == 1, "Width=300 should be included by max_width=300"
-        assert result[0].name == "Medium Rectangle"
+    # test_boundary_dimension_exact_max_width and test_boundary_dimension_exact_min_width are
+    # REMOVED: both are graded by @T-UC-005-dim-boundary ("Dimension boundary - inclusive range
+    # at threshold"), MEASURED passed:3 (a2a/mcp/rest). That scenario puts a 728-wide render
+    # under min_width 728 AND max_width 728 and requires it returned, so it exercises
+    # inclusivity at both bounds at once -- an exclusive bound at either end would fail it.
+    #
+    # The two off-by-one siblings below are DELIBERATELY KEPT, and the reason is worth stating,
+    # because a passing scenario is not automatically a grading one. @T-UC-005-boundary-dimension
+    # (MEASURED passed:15) looks like it should cover them, but its Examples name no threshold
+    # ("width filter only", "height filter only", ...) and its Then is "the dimension handling
+    # should be valid", which routes to _assert_partition_outcome + _assert_filter_content in
+    # tests/bdd/steps/generic/then_payload.py: for expected="valid" that asserts only that no
+    # error came back, that .formats is a list, and that any format which survived narrowing has
+    # render dimensions. It never asserts that a render one pixel over the bound is EXCLUDED.
+    # @T-UC-005-inv-049-4-violated does assert exclusion, but with min_width 700 against renders
+    # of 300 and 320 -- a wide miss, which is exactly the case that cannot catch an off-by-one.
 
     def test_boundary_dimension_off_by_one_max_width(self):
         """Format with width=301 excluded when max_width=300."""
@@ -355,20 +296,8 @@ class TestBoundaryDimensionExactMax:
 
         assert result == [], "Width=301 should be excluded by max_width=300"
 
-    def test_boundary_dimension_exact_min_width(self):
-        """Format with width=300 included when min_width=300 (inclusive boundary)."""
-        formats = [
-            _make_format(
-                "rect",
-                "Medium Rectangle",
-                renders=[Renders(role="primary", dimensions=Dimensions(width=300, height=250))],
-            ),
-        ]
-
-        req = ListCreativeFormatsRequest(min_width=300)
-        result = _call_impl(formats, req)
-
-        assert len(result) == 1, "Width=300 should be included by min_width=300"
+    # test_boundary_dimension_exact_min_width is REMOVED: see the note above -- graded by
+    # @T-UC-005-dim-boundary, MEASURED passed:3.
 
     def test_boundary_dimension_off_by_one_min_width(self):
         """Format with width=299 excluded when min_width=300."""

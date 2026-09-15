@@ -277,49 +277,9 @@ class TestAIRankingExceptionPropagation:
                 await _get_products_impl(_make_request(brief="video ads"), identity)
 
 
-class TestAdapterAnnotationExceptionPropagation:
-    """Adapter annotation fail-open.
-
-    Covers: UC-001-MAIN-43
-    """
-
-    @pytest.mark.asyncio
-    async def test_type_error_propagates(self):
-        """TypeError (bug) propagates, not swallowed.
-
-        Covers: UC-001-MAIN-43
-
-        Adapter annotation resolves tenant-level via get_adapter_class_for_tenant()
-        (salesagent-r9rf), not a Principal-bound get_adapter() instance — patch
-        the call site actually used now.
-        """
-        from tests.helpers.adcp_factories import create_test_product
-
-        product = create_test_product(product_id="p1")
-        mock_uow = _mock_uow_with_products([product])
-
-        # The adapter annotation path needs a principal: ``_make_identity()`` carries one.
-        patches = [
-            patch("src.core.database.repositories.uow.ProductUoW", return_value=mock_uow),
-            patch("src.core.tools.products.convert_product_model_to_schema", side_effect=lambda p, **kw: p),
-            patch(
-                "src.services.dynamic_products.generate_variants_for_brief",
-                new_callable=AsyncMock,
-                return_value=[],
-            ),
-            patch("src.services.dynamic_pricing_service.DynamicPricingService"),
-            patch(
-                "src.core.helpers.adapter_helpers.get_adapter_class_for_tenant",
-                side_effect=TypeError("'NoneType' object has no attribute 'get'"),
-            ),
-        ]
-
-        import contextlib
-
-        from src.core.tools.products import _get_products_impl
-
-        with contextlib.ExitStack() as stack:
-            for p in patches:
-                stack.enter_context(p)
-            with pytest.raises(TypeError, match="NoneType"):
-                await _get_products_impl(_make_request(), _make_identity())
+# (Deleted) TestAdapterAnnotationExceptionPropagation graded the fail-open around the
+# pricing-option adapter annotation in get_products -- the block that called
+# get_adapter_class_for_tenant() and wrote `supported` / `unsupported_reason` onto every
+# pricing option. Commit ecfdd7771 deleted that block with the two unread fields it set,
+# so get_products no longer resolves an adapter class at all and there is no fail-open
+# left to grade. The obligation it cited, UC-001-MAIN-43, has no other test.

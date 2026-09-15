@@ -20,7 +20,6 @@ import pytest
 from adcp.types import MediaBuyStatus
 from pydantic import ValidationError
 from sqlalchemy import func, select
-from src.core.testing_hooks import AdCPTestContext
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import MediaBuy, WorkflowStep
@@ -32,10 +31,12 @@ from src.core.exceptions import (
     AdCPValidationError,
     first_validation_error_field,
 )
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
+from src.core.schemas.account import Account
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_approval import run_approval
 from tests.integration.media_buy_helpers import (
@@ -61,24 +62,29 @@ def _make_identity(
     principal_id: str = "test_principal",
     tenant_id: str = "test_tenant",
     tenant: dict[str, Any] | None = None,
-    testing_context: AdCPTestContext | None = None,
-    dry_run: bool = False,
-) -> ResolvedIdentity:
-    """Build a ResolvedIdentity for integration tests."""
+) -> AccountIdentity:
+    """Build the caller the media-buy implementations take.
+
+    Principal, tenant, and the ACCOUNT: ``create-media-buy-request.json`` and
+    ``update-media-buy-request.json`` both require ``account``, so both implementations
+    are annotated ``AccountIdentity`` and read ``identity.account.account_id`` directly
+    (media_buy_create.py:2765). A plain ``ResolvedIdentity`` leaves that None, which is
+    how 14 cases here failed with ``AttributeError: 'NoneType' object has no attribute
+    'account_id'`` — the wrong identity TYPE, not a missing access grant.
+
+    The account is the same ``DEFAULT_TEST_ACCOUNT_ID`` the request payloads name and
+    ``MediaBuyFactory`` seeds. Ownership-mismatch cases keep refusing: they pass a
+    DIFFERENT principal, and the buy's ownership check does not consult this account.
+    """
     if tenant is None:
         tenant = {"tenant_id": tenant_id}
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant=tenant,
-        protocol="mcp",
-        testing_context=testing_context
-        or AdCPTestContext(
-            dry_run=dry_run,
-            mock_time=None,
-            jump_to_event=None,
-            test_session_id=None,
+    return PrincipalFactory.make_account_identity(
+        PrincipalFactory.make_identity(
+            principal_id=principal_id,
+            tenant_id=tenant_id,
+            tenant=tenant,
         ),
+        Account(account_id=DEFAULT_TEST_ACCOUNT_ID, name="Test Account", status="active"),
     )
 
 
@@ -112,8 +118,20 @@ def mb_products(sample_products):
 
 
 @pytest.fixture
-def mb_identity(mb_tenant, mb_principal):
-    """Provide a ResolvedIdentity backed by real DB state."""
+def mb_account(factory_session, mb_tenant, mb_principal):
+    """The Account row the request payloads name, plus this principal's access to it.
+
+    These cases drive the REAL media-buy implementations, so the row has to exist
+    (``media_buys`` has a composite FK to (tenant_id, account_id)) and the grant with it
+    (resolution is access-scoped). ``seed_default_account`` is the one get-or-create,
+    shared with ``MediaBuyFactory``'s grant hook.
+    """
+    return seed_default_account(mb_tenant["tenant_id"], mb_principal["principal_id"])
+
+
+@pytest.fixture
+def mb_identity(mb_tenant, mb_principal, mb_account):
+    """Provide the AccountIdentity the implementations take, backed by real DB state."""
     return _make_identity(
         principal_id=mb_principal["principal_id"],
         tenant_id=mb_tenant["tenant_id"],
@@ -122,8 +140,12 @@ def mb_identity(mb_tenant, mb_principal):
 
 
 @pytest.fixture
-def mb_tenant_with_approval(integration_db, sample_tenant):
-    """Tenant with human_review_required=True for manual approval tests."""
+def mb_tenant_with_approval(integration_db, sample_tenant, mb_account):
+    """Tenant with human_review_required=True for manual approval tests.
+
+    Requests ``mb_account`` for the same reason ``mb_identity`` does: the manual-approval
+    cases persist a real media buy, whose composite FK needs the account row.
+    """
     from src.core.database.models import Tenant as TenantModel
 
     with get_db_session() as session:
