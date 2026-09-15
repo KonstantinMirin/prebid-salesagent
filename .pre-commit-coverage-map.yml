@@ -21,9 +21,6 @@ check-gam-auth-support:
 check-response-attribute-access:
   enforced_by: ci-step
   location: Makefile::quality-ci
-check-roundtrip-tests:
-  enforced_by: ci-step
-  location: Makefile::quality-ci
 check-code-duplication:
   enforced_by: gate + ci-step
   location: tox.ini::quality -> tests/quality/test_ratchets_slow.py + Makefile::quality-ci

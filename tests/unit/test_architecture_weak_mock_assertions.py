@@ -40,19 +40,15 @@ SCAN_DIRS = (ROOT / "tests",)
 # are upgraded to assert_called_once_with().
 # FIXME(#1370): each entry below should be upgraded to assert_called_once_with()
 WEAK_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
-    ("tests/unit/test_creative.py", "test_webhook_delivered_on_approval"),
-    ("tests/unit/test_creative_coverage_gaps.py", "test_slack_notification_for_rejected_creative"),
     ("tests/unit/test_creative_repository.py", "test_creates_and_flushes"),
     ("tests/unit/test_creative_repository.py", "test_creates_assignment"),
     ("tests/unit/test_delivery.py", "test_adapter_failure_audit_logged"),
     ("tests/unit/test_external_domain_routing.py", "test_index_route_external_domain_with_tenant"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_excludes_weight_when_default"),
     ("tests/unit/test_gam_creative_rotation.py", "test_lica_payload_includes_weight_when_non_default"),
-    ("tests/unit/test_gam_creatives_manager.py", "test_line_item_matching_no_match_logs_warning"),
     ("tests/unit/test_gam_service_account_auth.py", "test_service_account_credentials_creation"),
     ("tests/unit/test_get_media_buys.py", "test_snapshot_requested_calls_adapter"),
     ("tests/unit/test_pr1071_review_fixes.py", "test_audit_log_records_has_brand_not_has_brand_manifest"),
-    ("tests/unit/test_sync_creatives_behavioral.py", "test_slack_notification_only_when_webhook_configured"),
     ("tests/unit/test_update_media_buy_behavioral.py", "test_update_both_start_and_end_time"),
     # FIXME(#1370): pre-existing split assertions outside tests/unit/ (surfaced by SCAN_DIRS widen)
     ("tests/integration/test_creative_async_lifecycle_obligations.py", "test_async_input_required_response"),
@@ -187,7 +183,6 @@ class TestNoWeakMockAssertions:
 # FIXME(#1370): each entry below should be reviewed and upgraded
 BARE_ASSERTION_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/unit/test_auth_setup_mode.py", "test_disable_setup_mode_succeeds_when_sso_enabled"),
-    ("tests/unit/test_creative.py", "test_audit_log_sync_succeeds_without_principal_in_db"),
     ("tests/unit/test_creative_repository.py", "test_flushes_session"),
     ("tests/unit/test_creative_repository.py", "test_returns_list"),
     ("tests/unit/test_creative_repository.py", "test_returns_matching_assignments"),
