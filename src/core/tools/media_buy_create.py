@@ -1456,29 +1456,6 @@ def execute_approved_media_buy(
         return _mark_approval_failed(tenant_id, media_buy_id, error_msg)
 
 
-def _creative_owner_identity(*, creative_id: str, tenant_id: str) -> ResolvedIdentity | None:
-    """The identity of the principal that owns *creative_id*, or None if there is no such row.
-
-    Two steps, in this order, and the order is the point: read the owner's id with a unit
-    of work that is CLOSED before returning, then resolve. ``identity_of`` opens its own
-    sessions, and because ``get_db_session()`` yields the thread-scoped session with no
-    nesting refcount, resolving while any other unit is open closes that unit's session
-    out from under it (GH #1644). Keeping both halves here means the caller can resolve
-    before it opens its own unit and never has to think about the ordering again.
-    """
-    from src.core.database.repositories.uow import AdminCreativeUoW
-
-    with AdminCreativeUoW(tenant_id) as uow:
-        assert uow.creatives is not None
-        creative = uow.creatives.admin_get_by_id(creative_id)
-        if creative is None:
-            return None
-        owner_principal_id = creative.principal_id
-
-    # Outside the block: see the docstring.
-    return identity_of(tenant_id, owner_principal_id)
-
-
 def push_creative_to_existing_buy(
     *,
     creative_id: str,
@@ -1497,18 +1474,31 @@ def push_creative_to_existing_buy(
     from src.core.database.repositories.uow import AdminCreativeUoW
 
     try:
-        # Resolved BEFORE the unit below opens, and this ordering is load-bearing.
+        # TWO PHASES, SEQUENTIAL, NEVER NESTED — and the ordering is load-bearing.
+        #
         # identity_of opens its own sessions (TenantContext.load, get_principal_by_id, and
         # the account read when one is named), and get_db_session() yields the
         # THREAD-SCOPED session with no nesting refcount — so its exit runs
-        # session.close(); scoped.remove() on the SAME session object the enclosing unit
-        # holds. Called from inside the block, as it was, it left ``uow`` holding a closed
-        # session, and the reads and the update_data WRITE that follow ran against it
-        # (GH #1644). The owner is a fact of the stored row, so it can be read and the
-        # unit closed before anything else starts.
-        owner = _creative_owner_identity(creative_id=creative_id, tenant_id=tenant_id)
-        if owner is None:
-            return False, f"Creative {creative_id} not found"
+        # session.close(); scoped.remove() on the SAME session object an enclosing unit
+        # holds. Called from inside the work block, as it was, it left that unit holding a
+        # closed session, and the reads and the update_data WRITE below ran against it:
+        # the push returned success while the enrichment was silently never persisted
+        # (GH #1644, graded by tests/integration/test_push_creative_to_existing_buy.py).
+        #
+        # The owner is a fact of the stored row, so phase one reads it and CLOSES, phase
+        # two resolves with nothing open, and the work block opens afterwards. Inline
+        # rather than extracted: the admin lookup carries this function's sanctioned
+        # allowlist entry in test_architecture_creative_lookup_principal_scoped, and a
+        # helper would split one sanctioned violation into two.
+        with AdminCreativeUoW(tenant_id) as owner_uow:
+            assert owner_uow.creatives is not None
+            owner_row = owner_uow.creatives.admin_get_by_id(creative_id)
+            if owner_row is None:
+                return False, f"Creative {creative_id} not found"
+            owner_principal_id = owner_row.principal_id
+
+        # Nothing is open here. This is the whole point of the split.
+        identity = identity_of(tenant_id, owner_principal_id)
 
         with AdminCreativeUoW(tenant_id) as uow:
             assert uow.creatives is not None
@@ -1540,8 +1530,8 @@ def push_creative_to_existing_buy(
             if not matching:
                 return False, f"No assignment of creative {creative_id} to media buy {media_buy_id}"
 
-            # Resolved above, outside this unit. See the comment at the top of the try.
-            adapter = get_adapter(owner)
+            # Resolved above, outside every unit. See the comment at the top of the try.
+            adapter = get_adapter(identity)
             if not (hasattr(adapter, "creatives_manager") and adapter.creatives_manager):
                 return False, "Adapter does not support creative upload"
 

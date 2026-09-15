@@ -17,7 +17,8 @@ before the unit opens.
 
 The structural guard (``test_architecture_nested_unit_of_work.py``) is an AST scan: it can
 see that the call moved, and it cannot see whether the write LANDS. That is what this
-grades, by reading the row back through a fresh session and asserting the adapter's
+grades, by reading the row back through a unit of work the test opens afterwards and
+asserting the adapter's
 enrichment is on it.
 
 The adapter is the one seam stubbed. Everything else is real: real rows, real repository,
@@ -30,10 +31,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from sqlalchemy import select
 
-from src.core.database.database_session import get_db_session
-from src.core.database.models import Creative as DBCreative
 from src.core.schemas import AssetStatus
 from src.core.tools.media_buy_create import push_creative_to_existing_buy
 from tests.helpers.media_buy_approval import uploadable_creative
@@ -47,7 +45,11 @@ PLATFORM_CONCEPT_ID = "gam-order-90210"
 
 
 def _seed_live_buy_with_assigned_creative():
-    """A creative approved but not yet pushed, assigned to a package on a LIVE buy."""
+    """A creative approved but not yet pushed, assigned to a package on a LIVE buy.
+
+    Returns (tenant_id, creative_id, media_buy_id, principal_id) -- the principal because
+    the buyer-path repository read used for the assertion is principal-scoped.
+    """
     from tests.factories import (
         CreativeAssignmentFactory,
         CreativeFactory,
@@ -76,7 +78,7 @@ def _seed_live_buy_with_assigned_creative():
         package_config={"product_id": "prod_001", "platform_order_id": "gam_order_777"},
     )
     CreativeAssignmentFactory(creative=creative, media_buy=media_buy, package_id="pkg_live")
-    return tenant.tenant_id, creative.creative_id, media_buy.media_buy_id
+    return tenant.tenant_id, creative.creative_id, media_buy.media_buy_id, principal.principal_id
 
 
 def _adapter_reporting(creative_id: str) -> MagicMock:
@@ -94,27 +96,31 @@ def _adapter_reporting(creative_id: str) -> MagicMock:
     return adapter
 
 
-def _persisted_creative_data(tenant_id: str, creative_id: str) -> dict:
-    """The creative's ``data`` blob, read back through a FRESH session.
+def _persisted_creative_data(tenant_id: str, creative_id: str, principal_id: str) -> dict:
+    """The creative's ``data`` blob, read back through its own unit of work.
 
-    A fresh read is the point: the defect this grades left the write on a closed session,
-    so anything asserted against the in-memory object the function touched could pass while
-    the row was never updated.
+    A read through a unit the test opens AFTER the push returned is the point: the defect
+    this grades left the write on a closed session, so anything asserted against the
+    in-memory object the function touched could pass while the row was never updated. The
+    unit opens its own session, which is what makes this an independent read, and it goes
+    through ``CreativeRepository`` rather than a raw ``get_db_session()`` — the shape
+    ``test_architecture_repository_pattern`` requires of a new test.
+
+    Proven independent rather than assumed: with the nested ``identity_of`` call
+    reintroduced, this read still reports the un-enriched row and the test still fails.
     """
-    with get_db_session() as session:
-        row = session.scalars(
-            select(DBCreative).where(
-                DBCreative.tenant_id == tenant_id,
-                DBCreative.creative_id == creative_id,
-            )
-        ).first()
+    from src.core.database.repositories.uow import CreativeUoW
+
+    with CreativeUoW(tenant_id) as uow:
+        assert uow.creatives is not None
+        row = uow.creatives.get_by_id(creative_id, principal_id)
         assert row is not None, "the seeded creative row is missing"
         return dict(row.data or {})
 
 
 def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
     """The enrichment the adapter reported is on the ROW after the push returns."""
-    tenant_id, creative_id, media_buy_id = _seed_live_buy_with_assigned_creative()
+    tenant_id, creative_id, media_buy_id, principal_id = _seed_live_buy_with_assigned_creative()
 
     with patch(
         "src.core.tools.media_buy_create.get_adapter",
@@ -128,7 +134,7 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
 
     assert (ok, err) == (True, None), f"push failed: {err}"
 
-    data = _persisted_creative_data(tenant_id, creative_id)
+    data = _persisted_creative_data(tenant_id, creative_id, principal_id)
     assert data.get("concept_id") == PLATFORM_CONCEPT_ID, (
         "the adapter's concept enrichment did not reach the row — the update_data write "
         f"was lost. Persisted data: {data}"
