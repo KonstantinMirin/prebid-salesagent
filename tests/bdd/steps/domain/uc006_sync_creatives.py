@@ -39,11 +39,7 @@ from pytest_bdd import given, parsers, then, when
 from src.core.errors.codes import ErrorCode
 from tests.bdd.steps._harness_db import db_session
 from tests.bdd.steps._outcome_helpers import is_e2e, payload_or_none, require_payload, wire_field
-from tests.bdd.steps.generic._account_resolution import (
-    ensure_tenant_principal,
-    seed_account_with_access,
-    seed_natural_key_matches,
-)
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.factories import CreativeFactory
 from tests.factories.creative_asset import (
@@ -59,6 +55,7 @@ from tests.factories.principal import PrincipalFactory
 from tests.factories.request import OMIT, CreativeAssetRequestFactory
 from tests.harness.creative_sync import creative_fingerprint
 from tests.harness.media_buy_create import OMIT_ACCOUNT, OMIT_IDEMPOTENCY_KEY
+from tests.helpers.account_seeding import seed_account_with_access, seed_natural_key_matches
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

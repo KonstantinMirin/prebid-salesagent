@@ -3839,7 +3839,7 @@ def _seed_valid_account_if_named(ctx: dict, value: str) -> None:
     if tenant is None or principal is None:
         return
 
-    from tests.bdd.steps.generic._account_resolution import seed_account_with_access
+    from tests.helpers.account_seeding import seed_account_with_access
 
     # Explicit account_id ONLY (the invalid oneOf row also carries account_id but
     # pairs it with brand/operator — exclude it so it still errors).

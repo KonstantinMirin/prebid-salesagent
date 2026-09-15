@@ -20,11 +20,12 @@ from pytest_bdd import given, parsers, then, when
 
 from tests.bdd.steps._harness_db import db_session as _db_session
 from tests.bdd.steps._outcome_helpers import _get_response_field, payload_or_none, require_payload, wire_field
-from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal, seed_natural_key_matches
+from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 from tests.bdd.steps.generic._create_request import build_create_request_kwargs, pricing_option_id
 from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 from tests.factories.mint import mint
 from tests.harness.create_request import build_request_packages
+from tests.helpers.account_seeding import seed_natural_key_matches
 
 # ═══════════════════════════════════════════════════════════════════════
 # GIVEN steps — request setup and account state
