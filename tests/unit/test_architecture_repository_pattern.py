@@ -812,11 +812,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_database_health_integration.py", "test_health_check_table_existence_validation"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_with_real_schema_validation"),
     ("tests/integration/test_database_integration.py", "test_settings_queries"),
-    ("tests/integration/test_database_timeouts.py", "test_circuit_breaker_fail_fast"),
-    ("tests/integration/test_database_timeouts.py", "test_circuit_breaker_recovery"),
-    ("tests/integration/test_database_timeouts.py", "test_connection_timeout_configuration"),
-    ("tests/integration/test_database_timeouts.py", "test_query_timeout_configuration"),
-    ("tests/integration/test_database_timeouts.py", "test_statement_timeout_enforced"),
     ("tests/integration/test_delivery_poll_behavioral.py", "test_get_pricing_options_uses_string_id_not_integer_pk"),
     ("tests/integration/test_delivery_poll_behavioral.py", "test_integer_pk_lookup_returns_none"),
     (
