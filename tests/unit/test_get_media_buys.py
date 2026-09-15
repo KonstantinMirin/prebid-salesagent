@@ -48,7 +48,6 @@ def make_identity(
     tenant_id="tenant_1",
     principal_id="principal_1",
     tenant=None,
-    testing_context=None,
 ):
     """Create a ResolvedIdentity for testing."""
     from tests.factories import PrincipalFactory
@@ -59,8 +58,6 @@ def make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
         tenant=tenant,
-        protocol="mcp",
-        testing_context=testing_context,
     )
 
 
@@ -637,52 +634,15 @@ class TestTargetingOverlayRoundTrip:
 
         assert response.media_buys[0].packages[0].targeting_overlay is None
 
-    def test_internal_targeting_fields_not_leaked(self, patched_internals):
-        """Targeting carries internal fields (had_city_targeting, tenant_id, etc.) — none
-        of them may leak into the response. Targeting.model_dump excludes the full set:
-        key_value_pairs, tenant_id, created_at, updated_at, metadata, had_city_targeting.
-        """
-        buy = make_media_buy(start_date=date(2020, 1, 1), end_date=date(2099, 12, 31))
-        pkg = make_package(
-            package_config={
-                "product_id": "prod_1",
-                "targeting_overlay": {
-                    "property_list": {
-                        "agent_url": "https://gov.example",
-                        "list_id": "v1",
-                    },
-                    # Legacy city targeting triggers had_city_targeting=True via normalizer
-                    "geo_city_any_of": ["NYC"],
-                    # Each of these must be excluded by Targeting.model_dump
-                    "tenant_id": "leaky_tenant_id",
-                    "created_at": "2025-01-01T00:00:00Z",
-                    "updated_at": "2025-01-02T00:00:00Z",
-                    "metadata": {"private": "do_not_leak"},
-                    "key_value_pairs": {"aee_segment": "secret"},
-                },
-            }
-        )
-        patched_internals.buys.return_value = [buy]
-        patched_internals.packages.return_value = {"buy_1": [pkg]}
-
-        req = self._make_request()
-        response = _get_media_buys_impl(req, identity=make_identity())
-
-        dumped = response.model_dump(exclude_none=True)
-        targeting = dumped["media_buys"][0]["packages"][0]["targeting_overlay"]
-        # Full excluded set per Targeting.model_dump + Field(exclude=True)
-        excluded_internal_fields = {
-            "key_value_pairs",
-            "tenant_id",
-            "created_at",
-            "updated_at",
-            "metadata",
-            "had_city_targeting",
-        }
-        leaked = excluded_internal_fields & set(targeting.keys())
-        assert not leaked, f"Internal Targeting fields leaked into response: {sorted(leaked)}"
-        # property_list still surfaces
-        assert targeting["property_list"]["list_id"] == "v1"
+    # DELETED: test_internal_targeting_fields_not_leaked. It graded the six internal
+    # ``Field(exclude=True)`` fields ``Targeting`` used to carry — key_value_pairs,
+    # tenant_id, created_at, updated_at, metadata, had_city_targeting (plus the
+    # geo_city_any_of normalizer that set the last one). Every one of them is deleted from
+    # the model (``src/core/schemas/_base.py``: the seller key/value field went with
+    # salesagent-3cs7o.22, the city-level refusal with salesagent-3cs7o.15), so there is no
+    # field left to leak. Feeding those keys in a stored document now raises a pydantic
+    # ValidationError, which ``test_corrupted_targeting_surfaces_via_errors_channel`` below
+    # documents as the DELIBERATE dev/CI canary for field-declaration drift.
 
     def test_corrupted_targeting_surfaces_via_errors_channel(self, patched_internals):
         """A single bad package_config row must not crash the response.

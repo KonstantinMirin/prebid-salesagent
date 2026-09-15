@@ -90,16 +90,17 @@ def test_creative_optional_fields_still_included():
 def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
     """An unset optional field on a stored asset is OMITTED, never dumped as null.
 
-    ``Creative.assets`` is an untyped ``dict[str, Any]`` (the DB stores arbitrary
-    asset shapes), so Pydantic's ``exclude_none=True`` default never sees inside
-    it — a ``None`` on a stored asset would survive as a literal wire ``null``.
-    AdCP 3.1 types these asset fields without accepting ``null``, so that fails
-    schema validation. ``Creative.model_dump()`` runs ``strip_none_deep`` over
-    ``assets`` to prevent it.
+    AdCP 3.1 types these asset fields without accepting ``null``, so a literal wire
+    ``null`` fails schema validation. What prevents it is that ``Creative.assets`` is
+    INHERITED as the library's typed asset map — it used to be redeclared
+    ``dict[str, Any]``, which Pydantic's ``exclude_none=True`` default cannot see inside,
+    and a ``strip_none_deep`` pass over the dict patched the output back. The redeclaration
+    and the strip are both gone (``src/core/schemas/creative.py``): the row-to-model read
+    validates the stored document into the typed map, so ``exclude_none`` reaches the
+    asset's own fields.
 
-    Mutation check: delete the ``strip_none_deep`` call in
-    ``src/core/schemas/creative.py`` -> this goes red with the key present and
-    valued ``None``. The wire-level oracle is
+    Mutation check: redeclare ``assets: dict[str, Any]`` on ``Creative`` -> this goes red
+    with the key present and valued ``None``. The wire-level oracle is
     ``tests/integration/test_list_creatives_a2a_wire_shape.py::test_a2a_wire_omits_null_asset_fields``.
     """
     creative = make_test_creative(
@@ -107,14 +108,17 @@ def test_creative_model_dump_omits_null_fields_inside_assets(null_field):
         assets=build_assets(image_spec("banner").with_fields(**{null_field: None})),
     )
 
-    banner = creative.model_dump()["assets"]["banner"]
+    # ``mode="json"`` because the claim is about the SERIALIZED shape: the typed asset
+    # holds ``url`` as a pydantic ``AnyUrl``, and only the JSON dump is the wire form the
+    # pinned asset schema grades.
+    banner = creative.model_dump(mode="json")["assets"]["banner"]
 
     assert_omits_paths(
         banner,
         [null_field],
         context=f"model_dump() assets.banner (a null here is invalid against the pinned AdCP asset schema; {banner!r})",
     )
-    # Negative control: stripping must not eat the asset's real fields.
+    # Negative control: the omission must not eat the asset's real fields.
     assert banner["asset_type"] == "image"
     assert banner["url"] == "https://example.com/banner.png"
 
