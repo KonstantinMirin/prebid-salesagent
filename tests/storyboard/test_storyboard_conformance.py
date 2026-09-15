@@ -41,7 +41,7 @@ from typing import Any
 import pytest
 
 from scripts.audit import ledger, storyboard_spec
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN
+from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
 from tests.storyboard import collected
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -461,7 +461,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
     protocol surfaces.
     """
     agent_url = os.environ.get(_agent_url_env(protocol), _DEFAULT_AGENT_URLS[protocol])
-    auth_token = os.environ.get(_AUTH_TOKEN_ENV, "ci-test-token")
+    auth_token = os.environ.get(_AUTH_TOKEN_ENV, CI_TEST_TOKEN)
     summary_path = _summary_path(protocol)
     cmd = [
         str(_ADCP_BIN),

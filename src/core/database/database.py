@@ -94,7 +94,12 @@ def init_db(exit_on_error=False):
 
                 # Create a CI test principal for E2E testing
                 PrincipalRepository(db_session, "default").create_with_token(
-                    "ci-test-token",  # Fixed token for E2E tests; stored hashed like any other
+                    # Fixed token for E2E tests; stored hashed like any other. A LITERAL
+                    # COPY of scripts/setup/init_database_ci.py's CI_TEST_TOKEN, which
+                    # owns the value: src/ cannot import from scripts/ (the dependency
+                    # runs the other way), so this one is kept in step by hand. Every
+                    # spelling under tests/ reads the constant.
+                    "ci-test-token",
                     principal_id="ci-test-principal",
                     name="CI Test Principal",
                     platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},

@@ -23,6 +23,14 @@ CI_TEST_ACCOUNT_ID = "ci-test-account"
 #: import from tests/ (see scripts/ci/migration_helpers.py).
 CI_TEST_SUBDOMAIN = "ci-test"
 
+#: The credential presented to that tenant: the plaintext token this script hashes into
+#: the CI principal's row. Owned here for the same reason as the subdomain above -- this
+#: script is what makes it resolvable -- and read by tests/integration/conftest_ci_seed.py
+#: and tests/storyboard/test_storyboard_conformance.py. ``tox.ini``'s
+#: ``STORYBOARD_AUTH_TOKEN`` default cannot import a Python constant and carries a literal
+#: that must be kept in step with this one; its comment says so.
+CI_TEST_TOKEN = "ci-test-token"
+
 
 def init_db_ci():
     """Initialize database with migrations only for CI testing."""
@@ -77,12 +85,12 @@ def init_db_ci():
                     print("   ✓ Access control configured")
 
                 # Check if principal exists GLOBALLY by token hash (it's unique across all tenants)
-                existing_principal = find_principal_by_token_hash(session, hash_token("ci-test-token"))
+                existing_principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
                 if not existing_principal:
                     # Create principal if it doesn't exist
                     principal_id = str(uuid.uuid4())
                     PrincipalRepository(session, tenant_id).create_with_token(
-                        "ci-test-token",
+                        CI_TEST_TOKEN,
                         principal_id=principal_id,
                         name="CI Test Principal",
                         platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
@@ -92,7 +100,7 @@ def init_db_ci():
                     principal_id = existing_principal.principal_id
                     # Principal exists but for different tenant - update it to point to new tenant
                     print(
-                        f"⚠️  Warning: Principal with token 'ci-test-token' exists for different tenant ({existing_principal.tenant_id})"
+                        f"⚠️  Warning: Principal with token '{CI_TEST_TOKEN}' exists for different tenant ({existing_principal.tenant_id})"
                     )
                     print(f"   Updating principal to point to new tenant: {tenant_id}")
                     existing_principal.tenant_id = tenant_id
@@ -214,11 +222,11 @@ def init_db_ci():
 
                 # Now create principal + dependencies in separate transaction
                 # Query again for principal (may have been created by other container)
-                existing_principal = find_principal_by_token_hash(session, hash_token("ci-test-token"))
+                existing_principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
 
                 if not existing_principal:
                     PrincipalRepository(session, tenant_id).create_with_token(
-                        "ci-test-token",
+                        CI_TEST_TOKEN,
                         principal_id=principal_id,
                         name="CI Test Principal",
                         platform_mappings={"mock": {"advertiser_id": "test-advertiser"}},
@@ -231,7 +239,7 @@ def init_db_ci():
                         session.rollback()
                         print(f"⚠️  Principal already exists (race condition): {e}")
                         # Re-query for principal created by other container
-                        existing_principal = find_principal_by_token_hash(session, hash_token("ci-test-token"))
+                        existing_principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
                         if existing_principal:
                             principal_id = existing_principal.principal_id
                             print(f"   Using existing principal (ID: {principal_id})")
@@ -240,7 +248,7 @@ def init_db_ci():
                     if existing_principal.tenant_id != tenant_id:
                         # Principal exists but for different tenant - update it
                         print(
-                            f"⚠️  Warning: Principal with token 'ci-test-token' exists for different tenant ({existing_principal.tenant_id})"
+                            f"⚠️  Warning: Principal with token '{CI_TEST_TOKEN}' exists for different tenant ({existing_principal.tenant_id})"
                         )
                         print(f"   Updating principal to point to new tenant: {tenant_id}")
                         existing_principal.tenant_id = tenant_id

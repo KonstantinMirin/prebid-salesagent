@@ -24,6 +24,8 @@ _GETPID = os.getpid
 # tests/e2e/conftest.py -> tests/ -> repo root.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+from scripts.setup.init_database_ci import CI_TEST_TOKEN
+
 # Import contract validation - this automatically validates tool calls at test collection time
 from tests.e2e.conftest_contract_validation import pytest_collection_modifyitems  # noqa: F401
 
@@ -574,7 +576,7 @@ def docker_services_e2e(request):
         # stack is seeded at all.
         from src.core.credentials import hash_token
 
-        ci_token_hash = hash_token("ci-test-token")
+        ci_token_hash = hash_token(CI_TEST_TOKEN)
         cursor.execute("SELECT COUNT(*) FROM principals WHERE token_hash = %s", (ci_token_hash,))
         principal_count = cursor.fetchone()[0]
         print(f"   Principals answering ci-test-token: {principal_count}")
@@ -676,11 +678,11 @@ def live_server(docker_services_e2e):
 def test_auth_token(live_server):
     """Create or get a test principal with auth token.
 
-    This token must match the one created by src/core/database/database.py::init_db().
+    Reads the constant the seeding script owns, so this fixture cannot hand out a token
+    the stack was not seeded with (``scripts/setup/init_database_ci.py``, which is also
+    the value ``src/core/database/database.py::init_db()`` creates for the demo tenant).
     """
-    # Return the CI test token that is created by init_db() in database.py
-    # This ensures consistency between database initialization and E2E tests
-    return "ci-test-token"
+    return CI_TEST_TOKEN
 
 
 @pytest.fixture
