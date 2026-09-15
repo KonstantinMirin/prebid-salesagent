@@ -140,10 +140,8 @@ class TestGenerativeCreatives:
             env.setup_default_data()
             fmt = env.setup_generative_build(
                 format_id="display_300x250_generative",
-                gemini_api_key=None,  # No API key
+                gemini_api_key=None,  # No API key — setup_generative_build clears it
             )
-            # Override to remove gemini key (setup_generative_build sets it)
-            env.mock["config"].return_value.gemini_api_key = None
 
             result = env.call_impl(
                 creatives=[

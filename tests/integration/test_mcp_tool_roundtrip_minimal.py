@@ -31,8 +31,14 @@ class TestMCPToolRoundtripMinimal:
     @pytest.fixture
     async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_account, sample_products):
         """Create MCP client for testing with test data."""
-        # Use the mcp_server fixture which provides port and manages lifecycle
-        headers = credential_headers(token=sample_principal["access_token"])
+        # Use the mcp_server fixture which provides port and manages lifecycle.
+        # The SELLER travels with the credential: these calls reach the server on
+        # localhost, so no host maps to a tenant and the resolver has no tenant to verify
+        # the token inside -- every tool answered AUTH_INVALID without it.
+        headers = credential_headers(
+            token=sample_principal["access_token"],
+            tenant=sample_tenant["tenant_id"],
+        )
         transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
         client = Client(transport=transport)
 

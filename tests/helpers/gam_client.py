@@ -44,16 +44,27 @@ def stub_gam_client_manager(
     *,
     line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
     created_creative_id: str = "gam_creative_1",
+    created_order_id: str = "9000001",
+    created_line_item_id: str = "9100001",
 ) -> MagicMock:
     """A ``GAMClientManager`` instance stand-in serving the order's line items.
 
     Every service the adapter asks for resolves: the ones a test states behaviour for
     are configured, and any other is a bare mock so a call reaching it neither fails
     nor pretends to have done anything.
+
+    ``createOrders`` and ``createLineItems`` answer with NUMERIC ids because production
+    reads them back and converts: ``create_order`` does ``str(created[0]["id"])`` and the
+    approval path then does ``int(order_id)``. A bare mock satisfies the subscript (every
+    MagicMock does) and yields ``"<MagicMock ...>"``, which fails much later as
+    ``invalid literal for int()`` -- a create that never touched a real client looking
+    like an ad-server fault.
     """
     services = {
+        "OrderService": MagicMock(createOrders=MagicMock(return_value=[{"id": int(created_order_id)}])),
         "LineItemService": MagicMock(
-            getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items)))
+            getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items))),
+            createLineItems=MagicMock(return_value=[{"id": int(created_line_item_id)}]),
         ),
         "CreativeService": MagicMock(createCreatives=MagicMock(return_value=[{"id": created_creative_id}])),
     }

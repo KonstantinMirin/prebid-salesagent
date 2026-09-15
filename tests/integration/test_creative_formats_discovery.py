@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import pytest
 
-from src.core.exceptions import AdCPAuthRequiredError
 from src.core.schemas import Format, FormatId, ListCreativeFormatsResponse
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.harness import CreativeFormatsEnv
@@ -115,33 +114,10 @@ class TestAuthOptionalForDiscovery:
         assert isinstance(result.payload, ListCreativeFormatsResponse)
         assert len(result.payload.formats) == 1
 
-    def test_no_tenant_context_raises_auth_error(self, integration_db):
-        """UC-005-MAIN-MCP-02: missing tenant context IS an error, even though auth is optional.
-
-        Authentication is optional for discovery, but tenant context is still
-        required to resolve which format catalog to return. No credential was
-        presented (auth_token=None) -> AUTH_MISSING (salesagent-otc5, completing
-        the #2092 split for the tenant-resolution axis).
-        """
-        formats = [_make_format("no_tenant_fmt", "Should Not Reach")]
-
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats(formats)
-
-            identity_no_tenant = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="orphan",
-                tenant=None,
-            )
-            # _impl is called directly and the raised error class IS the oracle --
-            # no transport is involved, so none is named. Previously dispatched
-            # through Transport.IMPL, a "transport" with no wire, and asserted on
-            # the reconstructed .error attribute; both are gone.
-            with pytest.raises(AdCPAuthRequiredError) as exc_info:
-                env.call_impl(identity=identity_no_tenant)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
+    # (Deleted) test_no_tenant_context_raises_auth_error: it built an identity with a
+    # resolved principal and tenant=None. See the note on the deleted
+    # TestTenantResolutionFailure class below -- the state is unreachable and the
+    # behavior it expected is not the one production has.
 
     def test_authenticated_vs_unauthenticated_return_same_catalog(self, integration_db):
         """UC-005-MAIN-MCP-02: auth token does not affect the catalog returned.
@@ -181,54 +157,22 @@ class TestAuthOptionalForDiscovery:
 # ---------------------------------------------------------------------------
 
 
-class TestTenantResolutionFailure:
-    """Covers: UC-005-EXT-A-01
-
-    Given no auth token AND no hostname mapping resolves to a tenant,
-    When Buyer calls list_creative_formats,
-    Then error with tenant context message and suggestion to provide credentials.
-    """
-
-    def test_no_tenant_no_auth_raises_auth_error(self, integration_db):
-        """UC-005-EXT-A-01: tenant=None + auth_token=None -> AUTH_MISSING error code (salesagent-otc5)."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats([_make_format("unreachable", "Should Not Reach")])
-
-            identity = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="unknown",
-                tenant=None,
-            )
-            # _impl is called directly and the raised error class IS the oracle --
-            # no transport is involved, so none is named. Previously dispatched
-            # through Transport.IMPL, a "transport" with no wire, and asserted on
-            # the reconstructed .error attribute; both are gone.
-            with pytest.raises(AdCPAuthRequiredError) as exc_info:
-                env.call_impl(identity=identity)
-
-        assert exc_info.value.error_code == "AUTH_MISSING"
-
-    def test_error_message_mentions_tenant(self, integration_db):
-        """UC-005-EXT-A-01: error message indicates tenant context could not be determined."""
-        with CreativeFormatsEnv() as env:
-            TenantFactory(tenant_id="test_tenant")
-            env.set_registry_formats([])
-
-            identity = PrincipalFactory.make_identity(
-                principal_id="anon_buyer",
-                tenant_id="unknown",
-                tenant=None,
-            )
-            result = env.call_via(Transport.A2A, identity=identity)
-
-        assert result.is_error
-        # Wire-envelope assertion via the harness's captured A2A artifact DataPart —
-        # exercises the real on_message_send pipeline + serialize-for-a2a envelope
-        # build, not the lossy reconstructed exception. See tests/CLAUDE.md §
-        # Error Verification Policy.
-
-        result.assert_wire_error(
-            "AUTH_MISSING",
-            recovery="correctable",
-        )
+# (Deleted) TestTenantResolutionFailure, whose two tests -- an in-process AUTH_MISSING
+# raise and its A2A wire envelope -- both began by constructing an identity with a
+# RESOLVED principal and ``tenant=None``.
+#
+# That state cannot be produced. ``_resolve_identity`` looks a credential up only inside
+# the tenant the request reached ("no tenant, no lookup", step 4), so a caller with no
+# tenant has no principal either; and ``ResolvedIdentity`` declares ``tenant`` required,
+# which is why these calls now fail in ``make_identity`` rather than in the assertion.
+#
+# The reachable tenant-less discovery request is the anonymous one --
+# ``PublicIdentity(principal=None, tenant=None)`` -- and production answers it with an
+# empty catalog rather than refusing it: "No seller is addressed: there are no formats to
+# list, and nothing to refuse" (``_list_creative_formats_impl``, 76c2a96fb, which replaced
+# the ``require_tenant`` raise these tests were written against).
+#
+# So UC-005-EXT-A-01 ("no hostname mapping resolves to a tenant -> error") is now
+# UNGRADED. Grading it means driving the boundary with no ``x-adcp-tenant`` header and
+# reading the wire; that also settles whether the empty catalog or the refusal is the
+# spec-correct answer, which is a question for the storyboard, not for a fixture.

@@ -11,6 +11,7 @@ our control.
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
@@ -28,10 +29,13 @@ from src.core.database.models import (
     Tenant,
 )
 from tests.factories import PricingOptionFactory
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.factories.account import seed_default_account
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
-from tests.helpers.external_service import is_external_service_response_error
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.helpers.gam_client import stub_gam_client_manager
+from tests.integration.media_buy_helpers import assert_created, make_media_buy_identity
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
+from tests.utils.tenant_setup import seed_setup_checklist_rows
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -41,6 +45,41 @@ _NOW = datetime.now(UTC)
 _FUTURE_START = (_NOW + timedelta(days=7)).strftime("%Y-%m-%dT00:00:00Z")
 _FUTURE_END_30D = (_NOW + timedelta(days=37)).strftime("%Y-%m-%dT23:59:59Z")
 _FUTURE_END_10D = (_NOW + timedelta(days=17)).strftime("%Y-%m-%dT23:59:59Z")
+
+
+TENANT_ID = "test_gam_pricing_tenant"
+PRINCIPAL_ID = "test_advertiser_pricing"
+GAM_ADVERTISER_ID = "123456789"
+
+
+def _identity():
+    """The caller ``_create_media_buy_impl`` takes: principal, tenant AND account.
+
+    ``account`` is spec-required on the request and the implementation reads
+    ``identity.account.account_id``; the tenant comes from its ROW (so the fixture's
+    ``human_review_required=False`` governs); and the principal carries the GAM mapping
+    the seeded row carries, because ``get_adapter`` reads the buyer's ``advertiser_id``
+    off it and order creation requires one.
+    """
+    return make_media_buy_identity(
+        PRINCIPAL_ID,
+        TENANT_ID,
+        platform_mappings={"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}},
+    )
+
+
+@pytest.fixture(autouse=True)
+def _stub_gam_client():
+    """Serve the GAM adapter a stand-in SOAP client for every test in this module.
+
+    The adapter has no dry-run mode: it builds a real client when constructed and every
+    read and write it makes is a GAM call. These tests grade the pricing translation the
+    adapter performs on the way to those calls, so the client is a stand-in
+    (``tests/helpers/gam_client``) and nothing leaves the process.
+    """
+    with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
+        client_manager.return_value = stub_gam_client_manager()
+        yield
 
 
 @pytest.fixture
@@ -56,16 +95,28 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             subdomain="gam-pricing-test",
             ad_server="google_ad_manager",
             human_review_required=False,
+            # Half of the setup checklist's "SSO configured" task; the other half is the
+            # TenantAuthConfig row seed_setup_checklist_rows writes below.
+            auth_setup_mode=False,
         )
         session.add(tenant)
         session.flush()
 
-        # Add adapter config (mock mode for testing)
+        # create_media_buy validates the setup checklist for every caller now (the
+        # testing context that used to skip it is gone), so this tenant has to really be
+        # set up.
+        seed_setup_checklist_rows(session, tenant)
+
+        # Add adapter config. The refresh token is what makes the adapter CONSTRUCTIBLE:
+        # it builds its credentials in __init__ and refuses a config carrying no
+        # key_file/service_account_json/refresh_token. Nothing authenticates --
+        # _stub_gam_client replaces the client manager -- so the value only has to exist.
         adapter_config = AdapterConfig(
             tenant_id="test_gam_pricing_tenant",
             adapter_type="google_ad_manager",
             gam_network_code="123456",
             gam_trafficker_id="gam_traffic_456",
+            gam_refresh_token="test_refresh_token",
         )
         session.add(adapter_config)
 
@@ -92,9 +143,16 @@ def setup_gam_tenant_with_all_pricing_models(integration_db):
             tenant_id="test_gam_pricing_tenant",
             principal_id="test_advertiser_pricing",
             name="Test Advertiser - Pricing",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "123456789"}},
+            platform_mappings={"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}},
         )
         session.add(principal)
+        session.flush()
+
+        # The ACCOUNT the request names, and this principal's access to it. Required on
+        # create-media-buy-request.json and resolved for real, so a payload naming an
+        # account with no row or no grant is refused before the pricing translation.
+        with bind_factories_to_session(session):
+            seed_default_account(TENANT_ID, PRINCIPAL_ID)
 
         # Add GAM inventory (required for product validation)
         gam_inventory_1 = GAMInventory(
@@ -390,27 +448,11 @@ async def test_gam_cpm_guaranteed_creates_standard_line_item(setup_gam_tenant_wi
         end_time=_FUTURE_END_30D,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In dry-run mode, the response should succeed
     # In real mode, we'd verify GAM line item properties:
@@ -437,27 +479,11 @@ async def test_gam_cpc_creates_price_priority_line_item_with_clicks_goal(setup_g
         end_time=_FUTURE_END_30D,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In real GAM mode, line item would have:
     # - lineItemType = "PRICE_PRIORITY"
@@ -485,27 +511,11 @@ async def test_gam_vcpm_creates_standard_line_item_with_viewable_impressions(set
         end_time=_FUTURE_END_30D,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In real GAM mode, line item would have:
     # - lineItemType = "STANDARD" (VCPM only works with STANDARD)
@@ -534,27 +544,11 @@ async def test_gam_flat_rate_calculates_cpd_correctly(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_10D,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # In real GAM mode, line item would have:
     # - lineItemType = "SPONSORSHIP" (FLAT_RATE → CPD uses SPONSORSHIP)
@@ -592,27 +586,11 @@ async def test_gam_multi_package_mixed_pricing_models(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_30D,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # Each package should create a line item with correct pricing:
     # - pkg_1: CPM, STANDARD, priority 8
@@ -658,26 +636,11 @@ async def test_gam_auction_cpc_creates_price_priority(setup_gam_tenant_with_all_
         end_time=_FUTURE_END_30D,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser_pricing",
-        tenant_id="test_gam_pricing_tenant",
-        tenant={"tenant_id": "test_gam_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
     # Cleanup auction pricing option
     with get_db_session() as session:

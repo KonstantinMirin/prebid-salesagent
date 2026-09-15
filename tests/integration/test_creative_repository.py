@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.core.credentials import hash_token
 from src.core.database.repositories.creative import (
     CreativeAssignmentRepository,
     CreativeListResult,
@@ -93,7 +94,14 @@ class TestCreativeRepoGetById:
             t1 = TenantFactory(tenant_id="t1")
             t2 = TenantFactory(tenant_id="t2")
             p1 = PrincipalFactory(tenant=t1, principal_id="p1")
-            PrincipalFactory(tenant=t2, principal_id="p1")
+            # Same principal_id in a second tenant IS the subject here. ``token_hash`` is
+            # globally unique and the factory derives it from the principal_id alone, so
+            # the twin needs a distinct token; no credential is presented in this module.
+            PrincipalFactory(
+                tenant=t2,
+                principal_id="p1",
+                token_hash=hash_token("tok_test_t2_p1"),
+            )
             CreativeFactory(tenant=t1, principal=p1, creative_id="c_t1")
 
             session = env.get_session()

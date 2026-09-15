@@ -72,12 +72,14 @@ class TestListAuth:
             with pytest.raises(AdCPAuthenticationError):
                 env.call_impl(identity=identity)
 
-    def test_no_tenant_raises_auth_error(self, integration_db):
-        """Covers: UC-006-EXT-B-01 — tenant=None → AdCPAuthenticationError."""
-        identity = _make_identity(principal_id="p1", tenant=None)
-        with CreativeListEnv() as env:
-            with pytest.raises(AdCPAuthenticationError):
-                env.call_impl(identity=identity)
+    # (Deleted) test_no_tenant_raises_auth_error (UC-006-EXT-B-01), which built
+    # ``_make_identity(principal_id="p1", tenant=None)``. ``list_creatives`` is a
+    # PROTECTED tool: its ``ResolvedIdentity`` declares both fields required, and the
+    # resolver refuses a tenant-less caller before the implementation runs -- with no
+    # tenant there is no principal lookup, so a presented credential resolves nothing and
+    # is AUTH_INVALID (``_resolve_identity`` step 4). The refusal is minted there and
+    # nowhere else, so the state this test set up cannot exist and the assertion could
+    # only ever have graded ``make_identity``.
 
 
 # ---------------------------------------------------------------------------

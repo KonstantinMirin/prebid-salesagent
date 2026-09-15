@@ -355,8 +355,8 @@ class TestGenerativeUpdateGeminiKeyMissing:
                 ]
             )
 
-            # Remove gemini key for update
-            env.mock["config"].return_value.gemini_api_key = None
+            # Remove gemini key for update — the env owns "is the key configured".
+            env.set_gemini_api_key(None)
 
             result = env.call_impl(
                 creatives=[
@@ -386,7 +386,7 @@ class TestApprovalModeUpdate:
         """Update with auto-approve → status=approved in DB."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "auto-approve"
+            env.configure_tenant_field("approval_mode", "auto-approve")
 
             # Create (auto-approve)
             env.call_impl(creatives=[_creative(creative_id="c_auto_up")])
@@ -419,7 +419,7 @@ class TestApprovalModeUpdate:
             env.call_impl(creatives=[_creative(creative_id="c_ai_up")])
 
             # Switch to ai-powered for update
-            env.identity.tenant["approval_mode"] = "ai-powered"
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),
@@ -749,7 +749,7 @@ class TestCreateAutoApprove:
         """Create with auto-approve → DB status=approved."""
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "auto-approve"
+            env.configure_tenant_field("approval_mode", "auto-approve")
 
             result = env.call_impl(creatives=[_creative(creative_id="c_auto_create")])
             assert result.creatives[0].action == "created"
@@ -775,7 +775,7 @@ class TestCreateAIPoweredApproval:
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
-            env.identity.tenant["approval_mode"] = "ai-powered"
+            env.configure_tenant_field("approval_mode", "ai-powered")
 
             with (
                 patch("src.admin.blueprints.creatives._ai_review_executor", mock_executor),

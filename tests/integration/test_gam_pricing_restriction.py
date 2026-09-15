@@ -26,6 +26,7 @@ our control.
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
 
@@ -43,13 +44,38 @@ from src.core.database.models import (
     Tenant,
 )
 from tests.factories import PricingOptionFactory
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.factories.account import seed_default_account
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
-from tests.helpers.external_service import is_external_service_response_error
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.helpers.gam_client import stub_gam_client_manager
+from tests.integration.media_buy_helpers import assert_created, make_media_buy_identity
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
+from tests.utils.tenant_setup import seed_setup_checklist_rows
 
 # Tests are now AdCP 2.4 compliant (removed status field, using errors field)
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
+
+
+TENANT_ID = "test_gam_tenant"
+PRINCIPAL_ID = "test_advertiser"
+GAM_ADVERTISER_ID = "987654321"
+
+
+def _identity():
+    """The caller ``_create_media_buy_impl`` takes: principal, tenant AND account.
+
+    ``account`` is spec-required on the request and the implementation reads
+    ``identity.account.account_id``, so a plain ``ResolvedIdentity`` is the wrong TYPE --
+    see ``make_media_buy_identity``, which also loads the tenant from its row.
+    """
+    # The GAM mapping of the seeded principal ROW: get_adapter reads the buyer's
+    # advertiser_id off identity.principal.platform_mappings and passes it to the adapter
+    # as company_id, which order creation requires.
+    return make_media_buy_identity(
+        PRINCIPAL_ID,
+        TENANT_ID,
+        platform_mappings={"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}},
+    )
 
 
 def _get_future_date_range() -> tuple[str, str]:
@@ -62,6 +88,20 @@ def _get_future_date_range() -> tuple[str, str]:
     start_time = tomorrow.strftime("%Y-%m-%dT00:00:00Z")
     end_time = end_date.strftime("%Y-%m-%dT23:59:59Z")
     return start_time, end_time
+
+
+@pytest.fixture(autouse=True)
+def _stub_gam_client():
+    """Serve the GAM adapter a stand-in SOAP client for every test in this module.
+
+    The adapter has no dry-run mode: it builds a real client when it is constructed.
+    These tests grade the PRICING decision the adapter makes before and around that
+    call, so the client is a stand-in (``tests/helpers/gam_client``) and no request
+    leaves the process.
+    """
+    with patch("src.adapters.google_ad_manager.GAMClientManager") as client_manager:
+        client_manager.return_value = stub_gam_client_manager()
+        yield
 
 
 @pytest.fixture
@@ -77,16 +117,30 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
             subdomain="gam-test",
             ad_server="google_ad_manager",
             human_review_required=False,
+            # Half of the setup checklist's "SSO configured" task; the other half is the
+            # TenantAuthConfig row seed_setup_checklist_rows writes below.
+            auth_setup_mode=False,
         )
         session.add(tenant)
         session.flush()
 
-        # Add adapter config (mock mode for testing)
+        # create_media_buy validates the setup checklist for every caller now (the
+        # testing context that used to skip it is gone), so this tenant has to really be
+        # set up.
+        seed_setup_checklist_rows(session, tenant)
+
+        # Add adapter config. The refresh token is what makes the adapter CONSTRUCTIBLE:
+        # it builds its credentials in __init__ and refuses a config with no
+        # key_file/service_account_json/refresh_token (google_ad_manager.py:176). It used
+        # to skip that whenever the caller set the testing context's dry_run, and that
+        # channel is gone (a1b79d22d). Nothing authenticates -- _stub_gam_client below
+        # replaces the client manager -- so the value only has to be present.
         adapter_config = AdapterConfig(
             tenant_id="test_gam_tenant",
             adapter_type="google_ad_manager",
             gam_network_code="123456",
             gam_trafficker_id="987654",
+            gam_refresh_token="test_refresh_token",
         )
         session.add(adapter_config)
 
@@ -113,9 +167,16 @@ def setup_gam_tenant_with_non_cpm_product(integration_db):
             tenant_id="test_gam_tenant",
             principal_id="test_advertiser",
             name="Test Advertiser",
-            platform_mappings={"google_ad_manager": {"advertiser_id": "987654321"}},
+            platform_mappings={"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}},
         )
         session.add(principal)
+        session.flush()
+
+        # The ACCOUNT the request names, and this principal's access to it. Required on
+        # create-media-buy-request.json and resolved for real, so a payload naming an
+        # account with no row or no grant is refused before the pricing check under test.
+        with bind_factories_to_session(session):
+            seed_default_account(TENANT_ID, PRINCIPAL_ID)
 
         # Add GAM inventory (required for product validation)
         # Note: Using numeric ID as GAM requires numeric ad unit IDs
@@ -312,11 +373,7 @@ async def test_gam_rejects_cpcv_pricing_model(setup_gam_tenant_with_non_cpm_prod
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-    )
+    identity = _identity()
 
     from src.core.exceptions import AdCPValidationError
     from src.core.tools.media_buy_create import _create_media_buy_impl
@@ -344,28 +401,12 @@ async def test_gam_accepts_cpm_pricing_model(setup_gam_tenant_with_non_cpm_produ
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-    )
+    identity = _identity()
 
     # This should succeed
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
@@ -386,11 +427,7 @@ async def test_gam_rejects_cpp_from_multi_pricing_product(setup_gam_tenant_with_
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-    )
+    identity = _identity()
 
     from src.core.exceptions import AdCPValidationError
 
@@ -417,25 +454,9 @@ async def test_gam_accepts_cpm_from_multi_pricing_product(setup_gam_tenant_with_
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_gam_tenant",
-        tenant={"tenant_id": "test_gam_tenant"},
-    )
+    identity = _identity()
 
     # This should succeed - buyer chose CPM from multi-option product
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # Skip if external creative agent is unavailable
-    if is_external_service_response_error(response):
-        pytest.skip(f"External creative agent unavailable: {response.errors}")
-
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)

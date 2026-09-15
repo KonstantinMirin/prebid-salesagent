@@ -15,11 +15,28 @@ from src.core.schemas import GetProductsRequest, PricingModel
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from src.core.tools.products import _get_products_impl
 from tests.factories import PricingOptionFactory
+from tests.factories.account import seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.adcp_factories import create_test_media_buy_request, create_test_package_request
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.integration.media_buy_helpers import assert_created, make_media_buy_identity
+from tests.utils.database_helpers import bind_factories_to_session, create_tenant_with_timestamps
+from tests.utils.tenant_setup import seed_setup_checklist_rows
 
 pytestmark = pytest.mark.requires_db
+
+
+TENANT_ID = "test_pricing_tenant"
+PRINCIPAL_ID = "test_advertiser"
+
+
+def _identity():
+    """The caller ``_create_media_buy_impl`` takes: principal, tenant AND account.
+
+    The account is spec-required on the request and the implementation reads
+    ``identity.account.account_id``, so a plain ``ResolvedIdentity`` is the wrong TYPE
+    here -- see ``make_media_buy_identity``.
+    """
+    return make_media_buy_identity(PRINCIPAL_ID, TENANT_ID)
 
 
 def _get_future_date_range() -> tuple[str, str]:
@@ -44,9 +61,21 @@ def setup_tenant_with_pricing_products(integration_db):
             name="Pricing Test Publisher",
             subdomain="pricing-test",
             ad_server="mock",
+            # Half of the setup checklist's "SSO configured" task; the other half is the
+            # TenantAuthConfig row seed_setup_checklist_rows writes below.
+            auth_setup_mode=False,
+            # The column defaults to True, which routes every create to the
+            # manual-approval branch and answers `submitted` with no media_buy_id. These
+            # tests grade PRICING on a completed create, so the gate is off -- the same
+            # reason the GAM pricing fixtures set it.
+            human_review_required=False,
         )
         session.add(tenant)
         session.flush()
+
+        # create_media_buy validates the setup checklist for every caller now, so the
+        # tenant these tests drive has to really be set up.
+        seed_setup_checklist_rows(session, tenant)
 
         # Add property tag (required for products)
         property_tag = PropertyTag(
@@ -74,6 +103,14 @@ def setup_tenant_with_pricing_products(integration_db):
             platform_mappings={"mock": {"advertiser_id": "mock_adv_123"}},
         )
         session.add(principal)
+        session.flush()
+
+        # The ACCOUNT the request names, and this principal's access to it. Required on
+        # create-media-buy-request.json, and resolved for real -- a payload naming an
+        # account with no row, or with no grant for the caller, is refused before the
+        # pricing logic under test runs.
+        with bind_factories_to_session(session):
+            seed_default_account(TENANT_ID, PRINCIPAL_ID)
 
         # Product 1: CPM fixed rate
         product_cpm_fixed = Product(
@@ -245,11 +282,11 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     """Test that get_products returns pricing_options for products."""
     request = GetProductsRequest(brief="display ads", brand={"domain": "testbrand.com"})
 
-    # Create identity
+    # get_products is a PUBLIC tool and names no account: the plain resolved caller.
     identity = PrincipalFactory.make_identity(
         principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
+        tenant_id=TENANT_ID,
+        tenant={"tenant_id": TENANT_ID},
     )
 
     response = await _get_products_impl(request, identity)
@@ -296,23 +333,11 @@ async def test_create_media_buy_with_cpm_fixed_pricing(setup_tenant_with_pricing
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
@@ -332,23 +357,11 @@ async def test_create_media_buy_with_cpm_auction_pricing(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
@@ -368,11 +381,7 @@ async def test_create_media_buy_auction_bid_below_floor_fails(setup_tenant_with_
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
@@ -401,23 +410,11 @@ async def test_create_media_buy_with_cpcv_pricing(setup_tenant_with_pricing_prod
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
@@ -436,11 +433,7 @@ async def test_create_media_buy_below_min_spend_fails(setup_tenant_with_pricing_
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl
@@ -469,23 +462,11 @@ async def test_create_media_buy_multi_pricing_choose_cpp(setup_tenant_with_prici
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     response = await _create_media_buy_impl(req=request, identity=identity)
 
-    # The SUCCESS branch of create-media-buy-response.json's oneOf, asserted on fields
-    # that exist. `not hasattr(response, "errors")` stood here and could not tell the
-    # branches apart: CreateMediaBuyResult declares no `errors` field at all, so the
-    # check was True for every object it could be handed, including an error one. It
-    # was also unreachable — the call above unpacked the model into a (name, value)
-    # tuple, and a tuple has no .errors either (salesagent-jnqab).
-    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
-    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
-    assert response.media_buy_id is not None
+    assert_created(response)
 
 
 @pytest.mark.requires_db
@@ -504,11 +485,7 @@ async def test_create_media_buy_invalid_pricing_model_fails(setup_tenant_with_pr
         end_time=end_time,
     )
 
-    identity = PrincipalFactory.make_identity(
-        principal_id="test_advertiser",
-        tenant_id="test_pricing_tenant",
-        tenant={"tenant_id": "test_pricing_tenant"},
-    )
+    identity = _identity()
 
     # Boundary-validation failures are now signaled via typed AdCPSalesAgentError that
     # propagates past the narrowed (ValueError, PermissionError) catch in _impl

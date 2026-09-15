@@ -88,16 +88,22 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         return tenant
 
     @staticmethod
-    def _principal_for(principal_id: str) -> SchemaPrincipal:
+    def _principal_for(principal_id: str, platform_mappings: Mapping[str, object] | None = None) -> SchemaPrincipal:
         """The principal the resolver would have loaded for this caller.
 
         The factory's own shape (name and the mock platform mapping), so what a tool reads
         off ``identity.principal`` is what a row would have given it.
+
+        ``platform_mappings`` is the one part a caller can state, because it is the one part
+        a TOOL branches on: ``get_adapter`` reads the buyer's per-adapter ids off it
+        (``platform_mappings["google_ad_manager"]["advertiser_id"]`` becomes the GAM
+        ``company_id``), so a test driving a non-mock adapter needs the mapping its seeded
+        principal row carries, not the mock default.
         """
         return SchemaPrincipal(
             principal_id=principal_id,
             name=f"Test Advertiser {principal_id}",
-            platform_mappings={"mock": {"advertiser_id": "test_adv"}},
+            platform_mappings=dict(platform_mappings) if platform_mappings else {"mock": {"advertiser_id": "test_adv"}},
         )
 
     @classmethod
@@ -106,6 +112,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         principal_id: str = "test_principal",
         tenant_id: str = "test_tenant",
         tenant: TenantContext = _UNSET,  # type: ignore[assignment]
+        platform_mappings: Mapping[str, object] | None = None,
         **tenant_overrides: object,
     ) -> ResolvedIdentity:
         """The AUTHENTICATED caller a protected tool takes, without DB persistence.
@@ -114,6 +121,8 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         are non-optional here: the anonymous caller is ``make_public_identity``. When
         ``tenant`` is not given, ``TenantFactory.make_tenant()`` builds the TenantContext;
         pass **tenant_overrides for domain fields (approval_mode, etc).
+        ``platform_mappings`` is the buyer's per-adapter ids -- state it when the tool
+        under test reads one (GAM's ``advertiser_id``), since the default is mock-only.
 
         ``tenant`` is passed through as given. The factory normalizes nothing, and the
         identity refuses a dict at construction (``InstanceOf`` on the field), so a test
@@ -123,7 +132,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         factory's defaults are the one source of identity defaults in tests.
         """
         return ResolvedIdentity(
-            principal=cls._principal_for(principal_id),
+            principal=cls._principal_for(principal_id, platform_mappings),
             tenant=cls._tenant_for(tenant, tenant_id, tenant_overrides),  # type: ignore[arg-type]
         )
 

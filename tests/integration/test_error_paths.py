@@ -69,7 +69,13 @@ class TestRestBoundaryAuditObservability:
             response = client.post(
                 "/api/v1/capabilities",
                 json={},
-                headers=credential_headers(token=sample_principal["access_token"]),
+                # The SELLER as well as the credential: a principal is a row in a tenant,
+                # so the resolver looks the token up inside the tenant the request names
+                # and rejects it (AUTH_INVALID -> 401) when no tenant was addressed.
+                headers=credential_headers(
+                    token=sample_principal["access_token"],
+                    tenant=sample_tenant["tenant_id"],
+                ),
             )
 
         assert response.status_code == 404

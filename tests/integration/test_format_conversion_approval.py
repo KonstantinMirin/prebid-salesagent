@@ -25,9 +25,12 @@ from src.core.database.models import (
 )
 from src.core.tools.media_buy_create import ApprovalOutcome
 from tests.factories import PricingOptionFactory
+from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID as ACCOUNT_ID
+from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.helpers.media_buy_approval import run_approval
+from tests.utils.database_helpers import bind_factories_to_session
 
 
 def create_media_package(
@@ -156,7 +159,15 @@ def test_property_tag(integration_db, test_tenant):
 
 @pytest.fixture
 def test_principal(integration_db, test_tenant):
-    """Create test principal."""
+    """Create test principal, and the account every media buy below is booked against.
+
+    ``execute_approved_media_buy`` reads the buy's ``account_id`` off the persisted row
+    and REFUSES a row that has none -- ``AdCPPersistedStateError``, reported as
+    "cannot be acted on: Configuration error" -- because the account is what the
+    boundary resolved and is never synthesised on the replay. So each MediaBuy here is
+    seeded with ``account_id=ACCOUNT_ID``, which needs the Account row (media_buys
+    carries a composite FK to accounts) and the principal's grant on it.
+    """
     principal_id = "test_advertiser"
     with get_db_session() as session:
         principal = Principal.with_token(
@@ -168,6 +179,9 @@ def test_principal(integration_db, test_tenant):
         )
         session.add(principal)
         session.commit()
+
+    with get_db_session() as session, bind_factories_to_session(session):
+        seed_default_account(test_tenant, principal_id)
 
     yield principal_id
 
@@ -223,6 +237,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Format Ref Test Order",
                 advertiser_name="Test Advertiser",
@@ -324,6 +341,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Invalid Format Order",
                 advertiser_name="Test Advertiser",
@@ -425,6 +445,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Empty Agent URL Order",
                 advertiser_name="Test Advertiser",
@@ -525,6 +548,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Invalid URL Order",
                 advertiser_name="Test Advertiser",
@@ -628,6 +654,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="No Format ID Order",
                 advertiser_name="Test Advertiser",
@@ -729,6 +758,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Format ID Test Order",
                 advertiser_name="Test Advertiser",
@@ -828,6 +860,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Missing Both IDs Order",
                 advertiser_name="Test Advertiser",
@@ -923,6 +958,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Empty Formats Order",
                 advertiser_name="Test Advertiser",
@@ -1034,6 +1072,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Mixed Formats Order",
                 advertiser_name="Test Advertiser",
@@ -1129,6 +1170,9 @@ class TestFormatConversionApproval:
             media_buy = MediaBuy(
                 tenant_id=test_tenant,
                 media_buy_id=media_buy_id,
+                # The account the buy is booked against; an approval refuses a row
+                # without one. See the test_principal fixture.
+                account_id=ACCOUNT_ID,
                 principal_id=test_principal,
                 order_name="Invalid Type Order",
                 advertiser_name="Test Advertiser",

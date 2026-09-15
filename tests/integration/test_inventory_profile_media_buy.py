@@ -19,21 +19,40 @@ from src.core.database.models import (
     InventoryProfile,
     Principal,
 )
-from src.core.resolved_identity import ResolvedIdentity
+from src.core.resolved_identity import AccountIdentity
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.tools.media_buy_create import _create_media_buy_impl
 from tests.factories import PricingOptionFactory
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.factories.account import seed_default_account
+from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product, create_test_package_request
+from tests.integration.media_buy_helpers import make_media_buy_identity
+from tests.utils.database_helpers import bind_factories_to_session
 
 
-def _make_context(tenant_id: str, principal_id: str) -> ResolvedIdentity:
-    """Create a ResolvedIdentity for testing."""
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id},
-    )
+def _make_context(tenant_id: str, principal_id: str) -> AccountIdentity:
+    """The caller ``_create_media_buy_impl`` takes: principal, tenant AND account.
+
+    ``account`` is spec-required on create-media-buy-request.json and the implementation
+    reads ``identity.account.account_id``, so a plain ``ResolvedIdentity`` is the wrong
+    TYPE -- see ``make_media_buy_identity``, which also loads the tenant from its row.
+    """
+    return make_media_buy_identity(principal_id, tenant_id)
+
+
+def _seed_account_access(session, tenant_id: str, principal_id: str) -> None:
+    """The Account row the request names, plus this principal's access grant.
+
+    Each test here seeds its own principal, so each needs its own grant: the account
+    reference is resolved for real, and a row without the grant is refused
+    indistinguishably from no row at all.
+
+    On the caller's session -- ``get_db_session`` is SCOPED and closes the session when
+    the innermost block exits, so opening a second one here would detach the rows the
+    test is still holding.
+    """
+    with bind_factories_to_session(session):
+        seed_default_account(tenant_id, principal_id)
 
 
 def _get_future_date_range() -> tuple[datetime, datetime]:
@@ -103,15 +122,23 @@ async def test_create_media_buy_with_profile_based_product(sample_tenant):
         session.add(principal)
         session.commit()
 
+        # The ids as VALUES, before anything opens another session. ``get_db_session`` is
+        # scoped and closes the session on exit, so a nested one -- the account seeding
+        # below, and the tenant-row load inside _make_context -- detaches these rows and
+        # every later attribute read raises DetachedInstanceError.
+        product_id = product.product_id
+        principal_id = principal.principal_id
+
         start_time, end_time = _get_future_date_range()
-        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
+        _seed_account_access(session, sample_tenant["tenant_id"], principal_id)
+        ctx = _make_context(sample_tenant["tenant_id"], principal_id)
 
         req = CreateMediaBuyRequest(
             account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    product_id=product.product_id,
+                    product_id=product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=150.0,
                 )
@@ -197,8 +224,14 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
         session.add(principal)
         session.commit()
 
+        # Read as VALUES before any nested session closes this one -- see the note in
+        # test_create_media_buy_with_profile_based_product.
+        product_id = product.product_id
+        principal_id = principal.principal_id
+
         start_time, end_time = _get_future_date_range()
-        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
+        _seed_account_access(session, sample_tenant["tenant_id"], principal_id)
+        ctx = _make_context(sample_tenant["tenant_id"], principal_id)
 
         # Create media buy - should succeed or return structured error, not crash
         try:
@@ -207,7 +240,7 @@ async def test_create_media_buy_with_profile_formats(sample_tenant):
                 brand={"domain": "testbrand.com"},
                 packages=[
                     create_test_package_request(
-                        product_id=product.product_id,
+                        product_id=product_id,
                         pricing_option_id="cpm_usd_fixed",
                         budget=150.0,
                     )
@@ -287,8 +320,14 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
         session.add(principal)
         session.commit()
 
+        # Read as VALUES before any nested session closes this one -- see the note in
+        # test_create_media_buy_with_profile_based_product.
+        product_ids = [product.product_id for product in products]
+        principal_id = principal.principal_id
+
         start_time, end_time = _get_future_date_range()
-        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
+        _seed_account_access(session, sample_tenant["tenant_id"], principal_id)
+        ctx = _make_context(sample_tenant["tenant_id"], principal_id)
 
         # Use only the first product (AdCP spec: package has singular product_id)
         req = CreateMediaBuyRequest(
@@ -296,11 +335,11 @@ async def test_multiple_products_same_profile_in_media_buy(sample_tenant):
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    product_id=products[i].product_id,
+                    product_id=product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=150.0,
                 )
-                for i in range(3)
+                for product_id in product_ids
             ],
             start_time=start_time,
             end_time=end_time,
@@ -400,16 +439,22 @@ async def test_media_buy_reflects_profile_updates(sample_tenant):
         ]
         session.commit()
 
+        # Read as VALUES before any nested session closes this one -- see the note in
+        # test_create_media_buy_with_profile_based_product.
+        product_id = product.product_id
+        principal_id = principal.principal_id
+
         # Create media buy AFTER profile update — should still succeed
         start_time, end_time = _get_future_date_range()
-        ctx = _make_context(sample_tenant["tenant_id"], principal.principal_id)
+        _seed_account_access(session, sample_tenant["tenant_id"], principal_id)
+        ctx = _make_context(sample_tenant["tenant_id"], principal_id)
 
         req = CreateMediaBuyRequest(
             account={"account_id": "acct_test"},
             brand={"domain": "testbrand.com"},
             packages=[
                 create_test_package_request(
-                    product_id=product.product_id,
+                    product_id=product_id,
                     pricing_option_id="cpm_usd_fixed",
                     budget=150.0,
                 )

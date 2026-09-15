@@ -343,21 +343,11 @@ class TestTenantContextFromA2AHeaders:
         b_ids = {f.format_id.id for f in response_b.formats}
         assert b_ids == {"fmtB1", "fmtB2"}
 
-    def test_a2a_no_tenant_raises_auth_error(self, integration_db):
-        """UC-005-MAIN-REST-03: missing tenant context raises AdCPAuthenticationError.
-
-        When the identity has no tenant (tenant=None), the A2A wrapper
-        must raise an auth error, not silently return empty data.
-        """
-        from src.core.exceptions import AdCPAuthenticationError
-
-        identity_no_tenant = PrincipalFactory.make_identity(
-            principal_id="buyer_no_tenant",
-            tenant_id="no_tenant",
-            tenant=None,
-        )
-
-        with CreativeFormatsEnv() as env:
-            # A2A transport translates AdCPSalesAgentError to a2a-sdk errors; catch either
-            with pytest.raises((AdCPAuthenticationError, Exception)):
-                env.call_a2a(identity=identity_no_tenant)
+    # (Deleted) test_a2a_no_tenant_raises_auth_error: it built an identity with a resolved
+    # principal and ``tenant=None`` and asserted the A2A wrapper refuses it. The resolver
+    # never produces that pairing -- it looks a credential up only inside the tenant the
+    # request reached -- and ``ResolvedIdentity`` declares ``tenant`` required, so the
+    # construction itself now fails. The reachable case, an anonymous tenant-less
+    # discovery request, is answered with an empty catalog by design (76c2a96fb), which
+    # is the opposite of what this asserted. Its `pytest.raises((AdCPAuthenticationError,
+    # Exception))` could not have told the two apart anyway: every exception matches.

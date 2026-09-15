@@ -33,10 +33,11 @@ from src.core.database.models import (
     Principal,
 )
 from src.core.database.models import Product as DBProduct
-from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import CreativeStatusEnum, SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.creative_asset import build_assets, image_spec
-from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.factories.principal import plaintext_token_for
+from tests.helpers.credentials import credential_headers
+from tests.helpers.envelope_assertions import raises_adcp
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
@@ -53,16 +54,15 @@ DEFAULT_FORMAT_ID = "display_300x250_image"
 # ---------------------------------------------------------------------------
 
 
-def _make_identity(
-    tenant_id: str,
-    principal_id: str,
-    approval_mode: str = "auto-approve",
-) -> ResolvedIdentity:
-    return PrincipalFactory.make_identity(
-        principal_id=principal_id,
-        tenant_id=tenant_id,
-        tenant={"tenant_id": tenant_id, "approval_mode": approval_mode},
-    )
+def _headers(tenant_id: str, principal_id: str) -> dict[str, str]:
+    """The headers a call arrives with: this caller's credential and the seller it names.
+
+    ``invoke_tool`` takes HEADERS, never an identity -- the resolver is their one reader --
+    so a test states the credential and the tenant and nothing else. Everything the
+    identity used to be handed (the principal, and the tenant's domain fields such as
+    ``approval_mode``) is read off the ROWS the fixtures seed.
+    """
+    return credential_headers(token=plaintext_token_for(principal_id), tenant=tenant_id)
 
 
 def _make_creative_dict(
@@ -141,18 +141,19 @@ def mock_format_registry():
 def _sync_creatives(**kwargs):
     """Build a SyncCreativesRequest from flat fields, then dispatch it at the boundary.
 
-    ``invoke_tool`` is the path every transport takes -- account resolution and the
-    idempotency probe included -- so a call site here reaches production the way a buyer
-    does. Routing this module's call sites through one seam keeps them flat and readable
-    without re-listing the request's fields at each.
+    ``invoke_tool`` is the path every transport takes -- identity resolution, account
+    resolution and the idempotency probe included -- so a call site here reaches production
+    the way a buyer does. It takes the request's HEADERS and the transport label; the
+    caller is resolved inside, from the credential those headers present.
     """
     import asyncio
 
+    from src.core.resolved_identity import TransportProtocol
     from src.core.tools._boundary import invoke_tool
 
-    identity = kwargs.pop("identity", None)
+    headers = kwargs.pop("headers")
     kwargs.pop("ctx", None)
-    return asyncio.run(invoke_tool("sync_creatives", SyncCreativesRequest(**kwargs), identity))
+    return asyncio.run(invoke_tool("sync_creatives", SyncCreativesRequest(**kwargs), headers, TransportProtocol.MCP))
 
 
 class TestCrossPrincipalIsolation:
@@ -211,8 +212,6 @@ class TestCrossPrincipalIsolation:
         _seed_account_for(self.TENANT_ID, ("principal_1", "principal_2"))
 
     def _sync_one(self, principal_id: str, creative_id: str = "c_shared") -> SyncCreativesResponse:
-
-        identity = _make_identity(self.TENANT_ID, principal_id)
         return _sync_creatives(
             creatives=[_make_creative_dict(creative_id=creative_id)],
             # Both are in sync-creatives-request.json /required, and every transport builds
@@ -225,7 +224,7 @@ class TestCrossPrincipalIsolation:
             # that sync_creatives honours the key.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=_headers(self.TENANT_ID, principal_id),
         )
 
     def test_creative_lookup_filters_by_principal(self):
@@ -300,49 +299,34 @@ class TestApprovalWorkflow:
     Spec: UNSPECIFIED (implementation-defined approval workflow).
     """
 
-    TENANT_ID = "approval_tenant"
-    PRINCIPAL_ID = "approval_principal"
-
     @pytest.fixture(autouse=True)
-    def setup_tenant(self, integration_db, bound_factory_session):
-        """Create tenant and principal for approval tests."""
-        with get_db_session() as session:
-            tenant = create_tenant_with_timestamps(
-                tenant_id=self.TENANT_ID,
-                name="Approval Test Tenant",
-                subdomain="approval-test",
-                is_active=True,
-                ad_server="mock",
-                approval_mode="auto-approve",
-            )
-            session.add(tenant)
-            session.add(
-                CurrencyLimit(
-                    tenant_id=self.TENANT_ID,
-                    currency_code="USD",
-                    min_package_budget=100.0,
-                    max_daily_package_spend=10000.0,
-                )
-            )
-            session.add(
-                Principal.with_token(
-                    plaintext_token_for(self.PRINCIPAL_ID),
-                    tenant_id=self.TENANT_ID,
-                    principal_id=self.PRINCIPAL_ID,
-                    name="Test Advertiser",
-                    platform_mappings={"mock": {"id": "adv1"}},
-                )
-            )
-            session.commit()
+    def bind_factories(self, integration_db, bound_factory_session):
+        """Bind the factories; each test seeds the tenant whose mode it grades.
 
+        The mode used to ride on a hand-built TenantContext handed to ``_impl``. The
+        boundary loads the tenant from its ROW now (``TenantContext.load``), so
+        ``approval_mode`` has to BE the row's -- which means one tenant per mode rather
+        than one tenant and three identities.
+        """
+
+    def _seed(self, tenant_id: str, **tenant_fields) -> str:
+        """A tenant with *tenant_fields*, a principal in it, and the account it can reach.
+
+        Returns the principal_id, derived from the tenant so the tokens stay distinct:
+        ``PrincipalFactory`` derives the (globally unique) ``token_hash`` from the
+        principal_id alone.
+        """
+        from tests.factories import PrincipalFactory, TenantFactory
+
+        principal_id = f"{tenant_id}_buyer"
+        tenant = TenantFactory(tenant_id=tenant_id, **tenant_fields)
+        PrincipalFactory(tenant=tenant, principal_id=principal_id, name="Test Advertiser")
         # ``account`` is in sync-creatives-request.json /required, so every sync call in
-        # this file needs one that the calling principal can reach. Seeded through the
-        # factories (CLAUDE.md) rather than extending the hand-rolled block above.
-        _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
+        # this file needs one that the calling principal can reach.
+        _seed_account_for(tenant_id, (principal_id,))
+        return principal_id
 
-    def _sync(self, approval_mode: str, creative_id: str) -> SyncCreativesResponse:
-
-        identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID, approval_mode=approval_mode)
+    def _sync(self, tenant_id: str, principal_id: str, creative_id: str) -> SyncCreativesResponse:
         return _sync_creatives(
             creatives=[_make_creative_dict(creative_id=creative_id)],
             # Both are in sync-creatives-request.json /required, and every transport builds
@@ -350,13 +334,13 @@ class TestApprovalWorkflow:
             # a call that reaches the impl.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=_headers(tenant_id, principal_id),
         )
 
-    def _get_db_status(self, creative_id: str) -> str | None:
+    def _get_db_status(self, tenant_id: str, creative_id: str) -> str | None:
         with get_db_session() as session:
             stmt = select(DBCreative).filter_by(
-                tenant_id=self.TENANT_ID,
+                tenant_id=tenant_id,
                 creative_id=creative_id,
             )
             row = session.scalars(stmt).first()
@@ -369,8 +353,10 @@ class TestApprovalWorkflow:
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_auto_approve_sets_approved_status
         """
-        self._sync("auto-approve", "c_auto")
-        assert self._get_db_status("c_auto") == CreativeStatusEnum.approved.value
+        tenant_id = "approval_auto"
+        principal_id = self._seed(tenant_id, approval_mode="auto-approve")
+        self._sync(tenant_id, principal_id, "c_auto")
+        assert self._get_db_status(tenant_id, "c_auto") == CreativeStatusEnum.approved.value
 
     def test_require_human_sets_pending_review(self):
         """Require-human mode sets creative status to pending_review in DB.
@@ -379,8 +365,10 @@ class TestApprovalWorkflow:
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_require_human_sets_pending_review
         """
-        self._sync("require-human", "c_human")
-        assert self._get_db_status("c_human") == CreativeStatusEnum.pending_review.value
+        tenant_id = "approval_human"
+        principal_id = self._seed(tenant_id, approval_mode="require-human")
+        self._sync(tenant_id, principal_id, "c_human")
+        assert self._get_db_status(tenant_id, "c_human") == CreativeStatusEnum.pending_review.value
 
     def test_default_approval_mode_is_require_human(self):
         """Tenant with no approval_mode defaults to require-human.
@@ -389,21 +377,14 @@ class TestApprovalWorkflow:
         Spec: UNSPECIFIED (implementation-defined approval workflow).
         Unit stub: TestApprovalWorkflow::test_default_approval_mode_is_require_human
         """
-
-        # Identity with tenant dict that lacks approval_mode key
-        identity = PrincipalFactory.make_identity(
-            principal_id=self.PRINCIPAL_ID,
-            tenant_id=self.TENANT_ID,
-            tenant={"tenant_id": self.TENANT_ID},  # No approval_mode key
-        )
-        _sync_creatives(
-            creatives=[_make_creative_dict(creative_id="c_default")],
-            # Both are in sync-creatives-request.json /required.
-            idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
-        )
-        assert self._get_db_status("c_default") == CreativeStatusEnum.pending_review.value
+        # No approval_mode: the tenant COLUMN defaults to "require-human"
+        # (models.Tenant.approval_mode), which is the default under test. It used to be
+        # spelled as a tenant dict with the key omitted, which graded TenantContext's own
+        # field default instead of the row's.
+        tenant_id = "approval_default"
+        principal_id = self._seed(tenant_id)
+        self._sync(tenant_id, principal_id, "c_default")
+        assert self._get_db_status(tenant_id, "c_default") == CreativeStatusEnum.pending_review.value
 
 
 # ---------------------------------------------------------------------------
@@ -456,8 +437,8 @@ class TestBatchSync:
         # factories (CLAUDE.md) rather than extending the hand-rolled block above.
         _seed_account_for(self.TENANT_ID, (self.PRINCIPAL_ID,))
 
-    def _identity(self) -> ResolvedIdentity:
-        return _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
+    def _creds(self) -> dict[str, str]:
+        return _headers(self.TENANT_ID, self.PRINCIPAL_ID)
 
     def test_batch_sync_multiple_creatives(self):
         """Batch of N creatives produces N per-creative results and N DB rows.
@@ -472,7 +453,7 @@ class TestBatchSync:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=self._identity(),
+            headers=self._creds(),
         )
 
         assert len(result.creatives) == 5
@@ -493,7 +474,7 @@ class TestBatchSync:
         Unit stub: TestSyncCreativesE2E::test_upsert_by_triple_key
         """
 
-        identity = self._identity()
+        headers = self._creds()
 
         # First sync: create
         result1 = _sync_creatives(
@@ -501,7 +482,7 @@ class TestBatchSync:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
         action1 = result1.creatives[0].action
         if hasattr(action1, "value"):
@@ -514,7 +495,7 @@ class TestBatchSync:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
         action2 = result2.creatives[0].action
         if hasattr(action2, "value"):
@@ -626,9 +607,9 @@ class TestFormatCompatibility:
         Spec: UNSPECIFIED (implementation-defined format compatibility logic).
         Unit stub: TestFormatCompatibility::test_format_mismatch_strict_raises
         """
-        from src.core.exceptions import AdCPCreativeRejectedError
+        from src.core.exceptions import AdCPValidationError
 
-        identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
+        headers = _headers(self.TENANT_ID, self.PRINCIPAL_ID)
 
         # First sync the display creative (so it exists in DB)
         _sync_creatives(
@@ -636,11 +617,22 @@ class TestFormatCompatibility:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=headers,
         )
 
-        # Now try to assign it to the video-only package in strict mode
-        with pytest.raises(AdCPCreativeRejectedError):
+        # Now try to assign it to the video-only package in strict mode.
+        #
+        # The CODE is the oracle, not the typed class: this dispatches at the boundary,
+        # which answers every failure with a response and raises AdcpFailure carrying it,
+        # so the raise site's exception never reaches the caller (tests/CLAUDE.md §
+        # Error verification policy).
+        #
+        # And the code is VALIDATION_ERROR, not CREATIVE_REJECTED: 3.1.1's enum reserves
+        # CREATIVE_REJECTED for "Creative failed content policy review", so
+        # _assignments.py routes a format the product does not accept to
+        # AdCPValidationError, converged with the create and update paths (reversing
+        # #1417). The old expectation predates that.
+        with raises_adcp(AdCPValidationError):
             _sync_creatives(
                 creatives=[_make_creative_dict(creative_id="c_display")],
                 # list[Assignment], not the {creative_id: [package_id]} map: that map was an
@@ -651,7 +643,7 @@ class TestFormatCompatibility:
                 # Both are in sync-creatives-request.json /required.
                 idempotency_key=f"sync-{uuid4().hex}",
                 account=AccountReference(root={"account_id": ACCOUNT_ID}),
-                identity=identity,
+                headers=headers,
             )
 
 
@@ -752,8 +744,6 @@ class TestMediaBuyStatusTransition:
         Unit stub: TestMediaBuyStatusTransition::test_draft_with_approved_at_transitions
         """
 
-        identity = _make_identity(self.TENANT_ID, self.PRINCIPAL_ID)
-
         # Sync creative and assign to draft media buy's package
         _sync_creatives(
             creatives=[_make_creative_dict(creative_id="c_transition")],
@@ -762,7 +752,7 @@ class TestMediaBuyStatusTransition:
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
             account=AccountReference(root={"account_id": ACCOUNT_ID}),
-            identity=identity,
+            headers=_headers(self.TENANT_ID, self.PRINCIPAL_ID),
         )
 
         # Verify media buy status changed

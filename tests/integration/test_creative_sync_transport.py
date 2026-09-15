@@ -1074,36 +1074,14 @@ class TestAuthPrincipalRequired:
         )
 
 
-@pytest.mark.requires_db
-class TestAuthTenantRequired:
-    """Missing tenant → AdCPAuthenticationError.
-
-    Covers: UC-006-EXT-B-02
-    """
-
-    def test_no_tenant_raises_auth_error(self, integration_db):
-        """Identity with tenant=None → AdCPAuthenticationError."""
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            identity_no_tenant = make_identity(
-                principal_id="test_principal",
-                tenant_id="test_tenant",
-                tenant=None,
-            )
-
-            # _impl raises; the error class and its code ARE the oracle. This used
-            # to dispatch through Transport.IMPL so the dispatcher would catch the
-            # exception into a TransportResult -- a wrapper around a raise.
-            with pytest.raises(AdCPSalesAgentError) as exc_info:
-                env.call_impl(
-                    creatives=[_creative()],
-                    identity=identity_no_tenant,
-                )
-
-        assert exc_info.value.error_code in {"AUTH_MISSING", "AUTH_INVALID"}, (
-            f"Expected an authentication rejection, got {exc_info.value.error_code!r}"
-        )
+# (Deleted) TestAuthTenantRequired::test_no_tenant_raises_auth_error (UC-006-EXT-B-02),
+# which built ``make_identity(principal_id="test_principal", tenant=None)``.
+# ``sync_creatives`` takes an ``AccountIdentity``: principal, tenant and account are all
+# required, and the resolver has refused a tenant-less caller long before the
+# implementation runs (no tenant means no principal lookup, so a presented credential
+# resolves nothing -- AUTH_INVALID, ``_resolve_identity`` step 4). The identity this set
+# up cannot be constructed, and the refusal has exactly one minting site, which is not
+# this tool.
 
 
 @pytest.mark.requires_db

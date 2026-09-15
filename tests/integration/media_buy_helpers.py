@@ -64,6 +64,29 @@ def _single_creative_request(creative_id: str, **overrides: Any) -> CreateMediaB
     )
 
 
+def assert_created(response: Any) -> None:
+    """Assert *response* is the SUCCESS branch of create-media-buy-response.json's oneOf.
+
+    On fields that EXIST. ``not hasattr(response, "errors")`` stood at each of these call
+    sites and could not tell the branches apart: ``CreateMediaBuyResult`` declares no
+    ``errors`` field at all, so the check was True for every object it could be handed,
+    including an error one.
+
+    Skips rather than fails when the creative agent this environment reaches is down --
+    external availability is not what a pricing test grades.
+    """
+    import pytest
+
+    from tests.helpers.external_service import is_external_service_response_error
+
+    if is_external_service_response_error(response):
+        pytest.skip(f"External creative agent unavailable: {response.adcp_error}")
+
+    assert response.adcp_error is None, f"create_media_buy failed: {response.adcp_error}"
+    assert response.status == "completed", f"expected a completed create, got {response.status!r}"
+    assert response.media_buy_id is not None
+
+
 def make_media_buy_identity(principal_id: str, tenant_id: str, **tenant_overrides: Any) -> Any:
     """The caller ``_create_media_buy_impl`` / ``_update_media_buy_impl`` take.
 
