@@ -498,16 +498,17 @@ _XFAIL_TAGS: dict[str, str] = {
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
     "T-UC-005-sandbox-validation": "sandbox validation not triggered for invalid filters — spec-production gap",
-    # T-UC-005-main-referrals: in-process ONLY (the registry is mocked and returns no agents).
-    # GRADUATED for e2e_rest in the apply loop below (#1417) — with a seeded tenant
-    # the live server populates creative_agents (>=DEFAULT_AGENT). NOT a spec-production gap.
-    # Two independent reasons, and the second was briefly added as a SECOND dict entry with
-    # this same key -- which a dict literal silently resolves to the last one, erasing the
-    # first. ruff B035 catches it; the reasons belong merged, not duplicated.
-    "T-UC-005-main-referrals": "creative agent referrals empty — in-process registry mock returns no agents; "
-    "production populates >=DEFAULT_AGENT over real transports (mock limitation, not a spec-production gap). "
-    "ALSO upstream adcp#7338 on e2e_rest: the response asset oneOf omits pixel_tracker, which the reference "
-    "formats declare -- see the _SELECTIVE_XFAIL block for the evidence",
+    # Graduated 2026-09-15: T-UC-005-main-referrals. Its reason had two halves and neither
+    # was production. The first -- "in-process registry mock returns no agents" -- was the
+    # MOCK: CreativeFormatsEnv left ``_get_tenant_agents`` as a MagicMock attribute, and
+    # MagicMock makes that iterable AND empty, so production walked zero agents and
+    # answered ``creative_agents: []``. The env now binds the real method, and the Given
+    # seeds a ``creative_agents`` ROW (given_entities.py), which is what production reads
+    # in both worlds; the scenario grades POST-S4 on a2a, its only in-process
+    # parametrization. The second half -- upstream adcp#7338 on e2e_rest -- is real and
+    # unfixable here, so that ONE NODE sits on tests/bdd/e2e_rest_known_failures.txt under
+    # the #7338 block with its sibling, rather than parking all transports by tag. The
+    # e2e_rest ``break`` this key used to need in the apply loop is gone with it.
     # Graduated: T-UC-005-main. Both halves of its old reason were the Given, not
     # production: it minted fmt_N formats, which carry no assets (so "asset requirements"
     # graded nothing in-process and read as a spec-production gap) and which the live
@@ -1982,12 +1983,11 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                 # escape-hatch registry grows; the weaker one goes. strict=False was the
                 # weaker one in the literal sense too: it would have swallowed an xpass, so
                 # if the live catalog ever DOES serve these ids, nothing would have said so.
-                if is_e2e_rest and tag == "T-UC-005-main-referrals":
-                    # GRADUATED for e2e_rest (#1417): with a seeded tenant the
-                    # live server populates creative_agents (>=DEFAULT_AGENT), so referrals
-                    # are present on the wire and the (wire-asserting) Then passes. The marker
-                    # stays strict for in-process transports where the registry mock is empty.
-                    break
+                # DELETED 2026-09-15: the e2e_rest ``break`` for T-UC-005-main-referrals.
+                # It existed because the tag carried an in-process-only xfail that e2e_rest
+                # had to escape. The tag is gone from _XFAIL_TAGS entirely (the mock was the
+                # gap, see the note at its former entry), so there is no marker for e2e_rest
+                # to break out of; its remaining #7338 failure is one ledger row.
                 if is_e2e_rest and tag in uc005_filter_e2e_untestable:
                     # tolerate either outcome — see uc005_filter_e2e_reason
                     item.add_marker(pytest.mark.xfail(reason=uc005_filter_e2e_reason, strict=False))

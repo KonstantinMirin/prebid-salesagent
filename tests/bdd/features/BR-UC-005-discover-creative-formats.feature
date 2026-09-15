@@ -50,10 +50,35 @@ Feature: BR-UC-005 Discover Creative Formats
   Scenario: Creative agent referrals included in response
     Given the seller has additional creative agents beyond the default
     When the Buyer Agent requests the format catalog
-    Then the response is compliant with the list_creative_formats spec
-    And the response should include creative_agents referrals
+    Then the response should include creative_agents referrals
     And each referral should include the agent URL and supported capabilities
     # POST-S4: Creative agent referrals present when available
+    #
+    # THE COMPLIANCE THEN IS DELIBERATELY ABSENT (local divergence -- mirror upstream). It
+    # read "Then the response is compliant with the list_creative_formats spec" and was
+    # REDUNDANT on every transport, while being the only thing that kept POST-S4 --
+    # this scenario's whole subject -- ungraded in-network:
+    #
+    #   * Over e2e_rest it validated a document byte-identical to the one
+    #     @T-UC-005-main's copy of the same line validates: the live server answers with
+    #     the whole reference catalog whichever formats a Given names (set_registry_formats
+    #     is a no-op there for reference ids), and 45 of the catalog's 57 formats carry a
+    #     pixel_tracker asset the pinned Format.assets union does not admit (adcp#7338).
+    #     That node is already on tests/bdd/e2e_rest_known_failures.txt with the evidence.
+    #   * In process the format half is @T-UC-005-main's SUBJECT, graded there against the
+    #     same pixel_tracker-free reference picks, on a2a/mcp/rest.
+    #   * The creative_agents half cannot be made to fail from any scenario input, which
+    #     was measured rather than assumed: production builds the block out of the pinned
+    #     AdcpCreativeAgent, so it conforms by construction, and a drift (an advertised
+    #     capability outside enums/creative-agent-capability.json) raises INSIDE
+    #     creative_formats.py's own `except Exception` and degrades to an empty array --
+    #     caught by "should include creative_agents referrals" below, not by a schema check.
+    #     Probe: adding a bogus capability to ADVERTISED_CREATIVE_AGENT_CAPABILITIES fails
+    #     this scenario with "got empty list" on all three in-process transports.
+    #
+    # 16 of this feature's 85 scenarios already carry no compliance Then, and no guard
+    # requires one (the only ordering guard is UC-004-scoped and self-declared disposable).
+    # Restore the line only if a reason appears that the three bullets above do not cover.
 
   @T-UC-005-main-pricing @main-flow @post-s5
   Scenario: Per-format pricing options surfaced pass-through by the media-buy aggregator

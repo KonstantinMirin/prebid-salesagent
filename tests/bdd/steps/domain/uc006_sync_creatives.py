@@ -3752,21 +3752,39 @@ def given_creative_agent_is_reachable(ctx: dict) -> None:
 
 @given(parsers.parse('a creative with provenance declaring digital_source_type "{source_type}"'))
 def given_creative_with_provenance_source_type(ctx: dict, source_type: str) -> None:
-    """Build a creative payload with creative-level provenance.digital_source_type."""
+    """Build a creative payload with creative-level provenance.digital_source_type.
+
+    BOTH HALVES of the format identity come from the transport switch, and the assets
+    with them. This step used to take the ID from ``_format_payload`` and pin the
+    ``agent_url`` to ``env.DEFAULT_AGENT_URL``, which is precisely the defect
+    ``_scenario_format_entry``'s docstring names with the halves swapped: over e2e_rest the
+    payload claimed the live catalog's ``display_300x250_image`` at
+    ``creative.test.example.com``, an agent that does not serve it. ``fetch_format_spec``
+    then resolved nothing and ``_validate_creative_input`` refused the entry with
+    ``AdCPFormatNotFoundError`` (src/core/tools/creatives/_validation.py) -- inside a
+    transport-level SUCCESS, so the compliance Then above passed and the read-back
+    underneath reported "No creative found in DB". The factory's default assets were wrong
+    for the same reason: they key an ``image`` slot, and the catalog format wants
+    ``banner_image``.
+
+    In process the pair and the assets are byte-identical to what this built before.
+    """
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
-    format_id, _, _ = _format_payload(ctx, env)
+    format_id_entry = _creative_format_id_entry(ctx, env)
+    _format_id, _agent_url, assets = _format_payload(ctx, env)
     creative_id = "creative-provenance-source-001"
     payload: dict = CreativeAssetRequestFactory.payload(
         creative_id=creative_id,
         name="Provenance Source Type Creative",
-        format_id={"id": format_id, "agent_url": env.DEFAULT_AGENT_URL},
+        format_id=format_id_entry,
+        assets=assets,
         # ADDING a real field, not perturbing one: provenance is declared on
         # CreativeAssetRequest, so extra="forbid" would catch a typo here.
         provenance={"digital_source_type": source_type},
     )
     ctx.setdefault("creatives", []).append(payload)
-    ctx["creative_format_id"] = format_id
+    ctx["creative_format_id"] = format_id_entry["id"]
 
 
 @given(parsers.parse('an asset within the creative declaring digital_source_type "{source_type}"'))

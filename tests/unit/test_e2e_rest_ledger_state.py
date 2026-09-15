@@ -29,6 +29,11 @@ from tests.helpers.ledger import load_ledger_nodeids
 # perf/parallelize-test-suite work — see the block comment inside the set)
 # + the adcp#7338 catalog row (2026-09-13) + 3 UC-010 targeting-shape rows
 # (2026-09-15), both annotated at their entries below.
+# A SECOND #7338 row (@T-UC-005-main-referrals) was considered on 2026-09-15 and
+# NOT added: it would have validated a document byte-identical to the row below
+# while denying POST-S4 the only transport where the seller's real federation path
+# runs. The redundant compliance Then was deleted from that scenario instead. The
+# ledger file's #7338 block carries the reasoning and the measured scope.
 # The 3 uc018 rows of that block graduated 2026-08-31: their Givens seed through
 # the factories into the live server's own database, so the block's
 # "injected cross-principal creatives" clause no longer describes them. XPASS in
@@ -89,6 +94,15 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # transport; over e2e_rest the live catalog carries pixel_tracker assets the
         # pinned Format.assets union does not admit (adcp#7338), so the compliance
         # Then fails there for the same reason as the three UC-005 rows above.
+        # Upstream's own release is inconsistent with itself, which is why no change here
+        # can graduate this row: the reference catalog captured at pin 467fd93d7711 -- the
+        # same commit the feature files cite for the pinned schemas -- publishes
+        # pixel_tracker on 45 of its 57 formats, and the adcp SDK from that release already
+        # carries an UnknownFormatAsset fallback arm for exactly this ("AdCP enums grow
+        # additively by design", strict on emit, lenient on parse). The JSON schema is the
+        # half that did not get the arm. The one local "fix" -- stripping assets the pin
+        # omits from the catalog this seller serves -- would tell a buyer a format needs
+        # fewer assets than it does.
         "tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]",
         # Added 2026-09-15: three UC-010 rows that configure a targeting SHAPE per
         # tenant (which metro systems, which country-keyed postal systems) and read
