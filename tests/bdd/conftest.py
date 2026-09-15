@@ -1466,25 +1466,15 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         is_impl = "[impl]" in nodeid or "[impl-" in nodeid
         is_e2e_rest = "[e2e_rest]" in nodeid or "[e2e_rest-" in nodeid
 
-        # T-UC-002-ext-i on MCP ONLY: an unauthenticated caller gets its PAYLOAD critiqued
-        # instead of being told it is unauthenticated. The scenario sends a deliberately
-        # minimal body (it is an auth test, not a payload test); a2a and rest answer
-        # AUTH_MISSING, MCP validates the announced shape first and answers INVALID_REQUEST
-        # naming brand/start_time/end_time. Auth-before-validation is the correct order --
-        # it is also what stops an unauthenticated caller learning the request shape.
-        #
-        # Only visible since the step began dispatching the raw parameter bag (prkv.33);
-        # while it built the request in-process the payload never reached any transport.
-        # The other leg of this tag GRADUATED on a2a/rest in that same change. Filed as
-        # the ordering bug it is rather than left red.
-        if "T-UC-002-ext-i" in marker_names and is_mcp:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="MCP validates the payload before checking auth, so an "
-                    "unauthenticated caller gets INVALID_REQUEST instead of AUTH_MISSING",
-                    strict=True,
-                )
-            )
+        # Graduated: T-UC-002-ext-i on MCP. The reason said MCP validates the payload
+        # before checking auth, which is TRUE and is filed as
+        # https://github.com/prebid/salesagent/issues/2243 -- but it was not what made
+        # this scenario red. The scenario sent a near-empty body while asserting
+        # AUTH_MISSING, so it was grading schema validation, and on a2a and rest it was
+        # failing OUTSIDE this routing for the same reason. It now carries `And a valid
+        # create_media_buy request`, which is what an auth scenario has to send, and all
+        # three transports answer AUTH_MISSING. The ordering divergence needs its own
+        # scenario -- no credential AND a malformed body -- which #2243 describes.
 
         # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
         # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
@@ -2296,7 +2286,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # changed nothing about the request. Both now XPASS, wire-graded through
             # then_error_code, which has no reconstructed fallback.
             "T-UC-004-ext-c": ("partial-success Error model needs suggestion field — production enhancement", True),
-            "T-UC-004-ext-d": ("partial-success Error model needs suggestion field — production enhancement", True),
+            # Graduated: T-UC-004-ext-d. Its reason named a missing suggestion field; what
+            # actually failed was the scenario's own demand for a hard refusal coded
+            # "media_buy_not_found" (lowercase, and the pin's members are upper snake).
+            # Corrected to the per-id MEDIA_BUY_NOT_FOUND advisory the response schema
+            # declares, which keeps the security property -- a non-owned id is answered
+            # exactly like a nonexistent one.
             # Graduated: T-UC-004-identify-partial, T-UC-004-identify-batch-ownership.
             # Both grade BR-RULE-030 INV-5 as ADVISORY PER ID: an id that resolves to no
             # buy the caller owns gets no delivery data and a MEDIA_BUY_NOT_FOUND entry in
@@ -2592,15 +2587,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # reject (wire-drop confirmed XPASS, #1417); the only remaining
             # transport-aware failure (a2a empty array) is handled below — entry removed
             # here so it does not blanket-xfail every boundary-resolution row.
-            # ownership: owner-matches rows pass on all
-            # transports. owner-mismatch is the C3 security gap — cross-
-            # principal access returns 200+empty instead of MEDIA_BUY_NOT_FOUND.
-            (
-                "T-UC-004-partition-ownership",
-                {"owner_mismatch"},
-                "cross-principal access returns 200+empty instead of "
-                "AdCPSalesAgentError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
-            ),
+            # Graduated: T-UC-004-partition-ownership row owner_mismatch. The C3 gap it
+            # named -- cross-principal access answering 200 + empty instead of a refusal --
+            # is closed: production reports a buy owned by another principal as
+            # MEDIA_BUY_NOT_FOUND, which is both a pinned code and the answer 3.1.1's L1
+            # security prose requires ("the body MUST NOT distinguish 'unauthorized' from
+            # 'not found'"). Observed as a deterministic strict XPASS. The sibling
+            # T-UC-004-boundary-ownership routing below graduates with it.
             # boundary-ownership: fully GRADUATED. a2a first (wire-drop XPASS,
             # #1417), then mcp/rest at the #1534 merge — production reports the
             # cross-principal buy as MEDIA_BUY_NOT_FOUND (spec 3.1.1
@@ -2704,14 +2697,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # the buy on every transport, and querying a non-owned id hits the C3 gap --
         # production answers 200 + empty instead of MEDIA_BUY_NOT_FOUND -- on every
         # transport, exactly like T-UC-004-partition-ownership/owner_mismatch above.
-        if "T-UC-004-boundary-ownership" in marker_names and "matches owner" not in nodeid:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="cross-principal access returns 200+empty instead of "
-                    "AdCPSalesAgentError(MEDIA_BUY_NOT_FOUND). See docs/test-debt-bdd-strict-markers.md item C3.",
-                    strict=False,
-                )
-            )
+        # Graduated: T-UC-004-boundary-ownership "principal differs from owner". The block
+        # above correctly diagnosed that the old per-transport table was measuring which
+        # transport rejects an unknown argument -- and the helper it routed both outlines
+        # through kept injecting that argument, so the trap moved rather than closed. The
+        # When now seeds a REAL second principal and presents its token, so every transport
+        # runs the same request; and the row asserts the per-id MEDIA_BUY_NOT_FOUND advisory
+        # that get-media-buy-delivery-response.json declares, rather than a hard refusal.
 
         # Graduated: T-UC-004-boundary-reporting-dims — "metro but no system" is the
         # only row still genuinely gapped (prose-only spec constraint, no formal
@@ -3048,12 +3040,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # resolution partition GRADUATED (#1545): empty media_buy_ids=[]
             # hits the SDK min_length=1 constraint -> VALIDATION_ERROR+suggestion on the
             # a2a/mcp/rest wire (all three empirically PASS the named Example). Entry removed.
-            # ownership: production doesn't validate principal mismatch
-            (
-                "T-UC-004-partition-ownership",
-                {"owner_mismatch"},
-                "ownership validation not implemented — production accepts non-owned media buys",
-            ),
+            # Graduated: T-UC-004-partition-ownership row owner_mismatch, the second of two
+            # routings this row carried. "Production accepts non-owned media buys" was
+            # true of the OLD scenario, which demanded a hard refusal; the obligation for
+            # this rule on this tool is a per-id advisory, which production emits and
+            # @T-UC-004-identify-batch-ownership already graded for the batch case. The row
+            # now names that outcome instead of the word "invalid".
         ]
         for tag, substrings, reason in _UC004_PARTITION_SELECTIVE:
             if tag in marker_names:
@@ -3110,16 +3102,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # inv-151-1, inv-152-1/2/3/5, inv-154-tenant, sandbox-production,
         # snapshot available variants, principal_scoping valid variants.
         _UC019_XFAIL_TAGS: set[str] = {
-            # Status filter invalid — all parametrizations still fail.
-            # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable —
-            # with this entry removed the scenario still xfails at the fixture
-            # ("No harness wired for None": not env-wired), and its examples
-            # assert non-canonical codes (STATUS_FILTER_INVALID_VALUE /
-            # STATUS_FILTER_EMPTY — absent from the pinned error-code enum),
-            # which the shared-boundary fix will not emit. Reconcile upstream.
-            # Suggestion parity for get_media_buys is pinned by
+            # Graduated: T-UC-019-partition-status-filter-invalid. The 2026-07-06 note
+            # said "NOT graduatable" on two grounds, both since removed: the scenario was
+            # not env-wired (it is now), and its examples asserted
+            # STATUS_FILTER_INVALID_VALUE / STATUS_FILTER_EMPTY, codes absent from the
+            # pin's 92. Both rows now assert INVALID_REQUEST, which is what the pin gives
+            # for a schema-constraint violation — get-media-buys-request.json types
+            # status_filter as oneOf [MediaBuyStatus, array with minItems 1], so an
+            # out-of-enum value and an empty array both fail the SCHEMA, not a business
+            # rule. Wire-graded on both envelope layers by then_fail_with_code, with the
+            # field pointer graded by then_error_field_contains; xpassing on a2a, mcp and
+            # rest. Suggestion parity for get_media_buys stays pinned by
             # tests/integration/test_request_validation_suggestion_parity.py.
-            "T-UC-019-partition-status-filter-invalid",
             # Package details omit the flight window. The buyer supplies start/end in the
             # Given, the pinned 3.1 core/package.json names the echo fields start_time /
             # end_time (optional — required is ["package_id"]), and production does not
@@ -3139,7 +3133,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             #   inv-150-1 (pre-flight active -> pending_start)
             #   inv-150-3 (post-flight active -> completed)
             # Graduated: T-UC-019-inv-150-5 (status filter no longer blocks by-ID queries)
-            "T-UC-019-inv-151-4",
+            # Graduated: T-UC-019-inv-151-4 (unknown status value rejected). Asserts
+            # INVALID_REQUEST with the field pointer naming status_filter and a
+            # suggestion, all read off the wire on both envelope layers, and xpasses on
+            # a2a, mcp and rest. Same correction as the two status-filter outlines: the
+            # obligation is the pin's schema-constraint code, not a STATUS_FILTER_* code
+            # the protocol never declared.
             # inv-153-3/4/5 moved to _UC019_SNAPSHOT_HARNESS_GAP_TAGS (#1721 M4):
             # they were mislabeled here as production gaps but actually fail on the
             # Given (no adapter mock in this harness), never reaching graded behavior.
@@ -3227,13 +3226,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # not-yet-implemented sub-feature are xfailed. All are pre-existing gaps
         # unrelated to this PR's status-taxonomy work.
         _UC019_BOUNDARY_SELECTIVE: list[tuple[str, set[str], str]] = [
-            # Invalid status_filter VALUES need a dedicated STATUS_FILTER_INVALID_VALUE
-            # code; production raises the generic VALIDATION_ERROR instead.
-            (
-                "T-UC-019-boundary-status-filter",
-                {"pending_activation", "expired"},
-                "status_filter value validation emits VALIDATION_ERROR, not STATUS_FILTER_INVALID_VALUE (unimplemented)",
-            ),
+            # Graduated: T-UC-019-boundary-status-filter rows pending_activation and
+            # expired. The reason demanded a dedicated STATUS_FILTER_INVALID_VALUE code,
+            # which is not among the pin's 92; both rows now assert INVALID_REQUEST,
+            # the code 3.1.1 gives for a schema-constraint violation, and both xpass on
+            # a2a, mcp and rest. Graded by then_error_code_with_suggestion, which asserts
+            # through assert_wire_error with require_suggestion, so the suggestion must
+            # sit in error.json's own position rather than inside details.
             # Sandbox echo (sandbox=true/false in the response) is not implemented;
             # only the production-absent row is graded.
             (
@@ -3304,14 +3303,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # wire once status_filter is coerced to the MediaBuyStatus enum and the
             # scenario pins its clock. The remaining status-filter gaps are the
             # value/empty VALIDATION rows below, not the mapping.
-            # Status filter boundary: STATUS_FILTER_EMPTY (empty array) is not a
-            # dedicated code yet (the value-validation rows are handled by
-            # _UC019_BOUNDARY_SELECTIVE above). "all seven" now grades and passes.
-            (
-                "T-UC-019-boundary-status-filter",
-                {"empty array"},
-                "STATUS_FILTER_EMPTY not implemented — empty array returns empty success, not an error",
-            ),
+            # Graduated: T-UC-019-boundary-status-filter row "empty array". Its reason
+            # named STATUS_FILTER_EMPTY, a code the pin does not declare, and claimed an
+            # empty array returns an empty success. The row now asserts INVALID_REQUEST
+            # and xpasses on all three transports: get-media-buys-request.json gives the
+            # array branch minItems 1, so [] fails the schema. "all seven" grades and
+            # passes as before.
             # Snapshot: not-requested variant fails (include_snapshot=false path)
             (
                 "T-UC-019-partition-snapshot",

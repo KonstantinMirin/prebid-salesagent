@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
@@ -904,8 +904,14 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         return body
 
     def parse_rest_response(self, data: dict[str, Any]) -> SyncCreativesResponse:
-        """Parse REST JSON into SyncCreativesResponse."""
-        return SyncCreativesResponse(**data)
+        """Parse a REST body into SyncCreativesResponse, through the reader-side door.
+
+        Named here rather than left to the base because ``sync_creatives`` has no single
+        pinned response model for ``RESPONSE_MODEL`` to hold. ``revive`` for the same
+        reason the base uses it: a served document carries the context the boundary
+        stamped, and the constructor refuses that field.
+        """
+        return cast("SyncCreativesResponse", SyncCreativesResponse.revive(data))
 
 
 class RealRegistryCreativeSyncEnv(CreativeSyncEnv):

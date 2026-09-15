@@ -16,7 +16,7 @@ GH #1335, GH #1900
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from src.core.schemas._base import GetMediaBuysRequest, GetMediaBuysResponse
 from tests.harness._base import IntegrationEnv
@@ -190,11 +190,12 @@ class MediaBuyListDispatchMixin:
     def _parse_list_rest_response(self, data: dict[str, Any]) -> GetMediaBuysResponse:
         """Parse a get_media_buys REST body into the typed response.
 
-        Not equivalent to the inherited default either: ``BaseTestEnv.parse_rest_response``
-        raises NotImplementedError, so dropping this would replace a working parser
-        with a refusal.
+        Kept as a named helper because the dual envs select it by which verb they
+        dispatched, which the base cannot express. Through ``revive`` for the same reason
+        the base uses it: a served document carries the context the boundary stamped, and
+        ``AdcpResponse`` refuses that field on construction.
         """
-        return GetMediaBuysResponse(**data)
+        return cast("GetMediaBuysResponse", GetMediaBuysResponse.revive(data))
 
 
 class MediaBuyListEnv(MediaBuyListDispatchMixin, IntegrationEnv):

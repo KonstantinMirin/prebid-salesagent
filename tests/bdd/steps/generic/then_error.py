@@ -119,31 +119,36 @@ def _wire_of(error: object) -> dict | None:
 
 
 def _get_error_code(error: object) -> str:
-    """Extract error code from an exception or Error model.
+    """The error code the BUYER received: off the wire, or off an errors[] advisory.
 
-    Handles two patterns:
-    1. Exception-based: AdCPSalesAgentError with .error_code
-    2. Partial success: adcp.types.Error model with .code (from response.errors)
+    Two sources, both real; the three reconstructions this had are refusals now, for the
+    same reason as in ``_get_error_dict`` above. ``AdCPSalesAgentError.error_code`` is the
+    code of an exception the HARNESS caught, so reading it asserts that the object the test
+    holds is the object the test holds. A bare ``pydantic.ValidationError`` mapped to
+    "VALIDATION_ERROR" is worse: that exception is raised while BUILDING the request, so the
+    payload never left the test process and production never ran. ``type(error).__name__``
+    is not a protocol code at all -- with it, a scenario asserting a pinned code could only
+    fail, but a scenario asserting "some error happened" passed on any exception whatsoever.
     """
     wire = _wire_of(error)
     if wire is not None:
         return str(wire.get("code") or "")
     from src.core.exceptions import AdCPSalesAgentError
 
-    if isinstance(error, AdCPSalesAgentError):
-        return error.error_code
-    # adcp.types.Error model (from partial success response.errors)
+    # adcp.types.Error model (from partial success response.errors) — payload data.
     if hasattr(error, "code") and not isinstance(error, Exception):
-        return error.code
-    # Pydantic ValidationError → VALIDATION_ERROR
-    try:
-        from pydantic import ValidationError
-
-        if isinstance(error, ValidationError):
-            return "VALIDATION_ERROR"
-    except ImportError:
-        pass
-    return type(error).__name__
+        return str(error.code)
+    raise AssertionError(
+        "RECONSTRUCTED-CODE READ: this step was about to take a code off "
+        f"{type(error).__name__}, which the harness itself is holding -- no wire envelope was "
+        "captured and this is not an errors[] advisory. "
+        + (
+            "An AdCPSalesAgentError's error_code is the code of a caught exception, not the one the buyer received. "
+            if isinstance(error, AdCPSalesAgentError)
+            else "A request-construction failure means production never ran. "
+        )
+        + "Assert on the wire."
+    )
 
 
 def _get_error_message(error: object) -> str:
@@ -162,24 +167,44 @@ def _get_error_message(error: object) -> str:
 
 
 def _get_error_dict(error: object) -> dict:
-    """Convert exception or Error model to dict for field-presence checks."""
+    """The error object a Then step reads, from the WIRE or from the payload — never rebuilt.
+
+    Ten suggestion/field steps read through here, which is why the reconstruction lived in
+    ONE place and could be removed in one place. Two of the four branches this had were
+    reconstructions of an exception the harness caught, and both are now refusals:
+
+    * an ``AdCPSalesAgentError`` re-serialized through ``envelope_for`` -- a second
+      envelope built test-side from the exception, which derives ``message``,
+      ``suggestion`` and ``recovery`` from ``CODE_TABLE`` and so can only ever AGREE WITH
+      ITSELF. A scenario that reached no wire passed on it;
+    * a bare ``{"code": ..., "message": ...}`` scraped off any object with those
+      attributes, which is the same agreement with an even looser subject.
+
+    ``then_error_code`` and ``then_error_recovery`` had the identical fallback and it was
+    measured across the whole suite to have ZERO consumers, so both were deleted; there is
+    no reason to expect a different answer here, and the refusal MEASURES it rather than
+    assuming it. The two remaining branches are the two real sources: the wire envelope the
+    dispatcher captured, and an ``adcp.types.Error`` taken out of a SUCCESSFUL response's
+    ``errors[]`` -- the per-item advisory channel the pin declares, which is payload data
+    and not a reconstruction.
+    """
     wire = _wire_of(error)
     if wire is not None:
         return dict(wire)
     from src.core.exceptions import AdCPSalesAgentError
 
     if isinstance(error, AdCPSalesAgentError):
-        # The wire envelope, not a second serialization of the same object, and
-        # located through the ONE sanctioned locator rather than indexed here --
-        # `locate_envelope_error` is where "which region does the spec put this in"
-        # is answered. The envelope already uses the vocabulary the feature files
-        # read (`code`, not `error_code`), so no remapping is needed.
-        from tests.helpers.envelope_assertions import envelope_for, locate_envelope_error
-
-        located = locate_envelope_error(envelope_for(error))
-        return dict(located) if located else {}
+        raise AssertionError(
+            "RECONSTRUCTED-ERROR READ: this step was about to grade an envelope rebuilt "
+            f"test-side from {type(error).__name__}, because the dispatch captured no wire "
+            "envelope. message/suggestion/recovery are all derived from CODE_TABLE, so such "
+            "a read can only agree with itself and would pass for a request the seller never "
+            "answered. Assert on the wire, or -- if this scenario grades a PER-ITEM advisory "
+            "inside a successful response -- read it out of response.errors[] instead."
+        )
     # adcp.types.Error model (from partial success response.errors) — has code,
-    # message, suggestion, recovery, field as direct attributes.
+    # message, suggestion, recovery, field as direct attributes. PAYLOAD data, not a
+    # reconstruction: the pin declares errors[] as the per-item advisory channel.
     if hasattr(error, "code") and not isinstance(error, Exception):
         d: dict = {"code": error.code, "message": getattr(error, "message", "")}
         suggestion = getattr(error, "suggestion", None)
@@ -192,7 +217,12 @@ def _get_error_dict(error: object) -> dict:
         if field:
             d["field"] = field
         return d
-    return {"code": _get_error_code(error), "message": _get_error_message(error)}
+    raise AssertionError(
+        "RECONSTRUCTED-ERROR READ (loose branch): this step was about to grade a "
+        f"hand-built {{code, message}} scraped off {type(error).__name__}, which reached no "
+        "wire and is not an errors[] advisory either. There is nothing here the buyer "
+        "received. Assert on the wire."
+    )
 
 
 # ── Shared validation ───────────────────────────────────────────────

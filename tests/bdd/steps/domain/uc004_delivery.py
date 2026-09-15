@@ -1112,15 +1112,10 @@ def when_request_delivery_default(ctx: dict) -> None:
     dispatch_request(ctx, **kwargs)
 
 
-@when("the Buyer Agent sends a delivery metrics request without authentication")
-def when_request_no_auth(ctx: dict) -> None:
-    """Request delivery metrics presenting the env's tenant and no token.
-
-    The tenant is addressed so the request reaches a known seller, and nothing is
-    presented for it to verify, which is the pin's AUTH_MISSING state ("no Authorization
-    header was included in the request"). The refusal comes from the real resolver.
-    """
-    dispatch_request(ctx, credential=ctx["env"].credential(token=None))
+# "the Buyer Agent sends a delivery metrics request without authentication" is bound by
+# steps/generic/given_auth.py::when_dispatch_without_credential, together with UC-011's
+# list_accounts spelling. Both were functions here and there with byte-identical bodies:
+# presenting no credential is tool-agnostic, because the tool is the env's declaration.
 
 
 # ── Webhook When steps ─────────────────────────────────────────────
@@ -3951,15 +3946,26 @@ def _dispatch_ownership_partition(ctx: dict, label: str) -> None:
     media_buys = ctx.get("media_buys", {})
     owned_ids = _resolve_media_buy_ids(ctx, list(media_buys.keys()))
     if "mismatch" in norm or "differs" in norm:
-        # Query the owned buy as a different principal — a genuine ownership
-        # mismatch. (The row is selective-xfailed: production does not yet
-        # reject a non-owned id, it just returns nothing.)
-        from tests.factories import PrincipalFactory
+        # Query the owned buy as a REAL second principal: seed its row, re-point the env at
+        # it, and let the resolver build its identity from the token that row carries.
+        #
+        # What this replaced passed ``identity=`` as a request kwarg -- a fabricated
+        # ResolvedIdentity injected past the resolver. It never tested ownership on any
+        # transport. a2a and mcp rejected ``identity`` as an unrecognized argument, so the
+        # "expected invalid" assertion passed on the argument being unknown rather than on
+        # the buy being someone else's; rest dropped it, dispatched as the OWNER, and
+        # "failed" for succeeding. The comment above this table already named that exact
+        # trap for the boundary outline ("a table of which transport rejects an unknown
+        # argument") and routed both outlines through this helper to fix it -- while the
+        # helper kept the injection, so the trap moved rather than closed.
+        from tests.bdd.steps.generic._auth import authenticate_env_as
+        from tests.factories.principal import PrincipalFactory
 
-        foreign = PrincipalFactory.make_identity(
-            principal_id="buyer-999-foreign", tenant_id=ctx.get("tenant_id", "test_tenant")
-        )
-        dispatch_request(ctx, identity=foreign, media_buy_ids=owned_ids or ["mb-001"])
+        env = ctx["env"]
+        foreign = PrincipalFactory(tenant=ctx["tenant"], principal_id="buyer-999-foreign")
+        env._commit_factory_data()
+        authenticate_env_as(ctx, foreign.principal_id)
+        dispatch_request(ctx, media_buy_ids=owned_ids or ["mb-001"])
     else:
         # owner_matches — query as the owning principal (default identity).
         dispatch_request(ctx, media_buy_ids=owned_ids or None)

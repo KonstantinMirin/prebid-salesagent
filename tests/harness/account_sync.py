@@ -434,4 +434,4 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         """
         if self._active_list:
             return self._parse_list_rest_response(data)
-        return SyncAccountsResponse(**data)
+        return super().parse_rest_response(data)
