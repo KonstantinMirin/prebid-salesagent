@@ -2875,9 +2875,11 @@ def given_adapter_error(ctx: dict) -> None:
     # "retryable", which is not in RecoveryHint at all — the parameter's deletion made that
     # unrepresentable, and AdCPAdapterError's SERVICE_UNAVAILABLE table recovery
     # ("transient") is what a buyer should see for an ad-server outage anyway.
-    error = AdCPAdapterError(
-        details={"suggestion": "Retry the operation or contact ad server support"},
-    )
+    # No details either, for the same reason recovery is absent: ``suggestion`` is a
+    # read-only property over CODE_TABLE, so a ``details={"suggestion": ...}`` block never
+    # reached it -- it fabricated a shape production cannot produce, and ``__new__`` now
+    # refuses a details block that is not an ErrorDetails class at all.
+    error = AdCPAdapterError()
     mock_adapter.create_media_buy.side_effect = error
     mock_adapter.update_media_buy.side_effect = error
     # Also write to DB so Docker adapter raises the same error.

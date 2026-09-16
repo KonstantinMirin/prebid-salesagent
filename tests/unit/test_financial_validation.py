@@ -4,7 +4,8 @@ from decimal import Decimal
 
 import pytest
 
-from src.core.exceptions import AdCPBudgetTooLowError, AdCPValidationError
+from src.core.errors.details import BudgetDetails
+from src.core.exceptions import AdCPBudgetTooLowError
 from src.core.tools.financial_validation import (
     raise_if_validation_failed,
     validate_max_campaign_budget,
@@ -152,19 +153,37 @@ def test_validate_max_daily_package_spend_trailer_overrides_trailing_sentence() 
 
 def test_raise_if_validation_failed_is_noop_on_empty_message() -> None:
     # None and "" are both no-ops — there is no failure to raise.
-    assert raise_if_validation_failed(None) is None
-    assert raise_if_validation_failed("") is None
+    for reason in (None, ""):
+        assert (
+            raise_if_validation_failed(
+                reason,
+                exc_type=AdCPBudgetTooLowError,
+                requested_budget=Decimal("1"),
+                budget_limit=Decimal("100"),
+            )
+            is None
+        )
 
 
-def test_raise_if_validation_failed_raises_default_validation_error() -> None:
-    with pytest.raises(AdCPValidationError) as exc_info:
-        raise_if_validation_failed("budget below minimum")
+def test_raise_if_validation_failed_carries_the_two_numbers_that_decided_it() -> None:
+    """The details block is a declared class holding the comparison, not a dict.
 
-    assert exc_info.value.error_code == "VALIDATION_ERROR"
+    What the wire does with this is BDD's (the daily-spend-cap outlines on a2a/mcp/rest);
+    what is graded here is the helper's own contract, because the dict it used to build
+    had no ``to_wire`` and killed the boundary's failure builder mid-render.
 
-
-def test_raise_if_validation_failed_raises_selected_subclass() -> None:
+    There is no default-``exc_type`` case to grade any more. The default was
+    ``type[AdCPSalesAgentError]``, which binds ``DetailsT`` to ``Any``, and ``Any`` is what
+    let the dict through — so the parameter is required and every call site names its class.
+    The former test asserted ``error_code == "VALIDATION_ERROR"`` off that default; the code
+    is a ClassVar resolved through CODE_TABLE, so it only ever compared the table to itself.
+    """
     with pytest.raises(AdCPBudgetTooLowError) as exc_info:
-        raise_if_validation_failed("package below minimum spend", exc_type=AdCPBudgetTooLowError)
+        raise_if_validation_failed(
+            "package below minimum spend",
+            exc_type=AdCPBudgetTooLowError,
+            requested_budget=Decimal("50"),
+            budget_limit=Decimal("100"),
+        )
 
-    assert exc_info.value.error_code == "BUDGET_TOO_LOW"
+    assert exc_info.value.details == BudgetDetails(requested_budget="50", budget_limit="100")

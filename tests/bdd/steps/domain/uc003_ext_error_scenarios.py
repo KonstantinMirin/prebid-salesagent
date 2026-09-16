@@ -47,10 +47,10 @@ def _inject_privilege_error(ctx: dict) -> None:
     mock_adapter = env.mock["update_adapter"].return_value
     # PERMISSION_DENIED is canonical (pinned enum @04f59d2d5, recovery
     # correctable) but no typed subclass models it, so synthesize the code.
-    error = AdCPSalesAgentError(
-        error_code="PERMISSION_DENIED",
-        details={"suggestion": "Request admin privileges or contact an administrator to perform this action"},
-    )
+    # The code alone. ``suggestion`` is a read-only property over CODE_TABLE, so the
+    # ``details={"suggestion": ...}`` block this used to carry reached nothing -- and
+    # ``__new__`` now refuses a details block that is not an ErrorDetails class.
+    error = AdCPSalesAgentError(error_code="PERMISSION_DENIED")
     mock_adapter.update_media_buy.side_effect = error
 
 
@@ -687,10 +687,8 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
     # Branch the seller-side refusal at the update adapter with the canonical code.
     env = ctx["env"]
     mock_adapter = env.mock["update_adapter"].return_value
-    mock_adapter.update_media_buy.side_effect = AdCPSalesAgentError(
-        error_code="NOT_CANCELLABLE",
-        details={"suggestion": "Pause the buy instead (paused: true) or contact the seller to arrange cancellation"},
-    )
+    # The code alone — CODE_TABLE owns the suggestion (see the PERMISSION_DENIED step above).
+    mock_adapter.update_media_buy.side_effect = AdCPSalesAgentError(error_code="NOT_CANCELLABLE")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -714,9 +712,8 @@ def given_adapter_error_during_update(ctx: dict) -> None:
     # transient / correctable / terminal — and it reached the wire verbatim because
     # the kwarg was a free string. AdCPAdapterError's wire code SERVICE_UNAVAILABLE
     # is pinned transient, which is what this scenario always meant.
-    error = AdCPAdapterError(
-        details={"suggestion": "Retry the operation or contact ad server support"},
-    )
+    # No details, for the same reason recovery is absent — see the PERMISSION_DENIED step.
+    error = AdCPAdapterError()
     # Inject into all adapter methods that update_media_buy_impl might call.
     # Production calls adapter.update_media_buy() for the actual update,
     # and may call validate_media_buy_request() beforehand.
