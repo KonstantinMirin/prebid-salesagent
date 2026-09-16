@@ -23,9 +23,8 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
-from src.core.exceptions import AdCPSalesAgentError
 from tests.factories.creative_asset import build_assets, image_spec, text_spec
-from tests.harness import CreativeSyncEnv, Transport, assert_envelope, make_identity
+from tests.harness import CreativeSyncEnv, Transport, assert_envelope
 from tests.helpers.creative_test_helpers import assert_stored_creative_assets, creative_payload
 
 
@@ -1043,36 +1042,20 @@ class TestAssignmentResultFields:
 
 
 @pytest.mark.requires_db
-class TestAuthPrincipalRequired:
-    """Missing principal_id → AdCPAuthenticationError.
-
-    Covers: UC-006-EXT-A-02
-    """
-
-    def test_no_principal_raises_auth_error(self, integration_db):
-        """Identity with principal_id=None → AdCPAuthenticationError."""
-        with CreativeSyncEnv() as env:
-            env.setup_default_data()
-
-            identity_no_principal = make_identity(
-                principal_id=None,
-                tenant_id="test_tenant",
-                tenant=env.identity.tenant,
-            )
-
-            # _impl raises; the error class and its code ARE the oracle. This used
-            # to dispatch through Transport.IMPL so the dispatcher would catch the
-            # exception into a TransportResult -- a wrapper around a raise.
-            with pytest.raises(AdCPSalesAgentError) as exc_info:
-                env.call_impl(
-                    creatives=[_creative()],
-                    identity=identity_no_principal,
-                )
-
-        assert exc_info.value.error_code in {"AUTH_MISSING", "AUTH_INVALID"}, (
-            f"Expected an authentication rejection, got {exc_info.value.error_code!r}"
-        )
-
+# (Deleted) TestAuthPrincipalRequired::test_no_principal_raises_auth_error (UC-006-EXT-A-02),
+# which built ``make_identity(principal_id=None, ...)``. The remaining half of the pair
+# below, removed for the same reason: ``sync_creatives`` takes an ``AccountIdentity``,
+# whose principal is a REQUIRED field, so "an identity with no principal" is not a value
+# the parameter can hold. The resolver refused an anonymous caller before the
+# implementation ran, and ``ruff-boundary.toml`` bans raising AUTH_MISSING or AUTH_INVALID
+# anywhere but there -- so this asserted a refusal this tool cannot mint, reached only
+# because ``identity.principal.principal_id`` raised AttributeError on the fabricated
+# value. Its oracle was ``error_code in {"AUTH_MISSING", "AUTH_INVALID"}``, which could not
+# tell the two apart either way.
+#
+# The obligation is graded where it is decided: ``_resolve_identity`` refuses a missing
+# credential for every tool and transport at once, and the transport-blind auth scenarios
+# assert the AUTH_MISSING wire envelope across a2a, mcp and rest.
 
 # (Deleted) TestAuthTenantRequired::test_no_tenant_raises_auth_error (UC-006-EXT-B-02),
 # which built ``make_identity(principal_id="test_principal", tenant=None)``.

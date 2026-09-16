@@ -20,7 +20,6 @@ import pytest
 from adcp.types import CreativeFilters, PaginationRequest
 from adcp.types.generated_poc.creative.list_creatives_request import Sort
 
-from src.core.exceptions import AdCPAuthenticationError
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -62,24 +61,29 @@ def _seed_tagged(tenant, principal, *, creative_id: str, name: str, tags: list[s
 # ---------------------------------------------------------------------------
 
 
-class TestListAuth:
-    """list_creatives requires authentication — creatives are principal-scoped."""
+# (Deleted) TestListAuth::test_no_principal_raises_auth_error (UC-006-EXT-A-01), which
+# built ``_make_identity(principal_id=None, ...)``. The remaining half of the pair below,
+# removed for the same reason: ``list_creatives`` is a PROTECTED tool whose
+# ``ResolvedIdentity`` declares principal required, so "an identity with no principal" is
+# not a value the parameter can hold. ``listing.py`` says so at the site the test reached
+# -- "The boundary refused an anonymous caller; the ResolvedIdentity carries the principal
+# by type" -- and the only way the assertion passed was
+# ``identity.principal.principal_id`` raising AttributeError on the fabricated value, which
+# is not an authentication rejection at all. Adding a guard there to make it a real one is
+# the defensive-code antipattern tests/CLAUDE.md names.
+#
+# The obligation is graded where the refusal is minted: ``_resolve_identity``, for every
+# tool and transport at once, with the AUTH_MISSING wire envelope asserted by the
+# transport-blind auth scenarios.
 
-    def test_no_principal_raises_auth_error(self, integration_db):
-        """Covers: UC-006-EXT-A-01 — principal_id=None → AdCPAuthenticationError."""
-        identity = _make_identity(principal_id=None, tenant={"tenant_id": "t1", "name": "T1"})
-        with CreativeListEnv() as env:
-            with pytest.raises(AdCPAuthenticationError):
-                env.call_impl(identity=identity)
-
-    # (Deleted) test_no_tenant_raises_auth_error (UC-006-EXT-B-01), which built
-    # ``_make_identity(principal_id="p1", tenant=None)``. ``list_creatives`` is a
-    # PROTECTED tool: its ``ResolvedIdentity`` declares both fields required, and the
-    # resolver refuses a tenant-less caller before the implementation runs -- with no
-    # tenant there is no principal lookup, so a presented credential resolves nothing and
-    # is AUTH_INVALID (``_resolve_identity`` step 4). The refusal is minted there and
-    # nowhere else, so the state this test set up cannot exist and the assertion could
-    # only ever have graded ``make_identity``.
+# (Deleted) test_no_tenant_raises_auth_error (UC-006-EXT-B-01), which built
+# ``_make_identity(principal_id="p1", tenant=None)``. ``list_creatives`` is a
+# PROTECTED tool: its ``ResolvedIdentity`` declares both fields required, and the
+# resolver refuses a tenant-less caller before the implementation runs -- with no
+# tenant there is no principal lookup, so a presented credential resolves nothing and
+# is AUTH_INVALID (``_resolve_identity`` step 4). The refusal is minted there and
+# nowhere else, so the state this test set up cannot exist and the assertion could
+# only ever have graded ``make_identity``.
 
 
 # ---------------------------------------------------------------------------

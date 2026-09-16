@@ -337,25 +337,29 @@ class TestErrorsAreNeverCached:
         from datetime import timedelta
 
         from src.core.database.repositories import MediaBuyUoW
-        from src.core.exceptions import AdCPSalesAgentError
-        from src.core.schemas import CreateMediaBuyError, Error
+        from src.core.exceptions import AdCPRateLimitError
+        from tests.helpers.envelope_assertions import raises_adcp
 
         idem_key = f"err-{uuid.uuid4().hex}"
 
         with MediaBuyCreateEnv() as env:
             _tenant, _principal, product, _pricing = env.setup_media_buy_data()
             adapter = env.mock["adapter"].return_value
-            adapter.create_media_buy.side_effect = None
-            adapter.create_media_buy.return_value = CreateMediaBuyError(
-                status="failed",
-                errors=[Error(code="SERVICE_UNAVAILABLE", message="adapter failure", recovery="terminal")],
-                context=None,
-            )
+            # An adapter fails by RAISING. It cannot fail by returning an error: the method
+            # is annotated ``-> AdapterCreateResult``, which is a plain success carrier
+            # (``media_buy_id: str`` required, ``extra="forbid"``) with no error member, so
+            # a returned ``CreateMediaBuyError`` is a shape no deployment can produce. This
+            # used to inject exactly that, and production's success-path log line then read
+            # ``.media_buy_id`` off it and raised AttributeError -- caught by the tool's
+            # catch-all and reported as an adapter failure, so the test passed while grading
+            # a defensive branch reacting to an impossible value.
+            adapter.create_media_buy.side_effect = AdCPRateLimitError(retry_after=30)
             now = datetime.now(UTC)
-            # The adapter error surfaces as a failed result or a raised AdCPSalesAgentError —
-            # either way the key must NOT be cached.
-            try:
-                result = env.call_impl(
+            # ONE outcome, pinned. This was a try/except that accepted either a failed
+            # result or a raised error as "both valid emission shapes" -- a When that cannot
+            # fail, so it could not have told us the injection was impossible.
+            with raises_adcp(AdCPRateLimitError):
+                env.call_impl(
                     brand={"domain": "err-test.example.com"},
                     packages=[
                         {"product_id": product.product_id, "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}
@@ -365,12 +369,6 @@ class TestErrorsAreNeverCached:
                     po_number="ERR-1",
                     idempotency_key=idem_key,
                 )
-                assert result.status == "failed"
-            except AdCPSalesAgentError:
-                # The adapter failure may surface as a raised typed error rather
-                # than a failed result — both are valid emission shapes here. The
-                # assertion that matters is below: no cache row exists either way.
-                pass
             tenant_id = env._tenant_id
             principal_id = env._principal_id
 
@@ -391,17 +389,18 @@ class TestErrorsAreNeverCached:
         What this pins: the error path RAISES and the same-key retry books a fresh
         buy. The rejection used to return a result carrying ``status="failed"``,
         which is why the boundary once inspected a returned status before caching;
-        that site raises ``AdCPAdapterError`` now, so "an error caches nothing"
-        holds because a raise never reaches the save. The complementary "no cache
+        an adapter can only raise now -- its method is annotated
+        ``-> AdapterCreateResult``, which has no error member -- so "an error caches
+        nothing" holds because a raise never reaches the save. The complementary "no cache
         row is written on error" invariant is pinned directly by
         ``test_adapter_rejection_not_cached`` — that is the oracle for a
         cache-the-error regression; this is the fresh-re-execution half.
         """
         from datetime import timedelta
 
-        from src.core.exceptions import AdCPAdapterError
-        from src.core.schemas import CreateMediaBuyError, Error
+        from src.core.exceptions import AdCPRateLimitError
         from src.core.schemas._base import CreateMediaBuySuccess
+        from tests.helpers.envelope_assertions import raises_adcp
 
         idem_key = f"err-retry-{uuid.uuid4().hex}"
         now = datetime.now(UTC)
@@ -422,17 +421,18 @@ class TestErrorsAreNeverCached:
 
             # First attempt: adapter rejects -> RAISES, nothing cached, no MediaBuy
             # backstop (the rejection raises before the persist).
-            adapter.create_media_buy.side_effect = None
-            adapter.create_media_buy.return_value = CreateMediaBuyError(
-                status="failed",
-                errors=[Error(code="SERVICE_UNAVAILABLE", message="adapter failure", recovery="terminal")],
-                context=None,
-            )
-            with pytest.raises(AdCPAdapterError):
+            #
+            # By raising, which is the only way an adapter can fail: the method is annotated
+            # ``-> AdapterCreateResult``, a plain success carrier with no error member, so
+            # the returned ``CreateMediaBuyError`` this used to inject was a shape no
+            # deployment produces. ``AdCPAdapterError`` was then reached only because
+            # production's success-path log line read ``.media_buy_id`` off it, raised
+            # AttributeError, and the tool's catch-all relabelled that as an adapter fault.
+            adapter.create_media_buy.side_effect = AdCPRateLimitError(retry_after=30)
+            with raises_adcp(AdCPRateLimitError):
                 env.call_impl(**dict(kwargs))
 
             # Restore the happy-path adapter and retry the SAME key + same payload.
-            adapter.create_media_buy.return_value = None
             adapter.create_media_buy.side_effect = adapter._original_create_side_effect
             second = env.call_impl(**dict(kwargs))
 

@@ -59,7 +59,6 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.schemas import (
-    CreateMediaBuyError,
     CreateMediaBuyRequest,
     CreateMediaBuyResult,
     CreateMediaBuySubmitted,
@@ -1672,21 +1671,32 @@ class TestExtensionObligations:
         boundary once inspected a returned status before caching; raising says the
         same thing through control flow.
         """
-        from src.core.exceptions import AdCPAdapterError
-        from src.core.schemas import Error
+        from src.core.database.repositories import MediaBuyUoW
+        from src.core.exceptions import AdCPRateLimitError
+        from tests.helpers.envelope_assertions import raises_adcp
 
         req = _make_request()
 
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data()
             env.setup_product_chain(tenant)
-            # Adapter returns an error envelope (not success).
-            env.mock["adapter"].return_value.create_media_buy.side_effect = None
-            env.mock["adapter"].return_value.create_media_buy.return_value = CreateMediaBuyError(
-                status="failed", errors=[Error(code="SERVICE_UNAVAILABLE", message="GAM API error")]
-            )
-            with pytest.raises(AdCPAdapterError):
+            # The adapter RAISES, which the docstring above already said and the injection
+            # below used to contradict: it set a RETURN of ``CreateMediaBuyError``, and
+            # ``create_media_buy`` is annotated ``-> AdapterCreateResult`` -- a plain success
+            # carrier (``media_buy_id: str`` required, ``extra="forbid"``) with no error
+            # member. No deployment produces that value. ``AdCPAdapterError`` was reached
+            # only because production's success-path log line read ``.media_buy_id`` off it
+            # and raised AttributeError, which the tool's catch-all relabelled as an adapter
+            # fault -- so this graded a defensive branch reacting to an impossible value.
+            env.mock["adapter"].return_value.create_media_buy.side_effect = AdCPRateLimitError(retry_after=30)
+            with raises_adcp(AdCPRateLimitError):
                 env.call_impl(req=req)
+            tenant_id = env._tenant_id
+
+        # The assertion this test is NAMED for, and did not make: it only checked that
+        # something raised, which is true of every rejection in the file.
+        with MediaBuyUoW(tenant_id) as uow:
+            assert uow.media_buys.list_all() == [], "an adapter failure must persist no media buy"
 
     def test_no_max_daily_spend_configured_check_skipped(self, integration_db):
         """No max_daily_package_spend -> daily spend check is skipped.
