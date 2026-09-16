@@ -360,12 +360,20 @@ services:
           # checks and, with them, the capability probe that SELECTS storyboards: the
           # A2A axis graded 25 storyboards where MCP graded 44. Behind this front the
           # scheme the card publishes is the scheme the origin speaks.
+          #
+          # It is in the healthcheck below, like the other three. It was the one alias
+          # this service owns that the healthcheck did not probe, so the front could be
+          # broken while the service reported healthy -- and the storyboard job then ran
+          # to completion with 30 checks reporting `<!doctype html>` from the MCP
+          # endpoint, which is what nginx serves when it cannot reach the upstream. A
+          # front that is not probed is a front whose failure arrives as someone else's
+          # mystery.
           - storyboard.adcp.test
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health",
+          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health",
         ]
       interval: 10s
       timeout: 5s
