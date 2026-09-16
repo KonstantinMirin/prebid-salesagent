@@ -30,11 +30,13 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 #: The count the ledger was created with. A bound, never a target — see
 #: ``test_the_ledger_never_grows``.
 #:
-#: 50, not the 48 a full box run measured. The box has ``ADCP_AUTH_TEST_MODE`` on, so the
-#: two cluster-I entries pass there and fail wherever it is off; CI found them. That is a
-#: baseline measured in one environment and applied to another, which is the mistake this
-#: number should not repeat: a ledger created from a single run is a floor on its contents.
-CEILING = 50
+#: 53, where a full box run measured 48. Both additions were mine to see and did not:
+#: cluster I (2) passes on the box because it has ``ADCP_AUTH_TEST_MODE`` on and fails
+#: wherever it is off, so a baseline measured in one environment does not transfer; and
+#: cluster J (3) I excluded by judgement as another PR's to fix, which conflated fixing
+#: with recording and left CI red for a reason no reader could find. A ledger created from
+#: a single run is a floor on its contents, and the number only falls from here.
+CEILING = 53
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -97,6 +99,10 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # Cluster I (salesagent-091d8) — production composition depends on a test flag
         "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve",
         "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints",
+        # Cluster J (GH #2189) — these re-run a BDD slice and grade their own subrun
+        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live",
+        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live",
+        "tests/integration/test_bdd_scenario_liveness_real_run.py::test_provenance_tag_is_a_recorded_field_not_a_collection_filter",
     }
 )
 

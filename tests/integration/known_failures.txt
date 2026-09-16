@@ -128,3 +128,18 @@ tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistr
 # admin reaches a fresh deployment before SSO exists. salesagent-091d8 asks it.
 tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve
 tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints
+
+# --- Cluster J (GH #2189) -----------------------------------------------------------
+# Owned by an OPEN PR, not by this epic. These three publish their own liveness artifact
+# by re-running a slice of the BDD suite, so they grade a 9-scenario subrun and then
+# assert against it -- which is the mechanism #2189 ("read what the run published instead
+# of re-running it") removes. Verified to reproduce locally and on CI alike.
+#
+# I first left them out of the ledger on the grounds that they are not this epic's to fix.
+# That conflated fixing with recording: a test red for a known, owned reason is exactly
+# what a ledger is for, and excluding them left CI red for a reason no reader could find.
+# They come out when #2189 lands, and its author does not need to touch this file --
+# strict xfail means they fail here the moment they start passing.
+tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc006_storyboard_scenarios_as_ledgered_or_live
+tests/integration/test_bdd_scenario_liveness_real_run.py::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live
+tests/integration/test_bdd_scenario_liveness_real_run.py::test_provenance_tag_is_a_recorded_field_not_a_collection_filter
