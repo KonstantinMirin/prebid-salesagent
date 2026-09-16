@@ -580,14 +580,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated (#1417/gh8p.10): duplicate product_id now raises AdCPValidationError
     # with a buyer-facing suggestion ("Each package must reference a distinct
     # product_id ..."), surfaced on the wire. T-UC-002-ext-e passes.
-    # FIXME: stale .feature expectation, NOT a production gap.
-    # Production correctly emits BUDGET_EXCEEDED for "daily budget exceeds cap"
-    # (AdCPBudgetExceededError; verified at wire on mcp/rest/a2a). v3.1 renamed the
-    # code BUDGET_TOO_LOW -> BUDGET_EXCEEDED for BR-RULE-012 "exceeds cap"
-    # (adcp-req .impl-coverage/BR-UC-002.yaml:1198); the generated .feature still
-    # asserts the pre-v3.1 BUDGET_TOO_LOW. Graduates once adcp-req is reconciled and
-    # BR-UC-002 is regenerated (#1417). Strict xfail; assertion unchanged.
-    "T-UC-002-ext-k": "generated .feature asserts pre-v3.1 BUDGET_TOO_LOW; production correctly emits BUDGET_EXCEEDED — stale spec, pending upstream regen",
+    # GRADUATED: T-UC-002-ext-k. Its entry said "stale .feature expectation, NOT a
+    # production gap ... Graduates once adcp-req is reconciled and BR-UC-002 is
+    # regenerated", which diagnosed it correctly and then waited on a regen instead of
+    # fixing it. tests/CLAUDE.md is explicit that a generated feature is EDITABLE and gets
+    # corrected in place, because "wait for an upstream regen" is not a plan -- there may
+    # never be one; a marker parked on that condition is permanent. The scenario now asserts
+    # BUDGET_EXCEEDED, which 3.1/enums/error-code.json distinguishes from BUDGET_TOO_LOW by
+    # direction in BUDGET_EXCEEDED's own description, and the diff is mirrored upstream.
     # FIXME(#1417): proposal-based create_media_buy is an unbuilt spec feature.
     # BR-UC-002-alt-proposal (status: active) + BR-UC-002-ext-l/ext-m define a full
     # proposal flow: resolve proposal_id, expiry check (PROPOSAL_EXPIRED), and
@@ -2015,19 +2015,19 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # boundary as VALIDATION_ERROR. The feature outcomes were reconciled to
         # match production and the scenarios now pass on a2a/mcp/rest.
         _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
-            # FIXME: daily spend cap error code mismatch
-            # Production raises plain ValueError → code="validation_error", no suggestion.
-            # Spec expects BUDGET_TOO_LOW with suggestion field.
-            (
-                "T-UC-002-partition-daily-spend-cap",
-                {"exceeds_cap"},
-                "daily spend cap returns validation_error, not BUDGET_TOO_LOW — spec-production gap",
-            ),
-            (
-                "T-UC-002-boundary-daily-spend-cap",
-                {"daily budget > cap"},
-                "daily spend cap returns validation_error, not BUDGET_TOO_LOW — spec-production gap",
-            ),
+            # GRADUATED: the two daily-spend-cap entries are gone. Their reason -- "production
+            # raises plain ValueError -> code=validation_error, no suggestion. Spec expects
+            # BUDGET_TOO_LOW with suggestion field" -- described a production that no longer
+            # exists: the raise sites are typed (AdCPBudgetExceededError for the daily cap,
+            # AdCPBudgetTooLowError for minimum spend) and the feature was reconciled to
+            # BUDGET_EXCEEDED, which is what the pin associates with a daily ceiling.
+            #
+            # They did not graduate on the strength of that alone. The scenarios also sat on
+            # the uc002-not-wired ENV_ROUTES catch-all, so nothing dispatched and the xpass
+            # this marker was supposed to expose could never occur -- 48 items, 48 xfailed,
+            # zero executed. Both markers came off together: the routing moved to the
+            # uc002-ext row and this pair was deleted, because removing either one alone
+            # leaves the scenarios exactly as dormant as before.
             # FIXME: creative error code mismatch
             # Production uses CREATIVES_NOT_FOUND / VALIDATION_ERROR / INVALID_CREATIVES,
             # spec expects CREATIVE_REJECTED. No max_creatives limit in production either.
@@ -5576,6 +5576,24 @@ ENV_ROUTES: list[EnvRoute] = [
                 or "T-UC-002-main" in m
                 or "nfr-highvalue" in m
                 or "T-UC-002-nfr-001-enforcement" in m
+                # The two daily-spend-cap outlines join for the same reason, and the same
+                # way. Their Givens need exactly this row's seed and nothing else: a tenant
+                # with the auto-seeded USD CurrencyLimit whose ``max_daily_package_spend``
+                # ``_set_daily_spend_cap`` mutates (it reads the row with ``.one()``, so the
+                # row has to exist), ``ctx["tenant"]`` to find it by, request defaults to put
+                # the package budget and flight dates on, and dispatch_mode="create" so the
+                # shared When dispatches what the Givens built.
+                #
+                # On the catch-all they dispatched nothing, and that concealed a live
+                # production defect for the whole life of the marker. The scenarios demand
+                # BUDGET_EXCEEDED on the wire and the Then asserts it through
+                # ``assert_wire_error``, so a run would have caught the buyer receiving
+                # INTERNAL_ERROR / transient / 500 instead — the failure builder raising while
+                # rendering a dict ``details``. Two markers covered them: this routing, and a
+                # narrower ``_UC002_VALIDATION_XFAIL`` entry whose reason ("production raises
+                # plain ValueError") had expired. Neither reason was the reason.
+                or "T-UC-002-partition-daily-spend-cap" in m
+                or "T-UC-002-boundary-daily-spend-cap" in m
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),

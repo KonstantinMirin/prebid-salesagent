@@ -420,7 +420,14 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
-    And the error code should be "BUDGET_TOO_LOW"
+    # BUDGET_EXCEEDED, not BUDGET_TOO_LOW. 3.1/enums/error-code.json separates them by
+    # DIRECTION and says so in BUDGET_EXCEEDED's own text: "Operation would exceed the
+    # allocated budget for the media buy or package. Distinct from BUDGET_EXHAUSTED
+    # (already spent) and BUDGET_TOO_LOW (below minimum)." 50000 over 2 days is 25000/day
+    # against a 1000/day ceiling — exceeding a maximum, not falling below a minimum. The
+    # scenario asserted BUDGET_TOO_LOW and was ledgered as a "spec-production gap pending
+    # upstream regen"; the pin agrees with production, so the scenario was the stale half.
+    And the error code should be "BUDGET_EXCEEDED"
     And the error recovery should be "correctable"
     And the error should include "suggestion" field
     # POST-F1: System state is unchanged on failure

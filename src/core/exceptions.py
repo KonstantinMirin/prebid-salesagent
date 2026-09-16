@@ -263,10 +263,21 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             )
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPSalesAgentError:
-        """Refuse to build an error whose code is absent, or doubly named.
+        """Refuse to build an error whose code is absent, doubly named, or details-shaped wrong.
 
         The invariant is: an error names a code, by its class OR explicitly. Both
         halves are refused here, so neither can be expressed.
+
+        The third refusal is ``details``. ``_details_to_wire`` calls ``details.to_wire()``
+        with no Mapping branch, on the stated ground that "mypy refuses one at the raise
+        site" -- true at every site that spells its detail type, and false at a site
+        annotated with a bare ``type[AdCPSalesAgentError]``, where ``DetailsT`` binds to
+        ``Any`` and ``Any`` accepts a dict. Two sites did, and the cost was not a wrong
+        details block: the renderer raised, INSIDE the boundary's own ``except Exception``,
+        so the raise went past the catch that would have wrapped it and a ``BUDGET_EXCEEDED``
+        / correctable / 422 reached the buyer as ``INTERNAL_ERROR`` / transient / 500.
+        Refusing here makes the mistake unconstructible instead of type-checked, which is
+        the same reason the two code refusals live here rather than in a scan.
 
         ``_code`` is annotation-only on the base, so ``hasattr`` is False here and
         True on every subclass that declares one. This is the check
@@ -286,6 +297,12 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             raise TypeError(f"{cls.__name__} already names a code; do not override it")
         if not has_class_code and not named:
             raise TypeError(f"{cls.__name__} declares no _code and none was named")
+        details = kwargs.get("details")
+        if details is not None and not isinstance(details, ErrorDetails):
+            raise TypeError(
+                f"{cls.__name__} was given details of type {type(details).__name__}; "
+                f"details must be an ErrorDetails subclass (see src/core/errors/details.py)"
+            )
         return cast("AdCPSalesAgentError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
@@ -1083,8 +1100,14 @@ class AdCPBulkUpdateError(AdCPAdapterError):
     (previously broadstreet raised 502, GAM raised 503 for the same semantic
     event). Carries the PARTIAL_FAILURE taxonomy as the class
     identity; per-operation detail (failed IDs, counts) belongs in ``details``
-    as data. Recovery=transient (inherited): failed operations may succeed
-    on retry.
+    as data.
+
+    Recovery is CORRECTABLE, from ``CODE_TABLE[PARTIAL_FAILURE]``. This said
+    "transient (inherited)" — byte-identical to main, where it was true — and both
+    halves expired here: the value is correctable, and there is no class-level
+    recovery knob left to inherit one from. ``recovery`` is a read-only property
+    resolved from the table at every read, so no class states it and this sentence
+    reports it rather than declaring it.
     """
 
     _code: ClassVar[ErrorCodeT] = AppErrorCode.PARTIAL_FAILURE
@@ -1112,11 +1135,20 @@ class AdCPGamUpdateError(AdCPAdapterError):
 
 
 class AdCPMediaBuyRejectedError(AdCPSalesAgentError[RejectionReasonDetails]):
-    """The seller declined the media buy (422 → POLICY_VIOLATION).
+    """The seller declined the media buy (MEDIA_BUY_REJECTED, 422, terminal).
 
-    A business rejection, not a server failure: recovery=correctable so the
-    buyer can adjust the request and resubmit. Carries the MEDIA_BUY_REJECTED
-    taxonomy as the class identity; the wire code is the standard POLICY_VIOLATION.
+    A business rejection rather than a server failure, and the buyer cannot make this
+    request succeed by correcting it — the seller declined, so recovery is TERMINAL.
+
+    All three of those were wrong here, in one sentence each: the docstring said
+    "422 → POLICY_VIOLATION", "recovery=correctable", and "the wire code is the standard
+    POLICY_VIOLATION". Every one was true on main, where ``ERROR_CODE_MAPPING`` collapsed
+    MEDIA_BUY_REJECTED to POLICY_VIOLATION. This change deletes that collapse: the class's
+    own ``_code`` IS the wire code, and ``recovery`` is a read-only property over
+    ``CODE_TABLE``, which answers terminal. Nothing reads a docstring, so none of this
+    misrouted a response — but with the class-level recovery knob gone, these sentences are
+    the only per-class statement of a raise site's recovery contract in ``src/``, and a
+    reader picking a class for a new raise site reads them.
     """
 
     _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED

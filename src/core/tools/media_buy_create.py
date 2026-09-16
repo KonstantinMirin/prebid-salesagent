@@ -2493,6 +2493,8 @@ async def _create_media_buy_impl(
                                             trailer="for products in this package",
                                         ),
                                         exc_type=AdCPBudgetTooLowError,
+                                        requested_budget=package_budget,
+                                        budget_limit=package_min_spend,
                                     )
                     else:
                         # Legacy mode: single total_budget for all products
@@ -2510,6 +2512,8 @@ async def _create_media_buy_impl(
                                     trailer="for the selected products",
                                 ),
                                 exc_type=AdCPBudgetTooLowError,
+                                requested_budget=budget_decimal,
+                                budget_limit=required_min_spend,
                             )
 
             # Validate maximum daily spend per package (if set)
@@ -2542,6 +2546,8 @@ async def _create_media_buy_impl(
                                 ),
                             ),
                             exc_type=AdCPBudgetExceededError,
+                            requested_budget=package_budget,
+                            budget_limit=Decimal(str(currency_limit.max_daily_package_spend)),
                         )
                 else:
                     # Legacy mode: validate total budget
@@ -2556,6 +2562,8 @@ async def _create_media_buy_impl(
                             trailer="This protects against accidental large budgets.",
                         ),
                         exc_type=AdCPBudgetExceededError,
+                        requested_budget=Decimal(str(total_budget)),
+                        budget_limit=Decimal(str(currency_limit.max_daily_package_spend)),
                     )
 
         # Validate targeting doesn't use managed-only dimensions (targeting_overlay is at package level per AdCP spec)

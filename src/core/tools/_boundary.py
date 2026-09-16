@@ -60,7 +60,8 @@ from typing import Any, NoReturn
 from adcp.types import ContextObject
 from pydantic import ValidationError
 
-from src.core.exceptions import AdcpFailure, adcp_error_for
+from src.core.errors.codes import AppErrorCode
+from src.core.exceptions import AdcpFailure, AdCPSalesAgentError, adcp_error_for
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import PublicIdentity, TransportProtocol
@@ -180,9 +181,36 @@ def failure_response(
     answer to what broke. ``adcp_error_for`` types it -- an untyped ValueError is a
     VALIDATION_ERROR, a PermissionError a PERMISSION_DENIED, anything else an INTERNAL_ERROR --
     and that answer does not depend on which transport is asking.
+
+    IT IS TOTAL, and that is structural rather than defensive. ``_failed`` calls it from
+    inside the boundary's own ``except Exception`` blocks, and Python raises an exception
+    thrown in a handler to that handler's CALLER -- so a raise here is already past the catch
+    that would have wrapped it, leaves ``serve`` as something no transport's
+    ``except AdcpFailure`` sees, and is answered by three catch-alls that hold neither the
+    identity nor the echo. Two of those catch-alls document a case this is not
+    (``main.py``: "A tool's own failure never reaches here"). One reachable instance of this
+    existed -- a dict ``details`` reaching ``details.to_wire()`` -- and it is now
+    unconstructible; this block is what makes the CLASS of bug non-fatal rather than that one
+    member of it, because the one function whose job is to make a failure expressible is the
+    one function whose own failure this system has no vocabulary for.
+
+    The fallback keeps the outcome and drops only the detail: still an error envelope, still
+    stamped by ``_served``, and INTERNAL_ERROR is the honest code for "the seller could not
+    render its own refusal". The secondary failure is logged with its traceback, because a
+    buyer who is told INTERNAL_ERROR when the record says BUDGET_EXCEEDED is the worst
+    diagnostic state available and the log is the only place that disagreement is visible.
     """
     record_boundary_error(protocol, operation, exc, identity=identity)
-    return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc)))
+    try:
+        return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc)))
+    except Exception:
+        logger.exception(
+            "Failure builder could not render %s for %s on %s; answering INTERNAL_ERROR instead",
+            type(exc).__name__,
+            operation,
+            protocol.value,
+        )
+        return _served(echo, AdcpErrorResponse.of(AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)))
 
 
 def _failed(

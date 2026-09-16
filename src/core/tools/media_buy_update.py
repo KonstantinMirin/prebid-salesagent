@@ -656,6 +656,8 @@ def _update_media_buy_impl(
                                 raise_if_validation_failed(
                                     package_daily_spend_error,
                                     exc_type=AdCPBudgetExceededError,
+                                    requested_budget=Decimal(str(pkg_budget_amount)),
+                                    budget_limit=currency_limit.max_daily_package_spend,
                                 )
 
             # Handle campaign-level updates
@@ -789,6 +791,8 @@ def _update_media_buy_impl(
                             raise_if_validation_failed(
                                 package_min_budget_error,
                                 exc_type=AdCPBudgetTooLowError,
+                                requested_budget=Decimal(str(budget_amount)),
+                                budget_limit=Decimal(str(_cl.min_package_budget)),
                             )
 
                         # The package must exist in the media buy before we hand the

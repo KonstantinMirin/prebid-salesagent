@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, NoReturn
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from adcp.exceptions import ADCPError
-
     from src.adapters import AdServerAdapter
     from src.core.database.models import Tenant as DBTenant
     from src.core.resolved_identity import ResolvedIdentity
@@ -37,69 +35,15 @@ logger = logging.getLogger(__name__)
 # (``src.core.utils.operator_mcp.call_operator_mcp_tool``), so nothing
 # constructs one any more. Keeping a second, unreachable way to build agent
 # auth would be the duplication the CLAUDE.md DRY invariant forbids.
-# ``raise_mapped_adcp_error`` below is NOT part of that removal: the registries
-# still catch the SDK's own ``ADCPError`` and delegate the mapping here.
-
-
-def raise_mapped_adcp_error(exc: ADCPError, *, agent_label: str, logger: logging.Logger) -> NoReturn:
-    """Translate an adcp SDK exception into the internal typed AdCPSalesAgentError taxonomy.
-
-    Shared by CreativeAgentRegistry and SignalsAgentRegistry so the SDK-to-internal
-    error mapping — and its recovery classification — has a single home: an
-    authentication failure surfaces as terminal (the caller must fix credentials),
-    a timeout or connection failure surfaces as a transient service outage (a retry
-    may succeed), and any other AdCP error maps to a generic adapter failure.
-
-    Always raises; the ``NoReturn`` annotation lets callers delegate from a single
-    ``except ADCPError`` branch without a trailing ``raise``.
-
-    ``exc.message`` is THIRD-PARTY free text and never reaches the wire: the SDK
-    builds e.g. ``ADCPConnectionError`` as ``f"Failed to connect: {last_error}"``
-    over a raw httpx error (adcp/protocols/mcp.py, a2a.py), which routinely
-    carries host:port and resolver detail. AdCP 3.1.1 transport-errors.mdx
-    § Security Considerations forbids that on a buyer-facing message, so the
-    buyer gets the stable first-party sentence from the mapping table below and
-    the SDK exception goes to ``internal_detail`` (logged, not serialized).
-    """
-    from adcp.exceptions import ADCPAuthenticationError, ADCPConnectionError, ADCPTimeoutError
-
-    from src.core.exceptions import (
-        AdCPAdapterError,
-        AdCPAuthenticationError,
-        AdCPSalesAgentError,
-        AdCPServiceUnavailableError,
-    )
-
-    # (SDK exception, internal class, buyer-facing sentence + log label). One
-    # table + one raise, rather than four copies of "log raw / raise typed"
-    # differing only in the label and the class (CLAUDE.md DRY invariant).
-    mapping: tuple[tuple[type[Exception], type[AdCPSalesAgentError], str], ...] = (  # (sdk, internal, mode label)
-        (ADCPAuthenticationError, AdCPAuthenticationError, "Authentication failed"),
-        (ADCPTimeoutError, AdCPServiceUnavailableError, "Request timed out"),
-        (ADCPConnectionError, AdCPServiceUnavailableError, "Connection failed"),
-    )
-    error_class: type[AdCPSalesAgentError] = AdCPAdapterError
-    # ONE CODE, MANY SENTENCES — resolved as an ACCEPTED MERGE, recorded not defaulted.
-    # ADCPTimeoutError and ADCPConnectionError both map to AdCPServiceUnavailableError,
-    # and they used to carry different buyer sentences ("Request timed out" /
-    # "Connection failed"). Both are SERVICE_UNAVAILABLE/transient on the wire and the
-    # buyer's action is identical (retry), so the distinction is diagnostic rather than
-    # buyer-actionable: the two now share the code's table sentence, and the mode is
-    # preserved under ``details`` so nothing is lost. A mode that ever needs its OWN
-    # buyer sentence needs its own AppErrorCode, not a message argument.
-    failure_mode = "AdCP agent request failed"
-    for sdk_class, internal_class, mode_label in mapping:
-        if isinstance(exc, sdk_class):
-            error_class, failure_mode = internal_class, mode_label
-            break
-
-    logger.error("%s for %s: %s", failure_mode, agent_label, exc.message)
-    # The mode is an operator label, i.e. prose — it belongs in the log, not in
-    # details. Four lines above, this file's own comment says a mode needing its own
-    # buyer sentence needs its own AppErrorCode, "not a message argument"; parking
-    # the sentence in details would be the same thing by another route. The SDK
-    # exception itself is the cause, logged with its traceback by the boundary.
-    raise error_class(details={"agent": agent_label}, internal_detail=exc) from exc
+#
+# ``raise_mapped_adcp_error`` went with them, one release late. This comment used to
+# exempt it -- "the registries still catch the SDK's own ADCPError and delegate the
+# mapping here" -- and that was false in three places at once: neither registry catches
+# ``ADCPError`` or imports this module, the function's own docstring named two callers that
+# did not exist, and ``outbound_error_mapping.py`` already described it as deleted while it
+# was still here. ``raise_mapped_outbound_error`` is what the registries actually call
+# (``creative_agent_registry.py:525``). It was also the second of the two raise sites
+# passing a plain dict as ``details``, which no longer constructs.
 
 
 def _resolve_tenant_id_and_fallback_adapter(tenant: TenantLike) -> tuple[str, str]:

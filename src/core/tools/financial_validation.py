@@ -5,17 +5,23 @@ values and returns validation results so create/update paths can share
 the same policy checks without duplicating comparison logic.
 """
 
+import logging
 from decimal import Decimal
 
-from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
+from src.core.errors.details import BudgetDetails
+from src.core.exceptions import AdCPSalesAgentError
+
+logger = logging.getLogger(__name__)
 
 
 def raise_if_validation_failed(
     reason: str | None,
     *,
-    exc_type: type[AdCPSalesAgentError] = AdCPValidationError,
+    exc_type: type[AdCPSalesAgentError[BudgetDetails]],
+    requested_budget: Decimal,
+    budget_limit: Decimal,
 ) -> None:
-    """Raise ``exc_type`` when ``reason`` is non-empty.
+    """Raise ``exc_type`` with the two numbers that decided it, when ``reason`` is non-empty.
 
     Shared one-liner so the budget ``validate_*`` call sites in the create and
     update media-buy paths express their failure path uniformly. Each site
@@ -23,12 +29,25 @@ def raise_if_validation_failed(
     minimum-spend shortfalls, ``AdCPBudgetExceededError`` for daily-spend
     ceilings — so the wire code reflects the failure kind.
 
-    ``reason`` is the validator's first-party diagnostic, not wire text: the
-    buyer-facing sentence comes from the code's table entry, and the diagnostic
-    travels under ``details`` where it is machine-readable.
+    ``exc_type`` is PARAMETERIZED, and that is the point of this signature. It was
+    ``type[AdCPSalesAgentError]`` with a default, which binds ``DetailsT`` to ``Any``, and
+    ``Any`` accepted the ``details={"reason": reason}`` this used to raise. A dict has no
+    ``to_wire``, so the boundary's failure builder raised while rendering the envelope —
+    inside the ``except Exception`` that would have wrapped it — and a BUDGET_EXCEEDED /
+    correctable / 422 reached the buyer as INTERNAL_ERROR / transient / 500, telling them to
+    retry a request that can never succeed. The default went with it: all six call sites
+    name their class, and a default that types as ``Any`` is how the hole stayed open.
+
+    ``reason`` is the validator's first-party diagnostic and is LOGGED, not carried. It is an
+    authored sentence naming which of several limits was hit, and an authored sentence has no
+    slot: buyer-facing text comes from ``CODE_TABLE`` via the read-only ``message`` property,
+    and ``internal_detail`` takes an exception rather than a string. The two numbers are the
+    machine-readable half, and ``BudgetDetails`` is where they already go — the GAM adapter
+    fills the same class.
     """
     if reason:
-        raise exc_type(details={"reason": reason})
+        logger.warning("Budget validation refused the request: %s", reason)
+        raise exc_type(details=BudgetDetails(requested_budget=str(requested_budget), budget_limit=str(budget_limit)))
 
 
 def validate_budget_positive(
