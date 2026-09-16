@@ -24,6 +24,7 @@ the properties doing the reading are pinned shrink-only by
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -108,20 +109,24 @@ def _matches(proc: subprocess.CompletedProcess[str]) -> list[dict]:
 
 
 @pytest.fixture
-def planted() -> Iterator[Path]:
-    """A directory under ``src/`` the cases write probe modules into.
+def planted(request: pytest.FixtureRequest) -> Iterator[Path]:
+    """A directory under ``src/`` this ONE case writes its probe modules into.
 
     Under ``src/`` deliberately: the rule is scoped ``files: ["src/**/*.py"]``, so a probe
     written to a pytest tmp_path would sit outside that glob and prove nothing about a
     production read — the scan would report clean whether the rule worked or not. Cleaned
     explicitly on teardown, since it cannot live under tmp_path.
+
+    Named after the requesting test, because the cases run on different xdist workers and
+    a directory shared between them is not a fixture but a race: one worker's teardown
+    deletes the probe another worker is mid-scan on, and removes the directory under it.
+    ``mkdir()`` refuses an existing directory rather than adopting it, so a leftover from
+    a killed run is loud instead of silently shared.
     """
-    target = repo_root() / "src" / "_ast_grep_probe"
-    target.mkdir(exist_ok=True)
+    target = repo_root() / "src" / f"_ast_grep_probe_{request.node.name}"
+    target.mkdir()
     yield target
-    for child in target.iterdir():
-        child.unlink()
-    target.rmdir()
+    shutil.rmtree(target)
 
 
 def test_a_production_read_of_the_flag_matches(planted: Path) -> None:
@@ -179,35 +184,9 @@ def test_the_config_exemption_is_live_not_prose() -> None:
     assert proc.returncode == 0
 
 
-def _tracked_production_modules() -> list[str]:
-    """Every ``.py`` file under ``src/`` that git tracks.
-
-    Case (e)'s subject is the COMMITTED tree, so it asks git rather than scanning the
-    working directory. Scanning ``src/`` outright made the case sensitive to any stray
-    local file — including the probe cases (a)-(c) plant under ``src/_ast_grep_probe/``,
-    which on a serial run is cleaned up before this case sees it and under xdist is not:
-    the probe lands on one worker while this case scans on another, and the guard fails
-    on its own fixture. A file nothing tracks is by definition not a production path.
-    """
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "src/"],
-        capture_output=True,
-        text=True,
-        cwd=repo_root(),
-        check=True,
-    )
-    modules = [p for p in listed.stdout.split("\0") if p.endswith(".py")]
-    assert modules, "git tracks no .py files under src/, so this case has no subject"
-    return modules
-
-
-def test_the_tree_is_clean_under_the_rule() -> None:
-    """(e) THE LIVE TREE — no production file outside the exemption reads the flag."""
-    proc = _scan(*_tracked_production_modules())
-
-    assert _matches(proc) == [], (
-        "a production path reads adcp_testing. Give the behavior a real input a deployment "
-        "can set (a tenant column, an AdapterConfig row, a settings field) and let the test "
-        "seed it — CLAUDE.md pattern 11."
-    )
-    assert proc.returncode == 0
+# There is no case scanning the live tree here. `make quality-ci` line 29 IS that scan
+# (`uv run ast-grep scan --config sgconfig.yml`), it covers every rule at once, and it
+# fails the build — so a pytest case re-running it over `src/` graded nothing the gate
+# did not already grade, and it collided with this module's own probe: cases (a)-(c)
+# plant a violating module under `src/_ast_grep_probe/`, which a serial run cleans up
+# before the tree scan reads it and an xdist run does not.
