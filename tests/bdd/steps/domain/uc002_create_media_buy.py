@@ -966,7 +966,15 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
     4. For full create scenarios: the response has a media_buy_id (success)
     """
     domain = _extract_validation_domain(outcome)
-    assert "error" not in ctx, f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}"
+    # The ENVELOPE, not just str(error). ``ctx["error"]`` is the carrier the transport raised,
+    # and on a wire transport its repr is "wire error VALIDATION_ERROR" and nothing more -- no
+    # field, no details, no issues. A row of this outline failed on e2e_rest and passed on the
+    # other three, and that message named the code while withholding every value that would
+    # say WHICH validation, so the cause could not be read off a CI log at all.
+    assert "error" not in ctx, (
+        f"Expected '{domain}' validation to pass but got error: {ctx.get('error')}\n"
+        f"wire envelope: {ctx.get('wire_error_envelope')}"
+    )
     resp = require_payload(ctx)
     if isinstance(resp, str):
         assert len(resp) > 0, f"Expected non-empty account_id for '{domain}' validation pass, got empty string"
