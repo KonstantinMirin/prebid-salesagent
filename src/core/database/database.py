@@ -24,15 +24,15 @@ def init_db(exit_on_error=False):
         exit_on_error: If True, exit process on migration error. If False, raise exception.
                       Default False for test compatibility.
     """
-    testing = get_settings().testing
-    if not testing.skip_migrations:
+    provisioning = get_settings().provisioning
+    if not provisioning.skip_migrations:
         # Run migrations first - this creates all tables
         print("Applying database migrations...")
         run_migrations(exit_on_error=exit_on_error)
 
     # A demo tenant is a fully configured tenant with the mock adapter; production
     # deployments start blank.
-    create_demo_tenant = testing.create_demo_tenant
+    create_demo_tenant = provisioning.create_demo_tenant
 
     # Check if we need to create a default tenant
     with get_db_session() as db_session:
@@ -139,7 +139,7 @@ def init_db(exit_on_error=False):
                 db_session.add(auth_config)
 
             # Only create additional sample advertisers if this is a development environment
-            if create_demo_tenant and testing.create_sample_data:
+            if create_demo_tenant and provisioning.create_sample_data:
                 principals_data = [
                     {
                         "principal_id": "acme_corp",
@@ -228,7 +228,7 @@ def init_db(exit_on_error=False):
 
         # Create sample products if CREATE_SAMPLE_DATA is set and products don't exist
         # This runs regardless of whether tenant was just created or already existed
-        if testing.create_sample_data:
+        if provisioning.create_sample_data:
             # Check if products already exist
             stmt_products = select(func.count()).select_from(Product).where(Product.tenant_id == "default")
             existing_products_count = db_session.scalar(stmt_products)
