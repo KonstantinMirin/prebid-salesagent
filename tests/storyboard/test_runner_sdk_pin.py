@@ -51,8 +51,8 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #: protocol surfaces therefore requires the 14 line, and the 14 line declares 3.2.0-rc.1.
 #:
 #: That a grader accepts ``--compliance-version`` without honouring it as the client contract
-#: is a defect in the grader, raised upstream. Retire this pin when the runner either declares
-#: 3.1.1 or separates the two.
+#: is a defect in the grader, raised upstream as adcontextprotocol/adcp-client#2950. Retire
+#: this pin when the runner either declares 3.1.1 or separates the two.
 _ACCEPTED_DIVERGENCE = ("14.0.0-rc.35", "3.2.0-rc.1", "3.1.1")
 
 
