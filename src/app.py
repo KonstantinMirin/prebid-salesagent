@@ -31,6 +31,7 @@ from src.a2a_server.adcp_a2a_server import (
     create_agent_card,
     restore_a2a_integer_types,
 )
+from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import AuthChallengeResponder
@@ -43,6 +44,7 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import TransportProtocol
+from src.core.signing.capture import SignedExchangeCapture
 from src.core.tools._boundary import failure_response
 from src.core.tools._wire import to_wire
 from src.landing import generate_tenant_landing_page
@@ -358,6 +360,9 @@ _request_handler = AdCPRequestHandler()
 _a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
+    # The SDK's default builder, plus the captured HTTP message an RFC 9421 signature covers
+    # — see src/a2a_server/context_builder.py. It carries a value; it decides nothing.
+    context_builder=AdCPCallContextBuilder(),
 )
 # Rebuild each route with an integer-restoring wrapper around its endpoint --
 # mutating route.endpoint in place would not change dispatch, since Starlette
@@ -611,10 +616,18 @@ if settings.debug_routes_enabled:
 # Middleware stack (via add_middleware — outermost = last registered):
 #   1. AuthChallengeResponder (outermost — renders EVERY transport's 401)
 #   2. CORSMiddleware (adds CORS headers to all responses)
+#   3. SignedExchangeCapture (innermost — records the message, decides nothing)
 #
 # No auth middleware. Each transport hands the request headers to the boundary, and the
-# resolver behind it is the one reader of a credential.
+# resolver behind it is the one reader of a credential — the bearer AND the RFC 9421
+# signature. The capture below is not an exception to that: it reads no credential and
+# refuses nothing. It exists because a signature covers things the boundary cannot rebuild
+# (the exact bytes, and ``@target-uri`` from ``raw_path``), so they have to be recorded where
+# they still exist. INNERMOST, so that nothing between it and the app can rewrite the body it
+# recorded a digest-able copy of.
 # ---------------------------------------------------------------------------
+
+app.add_middleware(SignedExchangeCapture)
 
 app.add_middleware(
     CORSMiddleware,

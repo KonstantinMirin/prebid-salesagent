@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, InstanceOf
 
 from src.core.schemas import Principal
 from src.core.schemas.account import Account
+from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)
@@ -171,6 +172,61 @@ def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
     return None
 
 
+def _carries_signature(subject: SignatureSubject | None) -> bool:
+    """Whether this request presented an RFC 9421 signature at all.
+
+    Read off the CAPTURED header list rather than the collapsed mapping this function is
+    handed, so that this test and the checklist's own see the same bytes — one definition,
+    on the capture (:meth:`~src.core.signing.capture.HttpExchange.presents_signature`).
+    """
+    exchange: HttpExchange | None = subject.exchange if subject is not None else None
+    return exchange is not None and exchange.presents_signature()
+
+
+def _signature_credential(
+    subject: SignatureSubject | None,
+    *,
+    headers: Mapping[str, str],
+    tenant: TenantContext | None,
+    principal: Principal | None,
+) -> Principal | None:
+    """Read the request's RFC 9421 signature, and return the caller after it.
+
+    The caller *principal* unchanged when the request presented no signature or already
+    resolved one from its bearer; the principal the signature ESTABLISHES when it did not.
+    Raises ``AdCPRequestSignatureError`` when the verifier refuses.
+
+    A verified signature establishes exactly one fact — "the request was issued by the agent
+    whose ``jwks_uri`` contains the ``keyid``" (security.mdx @ v3.1.1 § Agent identity) — and
+    names that agent by the ``agents[]`` entry the verifier already used to fetch the JWKS. It
+    is a publication coordinate the verifier controlled end to end, never a buyer-asserted
+    field, so looking a principal up by it is exactly as sound as looking one up by a token
+    hash.
+
+    ONLY when the bearer resolved none. A request carrying both credentials is answered on
+    its bearer, so a signature can never silently re-identify an authenticated caller as
+    somebody else.
+    """
+    from src.core.auth_utils import get_principal_by_agent_url
+    from src.core.signing.verifier import verify_inbound_signature
+
+    if subject is None:
+        return principal
+    signer = verify_inbound_signature(subject, headers=headers, tenant=tenant, principal=principal)
+    if principal is not None or signer is None or not signer.agent_url or tenant is None:
+        return principal
+
+    established = get_principal_by_agent_url(signer.agent_url, tenant.tenant_id)
+    if established is None:
+        logger.warning(
+            "A request signature verified for agent_url %r but tenant %r has no principal "
+            "onboarded at it, so the caller stays anonymous",
+            signer.agent_url,
+            tenant.tenant_id,
+        )
+    return established
+
+
 def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     """The tenant_id this request names, by four header strategies. NO row is loaded.
 
@@ -241,6 +297,7 @@ def _resolve_identity(
     require_valid_token: Literal[True],
     account_ref: AccountReference | None = None,
     credential_required_for: Callable[[TenantContext], bool] | None = None,
+    signature_subject: SignatureSubject | None = None,
 ) -> ResolvedIdentity: ...
 
 
@@ -251,6 +308,7 @@ def _resolve_identity(
     require_valid_token: Literal[False],
     account_ref: AccountReference | None = None,
     credential_required_for: Callable[[TenantContext], bool] | None = None,
+    signature_subject: SignatureSubject | None = None,
 ) -> PublicIdentity: ...
 
 
@@ -261,6 +319,7 @@ def _resolve_identity(
     require_valid_token: bool,
     account_ref: AccountReference | None = None,
     credential_required_for: Callable[[TenantContext], bool] | None = None,
+    signature_subject: SignatureSubject | None = None,
 ) -> ResolvedIdentity | PublicIdentity: ...
 
 
@@ -270,6 +329,7 @@ def _resolve_identity(
     require_valid_token: bool,
     account_ref: AccountReference | None = None,
     credential_required_for: Callable[[TenantContext], bool] | None = None,
+    signature_subject: SignatureSubject | None = None,
 ) -> ResolvedIdentity | PublicIdentity:
     """Resolve identity from request headers. PRIVATE to the boundary.
 
@@ -300,8 +360,17 @@ def _resolve_identity(
     at lint time rather than by convention.
 
     It reads the headers ONCE and does everything identity-shaped: the Bearer value, the
-    tenant, and the principal. No parameter accepts a pre-parsed token, so a second reader
-    of the headers has nothing to feed into this one.
+    RFC 9421 signature, the tenant, and the principal. No parameter accepts a pre-parsed
+    token, so a second reader of the headers has nothing to feed into this one.
+
+    TWO KINDS OF CREDENTIAL, ONE READER. A signature is a credential, so it is read here
+    and nowhere else — #1291's verifier used to be a fourth ASGI middleware that read the
+    ``Signature`` headers, resolved its own tenant and its own principal, and SENT its own
+    401, which is precisely what "no middleware decides auth" forbids. What made that shape
+    necessary was that no single place held the tenant, the caller and the request's name at
+    once; this function is that place, so the verifier becomes a call it makes
+    (:func:`src.core.signing.verifier.verify_inbound_signature`) with what it has already
+    resolved. The duplicated tenant lookup that shape needed is deleted, not ported.
 
     Args:
         headers: The request headers, as the transport's framework exposes them.
@@ -309,6 +378,10 @@ def _resolve_identity(
             If True, a missing credential raises. If False, a missing credential resolves
             anonymously (discovery). A PRESENTED credential that does not resolve raises
             either way.
+        signature_subject: What the boundary knows about the request that the signature
+            covers — the operation, whether the payload registers webhook credentials, and
+            the captured HTTP message. ``None`` means no transport captured one, which the
+            verifier reads as "this request presented no signature", because it did not.
 
     Returns:
         ResolvedIdentity with all fields resolved
@@ -318,6 +391,10 @@ def _resolve_identity(
             (AUTH_MISSING).
         AdCPAuthenticationError: A credential was presented and did not resolve
             (AUTH_INVALID), on every row: the pinned enum's MUST names no task.
+        AdCPRequestSignatureError: A signature was required, malformed or refused. It
+            carries the SPECIFIC taxonomy code, which survives into the envelope and is what
+            ``AuthChallengeResponder`` reads to write ``WWW-Authenticate: Signature
+            error="<code>"`` — graded byte-for-byte by the pinned compliance vectors.
 
     POSTCONDITION, relied on by every caller: when ``require_valid_token`` is True this
     either returns an identity with a resolved ``principal_id`` or raises. Callers do not
@@ -327,11 +404,16 @@ def _resolve_identity(
     Both errors are typed only. Rendering them as HTTP -- 401 and a ``WWW-Authenticate``
     challenge -- is the transport's job, in its own framework's terms.
     """
-    # Import here to avoid circular dependency (auth_utils imports from database)
+    # Import here to avoid a circular dependency: it reaches the database, which reaches the
+    # helpers package, which imports this module for ``PublicIdentity``.
     from src.core.auth_utils import get_principal_from_token
 
     # Step 1: the Bearer value, parsed here and nowhere else.
     auth_token = _extract_auth_token(headers)
+    # ...and whether the OTHER kind of credential is present. A signature that resolves to a
+    # counterparty establishes that principal (step 4b), so an absent bearer is not yet an
+    # absent credential and step 2 must not refuse on it alone.
+    presented_signature = _carries_signature(signature_subject)
 
     # Step 2: NO credential presented, on a surface that requires one.
     #
@@ -350,12 +432,16 @@ def _resolve_identity(
     # still resolves anonymously.
     #
     # This function raises TYPED errors and knows nothing about HTTP. Turning AUTH_MISSING
-    # into a 401 with a challenge is each transport's own job, done with its framework's
-    # mechanism -- see the REST exception handler, the A2A route wrapper and the MCP
-    # pre-dispatch gate. An earlier attempt had this function reach forward to the ASGI
-    # response instead; it could not work, because MCP sends its response status before the
-    # tool is ever dispatched.
-    if require_valid_token and not auth_token:
+    # into a 401 with a challenge is ``AuthChallengeResponder``'s job, done on a finished
+    # body. An earlier attempt had this function reach forward to the ASGI response instead;
+    # it could not work, because MCP sends its response status before the tool is dispatched.
+    #
+    # ``not presented_signature`` is the amendment #1291 makes to this check, and it is the
+    # whole of it: a signed request HAS presented a credential, so refusing it here for a
+    # missing bearer would answer AUTH_MISSING to a caller that presented one. The signature
+    # is read below, once the tenant is loaded, and either establishes a principal or refuses
+    # with its own code.
+    if require_valid_token and not auth_token and not presented_signature:
         from src.core.exceptions import AdCPAuthRequiredError
 
         raise AdCPAuthRequiredError()
@@ -372,7 +458,7 @@ def _resolve_identity(
     # is loaded; the answer is the same AUTH_MISSING the row-level check mints above.
     if not require_valid_token and tenant is not None and credential_required_for is not None:
         require_valid_token = credential_required_for(tenant)
-        if require_valid_token and not auth_token:
+        if require_valid_token and not auth_token and not presented_signature:
             from src.core.exceptions import AdCPAuthRequiredError
 
             raise AdCPAuthRequiredError()
@@ -396,14 +482,32 @@ def _resolve_identity(
 
         raise AdCPAuthenticationError()
 
+    # Step 4b: the OTHER credential. Placed here, after step 4, because both of its inputs are
+    # now resolved and neither was available to the ASGI middleware this replaces: the tenant
+    # row carries the posture to enforce, and whether a principal resolved is the third term
+    # of the composition rule's three-way AND ("...AND the caller presents no other credential
+    # the verifier accepts", security.mdx @ v3.1.1 :1224).
+    #
+    # AFTER the AUTH_INVALID check above, deliberately. A bearer that was presented and
+    # rejected is terminal on its own; verifying a signature for such a caller would let a
+    # valid signature launder a rejected token into a served request, and answering the
+    # signature's code instead of AUTH_INVALID would misreport which credential failed.
+    principal = _signature_credential(signature_subject, headers=headers, tenant=tenant, principal=principal)
+
     # A public tool takes whoever arrived: a resolved caller, or -- with nothing presented
     # -- nobody.
     if not require_valid_token:
         return PublicIdentity(principal=principal, tenant=tenant)
 
     # A protected row: step 2 or 3b refused an absent credential and the check above refused
-    # a rejected one, so both rows resolved. The assert is the static narrowing of that.
-    assert tenant is not None and principal is not None
+    # a rejected one. A caller that presented ONLY a signature reached here with both of those
+    # satisfied, so this is the one place the postcondition can still fail -- the signature
+    # verified but named nobody this seller onboarded, which is a credential that did not
+    # resolve. Same answer as a token that did not: AUTH_INVALID.
+    if tenant is None or principal is None:
+        from src.core.exceptions import AdCPAuthenticationError
+
+        raise AdCPAuthenticationError()
 
     if account_ref is None:
         return ResolvedIdentity(principal=principal, tenant=tenant)

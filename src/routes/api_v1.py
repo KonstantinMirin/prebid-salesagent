@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
+from src.core.signing.capture import captured_exchange
 from src.core.tools._announced_shape import apply_signature
 from src.core.tools._boundary import serve
 from src.core.tools._wire import to_wire
@@ -76,9 +77,14 @@ def _rest_handler(tool_name: str, spec: Any) -> Any:
                     body = {**body, **path_values}
                 except TypeError:
                     pass
-            # The request HEADERS, not an identity: the boundary resolves the caller and reads
-            # the row's auth declaration itself.
-            response = await serve(tool_name, body, request.headers, TransportProtocol.REST)
+            # The request HEADERS and the captured HTTP MESSAGE, not an identity: the boundary
+            # resolves the caller and reads the row's auth declaration itself. The capture
+            # comes off the scope rather than from ``await request.body()`` because a
+            # signature covers ``@method`` and ``@target-uri`` as well as the bytes, and
+            # ``@target-uri`` can only be rebuilt from ``raw_path``.
+            response = await serve(
+                tool_name, body, request.headers, TransportProtocol.REST, captured_exchange(request.scope)
+            )
         except AdcpFailure as failure:
             # REST's wire failure marker is the HTTP STATUS, and that is all this transport
             # adds. The BODY is the response the boundary built, serialized by the same

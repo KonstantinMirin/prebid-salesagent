@@ -660,6 +660,19 @@ class Principal(Base, JSONValidatorMixin):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     #: The displayable head of the token, so an operator can tell tokens apart.
     token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    # RFC 9421 (#1291 B1): the counterparty's own AdCP agent URL, from onboarding.
+    # This is the ONLY legitimate source for it — security.mdx @ v3.1.1 §"agent_url
+    # derivation" forbids taking the signer's agent URL from a header, a body field or any
+    # other self-assertion, because that would let the signer choose which brand.json (and
+    # therefore which key set) it is verified against. NULL means we cannot resolve a key
+    # for this counterparty, not that it is trusted.
+    #
+    # Indexed and unique PER TENANT because the resolver reads it in BOTH directions: from
+    # a bearer-resolved principal to its keys, and — when a signature verified with no
+    # bearer at all — from the verified signer's agent_url back to the principal it
+    # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
+    # would make that second lookup ambiguous, which is a silent authentication defect.
+    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -682,6 +695,7 @@ class Principal(Base, JSONValidatorMixin):
     __table_args__ = (
         Index("idx_principals_tenant", "tenant_id"),
         Index("idx_principals_token_hash", "token_hash"),
+        UniqueConstraint("tenant_id", "agent_url", name="uq_principals_tenant_agent_url"),
     )
 
     @classmethod
@@ -2696,4 +2710,45 @@ class WebhookDeliveryLog(Base):
         Index("idx_webhook_log_tenant", "tenant_id"),
         Index("idx_webhook_log_status", "status"),
         Index("idx_webhook_log_created_at", "created_at"),
+    )
+
+
+class ReplayNonce(Base):
+    """One live claim on an RFC 9421 ``(keyid, nonce)`` pair (#1291 A4).
+
+    A replay CACHE, not a permanent nonce ledger: every read filters ``expires_at > now()``,
+    so a dead row is indistinguishable from an absent one and the table is safe to sweep at
+    any time.
+
+    Schema translated from the DDL the SDK ships at ``adcp/signing/pg/replay_store.sql``,
+    table name included, so that file stays a valid reference for this table and a future
+    swap to the SDK's ``PgReplayStore`` needs no migration.
+
+    ``Text(collation="C")`` on both identifiers is security, not style: the SDK's SQL header
+    records that under some locales ``"Key-A"`` and ``"key-a"`` compare equal, which would
+    let an attacker collapse distinct kids or nonces into a single slot and replay against
+    it. ``"C"`` is byte-for-byte comparison.
+
+    **No ``tenant_id``, no FK — a decision, not an oversight.** The RFC 9421 signature base
+    covers ``@authority`` as a MANDATORY component (AdCP 3.1.1;
+    ``test-vectors/request-signing/negative/006-missing-covered-component.json`` is
+    literally "Covered components missing @authority"), so a nonce captured against tenant
+    A's virtual host cannot verify against tenant B's — cross-tenant replay dies at verifier
+    step 10, before this table is ever consulted. The consequence is that the store is
+    deployment-wide: it cannot use ``BaseUoW`` (which is ``(tenant_id)``-scoped) and its
+    reaper is deployment-wide too.
+    """
+
+    __tablename__ = "adcp_replay"
+
+    keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    nonce: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        # Sweep support (the SDK's index, same name).
+        Index("adcp_replay_expires_idx", "expires_at"),
+        # at_capacity's predicate. A partial index on now() is impossible (not IMMUTABLE),
+        # so the composite carries the whole predicate.
+        Index("adcp_replay_keyid_expires_idx", "keyid", "expires_at"),
     )

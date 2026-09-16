@@ -493,6 +493,34 @@ class AdCPAuthRequiredError(AdCPAuthenticationError):
     _code: ClassVar[ErrorCodeT] = ErrorCode.AUTH_MISSING
 
 
+class AdCPRequestSignatureError(AdCPSalesAgentError[ErrorDetails]):
+    """An inbound RFC 9421 signature was required, malformed, or refused (401).
+
+    It NAMES its code rather than declaring one, and it is the only error class in this
+    tree that does. ``__new__``'s second refusal describes exactly this case: "a boundary
+    that needs a code the class hierarchy does not model names it on the base". There are
+    27 codes in the request-family taxonomy, the spec grades the string they produce
+    byte-for-byte, and they are generated from the SDK's own table
+    (:mod:`src.core.errors.signature_codes`) — so a class per code would be 27 declarations
+    that can drift from the one table, and a single class with one fixed code would lose the
+    distinction the whole taxonomy exists to make.
+
+    A DIRECT subclass, not one of :class:`AdCPAuthenticationError`, although what it says is
+    the same kind of thing: a credential was presented and did not verify. Naming a code is
+    only possible for a class that declares none, and ``__new__`` walks the MRO — so
+    inheriting AUTH_INVALID would make every raise site here a "already names a code" error.
+    The relation that mattered about that parent is kept where it is actually enforced:
+    ``ruff-boundary.toml`` bans this class outside the resolver beside the other two, so the
+    three refusals of a buyer's credential have one author between them.
+
+    Recovery, suggestion, message and the 401 all come from ``CODE_TABLE`` like every other
+    code. What the buyer gets that is specific to the refusal is the CODE, twice: in
+    ``error.code``, and in the ``WWW-Authenticate`` challenge ``AuthChallengeResponder``
+    derives from it. The verifier's own exception — which carries the checklist step and a
+    diagnostic sentence — rides ``internal_detail``, server log only.
+    """
+
+
 class AdCPAuthorizationError(AdCPSalesAgentError[EntityRefDetails]):
     """Authenticated but not authorized for this resource (403).
 

@@ -54,9 +54,10 @@ from __future__ import annotations
 import dataclasses
 
 import pytest
+from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 
 from src.core import exceptions
-from src.core.errors.codes import CODE_TABLE, AppErrorCode
+from src.core.errors.codes import CODE_TABLE, AppErrorCode, SignatureErrorCode
 from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 from tests.helpers import pinned_schema
 
@@ -78,11 +79,33 @@ _KNOWN_PLATFORM_CODES = frozenset(
         "PARTIAL_FAILURE",
         "WORKFLOW_CREATION_FAILED",
     }
+    # The RFC 9421 transport error taxonomy. NOT hand-authored and NOT listed here by hand:
+    # the roster reads the same SDK table ``src.core.errors.signature_codes`` generates the
+    # codes from, so the two cannot drift and adding one is not a thing anybody can do here.
+    #
+    # They are outside the assertions below for the reason the roster exists -- the pinned
+    # error-code enum does not define them -- but they are not ungraded. The spec grades
+    # them directly, byte-for-byte, in the ``WWW-Authenticate: Signature error="<code>"``
+    # challenge (security.mdx @ v3.1.1 § Transport error taxonomy), and
+    # ``tests/unit/test_signature_challenge_string.py`` pins that string for every one of
+    # them against the SDK's own builder.
+    | frozenset(REQUEST_TO_WEBHOOK_CODE)
 )
 
 
 def _code_of(cls: type[AdCPSalesAgentError]) -> str:
-    return str(cls._code)
+    """The code a class IS, or ``""`` for the one class that names its code per raise.
+
+    ``AdCPRequestSignatureError`` declares no ``_code`` on purpose: the RFC 9421 transport
+    taxonomy is 27 codes generated from the SDK's own table, so a class per code would be 27
+    declarations that can drift from it. It is not ungraded — every one of its codes goes
+    through ``CodeEntry``, whose constructor refuses an empty message or suggestion and whose
+    ``recovery`` is a :class:`Recovery` member, and the challenge string those codes produce
+    is pinned against the SDK in ``tests/unit/test_signature_challenge_string.py``. What it
+    is outside of is THIS oracle, which grades a class against the PUBLISHED enum, and the
+    published enum does not define them (the wire vocabulary is open).
+    """
+    return str(getattr(cls, "_code", ""))
 
 
 _GRADED_CLASSES = sorted(
@@ -169,9 +192,10 @@ def test_platform_only_codes_are_the_pinned_roster() -> None:
         f"Either add it to the AdCP error-code enum (and advance the pin), or record it in "
         f"_KNOWN_PLATFORM_CODES here."
     )
-    assert unpinned == {str(member) for member in AppErrorCode}, (
-        "CODE_TABLE's non-spec codes must be exactly the AppErrorCode members — a published code "
-        "shadowed by a platform entry would take its recovery from the platform entry, not the pin."
+    assert unpinned == {str(member) for member in AppErrorCode} | {str(member) for member in SignatureErrorCode}, (
+        "CODE_TABLE's non-spec codes must be exactly the AppErrorCode members plus the "
+        "SignatureErrorCode ones — a published code shadowed by an entry from either enum would "
+        "take its recovery from that entry, not the pin."
     )
 
 

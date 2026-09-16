@@ -25,7 +25,11 @@ from enum import Enum
 from typing import Any
 
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import ExperimentalFeature, SupportedProtocol
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+    ExperimentalFeature,
+    ProtocolMethodsRequiredForItem,
+    SupportedProtocol,
+)
 
 # `Measurement` is aliased `LibraryMeasurementDeclaration`, NOT the conventional
 # `LibraryMeasurement`: the SDK has TWO distinct `Measurement` types, and
@@ -43,6 +47,98 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Tru
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.core.errors.details import ConfigurationDetails
+from src.core.signing.posture import RequestSigningPosture
+
+#: The two AdCP-namespace bucket names and the three protocol-method ones, as they are
+#: spelled in a stored declaration. Read off the model rather than typed out, so a bucket the
+#: pinned schema adds is covered by the split the day the field appears.
+_ADCP_BUCKETS = ("required_for", "warn_for", "supported_for")
+_PROTOCOL_BUCKETS = ("protocol_methods_required_for", "protocol_methods_warn_for", "protocol_methods_supported_for")
+
+
+def _is_protocol_method(name: str) -> bool:
+    """Whether *name* is a JSON-RPC protocol method name, per the PINNED SCHEMA.
+
+    Asked by validating the candidate against the generated ``protocol_methods_*`` item
+    model, whose ``^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$`` pattern is what the schema means by
+    that namespace. The rule is READ from the pin rather than transcribed as a ``/`` test
+    that would drift the day the pattern changed.
+    """
+    try:
+        ProtocolMethodsRequiredForItem(root=name)
+    except ValidationError:
+        return False
+    return True
+
+
+def is_block_declarable(block: str) -> bool:
+    """Whether a tenant may declare *block* — i.e. whether a stored value can exist.
+
+    Public read of the STRICT policy above, for a consumer that must know whether a stored
+    declaration can exist at all. The inbound signature verifier uses it to skip work whose
+    result could not change a decision: an undeclarable block means no tenant can have
+    declared one, so reading the row could not change any outcome. Removing an entry from
+    :data:`_UNBACKED_BLOCKS` therefore switches those consumers on by itself, with no second
+    flag to remember.
+    """
+    return block not in _UNBACKED_BLOCKS
+
+
+def _reject_mixed_namespaces(declared: Any) -> None:
+    """The namespace split, refused at CONFIGURATION time. security.mdx @ v3.1.1 :1053.
+
+        AdCP tool names (no ``/``) MUST NOT appear in any ``protocol_methods_*`` array, and
+        JSON-RPC method names (containing ``/``) MUST NOT appear in ``supported_for`` /
+        ``warn_for`` / ``required_for``. Verifiers MUST reject capability blocks that violate
+        the namespace split with a configuration-time error rather than silently coercing
+        strings between the two.
+
+    Runs on the RAW declaration, BEFORE ``model_validate``, and that placement is the point.
+    The generated ``protocol_methods_*`` item model would refuse a slash-free AdCP tool name
+    on its own -- with pydantic's "String should match pattern '^[a-z]...'", which names a
+    regex rather than the rule an operator broke. The spec asks for a configuration-time
+    error about the NAMESPACE SPLIT, so it is raised here, where the strings are still
+    strings and both directions can be reported together.
+
+    NEITHER DIRECTION TESTS FOR A ``/``. That test is a second definition of a question two
+    other modules already answer, and it answers it wrongly in both directions:
+    ``get_signals`` has no slash and is not a tool this seller implements, while
+    ``tasks/cancel`` has one and is not an AdCP operation either. So each half asks the
+    authority that owns it -- the REGISTRY for "is this an AdCP operation of this seller"
+    (``src.core.tools.registry.is_adcp_operation``, which IS what makes a name one), and the
+    PINNED SCHEMA for "is this a protocol method" (:func:`_is_protocol_method`).
+
+    Anything that is not a mapping of lists is left alone: this is a namespace check, not a
+    type check, and the shape is pydantic's to refuse a moment later.
+    """
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.tools.registry import is_adcp_operation
+
+    posture = declared.get("request_signing") if isinstance(declared, dict) else None
+    if not isinstance(posture, dict):
+        return
+
+    def _names(buckets: tuple[str, ...]) -> list[str]:
+        return [name for bucket in buckets for name in (posture.get(bucket) or []) if isinstance(name, str)]
+
+    misplaced = sorted(
+        {name for name in _names(_ADCP_BUCKETS) if _is_protocol_method(name)}
+        | {name for name in _names(_PROTOCOL_BUCKETS) if is_adcp_operation(name)}
+    )
+    if misplaced:
+        raise AdCPConfigurationError(
+            details=ConfigurationDetails(
+                capability="capability_declarations.request_signing",
+                rejected_value=misplaced,
+                tracked_by=(
+                    "The two buckets are matched against disjoint envelope fields "
+                    "(security.mdx @ v3.1.1 :1053): AdCP operation names belong in "
+                    "required_for/warn_for/supported_for, JSON-RPC method names in the "
+                    "matching protocol_methods_* bucket."
+                ),
+            ),
+        )
+
 
 # Blocks the AdCP schema defines but this deployment does NOT back, mapped to the
 # GitHub issue that will implement them. Declaring one is rejected by name so the
@@ -50,16 +146,23 @@ from src.core.errors.details import ConfigurationDetails
 # not permitted". Every entry here is a promise we would otherwise make to buyers
 # and could not keep.
 #
-# RFC 9421 message signing (#1291) gates the whole signing family: request_signing
-# and webhook_signing directly, identity because its brand_json_url/key_origins
-# subfields exist only to anchor signing keys, and
-# content_standards.supports_webhook_delivery / reporting_delivery_methods /
-# offline_delivery_protocols because the schema's must_equal_when rule forces
-# webhook_signing.supported=true the moment any of them is declared.
+# RFC 9421 message signing (#1291) gated the whole signing family. INBOUND request
+# verification now backs ``request_signing``, so that entry is gone and the block is a
+# declarable field below; what stays refused stays refused because the OUTBOUND half is
+# still absent. ``identity`` anchors keys this deployment does not publish (#1291 A3,
+# the trust root), ``webhook_signing`` is the outbound signer (#1291 C1), and the three
+# delivery blocks are gated by the schema's must_equal_when rule, which forces
+# ``webhook_signing.supported=true`` the moment any of them is declared.
 _UNBACKED_BLOCKS: dict[str, str] = {
-    "request_signing": "#1291 (RFC 9421 request signing is not implemented)",
     "webhook_signing": "#1291 (RFC 9421 webhook signing is not implemented)",
-    "identity": "#1291 (identity.brand_json_url/key_origins anchor signing keys we do not publish)",
+    # KNOWN GAP while only the INBOUND half of #1291 is here. The pin's
+    # ``identity.brand_json_url`` ``required_when`` lists the four ``request_signing``
+    # buckets among its triggers, so a tenant that declares one obliges this agent to emit
+    # ``identity.brand_json_url`` -- and nothing emits it yet, though
+    # ``src.core.agent_identity.brand_json_url`` already derives the value. Declaring
+    # ``request_signing.supported`` alone (the conservative default, and what a verifier with
+    # no per-counterparty pilot honestly holds) fires no trigger and is unaffected.
+    "identity": "#1291 A3 (identity.brand_json_url/key_origins anchor a trust root we do not publish yet)",
     "content_standards": "#1291 (supports_webhook_delivery forces webhook_signing.supported=true)",
     "reporting_delivery_methods": "#1291 (declaring [webhook] forces webhook_signing.supported=true)",
     "offline_delivery_protocols": "#1291 (no offline report delivery is implemented)",
@@ -232,6 +335,11 @@ class CapabilityDeclarations(BaseModel):
     measurement: MeasurementDeclaration | None = None
     supported_protocols: list[SupportedProtocol] | None = None
     specialisms: list[AdcpSpecialism] | None = None
+    # Typed as the EXISTING posture class rather than a parallel declaration model, which is
+    # what makes the block a tenant advertises and the capability the inbound verifier
+    # enforces ONE object -- and gets the protocol-method pattern and the
+    # covers_content_digest enum from the pinned schema for free.
+    request_signing: RequestSigningPosture | None = None
 
     @classmethod
     def from_tenant(cls, declared: Any) -> "CapabilityDeclarations":
@@ -274,6 +382,10 @@ class CapabilityDeclarations(BaseModel):
                 raise AdCPConfigurationError(
                     details=ConfigurationDetails(block=block, tracked_by=_UNBACKED_BLOCKS[block]),
                 )
+
+        # The namespace split, before pydantic sees the strings -- see the function for why
+        # the placement is the point rather than an ordering convenience.
+        _reject_mixed_namespaces(declared)
 
         # ValidationError only -- never a broad `except Exception`, which would
         # flatten any typed AdCPSalesAgentError raised from a nested validator into a
