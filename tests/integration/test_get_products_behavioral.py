@@ -9,7 +9,6 @@ Each test is traced to a BDD scenario from BR-UC-001-discover-available-inventor
 Tests are ordered by migration risk: HIGH_RISK first, then MEDIUM_RISK.
 """
 
-from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -388,101 +387,23 @@ class TestPolicyServiceFailopenPipeline:
 # ---- Adapter annotation: test 6 (S25) ----
 
 
-class TestAdapterSupportAnnotation:
-    """Test pricing options annotated with adapter support info.
-
-    BDD scenario: T-UC-001-adapter (S25)
-    """
-
-    @pytest.mark.asyncio
-    async def test_supported_pricing_annotated(self, integration_db):
-        """When adapter supports pricing model, supported=True is set on inner.
-
-        Resolved tenant-level via get_adapter_class_for_tenant() (salesagent-r9rf,
-        no Principal construction needed) — mock the CLASS, not an instance.
-        """
-        with ProductEnv(tenant_id="adpt-support", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="adpt-support", subdomain="adpt-support")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p, pricing_model="cpm")
-
-            mock_adapter_class = MagicMock()
-            mock_adapter_class.get_supported_pricing_models.return_value = {"cpm", "cpc"}
-            with patch(
-                "src.core.helpers.adapter_helpers.get_adapter_class_for_tenant",
-                return_value=mock_adapter_class,
-            ):
-                response = await env.call_impl(brief="campaign")
-
-        assert len(response.products) == 1
-        assert len(response.products[0].pricing_options) == 1
-        inner = response.products[0].pricing_options[0].root
-        assert inner.supported is True
-
-    @pytest.mark.asyncio
-    async def test_unsupported_pricing_annotated_with_reason(self, integration_db):
-        """When adapter does NOT support pricing model, unsupported_reason is set.
-
-        Resolved tenant-level via get_adapter_class_for_tenant() (salesagent-r9rf,
-        no Principal construction needed) — mock the CLASS, not an instance.
-        """
-        with ProductEnv(tenant_id="adpt-unsup", principal_id="p1") as env:
-            tenant = TenantFactory(tenant_id="adpt-unsup", subdomain="adpt-unsup")
-            PrincipalFactory(tenant=tenant, principal_id="p1")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p, pricing_model="vcpm", rate=Decimal("15.00"))
-
-            mock_adapter_class = MagicMock()
-            mock_adapter_class.get_supported_pricing_models.return_value = {"cpm"}
-            with patch(
-                "src.core.helpers.adapter_helpers.get_adapter_class_for_tenant",
-                return_value=mock_adapter_class,
-            ):
-                response = await env.call_impl(brief="campaign")
-
-        inner = response.products[0].pricing_options[0].root
-        assert inner.supported is False
-        assert "VCPM" in inner.unsupported_reason
-
-    @pytest.mark.asyncio
-    async def test_unresolvable_principal_still_gets_pricing_annotation(self, integration_db):
-        """A principal_id that doesn't resolve to a DB Principal must not silently
-        skip the adapter-support annotation (salesagent-r9rf, same INV-4 class as
-        salesagent-dn2s: capability data must not vary by whether get_principal_object()
-        happens to resolve — it describes the SELLER's adapter, not the caller).
-
-        Distinct from the anonymous-pricing-suppression rule (BR-RULE-004-01,
-        principal_id is None): here principal_id IS set but doesn't exist in the
-        DB, so pricing_options is NOT suppressed to [] — the caller sees full
-        rates. Before the fix, the "supported" annotation was gated on
-        ``get_principal_object()`` resolving a real Principal (needed only to
-        instantiate an adapter), so this case leaked un-annotated pricing:
-        worse than authenticated (annotated) AND worse than anonymous
-        (suppressed) — an inconsistent, unannounced third state.
-        """
-        with ProductEnv(tenant_id="adpt-ghost", principal_id="ghost_principal") as env:
-            tenant = TenantFactory(tenant_id="adpt-ghost", subdomain="adpt-ghost", brand_manifest_policy="public")
-            p = ProductFactory(tenant=tenant, product_id="p1")
-            PricingOptionFactory(product=p, pricing_model="cpm", rate=Decimal("15.00"))
-
-            env._identity = _lazy_identity("adpt-ghost", principal_id="ghost_principal")
-
-            response = await env.call_impl(brief="campaign")
-
-        assert len(response.products) == 1
-        assert len(response.products[0].pricing_options) == 1, (
-            "principal_id is set (not None), so BR-RULE-004-01 anonymous suppression must not apply"
-        )
-        inner = response.products[0].pricing_options[0].root
-        assert inner.supported is True, (
-            "adapter-support annotation must be present regardless of whether the "
-            "principal_id happens to resolve to a DB Principal — it's a tenant-level, "
-            "not caller-level, fact"
-        )
-
-
-# ---- Empty results pipeline stages: test 7 (S5) ----
+# (Deleted) TestAdapterSupportAnnotation -- three tests asserting ``supported is True`` /
+# ``unsupported_reason`` on each pricing option returned by get_products.
+#
+# There is no such field. ``_AdapterSupportAnnotations`` (src/core/schemas/pricing.py)
+# declares none: its own docstring says it adds "nothing on the wire", and all it carries
+# is the extra-mode config and the derived ``is_fixed`` property -- the class name outlived
+# the fields. ``core/pricing-option.json`` in the pin declares no support field either, on
+# any of its nine members, so this was an internal annotation rather than a spec one.
+#
+# The obligation survives in two places that do exist. An adapter's pricing support is
+# ADVERTISED through get_adcp_capabilities (``src/core/tools/capabilities.py`` reads
+# ``get_supported_pricing_models``), and ENFORCED by the adapter refusing a model it does
+# not support (``src/adapters/base.py`` reads the same set and raises). Annotating every
+# pricing option in the catalogue was a third mechanism, and it is gone.
+#
+# These cited "BDD scenario: T-UC-001-adapter (S25)" as their obligation. No feature file
+# contains that tag.
 
 
 class TestEmptyResultsPipelineStages:
