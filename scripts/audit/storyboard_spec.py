@@ -563,6 +563,47 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
     left to :func:`checks_by_owner`, so the two never double-count the same
     step: at 3.1.1, 8 assertion-task steps carry ``check:`` lines and 19 do not.
     """
+    return [
+        (owner, task, phase_id)
+        for _step_id, owner, task, phase_id in _steps_without_checks(text)
+        if _is_assertion_task(task)
+    ]
+
+
+def tool_steps_without_checks(text: str) -> list[tuple[str, str]]:
+    """Steps invoking a real AdCP TOOL with no ``check:`` line — ``(step_id, task)``.
+
+    The third family, and the sibling of :func:`graded_steps_by_task`: same
+    traversal, complementary half of the same filter. A step declaring
+    ``task: list_creative_formats`` and no checks is still run by the
+    ``@adcp/sdk`` runner, which reports pass or fail on the INVOCATION — the
+    tool either answered or it did not. The index, keyed on ``check:`` lines,
+    produces no record for such a step, so a genuine failure of one had nowhere
+    to be ledgered.
+
+    Measured: ``media_buy_seller/creative_reception::list_formats`` failed on
+    both protocols in a real run and was refused by the orphan-row check in
+    :mod:`scripts.audit.storyboard_check_index`, which knew only two no-check
+    families. The step is declared by the 3.1.1 pin
+    (``domains/media-buy/scenarios/creative_reception.yaml``, section
+    ``discover_accepted_formats``) and carries zero ``check:`` lines, so both
+    the runner and the ledger were right and the join universe was short.
+
+    OWNER is the step itself, unlike the assertion family: a tool step names no
+    ``triggered_by``, and the runner reports the step's own id.
+    """
+    return [
+        (step_id, task) for step_id, _owner, task, _phase in _steps_without_checks(text) if not _is_assertion_task(task)
+    ]
+
+
+def _steps_without_checks(text: str) -> list[tuple[str, str, str, str | None]]:
+    """``(step_id, owner_id, task, phase_id)`` per step declaring a task and no check.
+
+    One traversal for both no-check families. Owner is ``triggered_by`` when the
+    step names one — matching how the runner attributes a webhook failure — and
+    the step itself otherwise.
+    """
     windows: list[tuple[int, int, str]] = []
     for phase_id in phases(text):
         window = _phase_window(text, phase_id)
@@ -571,12 +612,12 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
             windows.append((offset, offset + len(body), phase_id))
 
     steps = list(_STEP_ID_RE.finditer(text))
-    graded: list[tuple[str, str, str | None]] = []
+    found: list[tuple[str, str, str, str | None]] = []
     for index, match in enumerate(steps):
         end = steps[index + 1].start() if index + 1 < len(steps) else len(text)
         block = text[match.end() : end]
         task_match = _STEP_TASK_RE.search(block)
-        if task_match is None or not _is_assertion_task(task_match.group(1)):
+        if task_match is None:
             continue
         if _CHECK_LINE_RE.search(block):
             continue
@@ -584,8 +625,8 @@ def graded_steps_by_task(text: str) -> list[tuple[str, str, str | None]]:
         owner = triggered_by.group(1) if triggered_by else match.group(1)
         enclosing = [w for w in windows if w[0] <= match.start() < w[1]]
         enclosing.sort(key=lambda w: w[1] - w[0])
-        graded.append((owner, task_match.group(1), enclosing[0][2] if enclosing else None))
-    return graded
+        found.append((match.group(1), owner, task_match.group(1), enclosing[0][2] if enclosing else None))
+    return found
 
 
 def check_inventory(text: str) -> dict[str, int]:
