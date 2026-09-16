@@ -1252,11 +1252,11 @@ def seed_error_test_tenant(
     ``PricingOptionFactory`` defaults (cpm/USD/fixed) derive the synthetic
     ``cpm_usd_fixed`` pricing option id the budget pins reference.
 
-    Returns a dict with ``tenant_dict`` (ready for ``set_current_tenant``), the seeded
-    ``identity`` (``ResolvedIdentity`` bound to the principal), and ``principal_id`` /
-    ``access_token`` for callers that need them separately.
+    Returns the seeded ``tenant`` / ``principal`` / ``product`` rows, the ``identity``
+    (``ResolvedIdentity`` bound to the principal, carrying the tenant derived from its own
+    row), and ``principal_id`` / ``access_token`` for callers that need them separately.
     """
-    from src.core.config_loader import set_current_tenant
+    from src.core.tenant_context import TenantContext
     from tests.factories import (
         PricingOptionFactory,
         PrincipalFactory,
@@ -1265,14 +1265,18 @@ def seed_error_test_tenant(
     )
     from tests.factories.principal import plaintext_token_for
 
-    tenant_dict = {
-        "tenant_id": tenant_id,
-        "name": tenant_name,
-        "subdomain": subdomain,
-        "ad_server": "mock",
-        "human_review_required": False,
-    }
-    tenant = TenantFactory(**tenant_dict, is_active=True)
+    # Keyword arguments on the factory, not a dict. There was a ``tenant_dict`` here that got
+    # splatted into the factory AND, separately, into ``make_tenant`` for the identity's
+    # tenant -- two independent constructions of one tenant, free to drift, from a second
+    # representation nothing owns. The factory owns the row's field values.
+    tenant = TenantFactory(
+        tenant_id=tenant_id,
+        name=tenant_name,
+        subdomain=subdomain,
+        ad_server="mock",
+        human_review_required=False,
+        is_active=True,
+    )
     product = ProductFactory(tenant=tenant, product_id=product_id, property_tags=["all_inventory"])
     PricingOptionFactory(product=product)
     # No access_token=: the row keeps sha256 plus a display prefix, and the factory
@@ -1291,23 +1295,29 @@ def seed_error_test_tenant(
     add_required_setup_data(session, tenant_id)
     session.commit()
 
-    set_current_tenant(tenant_dict)
+    # No set_current_tenant. The ambient-tenant ContextVar and its setter were deleted with
+    # the file-based config loader (76c2a96fb) -- tests/smoke/test_smoke_basic.py records it --
+    # so this import raised at collection and took every test in this helper's one consumer
+    # with it. The identity built below CARRIES the tenant, which is what production reads.
 
     # make_identity takes the principal and the tenant and nothing else. It refuses
     # unknown keywords by design rather than dropping them, so auth_token= and
     # protocol= are removed here instead of being silently ignored: the credential is
     # presented in a header the harness builds, and the transport is the harness's
     # choice, so neither is a property of the resolved identity.
+    # The tenant context DERIVED from the row, through production's own constructor, so the
+    # identity cannot describe a tenant the database disagrees with. It used to be built by
+    # ``make_tenant(**tenant_dict)`` from the same dict that made the row -- a second
+    # construction with its own defaults for every field the dict omitted.
     identity = PrincipalFactory.make_identity(
         principal_id=principal_id,
         tenant_id=tenant_id,
-        tenant=TenantFactory.make_tenant(**tenant_dict),
+        tenant=TenantContext.from_orm_model(tenant),
     )
     return {
         "tenant": tenant,
         "principal": principal,
         "product": product,
-        "tenant_dict": tenant_dict,
         "identity": identity,
         "principal_id": principal_id,
         # The token that actually authenticates this principal, derived the one way
