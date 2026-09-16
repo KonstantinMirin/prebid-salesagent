@@ -489,6 +489,22 @@ jobs:
           # The dedicated Security Audit check owns the uv-secure scan, so it
           # is skipped here even though _setup-env now provides a host uv.
           RUN_ALL_SKIP_AUDIT: 1
+      # The runner's OWN score, which no pytest summary can show: a storyboard
+      # check that PASSES produces no pytest item, so the suite's item list is
+      # its failures. Reading the job as green therefore says the ledger covered
+      # every failure, and says nothing about how many checks passed — 30 per
+      # protocol over 72 storyboards, reproduced across six in-network runs, is
+      # the number this job exists to hold, and it was only ever legible by
+      # opening a local artifact. Printed here so a reviewer reads it off the run
+      # that produced it.
+      #
+      # Reporting only, deliberately: no floor asserted. A floor is worth adding
+      # once this has published the CI-side number often enough to know it is the
+      # same population as the box's, and comparing counts across environments
+      # before then is what manufactures a failure with no defect behind it.
+      - name: Publish the storyboard runner score
+        if: always()
+        run: uv run python scripts/audit/storyboard_runner_score.py --repo . --markdown >> "$GITHUB_STEP_SUMMARY"
       # Publish the machinery's OUTPUT, not a committed copy of it (#1858).
       # These three reports used to live in docs/test-obligations/; a committed
       # report obliges you to prove regeneration is byte-identical, and the
