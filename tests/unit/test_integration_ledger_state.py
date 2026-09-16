@@ -36,7 +36,13 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 #: cluster J (3) I excluded by judgement as another PR's to fix, which conflated fixing
 #: with recording and left CI red for a reason no reader could find. A ledger created from
 #: a single run is a floor on its contents, and the number only falls from here.
-CEILING = 53
+#:
+#: 51 after the first two came off cluster B — deleted, not repaired, because
+#: test-results/bdd_scenario_liveness.json records @T-UC-002-ext-b and @T-UC-002-ext-o as
+#: bound, wired, unledgered and PASSING on all three in-process transports, grading the
+#: same two conditions and more of each. That is the shape the ledger's header asks for:
+#: a scenario replaces such a test, it does not port it.
+CEILING = 51
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -45,13 +51,11 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_error_response_contains_recovery_guidance",
         "tests/integration/test_create_media_buy_behavioral.py::TestProposalBasedObligations::test_proposal_based_product_validation",
         # Cluster B (salesagent-e30o7.2) — production refuses correctly, the test expects otherwise
-        "tests/integration/test_create_media_buy_behavioral.py::TestCreativeIdsNotFound::test_creative_ids_not_found_raises_tool_error",
         "tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_product_with_no_pricing_options",
         "tests/integration/test_create_media_buy_behavioral.py::TestExtensionObligations::test_proposal_budget_amount_zero_rejected",
         "tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_exceeded",
         "tests/integration/test_create_media_buy_behavioral.py::TestMaxDailySpendExceeded::test_max_daily_spend_same_day_flight_uses_min_one_day",
         "tests/integration/test_create_media_buy_behavioral.py::TestPostconditionObligations::test_system_state_unchanged_on_failure",
-        "tests/integration/test_create_media_buy_behavioral.py::TestProductNotFound::test_product_not_found_returns_error",
         "tests/integration/test_idempotency_race.py::TestRaceLoserPayloadRules::test_different_payload_under_a_stored_key_conflicts",
         # Cluster C (salesagent-e30o7.3) — the test holds a stale API
         "tests/integration/test_account_mcp_context_bypass.py::TestBDDTransportBypass::test_list_accounts_context_through_dispatch",
