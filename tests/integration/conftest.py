@@ -8,6 +8,7 @@ import os
 import uuid
 from contextlib import ExitStack
 from datetime import UTC, date, datetime
+from pathlib import Path
 
 import psycopg2
 import pytest
@@ -19,6 +20,7 @@ from src.admin.app import create_app
 # Registers the ci-test tenant/principal fixture for this package. Imported by
 # name rather than star-imported: the one star import in tests/conftest.py is an
 # allowlisted exception, not the pattern.
+from tests.helpers.ledger import load_ledger_nodeids
 from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 
 admin_app = create_app()
@@ -1398,3 +1400,36 @@ def bound_factory_session(integration_db):
             yield session
     finally:
         session.close()
+
+
+#: Integration tests ledgered pending rewrite — see ``known_failures.txt`` next to this
+#: file for why each is listed and which issue owns it. Read through the SHARED loader the
+#: bdd and storyboard ledgers use, so there is one parse of a nodeid ledger rather than a
+#: third copy free to disagree with the other two about comments and blank lines.
+_LEDGERED_NODEIDS: frozenset[str] = load_ledger_nodeids(Path(__file__).parent / "known_failures.txt")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """xfail(strict=True) exactly the ledgered nodeids.
+
+    STRICT, unlike the e2e_rest ledger. That one is deliberately non-strict because e2e
+    dispatches over real HTTP to a separate server and "an environment-dependent xpass
+    must not fail CI" (its own comment). These run in-process against the same real
+    Postgres on every run, so there is no environment to be dependent on -- which means a
+    ledgered test that starts passing must FAIL, or the ledger stops being a shrinking
+    work-list and becomes a place where coverage goes quiet. That is the dormancy this
+    repo has been bitten by often enough to have a graduation workflow for it
+    (.claude/rules/workflows/xpass-graduation.md).
+
+    An unmatched ledger entry is caught by ``tests/unit/test_integration_ledger_state.py``
+    rather than here: this hook sees only the items the current selection collected, so a
+    stale nodeid looks identical to one that was simply not selected.
+    """
+    for item in items:
+        if item.nodeid in _LEDGERED_NODEIDS:
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="ledgered pending rewrite (tests/integration/known_failures.txt)",
+                    strict=True,
+                )
+            )
