@@ -29,7 +29,12 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 
 #: The count the ledger was created with. A bound, never a target — see
 #: ``test_the_ledger_never_grows``.
-CEILING = 48
+#:
+#: 50, not the 48 a full box run measured. The box has ``ADCP_AUTH_TEST_MODE`` on, so the
+#: two cluster-I entries pass there and fail wherever it is off; CI found them. That is a
+#: baseline measured in one environment and applied to another, which is the mistake this
+#: number should not repeat: a ledger created from a single run is a floor on its contents.
+CEILING = 50
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -89,6 +94,9 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTokenEmitsAuthMissing::test_no_token_rest_wire_emits_auth_missing",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]",
+        # Cluster I (salesagent-091d8) — production composition depends on a test flag
+        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve",
+        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints",
     }
 )
 
