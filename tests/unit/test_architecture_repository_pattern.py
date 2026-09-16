@@ -807,7 +807,12 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "tests/integration/test_cross_principal_security.py",
         "test_update_media_buy_cannot_modify_other_principals_media_buy",
     ),
-    ("tests/integration/test_dashboard_integration.py", "test_db"),
+    # test_dashboard_integration.py::test_db is gone with the file: 8 tests that seeded rows
+    # with raw SQL, queried them with raw SQL, and asserted the query returned what they
+    # seeded. The file's only two src imports were in that fixture, both to get a connection,
+    # so no test called a production function. DashboardService is graded by
+    # tests/unit/test_dashboard_service.py and tests/integration/test_dashboard_reliability.py,
+    # 21 tests that construct it and call get_dashboard_metrics.
     ("tests/integration/test_database_health_integration.py", "test_health_check_performance_with_real_database"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_table_existence_validation"),
     ("tests/integration/test_database_health_integration.py", "test_health_check_with_real_schema_validation"),
