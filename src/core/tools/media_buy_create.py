@@ -1847,7 +1847,7 @@ from src.core.errors.details import (
     TimeWindowDetails,
     ValidationDetails,
 )
-from src.services.setup_checklist_service import SetupIncompleteError, validate_setup_complete
+from src.services.setup_checklist_service import validate_setup_complete
 from src.services.slack_notifier import get_slack_notifier
 
 
@@ -2060,16 +2060,7 @@ async def _create_media_buy_impl(
             field_prefix="push_notification_config",
         )
 
-    try:
-        validate_setup_complete(tenant.tenant_id)
-    except SetupIncompleteError as e:
-        # Return helpful error with missing tasks
-        raise AdCPConfigurationError(
-            details=ConfigurationDetails(
-                missing_tasks=[t["name"] for t in e.missing_tasks],
-                setup_checklist_url=f"/tenant/{tenant.tenant_id}/setup-checklist",
-            )
-        )
+    validate_setup_complete(tenant.tenant_id)
 
     # No second webhook-URL verdict here: the stored-then-fetched URLs already
     # got their correctable refusal at the registration gate above, before any

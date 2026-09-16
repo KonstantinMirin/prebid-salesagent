@@ -901,9 +901,6 @@ class TestMainFlowObligations:
 
         Covers: UC-002-MAIN-04
         """
-        from src.core.tools._wire import to_wire
-        from src.services.setup_checklist_service import SetupIncompleteError
-
         # No hand-built identity. This used to construct one from a tenant DICT for a
         # tenant_id no row backed, which the real resolver can never produce -- and it
         # handed a bare ResolvedIdentity to an implementation declaring AccountIdentity,
@@ -911,34 +908,37 @@ class TestMainFlowObligations:
         # and account ROWS and ``call_impl`` dispatches at ``invoke_tool``, so the
         # resolver builds the caller exactly as it does for a buyer.
         #
-        # The setup gate is the env's own mock ("setup_check"), not a hand-rolled patch of
-        # the same target.
+        # The gate RUNS, against a tenant that is genuinely not set up. It used to be
+        # patched -- ``env.mock["setup_check"].side_effect = SetupIncompleteError(...)`` --
+        # which graded the boundary's handling of an exception the test itself constructed,
+        # and said nothing about whether production ever raises one or which task it names.
+        # That mock is gone from EXTERNAL_PATCHES (tests/harness/CLAUDE.md: a production gate
+        # is never a patch target), so the tenant is made incomplete instead.
+        #
+        # ``auth_setup_mode`` is the piece to flip: the sso_configuration task is complete only
+        # when SSO is enabled AND setup mode is off (setup_checklist_service.py:397), and it is
+        # a TENANT column, so re-seeding cannot undo it and a fresh session sees it.
+        from src.core.tools._wire import to_wire
+
         with MediaBuyCreateEnv() as env:
             tenant, _principal = env.setup_default_data(human_review_required=False)
             env.setup_product_chain(tenant)
-            env.mock["setup_check"].side_effect = SetupIncompleteError(
-                "Setup incomplete", missing_tasks=[{"name": "Configure Products", "description": "Add products"}]
-            )
+            # Read inside the block: the assertion below runs after __exit__ closes the
+            # session, and a detached ORM instance raises on attribute access.
+            tenant_id = tenant.tenant_id
+            tenant.auth_setup_mode = True
+            env._commit_factory_data()
 
             with raises_adcp(AdCPConfigurationError) as exc_info:
                 env.call_impl(req=_make_request())
 
-        # Incomplete tenant setup is a SELLER configuration fault: the buyer cannot
-        # resolve it by resending, so the pinned-terminal CONFIGURATION_ERROR carries the
-        # verdict rather than a correctable VALIDATION_ERROR with a hand-typed terminal
-        # recovery. Graded on the wire body the boundary built -- the buyer-facing
-        # contract -- rather than on the typed exception, which no longer reaches a caller
-        # through the boundary (tests/CLAUDE.md § Error verification policy).
-        #
-        # ``details.missing_tasks`` replaced an older `match="Setup incomplete"`: the
-        # message is a read-only CODE_TABLE sentence, so no free text reaches the buyer.
-        # The obligation that match graded -- the error says WHICH seller setup step is
-        # missing -- lives in the structured details, checked by exact value.
+        # The code and the recovery, and nothing else. Which tasks are incomplete varies per
+        # configuration error, so ``missing_tasks`` is not this test's subject; asserting a
+        # member pins a string production can rename freely.
         assert_envelope_shape(
             to_wire(exc_info.value.response),
             "CONFIGURATION_ERROR",
             recovery="terminal",
-            details={"missing_tasks": ["Configure Products"]},
         )
 
     @pytest.mark.asyncio

@@ -1175,24 +1175,10 @@ class SetupChecklistService:
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
 
-
-class SetupIncompleteError(AdCPConfigurationError):
-    """Critical setup tasks are incomplete for this tenant.
-
-    In the AdCP hierarchy because we define it and we raise it. CONFIGURATION_ERROR
-    is what media_buy_create already converted it to by hand at its boundary; folding
-    it in makes that conversion redundant rather than load-bearing.
-
-    ``missing_tasks`` is kept as an attribute -- the boundary reads it to build a
-    checklist URL -- and is ALSO carried structurally in the details, where a machine
-    can read it without catching this class.
-    """
-
-    def __init__(self, message: str, missing_tasks: list[dict]):
-        # `message` is accepted and DISCARDED: the sentence is a function of the code
-        # through CODE_TABLE. The parameter stays so the one raise site is unchanged.
-        self.missing_tasks = missing_tasks
-        super().__init__(details=ConfigurationDetails(missing_tasks=[t["name"] for t in missing_tasks]))
+# SetupIncompleteError is gone. A subclass exists to bind a code, and it bound none: it
+# declared no _code, inherited CONFIGURATION_ERROR from AdCPConfigurationError, and could not
+# have declared another (__new__ refuses error_code= on a class whose parent names one).
+# Raise AdCPConfigurationError with ConfigurationDetails.
 
 
 def get_incomplete_critical_tasks(tenant_id: str) -> list[dict[str, Any]]:
@@ -1216,11 +1202,14 @@ def validate_setup_complete(tenant_id: str) -> None:
         tenant_id: Tenant ID to validate
 
     Raises:
-        SetupIncompleteError: If critical setup tasks are incomplete
+        AdCPConfigurationError: If critical setup tasks are incomplete
     """
     incomplete = get_incomplete_critical_tasks(tenant_id)
     if incomplete:
-        task_names = ", ".join(task["name"] for task in incomplete)
-        raise SetupIncompleteError(
-            f"Complete required setup tasks before creating orders: {task_names}", missing_tasks=incomplete
-        )
+        # ``key``, not ``name``: ``name`` is admin-UI display text -- two of the critical tasks
+        # carry a "⚠️" prefix, and ``inventory_synced`` has three names for the one key.
+        #
+        # No ``setup_checklist_url``. It was an f-string built here, which is recovery guidance
+        # authored at the raise site, and CODE_TABLE's suggestion already owns that; it also
+        # pointed at a seller admin path the buyer cannot open.
+        raise AdCPConfigurationError(details=ConfigurationDetails(missing_tasks=[t["key"] for t in incomplete]))

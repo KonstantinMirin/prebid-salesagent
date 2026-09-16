@@ -95,7 +95,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         Returns (tenant, principal, product, pricing_option).
         """
-        from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
 
         # Seed the tenant as auto-approve (human_review_required=False). The
         # in-process transports never hit the tenant approval gate because this
@@ -117,31 +116,43 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # Here and not in setup_default_data: seeding an account for EVERY tenant made
         # UC-011's account-listing scenarios wrong ("0 accounts visible" saw one).
         self.setup_default_account()
-        # Every CRITICAL row the create_media_buy setup-checklist gate grades, so the gate
-        # can RUN. It used to be patched out in process -- ``validate_setup_complete`` was in
-        # EXTERNAL_PATCHES, stubbed to return None -- while the live e2e_rest server, which
-        # has no patches, enforced it. One scenario, two productions, which is precisely what
-        # rule 1 of the BDD discipline forbids: a scenario is transport-independent BY
-        # CONSTRUCTION, and a patch that exists on three transports and not the fourth makes
-        # the transport the variable.
-        #
-        # The patch's own comment blamed "the testing context", a channel deleted in
-        # a1b79d22d; by then the patch was doing the skipping itself. Removing it left 96 of
-        # 180 UC-002 scenarios failing CONFIGURATION_ERROR -- not a production defect, a
-        # HALF-SEEDED tenant: "Authorized Properties" was seeded here and
-        # ``sso_configuration`` was not, and single-tenant deployments make the latter
-        # critical. Seeding both, the gate runs and all 180 pass, so nothing was being graded
-        # by the patch that is not graded by the rows.
-        #
-        # The third piece is ``auth_setup_mode``, a column on the TENANT rather than a row, so
-        # it belongs to whoever creates the tenant -- same split ``tests/utils/tenant_setup.py``
-        # documents for the integration fixtures, which needed these same three.
-        AuthorizedPropertyFactory(tenant=tenant)
-        TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
-        tenant.auth_setup_mode = False
-        self._commit_factory_data()
         product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
+
+    def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]:
+        """The base seed, plus the rows the create_media_buy setup-checklist gate grades.
+
+        Here rather than in ``setup_media_buy_data``, because that is not the path the callers
+        share: BDD reaches this env through it, the integration suite calls
+        ``setup_default_data`` and ``setup_product_chain`` directly. Here rather than in the
+        base, because ``validate_setup_complete`` has one production caller -- seeding an
+        AuthorizedProperty for every tenant would break UC-013's property counts the way
+        seeding an account for every tenant broke UC-011's.
+
+        Everything is CREATE-ONLY. ``call_impl`` re-enters this method (through
+        ``setup_default_account``), so an assignment on every call silently reverts whatever a
+        test set up: flipping ``auth_setup_mode`` to make a tenant incomplete was undone
+        between the flip and the dispatch. The factories are no help either -- neither checks
+        for an existing row, and ``tenant_auth_configs`` is UNIQUE on ``tenant_id``.
+        """
+        from sqlalchemy import select
+
+        from src.core.database.models import AuthorizedProperty, Tenant, TenantAuthConfig
+        from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
+
+        creating = self._session.scalars(select(Tenant).filter_by(tenant_id=self._tenant_id)).first() is None
+        tenant, principal = super().setup_default_data(**tenant_kwargs)
+
+        if self._session.scalars(select(AuthorizedProperty).filter_by(tenant_id=tenant.tenant_id)).first() is None:
+            AuthorizedPropertyFactory(tenant=tenant)
+        if self._session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant.tenant_id)).first() is None:
+            TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
+        if creating:
+            # The column's server_default is "true", which leaves sso_configuration incomplete.
+            tenant.auth_setup_mode = False
+
+        self._commit_factory_data()
+        return tenant, principal
 
     def setup_product_chain(
         self,

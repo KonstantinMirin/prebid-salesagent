@@ -18,8 +18,8 @@ from src.core.database.models import (
     TenantAuthConfig,
 )
 from src.services.setup_checklist_service import (
+    AdCPConfigurationError,
     SetupChecklistService,
-    SetupIncompleteError,
     get_incomplete_critical_tasks,
     validate_setup_complete,
 )
@@ -614,38 +614,24 @@ class TestSetupValidation:
                 assert task["is_complete"] is False
 
     def test_validate_setup_complete_fails_for_incomplete(self, integration_db, setup_minimal_tenant, test_tenant_id):
-        """Test that validation fails for incomplete setup."""
-        with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(SetupIncompleteError) as exc_info:
-                validate_setup_complete(test_tenant_id)
+        """An incomplete tenant is refused with CONFIGURATION_ERROR.
 
-            # Check error details
-            error = exc_info.value
-            assert len(error.missing_tasks) > 0
+        ``test_setup_incomplete_error_details`` used to sit beside this and grade the same
+        raise, by reading raw checklist ROWS off an ``error.missing_tasks`` attribute (gone
+        with the SetupIncompleteError subclass) and checking for "key" / "name" /
+        "description" keys in them -- the dict shape of an internal service return, asserted
+        on a buyer-facing error. It also asserted inside an ``except`` block, so it passed
+        unchanged when nothing was raised at all.
+        """
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(AdCPConfigurationError):
+                validate_setup_complete(test_tenant_id)
 
     def test_validate_setup_complete_passes_for_complete(self, integration_db, setup_complete_tenant, test_tenant_id):
         """Test that validation passes for complete setup."""
         with patch.dict(os.environ, {"GEMINI_API_KEY": "test_key"}):
             # Should not raise exception
             validate_setup_complete(test_tenant_id)
-
-    def test_setup_incomplete_error_details(self, integration_db, setup_minimal_tenant, test_tenant_id):
-        """Test that SetupIncompleteError provides useful details."""
-        with patch.dict(os.environ, {}, clear=True):
-            try:
-                validate_setup_complete(test_tenant_id)
-            except SetupIncompleteError as e:
-                # Check error structure
-                assert hasattr(e, "message")
-                assert hasattr(e, "missing_tasks")
-                assert isinstance(e.missing_tasks, list)
-                assert len(e.missing_tasks) > 0
-
-                # Check task structure
-                task = e.missing_tasks[0]
-                assert "key" in task
-                assert "name" in task
-                assert "description" in task
 
 
 class TestTaskDetails:

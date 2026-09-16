@@ -27,7 +27,6 @@ from src.adapters.base import AdapterCreateRequest, AdapterUpdateResult
 from src.core.exceptions import (
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
-    AdCPConfigurationError,
     AdCPCreativeNotFoundError,
     AdCPGoneError,
     AdCPProductNotFoundError,
@@ -1185,99 +1184,6 @@ class TestCreateMediaBuyStatusDetermination:
         start = datetime(2026, 3, 1, tzinfo=UTC)
         end = datetime(2026, 3, 31, tzinfo=UTC)
         assert _determine_media_buy_status(False, True, True, start, end, now) == "pending_start"
-
-
-class TestCreateMediaBuyImplAuth:
-    """UC-002 auth extension: identity and tenant-setup validation.
-
-    test_missing_principal_raises_auth_error (UC-002-A02 / UC-002-EXT-I-02) is REMOVED.
-    It patched ``src.core.auth.get_principal_object`` to return None and expected
-    _create_media_buy_impl to raise AdCPAuthenticationError -- a second principal lookup
-    inside the tool, after the one that produced the identity it was handed.
-
-    get_principal_object no longer exists (commit 47d57e5d6 deleted it with
-    LazyTenantContext, resolve_principal_or_raise and the admin-token fallback): the
-    identity CARRIES the Principal the resolver loaded, so a tool reads
-    ``identity.principal`` and there is no lookup to make fail. A protected tool also
-    cannot mint the refusal any more -- ruff-boundary.toml bans raising
-    AdCPAuthenticationError outside the resolver -- so this case's subject is the
-    resolver's, graded there and on the wire, not once per tool.
-
-    The setup-incompleteness cases below are unaffected: those grade a SELLER-side
-    configuration refusal the tool does raise.
-    """
-
-    @pytest.mark.asyncio
-    async def test_setup_incomplete_raises_error(self):
-        """UC-002-A04: incomplete tenant setup raises validation error.
-
-        Spec: UNSPECIFIED (implementation-defined tenant setup validation)
-        Priority: P1
-        Type: unit
-        Source: UC-002 main flow
-        Covers: UC-002-PRECOND-03
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-        from src.services.setup_checklist_service import SetupIncompleteError
-
-        req = _make_request()
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        with (
-            patch(
-                "src.core.tools.media_buy_create.validate_setup_complete",
-                side_effect=SetupIncompleteError(
-                    "Complete required setup tasks",
-                    missing_tasks=[{"name": "Add Products", "description": "Add at least one product"}],
-                ),
-            ),
-        ):
-            with pytest.raises(AdCPConfigurationError) as exc_info:
-                await _create_media_buy_impl(req, identity=identity)
-            # Upstream graded this refusal by prose (match="(?i)setup.*incomplete|required.*tasks").
-            # The merged raise site carries no such prose: it constructs
-            # AdCPConfigurationError(details=ConfigurationDetails(...)) and the message is the
-            # code table's default ("Configuration error"). The obligation that regex stood for —
-            # the refusal NAMES which setup is incomplete, and where to complete it — is
-            # STRUCTURED now, so it is graded on details rather than dropped.
-            assert exc_info.value.details.missing_tasks == ["Add Products"]
-            assert exc_info.value.details.setup_checklist_url == "/tenant/test_tenant/setup-checklist"
-
-    @pytest.mark.asyncio
-    async def test_setup_incomplete_recovery_is_terminal(self):
-        """Setup incomplete errors are terminal — buyer can't fix by retrying.
-
-        Admin must complete tenant setup (currency limits, property tags), so this
-        is a SELLER-side configuration fault: the class is AdCPConfigurationError,
-        whose pinned enumMetadata recovery IS terminal. It used to be
-        AdCPValidationError carrying a hand-typed recovery="terminal" on a wire
-        code (VALIDATION_ERROR) the pin classifies correctable — the intent was
-        right and the pair contradicted the spec. Choosing the class whose pinned
-        recovery is the intent is how that intent is now expressed.
-        Covers: PR #1083 review
-        """
-        from src.core.tools.media_buy_create import _create_media_buy_impl
-        from src.services.setup_checklist_service import SetupIncompleteError
-
-        req = _make_request()
-        identity = PrincipalFactory.make_identity(principal_id="test_principal", tenant_id="test_tenant")
-
-        with (
-            patch(
-                "src.core.tools.media_buy_create.validate_setup_complete",
-                side_effect=SetupIncompleteError(
-                    "Complete required setup tasks",
-                    missing_tasks=[{"name": "Add Products", "description": "Add at least one product"}],
-                ),
-            ),
-        ):
-            with pytest.raises(AdCPConfigurationError) as exc_info:
-                await _create_media_buy_impl(req, identity=identity)
-            assert exc_info.value.recovery == "terminal"
-            assert exc_info.value.error_code == "CONFIGURATION_ERROR", (
-                "the terminal verdict must be carried by a code the pin classifies terminal, "
-                f"not hand-typed onto a correctable one; got {exc_info.value.error_code!r}"
-            )
 
 
 class TestIdempotencyKeyRequired:

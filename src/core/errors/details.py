@@ -508,7 +508,9 @@ class ConfigurationDetails(CapabilityRefusalDetails):
     block: str | None = None
     tracked_by: str | None = None
     missing_tasks: list[str] | None = None
-    setup_checklist_url: str | None = None
+    # No setup_checklist_url. Its one producer built it with an f-string at the raise site --
+    # recovery guidance, which CODE_TABLE's suggestion owns -- and it was a seller admin path
+    # that the buyer receiving it cannot open.
     replay_ttl_seconds: int | None = None
     min_replay_ttl_seconds: int | None = None
     max_replay_ttl_seconds: int | None = None
