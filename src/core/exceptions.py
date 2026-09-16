@@ -263,21 +263,19 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             )
 
     def __new__(cls, *args: Any, **kwargs: Any) -> AdCPSalesAgentError:
-        """Refuse to build an error whose code is absent, doubly named, or details-shaped wrong.
+        """Refuse to build an error whose code is absent, or doubly named.
 
         The invariant is: an error names a code, by its class OR explicitly. Both
         halves are refused here, so neither can be expressed.
 
-        The third refusal is ``details``. ``_details_to_wire`` calls ``details.to_wire()``
-        with no Mapping branch, on the stated ground that "mypy refuses one at the raise
-        site" -- true at every site that spells its detail type, and false at a site
-        annotated with a bare ``type[AdCPSalesAgentError]``, where ``DetailsT`` binds to
-        ``Any`` and ``Any`` accepts a dict. Two sites did, and the cost was not a wrong
-        details block: the renderer raised, INSIDE the boundary's own ``except Exception``,
-        so the raise went past the catch that would have wrapped it and a ``BUDGET_EXCEEDED``
-        / correctable / 422 reached the buyer as ``INTERNAL_ERROR`` / transient / 500.
-        Refusing here makes the mistake unconstructible instead of type-checked, which is
-        the same reason the two code refusals live here rather than in a scan.
+        TWO refusals, and nothing about ``details``. A details block needs no runtime check
+        because the class is generic in its detail type and every concrete subclass binds
+        one, so mypy rejects a dict and a foreign detail class at every raise site --
+        docs/design/error-architecture.md § "An error names its code by its class". A third
+        branch was added here for a dict that reached ``details.to_wire()``; the raise site
+        had dropped the type parameter (``type[AdCPSalesAgentError]``, which erases
+        ``DetailsT`` to ``Any``), so the type system was not consulted rather than
+        insufficient. Parameterizing the annotation was the fix, and the branch came back out.
 
         ``_code`` is annotation-only on the base, so ``hasattr`` is False here and
         True on every subclass that declares one. This is the check
@@ -297,12 +295,6 @@ class AdCPSalesAgentError[DetailsT: ErrorDetails](Exception):
             raise TypeError(f"{cls.__name__} already names a code; do not override it")
         if not has_class_code and not named:
             raise TypeError(f"{cls.__name__} declares no _code and none was named")
-        details = kwargs.get("details")
-        if details is not None and not isinstance(details, ErrorDetails):
-            raise TypeError(
-                f"{cls.__name__} was given details of type {type(details).__name__}; "
-                f"details must be an ErrorDetails subclass (see src/core/errors/details.py)"
-            )
         return cast("AdCPSalesAgentError", super().__new__(cls, *args, **kwargs))
 
     def __init__(
@@ -1152,6 +1144,24 @@ class AdCPMediaBuyRejectedError(AdCPSalesAgentError[RejectionReasonDetails]):
     """
 
     _code: ClassVar[ErrorCodeT] = AppErrorCode.MEDIA_BUY_REJECTED
+
+
+class AdCPNotCancellableError(AdCPSalesAgentError[InvalidStateDetails]):
+    """A cancel refused by the buy's own state (NOT_CANCELLABLE, 410, correctable).
+
+    The SPECIALIZATION of INVALID_STATE that the pin reserves for one input: a cancel. 3.1's
+    enum carries both codes and separates them by what was asked, not by what went wrong --
+    "The media buy or package cannot be canceled in its current state" against INVALID_STATE's
+    "Operation is not permitted for the resource's current status". So a terminal buy answers
+    NOT_CANCELLABLE to a cancel and INVALID_STATE to anything else, which is the split
+    ``BR-UC-003-update-media-buy.feature`` already states.
+
+    Carries ``InvalidStateDetails`` for the same reason its generic sibling does: the fact the
+    buyer needs is ``current_status`` -- a re-cancel is refused because the buy is already
+    canceled, and the status is what says so.
+    """
+
+    _code: ClassVar[ErrorCodeT] = ErrorCode.NOT_CANCELLABLE
 
 
 class AdcpFailure(Exception):

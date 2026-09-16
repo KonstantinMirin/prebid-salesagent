@@ -406,22 +406,23 @@ _XFAIL_TAGS: dict[str, str] = {
     # ("Cannot update media buy in terminal state: canceled"). The scenario fails
     # on the CODE, not on the absence of enforcement.
     #
-    # The gap is code specialization. The pinned enum carries both codes, both
-    # `recovery: correctable` (tests/fixtures/adcp_schemas_pinned/enums/error-code.json),
-    # and BR-UC-003-update-media-buy.feature:2094-2097 states the split correctly:
-    # INVALID_STATE covers non-cancel updates to a terminal buy, while
-    # NOT_CANCELLABLE is reserved for re-cancel attempts specifically.
-    #
-    # Graduation trigger: NOT #1261 (silent-ignore of `canceled`) -- landing that
-    # leaves INVALID_STATE in place and this scenario still red. #1961 is the
-    # sibling on the A2A `on_cancel_task` surface, not this one. No issue
-    # currently owns specializing the code on update_media_buy; this entry
-    # graduates when one lands.
-    "T-UC-003-storyboard-not-cancellable-on-recancel": (
-        "re-cancel is refused with the generic INVALID_STATE; the pinned enum reserves "
-        "NOT_CANCELLABLE for a refused cancel specifically — a code-specialization gap, "
-        "not a missing terminal-state guard (that guard is media_buy_update.py:411)"
-    ),
+    # GRADUATED: T-UC-003-storyboard-not-cancellable-on-recancel. Its diagnosis was exactly
+    # right and its graduation trigger was wrong. The gap WAS code specialization -- the
+    # pinned enum carries both codes, both `recovery: correctable`, and
+    # BR-UC-003-update-media-buy.feature states the split: INVALID_STATE covers non-cancel
+    # updates to a terminal buy, NOT_CANCELLABLE is reserved for re-cancel attempts. What
+    # the entry then said was "no issue currently owns specializing the code on
+    # update_media_buy; this entry graduates when one lands", and that is a condition no
+    # code satisfies: the specialization is three lines at the guard the entry itself cites.
+    # It reads `req.canceled` at the terminal-state branch and raises
+    # AdCPNotCancellableError for a cancel, AdCPGoneError for anything else. The class did
+    # not exist either, so the code had a graded scenario and nothing bound to it; a fixture
+    # named it on the base class instead, which is how that survived.
+    # NOT_CANCELLABLE also had no row in codes.py's _HTTP_STATUS and so answered the 500
+    # default, which this scenario's own "should NOT be a 500" line refuses -- it is 410 now,
+    # in the band whose comment is this code's sentence ("the resource's own status forbids
+    # the operation"). Measured as XPASS(strict) before the marker came out, not inferred
+    # from it going green.
     # Graduated (GH #1075, sync_creatives half): T-UC-006-idempotency-replay and
     # T-UC-006-idempotency-conflict. Both reasons are now false of production —
     # 981776bdb gave sync_creatives the shared replay path (src/core/idempotency_replay.py:

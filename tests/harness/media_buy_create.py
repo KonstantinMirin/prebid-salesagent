@@ -71,7 +71,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "audit": "src.core.tools.media_buy_create.get_audit_logger",
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
-        "setup_check": "src.core.tools.media_buy_create.validate_setup_complete",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
     }
     REST_ENDPOINT = "/api/v1/media-buys"
@@ -96,7 +95,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
         Returns (tenant, principal, product, pricing_option).
         """
-        from tests.factories import AuthorizedPropertyFactory
+        from tests.factories import AuthorizedPropertyFactory, TenantAuthConfigFactory
 
         # Seed the tenant as auto-approve (human_review_required=False). The
         # in-process transports never hit the tenant approval gate because this
@@ -118,11 +117,29 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # Here and not in setup_default_data: seeding an account for EVERY tenant made
         # UC-011's account-listing scenarios wrong ("0 accounts visible" saw one).
         self.setup_default_account()
-        # Satisfy the create_media_buy setup-checklist "Authorized Properties"
-        # gate. In-process transports skip it via the testing context, but the
-        # live e2e_rest server enforces it (validate_setup_complete), so a
-        # fully-set-up tenant needs at least one authorized property.
+        # Every CRITICAL row the create_media_buy setup-checklist gate grades, so the gate
+        # can RUN. It used to be patched out in process -- ``validate_setup_complete`` was in
+        # EXTERNAL_PATCHES, stubbed to return None -- while the live e2e_rest server, which
+        # has no patches, enforced it. One scenario, two productions, which is precisely what
+        # rule 1 of the BDD discipline forbids: a scenario is transport-independent BY
+        # CONSTRUCTION, and a patch that exists on three transports and not the fourth makes
+        # the transport the variable.
+        #
+        # The patch's own comment blamed "the testing context", a channel deleted in
+        # a1b79d22d; by then the patch was doing the skipping itself. Removing it left 96 of
+        # 180 UC-002 scenarios failing CONFIGURATION_ERROR -- not a production defect, a
+        # HALF-SEEDED tenant: "Authorized Properties" was seeded here and
+        # ``sso_configuration`` was not, and single-tenant deployments make the latter
+        # critical. Seeding both, the gate runs and all 180 pass, so nothing was being graded
+        # by the patch that is not graded by the rows.
+        #
+        # The third piece is ``auth_setup_mode``, a column on the TENANT rather than a row, so
+        # it belongs to whoever creates the tenant -- same split ``tests/utils/tenant_setup.py``
+        # documents for the integration fixtures, which needed these same three.
         AuthorizedPropertyFactory(tenant=tenant)
+        TenantAuthConfigFactory(tenant=tenant, oidc_enabled=True)
+        tenant.auth_setup_mode = False
+        self._commit_factory_data()
         product, pricing_option = self.setup_product_chain(tenant)
         return tenant, principal, product, pricing_option
 
@@ -302,7 +319,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
         # Setup checklist: pass by default
-        self.mock["setup_check"].return_value = None
 
         # Format spec: mock _get_format_spec_sync to avoid asyncio.run() inside
         # running event loop. Returns a valid format keyed by format_id. Tests

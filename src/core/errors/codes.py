@@ -395,6 +395,13 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
         ErrorCode.IDEMPOTENCY_EXPIRED: 409,
         # 410 — the resource's own status forbids the operation.
         ErrorCode.INVALID_STATE: 410,
+        # Same band, same sentence: "The media buy or package cannot be canceled in its
+        # CURRENT STATE." Absent from this map it fell to the 500 default, which the 5xx
+        # band below defines as "the buyer cannot fix it" -- and the pin classifies this one
+        # correctable, with "check the seller's cancellation policy or contact the seller".
+        # A correctable code answered 500 tells the buyer two different things about one
+        # refusal, the same disagreement the SERVICE_UNAVAILABLE note below records.
+        ErrorCode.NOT_CANCELLABLE: 410,
         # 422 — well-formed, understood, and refused on its merits.
         ErrorCode.ACCOUNT_SETUP_REQUIRED: 422,
         ErrorCode.BUDGET_EXCEEDED: 422,

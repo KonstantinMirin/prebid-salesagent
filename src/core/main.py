@@ -382,10 +382,10 @@ class RegistryTool(Tool):
         except Exception as exc:
             # Raised OUTSIDE ``serve`` -- reading the headers, rendering the result -- so no
             # caller was resolved and the record is unscoped. A tool's own failure never
-            # reaches here, and what makes that true is that ``failure_response`` is TOTAL:
-            # the boundary calls it from inside its own ``except Exception``, so a raise
-            # there would land on this branch instead, with no identity and no echo. It
-            # did, once, for a dict ``details`` that had no ``to_wire``.
+            # reaches here. What makes that true is upstream of the boundary: ``failure_response``
+            # runs inside the boundary's own ``except Exception``, so anything it raises lands
+            # HERE, identity-less and echo-less. A dict ``details`` with no ``to_wire`` did,
+            # once, through the one raise site that had dropped the detail type parameter.
             response = failure_response(TransportProtocol.MCP, self.name, exc)
         # MCP's wire failure marker is a raised ToolError, and that marker is all this
         # transport adds: the BODY is the response the boundary built, serialized by the same

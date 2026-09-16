@@ -37,8 +37,57 @@ move it up this list.
   "production emits X", "the scenario expects X" are not — those are levels 4 and below,
   and they are what you are checking, not what you are checking against.
 
+## WHICH KIND OF TEST — decide this before picking a harness
+
+There is a preference order, and it is not a matter of taste. Answer in order and stop at the
+first that fits:
+
+> **1. BDD  →  2. integration, only if BDD cannot  →  3. unit, only for a pure function**
+
+**BDD is the default and covers behavior.** A behavior is anything a buyer can observe: a
+response field, an error code, a status, a webhook. One scenario runs on a2a, mcp, rest and
+e2e_rest against real production and a real database, so it grades the seller rather than a
+seat inside it.
+
+**Integration is for a behavior BDD genuinely cannot reach** — and the bar is two-part, both
+halves required:
+
+1. BDD cannot express it (no wire, no transport, or the subject is a repository or migration
+   contract rather than a buyer-visible outcome); **and**
+2. **it is a testable behavior at all.** A test that patches one layer in order to watch
+   another layer's defensive code run is testing the patch. If the state the layer reads
+   cannot occur, the answer is to make it unrepresentable in the design, not to fabricate it
+   with a mock. That is the single most common reason a test here should not exist.
+
+**Unit is for exactly one thing: a pure function.** Input in, value out, no database, no
+transport, no time, no identity. Nothing behavioral. A "unit test" of a controller, a
+boundary, or an error path is a behavioral test wearing the wrong suite's clothes, and it is
+graded by mocks it set up itself.
+
+### A lacking harness is not a licence to monkey-patch
+
+If the harness cannot express the state a scenario needs, **the harness is the thing to
+change** — an env method, a factory, a `realize_e2e` branch. Patching production out to make
+a scenario runnable is how a suite comes to grade a seller no deployment runs, and it is
+specifically forbidden by rule 1 below: a patch that exists on three transports and not the
+fourth makes the transport the variable rather than the constant.
+
+This is not hypothetical. `validate_setup_complete` was in `MediaBuyCreateEnv.EXTERNAL_PATCHES`
+stubbed to return `None`, while the live e2e_rest server enforced it — one scenario, two
+productions. Removing the patch left 96 of 180 UC-002 scenarios failing `CONFIGURATION_ERROR`;
+none was a production defect, all were a half-seeded tenant. Seeding the rows the gate
+actually grades, all 180 pass and the gate is real on every transport.
+
+The only defensible patch target is a system **we do not own and a test cannot call** — the ad
+server, an external creative agent, Slack, an LLM. Our own code is never one, and neither is
+our own database.
+
+**Related:** root [CLAUDE.md](../CLAUDE.md) pattern 11 — a production path that branches on a
+test flag is the same defect one layer down, and is build-failing.
+
 ## Contents
 
+- [Which kind of test](#which-kind-of-test--decide-this-before-picking-a-harness) — BDD, then integration only if it cannot, then unit only for pure functions
 - [The harness system (use this)](#the-harness-system-use-this) — environments, capabilities, and multi-transport dispatch
 - [Test types](#test-types) — unit, integration, BDD, E2E, and admin suites
 - [Factory system (use this)](#factory-system-use-this) — ORM and Pydantic factories, the identity helper, session binding
@@ -49,6 +98,18 @@ move it up this list.
 - [Quick reference: Write a new test](#quick-reference-write-a-new-test) — copyable skeletons for integration, unit, and BDD tests
 - [Error verification policy](#error-verification-policy) — assert on the wire envelope, not reconstructed exceptions
 - [Infrastructure](#infrastructure) — which command starts what
+
+Each subdirectory carries its own pointer, injected when you edit a file there. They say what
+belongs in that directory and point back here for the rules; none of them restates a rule,
+because a restated rule drifts from the one it copied:
+
+| Directory | What its pointer covers |
+|---|---|
+| [unit](unit/CLAUDE.md) | pure functions only, and the narrow structural-guard exception |
+| [integration](integration/CLAUDE.md) | the two-part bar for landing here at all, and the fixture debt |
+| [bdd](bdd/CLAUDE.md) · [bdd/steps](bdd/steps/CLAUDE.md) | helper-per-situation; what a step author gets wrong, and why a Given never mocks |
+| [harness](harness/CLAUDE.md) | what `EXTERNAL_PATCHES` may target, and what an env owns instead |
+| [factories](factories/CLAUDE.md) | one factory per model, one seeder for multi-row facts, and the 15 missing |
 
 ## The harness system (use this)
 

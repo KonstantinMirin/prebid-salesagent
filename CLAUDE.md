@@ -2,7 +2,7 @@
 
 ## 🤖 For Claude (AI assistant)
 
-This guide surfaces the repository-specific rules for the Prebid Sales Agent codebase (maintained under Prebid.org). The 9 critical patterns and the structural guards that enforce them are non-negotiable; the § Documentation list at the end says where the depth lives.
+This guide surfaces the repository-specific rules for the Prebid Sales Agent codebase (maintained under Prebid.org). The 11 critical patterns and the structural guards that enforce them are non-negotiable; the § Documentation list at the end says where the depth lives.
 
 **Never push directly to main.** Commits and PR titles use Conventional Commits prefixes — `feat` / `fix` / `docs` / `refactor` / `perf` / `chore` — enforced by `.github/workflows/pr-title-check.yml`; release-please builds the changelog from them, so an unprefixed commit ships undocumented.
 
@@ -60,6 +60,7 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 | Query type safety | DB queries use types matching column definitions | `test_architecture_query_type_safety.py` |
 | Serialize only at the edges | No `.model_dump()`, `.model_dump_json()`, `pydantic_core.to_json` or `to_jsonable_python` outside the named edge modules; a tool hands the model through | `ruff-serialization.toml` (TID251) + `.ast-grep/rules/serialize-only-at-the-edges.yml` |
 | Environment read once | No `os.environ` / `os.getenv` under `src/` or `scripts/` outside the settings loader (`src/core/config.py`) and the two writes of variables another library reads; a composition root calls `load_settings()` and everything else reads a named fact off the object | `ruff-environment.toml` (TID251) + `test_ruff_boundary_bans.py` |
+| Test flags never reach production | No read of `adcp_testing` under `src/` outside the settings loader that declares it; a behavior that differs under test reads a real input (a tenant column, an `AdapterConfig` row, a settings field) that the test seeds. The loader's seven properties that still fork on it are pinned shrink-only, not exempted (GH #2255) | `.ast-grep/rules/test-flag-never-reaches-production.yml` + `test_ast_grep_test_flag_ban.py` + `test_test_flag_properties_only_shrink.py` |
 | internal_detail is an exception | `internal_detail=` (and `x.internal_detail =`) never takes an authored string in any spelling (literal, f-string, `+`, `%`, `.format`, `str()`, conditional), under `src/`, `scripts/` or `tests/`; the parameter is typed `BaseException \| None`, and the boundary writes one record per failure with the traceback attached when the error has a `__cause__` or an `internal_detail` | `.ast-grep/rules/internal-detail-is-an-exception.yml` + mypy on `src/` + `test_tool_error_logging.py` |
 | No direct DB access | No `get_db_session()` or `session.add()` anywhere outside repositories/UoW/infrastructure | `test_architecture_repository_pattern.py` |
 | Migration completeness | Every migration has non-empty `upgrade()` and `downgrade()` | `test_architecture_migration_completeness.py` |
@@ -411,6 +412,59 @@ hand-written address check. A `# noqa` does not silence it.
 
 - **The rule, what it refuses, and how to add a call:** [docs/security/outbound-egress.md](docs/security/outbound-egress.md)
 - **What the `adcp` SDK owns and what this repo carries:** [docs/design/egress-sdk-boundary.md](docs/design/egress-sdk-boundary.md)
+
+### 10. Errors: one subclass per code, one declared details class
+
+**Raise an `AdCPSalesAgentError` subclass bound to the code, and pass the `ErrorDetails`
+subclass its type parameter declares. That is the whole API.**
+
+```python
+raise AdCPBudgetExceededError(details=BudgetDetails(requested_budget="500", budget_limit="100"))
+```
+
+`AdCPSalesAgentError` is generic in its details type and each of the 48 concrete subclasses
+binds one, so **mypy is the enforcement** — it rejects a dict and a foreign details class at
+every raise site. Three things follow, and each has been got wrong:
+
+- **Never a runtime check for what the type already refuses.** A `__new__` branch validating
+  `details` was added and removed in one day: the one site a dict escaped from was annotated
+  `type[AdCPSalesAgentError]` with the parameter dropped, which erases the type variable to
+  `Any`. The type system was not consulted, not insufficient. Parameterize the annotation.
+- **Never a `try` around the boundary's failure builder.** `failure_response` runs inside the
+  boundary's own `except Exception`, so a raise there is past the catch — but the answer is to
+  make the raise impossible upstream, not to catch it and answer INTERNAL_ERROR while the
+  record says otherwise.
+- **A code with no subclass is a gap, not a reason to name it on the base.**
+  `AdCPSalesAgentError(error_code="NOT_CANCELLABLE")` is the one way to put a code on the wire
+  with nothing bound to it. Add the subclass.
+
+No raise site authors text: `message`, `recovery`, `suggestion` and `status_code` are
+read-only properties over `CODE_TABLE`. A diagnostic sentence is logged, never carried —
+`internal_detail` takes an exception, and no `ErrorDetails` class has a free-text field.
+
+**The full rules, and the reasoning for each:**
+[docs/design/error-architecture.md](docs/design/error-architecture.md). Read it before adding
+or changing a raise site; this entry is a pointer and the document is the contract.
+
+### 11. Test flags never reach production behavior
+
+**A production path that branches on `adcp_testing` is a bug, always.**
+
+The flag says a suite is running. It says nothing about the seller being served, so a fork on
+it makes the suite grade a seller that no deployment runs — and makes the suite's verdict
+conditional on the suite being what ran it. Both fixes are the same shape and neither is the
+fork: give the behavior a **real input** a deployment can set (a tenant column, an
+`AdapterConfig` row, a settings field) and let the test seed it like any other state.
+
+The same rule binds the test side: patching a production step out so a scenario can run is
+how a scenario comes to grade a seller that does not exist. See
+[tests/CLAUDE.md](tests/CLAUDE.md) § Which kind of test.
+
+**Enforced by:** `.ast-grep/rules/test-flag-never-reaches-production.yml` (ast-grep, not
+ruff — the flag is an attribute read, and TID251 only sees imported names). `src/core/config.py`
+is exempt because it declares the field; the seven properties there that read it are the
+outstanding violations, pinned shrink-only by
+`tests/unit/test_test_flag_properties_only_shrink.py` and owned by GH #2255.
 
 ---
 

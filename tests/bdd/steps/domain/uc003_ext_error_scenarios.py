@@ -36,7 +36,7 @@ def _inject_privilege_error(ctx: dict) -> None:
     short-circuits the fields-less ext-n request through the empty-update path
     and never reaches the adapter — hence the documented production gap.
     """
-    from src.core.exceptions import AdCPSalesAgentError
+    from src.core.exceptions import AdCPAuthorizationError
 
     env = ctx["env"]
     # MediaBuyDualEnv keys the UPDATE adapter under "update_adapter" (the create
@@ -45,12 +45,17 @@ def _inject_privilege_error(ctx: dict) -> None:
     # the adapter execution step (media_buy_update.py:628/692/760) — NOT
     # validate_media_buy_request, which the update path never calls.
     mock_adapter = env.mock["update_adapter"].return_value
-    # PERMISSION_DENIED is canonical (pinned enum @04f59d2d5, recovery
-    # correctable) but no typed subclass models it, so synthesize the code.
-    # The code alone. ``suggestion`` is a read-only property over CODE_TABLE, so the
-    # ``details={"suggestion": ...}`` block this used to carry reached nothing -- and
-    # ``__new__`` now refuses a details block that is not an ErrorDetails class.
-    error = AdCPSalesAgentError(error_code="PERMISSION_DENIED")
+    # The CLASS that names PERMISSION_DENIED, not the code named on the base. This read
+    # "no typed subclass models it, so synthesize the code" and that was simply untrue --
+    # AdCPAuthorizationError has carried ``_code = PERMISSION_DENIED`` all along
+    # (exceptions.py). Naming a code on the base is the one way to put a code on the wire
+    # with no class bound to it, so a fixture doing it either hides an absent class or,
+    # here, an unchecked claim that one is absent.
+    #
+    # No details either: ``suggestion`` is a read-only property over CODE_TABLE, so the
+    # ``details={"suggestion": ...}`` block this used to carry reached nothing -- a details
+    # block is a declared ErrorDetails subclass and none of them has a suggestion field.
+    error = AdCPAuthorizationError()
     mock_adapter.update_media_buy.side_effect = error
 
 
@@ -675,20 +680,34 @@ def given_media_buy_uncancellable(ctx: dict) -> None:
     """Mark the active media buy as carrying committed delivery + request cancel.
 
     BR-RULE-216 INV-4: a buy not cancellable in its current state must reject a
-    cancel with NOT_CANCELLABLE. Production never reads canceled and has no
-    state-based cancellation check (gap, ext-v). We branch the update adapter to
-    refuse the cancel (the seller-side gate) and set canceled=true so the real
-    cancellation path is exercised on the wire.
+    cancel with NOT_CANCELLABLE.
+
+    TWO CASES CARRY THAT CODE and only one of them is implemented. A RE-CANCEL -- a cancel
+    against a buy already in a terminal state -- is refused by the state-machine guard
+    (``media_buy_update.py``), which now raises ``AdCPNotCancellableError`` for a cancel and
+    keeps INVALID_STATE for every other mutation, the split the pinned enum draws by what was
+    asked. THIS scenario is the other case: an ACTIVE buy the seller will not cancel
+    mid-flight for contractual reasons. There is no such policy in production -- no
+    commitment model to read, so nothing to refuse from -- so the adapter is branched to
+    stand in for the seller-side gate.
+
+    That branch is a fixture manufacturing an outcome production cannot reach, which is
+    exactly what a mock in a BDD Given should not be doing: it makes the scenario runnable
+    without making the behavior real, and what the run then grades is the boundary carrying
+    an adapter's error to the wire rather than any cancellation policy. It stays only
+    because deleting it would silently change what the ledgered entry fails on; the seller
+    commitment model is the actual missing piece.
     """
-    from src.core.exceptions import AdCPSalesAgentError
+    from src.core.exceptions import AdCPNotCancellableError
 
     kwargs = _ensure_update_defaults(ctx)
     kwargs["canceled"] = True
-    # Branch the seller-side refusal at the update adapter with the canonical code.
     env = ctx["env"]
     mock_adapter = env.mock["update_adapter"].return_value
-    # The code alone — CODE_TABLE owns the suggestion (see the PERMISSION_DENIED step above).
-    mock_adapter.update_media_buy.side_effect = AdCPSalesAgentError(error_code="NOT_CANCELLABLE")
+    # The CLASS, not the code named on the base: AdCPNotCancellableError exists now and has a
+    # production raise site, so a fixture standing in for the seller gate uses the same type
+    # production would. CODE_TABLE owns the suggestion (see the PERMISSION_DENIED step above).
+    mock_adapter.update_media_buy.side_effect = AdCPNotCancellableError()
 
 
 # ═══════════════════════════════════════════════════════════════════════
