@@ -74,6 +74,36 @@ travel the same road:
 That residual middleware, if MCP needs one, CAPTURES bytes and decides nothing — which keeps
 the principle intact.
 
+### CORRECTION from implementation — `signed_body` alone was wrong
+
+The plumbing above says `signed_body: bytes | None`, sourced per transport. Implementation
+found that insufficient, and the correction is better. Recorded here so the doc does not stay
+wrong:
+
+* **Bytes alone do not cover the signature base.** `@target-uri` covers the URL AS SENT with
+  percent-encoding intact, and `scope["path"]` is percent-DECODED by every real server
+  (uvicorn sets `path = unquote(raw_path)`), so only `raw_path` — bytes on the scope — can
+  rebuild it. `@method` is simply absent from what a transport hands the boundary. A digest is
+  not the only covered component the boundary cannot reconstruct.
+* **Per-transport sourcing would fork the one derivation that must not fork.** Three transports
+  sourcing it separately means three copies of the `@target-uri` derivation — and unlike most
+  duplication, divergence there fails EVERY signed request rather than an edge case.
+
+So: ONE capture, one derivation, three readers. The middleware records an `HttpExchange`
+(`method`, `url`, body) on `scope["state"]`; the resolver reads it. It still decides nothing —
+verified by there being no `raise`, no `401`, no `status_code` and no early `send` in it.
+
+Two further implementation findings worth keeping:
+
+* The capture is scoped by an **allowlist of AdCP surfaces, not a denylist**. That permanently
+  exempts the trust-root documents: buffering in front of `/.well-known/jwks.json` costs
+  nothing, but a VERIFIER in front of it would be a bootstrap deadlock — and an allowlist
+  cannot forget to exclude it.
+* The buffer must be **lossless on every exit**. The downstream app builds its `Request` from
+  the same scope and reads the SAME receive channel, so a buffer that consumed and discarded
+  would hand the handler a destroyed body. Over-cap refuses only the HASHING, and the
+  disconnect still reaches the app.
+
 ### The consequence to design deliberately
 
 The refusal stops being bodyless and becomes an AdCP envelope, so `_challenge_for_code` must
