@@ -1639,6 +1639,19 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
     - daily=1001 cap=1000: exceeds by 1 (budget=10010, 10-day flight)
     - daily=9999 no-cap: no cap configured (check skipped)
     - 0-day-flight: start==end, production floors to 1 day
+
+    THE DAILY RATE IS WHAT THESE ROWS VARY; THE TOTAL IS NOT FREE. A cap applies to
+    ``budget / flight_days``, so a row can reach any daily figure by raising the budget or by
+    shortening the flight -- but the TOTAL is what every downstream limit sees, and impressions
+    are derived from it (``budget / cpm * 1000``). The no-cap row reached daily=9999 the first
+    way, with a 99990 budget over ten days, and at the seeded $10 CPM that asks the seller for
+    9,999,000 impressions against the mock ad server's 1,000,000 goal ceiling (a real
+    GAM-style limit, ``mock_ad_server.py``). The live server refused it --
+    ``packages[0].impressions``, rejected_value 9999000 -- and the row failed on e2e_rest while
+    passing on the three transports that mock the adapter and so never reach that check. Its
+    sibling at 10000 survives by exactly one impression: 1,000,000 is not ``> 1000000``.
+    Reaching the same daily figure by shortening the flight keeps the row's meaning and stops
+    it asking for inventory no seller would sell.
     """
     config = config.strip()
 
@@ -1649,7 +1662,9 @@ def given_daily_spend_boundary(ctx: dict, config: str) -> None:
         _set_daily_spend_cap(ctx, cap=1000.0, budget=10010.0)
 
     elif config == "daily=9999 no-cap":
-        _set_daily_spend_cap(ctx, cap=None, budget=99990.0)
+        # daily = 9999/1 = 9999, which breaches every cap this outline uses, so the row still
+        # proves the check is SKIPPED rather than merely satisfied. 999,900 impressions.
+        _set_daily_spend_cap(ctx, cap=None, budget=9999.0, flight_days=1)
 
     elif config == "0-day-flight":
         # 0-day flight: start==end, production floors flight_days to 1
