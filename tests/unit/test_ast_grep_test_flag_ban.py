@@ -179,9 +179,31 @@ def test_the_config_exemption_is_live_not_prose() -> None:
     assert proc.returncode == 0
 
 
+def _tracked_production_modules() -> list[str]:
+    """Every ``.py`` file under ``src/`` that git tracks.
+
+    Case (e)'s subject is the COMMITTED tree, so it asks git rather than scanning the
+    working directory. Scanning ``src/`` outright made the case sensitive to any stray
+    local file — including the probe cases (a)-(c) plant under ``src/_ast_grep_probe/``,
+    which on a serial run is cleaned up before this case sees it and under xdist is not:
+    the probe lands on one worker while this case scans on another, and the guard fails
+    on its own fixture. A file nothing tracks is by definition not a production path.
+    """
+    listed = subprocess.run(
+        ["git", "ls-files", "-z", "src/"],
+        capture_output=True,
+        text=True,
+        cwd=repo_root(),
+        check=True,
+    )
+    modules = [p for p in listed.stdout.split("\0") if p.endswith(".py")]
+    assert modules, "git tracks no .py files under src/, so this case has no subject"
+    return modules
+
+
 def test_the_tree_is_clean_under_the_rule() -> None:
     """(e) THE LIVE TREE — no production file outside the exemption reads the flag."""
-    proc = _scan("src/")
+    proc = _scan(*_tracked_production_modules())
 
     assert _matches(proc) == [], (
         "a production path reads adcp_testing. Give the behavior a real input a deployment "
