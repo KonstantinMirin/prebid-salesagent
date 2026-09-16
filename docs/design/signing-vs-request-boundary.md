@@ -195,6 +195,42 @@ when `params.name` equals the listed string. This is why the verifier must match
 ENVELOPE's `method`, not on the resolved tool name — the resolved-tool-name shortcut looks
 correct, is simpler, and is a conformance failure.
 
+## KNOWN GAP — Decision 1 un-enforces the protocol-method namespace
+
+Found in implementation, and it is the one place the owner's decision costs real coverage.
+Stated here rather than left in a source comment.
+
+`protocol_methods_supported_for` / `_required_for` grade the JSON-RPC ENVELOPE's `method` —
+`tasks/cancel`, `tasks/get`, `tasks/resubscribe`, `tasks/pushNotificationConfig/set`. **None of
+those reach `invoke_tool`.** The a2a-sdk answers them itself, below AdCP tool dispatch. So
+moving verification into `_resolve_identity` — which only runs once a registry row has been
+resolved — leaves that entire namespace unverified.
+
+The sharp instance: **`tasks/pushNotificationConfig/set` registers webhook credentials with no
+skill invocation at all.** security.mdx :1465 is explicit that a request carrying webhook
+credentials must be signed, and that the composition rule does NOT exempt an authenticated
+caller, precisely because an on-path mutator can inject or strip the `authentication` block.
+Under Decision 1 as written, that request is never verified.
+
+Recorded in `src/core/signing/verifier.py` § "What the boundary cannot see".
+
+### The resolution is not "put it back in the middleware"
+
+The spec already models these as **two namespaces matched against disjoint envelope fields**,
+and forbids cross-matching between them (`security.mdx` :1053). Two disjoint namespaces may
+legitimately have two enforcement points; what the design forbids is two places deciding the
+SAME question. So:
+
+* **AdCP operations** — verified in `_resolve_identity`, as now. Unchanged.
+* **Protocol methods** — verified at the A2A transport entry, BEFORE the a2a-sdk dispatches
+  them, because that is the only point where they exist at all.
+
+That keeps one decider per namespace, matches the spec's own split, and closes the
+credential-registration hole. It is NOT a retreat to the old ASGI middleware, which decided
+both questions in one place above everything.
+
+Until it is built, the gap is real and `tasks/pushNotificationConfig/set` is unsigned-acceptable.
+
 ## Decision 3 — every one of our raise sites loses its message
 
 #1721 removes `message` from `AdCPError.__init__`; `CODE_TABLE` (100 entries) becomes the sole
