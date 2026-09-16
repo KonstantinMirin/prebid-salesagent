@@ -907,3 +907,56 @@ def test_external_patch_targets_name_production_seams(env_name: str, env_cls: ty
         "intercepts nothing production calls, so the env would run against the real "
         "collaborator while reporting a mock in place"
     )
+
+
+class TestAResolvedIdentityHasNoWireRepresentation:
+    """``identity=`` on a wire transport is refused, not shipped as a request field.
+
+    A transport carries a CREDENTIAL; the resolver turns it into a ``ResolvedIdentity``
+    inside ``serve``. So there is no wire spelling for an already-resolved identity, and a
+    test cannot inject one through a2a/mcp/rest -- ``credential={}`` (send no headers) and
+    ``credential={...}`` (send these) are the whole of what a caller controls.
+
+    Before this refusal the kwarg was forwarded into the request payload, where the
+    accepted-shape strip refused it as an undeclared field. Production was right, but the
+    diagnosis reaching the test -- ``INVALID_REQUEST`` with ``pointer: /identity`` -- named
+    a spec violation for what is a harness misuse. It has now been read that way three
+    times: two tests in ``tests/integration/test_creative_formats_discovery.py`` assert
+    against it today, and ``MediaBuyDualEnv._flatten_update_params`` carries a paragraph
+    about a UC-003 row that shipped ``identity=None`` into the DTO and "got INVALID_REQUEST
+    on all three transports while asserting AUTH_MISSING" -- fixed there by stripping the
+    key in that one env. This is the same fix at the one place every transport passes.
+
+    The codebase already answers this shape the same way twice more:
+    ``AdapterCreateResult`` sets ``extra="forbid"`` so a kwarg no tool reads raises at
+    construction, and ``PrincipalFactory.make_identity`` refuses unknown keywords rather
+    than dropping them.
+
+    SCOPE: ``_dispatch_core`` is the one dispatch core for a2a, mcp and both e2e
+    transports. The two REST dispatchers hand-assemble the core's own WRAP/DELIVER/UNWRAP
+    around a per-env ``REST_ENDPOINT`` literal instead of calling the assembly, so they do
+    not pass through here and ``identity=`` still reaches a REST payload. Migrating them is
+    the fix; it is not this change.
+    """
+
+    def test_dispatch_core_refuses_identity_in_the_payload(self):
+        from tests.harness.client import _dispatch_core
+        from tests.harness.transport import Transport
+
+        with pytest.raises(TypeError, match="identity"):
+            _dispatch_core(MagicMock(), Transport.A2A, "list_creative_formats", {"identity": object()}, {})
+
+    def test_every_refused_key_names_what_to_use_instead(self):
+        from tests.harness.client import _RESOLVER_OWNED_PAYLOAD_KEYS, _refuse_resolver_owned_payload_keys
+
+        assert set(_RESOLVER_OWNED_PAYLOAD_KEYS) == {"identity", "principal", "tenant"}
+        for key, instead in _RESOLVER_OWNED_PAYLOAD_KEYS.items():
+            assert instead, f"{key} names no alternative"
+            with pytest.raises(TypeError, match=key):
+                _refuse_resolver_owned_payload_keys({key: object()})
+
+    def test_a_real_request_field_still_passes(self):
+        """The refusal is three names, not a general kwargs ban."""
+        from tests.harness.client import _refuse_resolver_owned_payload_keys
+
+        _refuse_resolver_owned_payload_keys({"min_width": 728, "format_ids": ["display_300x250"]})

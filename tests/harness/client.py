@@ -653,6 +653,38 @@ def _unwrap_rest(env: BaseTestEnv, raw: Any, transport: Transport, tool_name: st
     return unwrap_rest_response(env, raw, transport, lambda body: _parse_pinned_response(tool_name, body))
 
 
+#: Facts the RESOLVER produces, which therefore have no spelling in a request payload.
+#: Each maps to what a caller controls instead. A wire carries a credential; ``serve``
+#: turns it into a ``ResolvedIdentity`` and reads the tenant and account off that, so
+#: none of these is a field any DTO declares.
+_RESOLVER_OWNED_PAYLOAD_KEYS = {
+    "identity": "pass credential={...} to present headers, or credential={} to send none",
+    "principal": "the resolver derives it from the credential; seed the row with PrincipalFactory",
+    "tenant": "the resolver derives it from the credential or the hostname",
+}
+
+
+def _refuse_resolver_owned_payload_keys(payload: dict[str, Any]) -> None:
+    """Refuse a payload key that names something the resolver owns.
+
+    These reached production as UNDECLARED REQUEST FIELDS, where the accepted-shape
+    strip refused them correctly -- but as ``INVALID_REQUEST`` with, for ``identity=``,
+    ``pointer: /identity``. That reads as a spec violation by the seller when it is a
+    harness misuse, and three tests in
+    ``tests/integration/test_creative_formats_discovery.py`` were written against that
+    reading. Refusing here makes the mistake impossible to express instead of
+    diagnosable after the fact, which is the same answer ``AdapterCreateResult``'s
+    ``extra="forbid"`` and ``PrincipalFactory.make_identity``'s unknown-keyword refusal
+    already give for their own arguments.
+    """
+    for key, instead in _RESOLVER_OWNED_PAYLOAD_KEYS.items():
+        if key in payload:
+            raise TypeError(
+                f"{key}= is not a request field: the resolver produces it inside serve(), so it has "
+                f"no wire representation and no DTO declares it. Instead, {instead}."
+            )
+
+
 def _dispatch_core(
     env: BaseTestEnv,
     transport: Transport,
@@ -696,6 +728,7 @@ def _dispatch_core(
     dispatches; a caller that needs the flat wire dict for one of them reads
     ``result.wire_response`` directly instead of relying on ``is_success``.
     """
+    _refuse_resolver_owned_payload_keys(payload)
     address = ADDRESS_TABLE.resolve(tool_name, transport)
     wrapped = WRAP[transport](address, payload)
     try:
