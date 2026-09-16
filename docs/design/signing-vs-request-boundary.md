@@ -195,41 +195,43 @@ when `params.name` equals the listed string. This is why the verifier must match
 ENVELOPE's `method`, not on the resolved tool name — the resolved-tool-name shortcut looks
 correct, is simpler, and is a conformance failure.
 
-## KNOWN GAP — Decision 1 un-enforces the protocol-method namespace
+## The protocol-method namespace: NOT a gap for this agent
 
-Found in implementation, and it is the one place the owner's decision costs real coverage.
-Stated here rather than left in a source comment.
+Implementation flagged that Decision 1 un-enforces `protocol_methods_*` — those methods are
+answered by the a2a-sdk below AdCP dispatch, so verification inside `_resolve_identity` never
+sees them. That was written assuming the methods DO something here. Measured, they do not:
 
-`protocol_methods_supported_for` / `_required_for` grade the JSON-RPC ENVELOPE's `method` —
-`tasks/cancel`, `tasks/get`, `tasks/resubscribe`, `tasks/pushNotificationConfig/set`. **None of
-those reach `invoke_tool`.** The a2a-sdk answers them itself, below AdCP tool dispatch. So
-moving verification into `_resolve_identity` — which only runs once a registry row has been
-resolved — leaves that entire namespace unverified.
+| Method | What this agent does |
+|---|---|
+| `tasks/pushNotificationConfig/{set,get,list,delete}` | all four `raise PushNotificationNotSupportedError()` — the agent advertises `push_notifications=False` (`adcp_a2a_server.py:427-456`) |
+| `tasks/get`, `tasks/cancel` | read `self.tasks`, an IN-MEMORY dict written only at `:266` within the same session — no persistence, no credentials, no AdCP state |
+| any `tasks/*` as an AdCP operation | **zero rows** in `src/core/tools/registry.py` |
 
-The sharp instance: **`tasks/pushNotificationConfig/set` registers webhook credentials with no
-skill invocation at all.** security.mdx :1465 is explicit that a request carrying webhook
-credentials must be signed, and that the composition rule does NOT exempt an authenticated
-caller, precisely because an on-path mutator can inject or strip the `authentication` block.
-Under Decision 1 as written, that request is never verified.
+So there is no credential registration to escalate through and no cross-request state to
+mutate. The namespace has no surface on this agent, and we declare nothing in
+`protocol_methods_*` — which is also what the SDK would allow, since `VerifierCapability`
+carries only 2 of the 6 buckets and silently drops the other four. We neither verify them nor
+claim to, which is honest and conformant.
 
-Recorded in `src/core/signing/verifier.py` § "What the boundary cannot see".
+**Why it is empty is deliberate, and it is the answer to the layering question.** A2A task
+lifecycle is a concept from a different protocol, poorly mapped onto AdCP; this agent uses the
+A2A envelope and nothing else. The spec carries `protocol_methods_*` because the transport SDKs
+auto-register `tasks/*` whether a seller wants them or not — defensible defensive thinking about
+a surface you inherit. But the need for it at all comes from jamming one protocol onto two
+transports, and declining the surface outright is the coherent response.
 
-### The resolution is not "put it back in the middleware"
+Revisit ONLY if this agent starts serving A2A task lifecycle for real. Then the enforcement
+point is the A2A transport entry, before the sdk dispatches — one decider per namespace, matching
+the spec's own disjoint-field split, not a retreat to the old ASGI middleware.
 
-The spec already models these as **two namespaces matched against disjoint envelope fields**,
-and forbids cross-matching between them (`security.mdx` :1053). Two disjoint namespaces may
-legitimately have two enforcement points; what the design forbids is two places deciding the
-SAME question. So:
+## Batching: one request, one call
 
-* **AdCP operations** — verified in `_resolve_identity`, as now. Unchanged.
-* **Protocol methods** — verified at the A2A transport entry, BEFORE the a2a-sdk dispatches
-  them, because that is the only point where they exist at all.
-
-That keeps one decider per namespace, matches the spec's own split, and closes the
-credential-registration hole. It is NOT a retreat to the old ASGI middleware, which decided
-both questions in one place above everything.
-
-Until it is built, the gap is real and `tasks/pushNotificationConfig/set` is unsigned-acceptable.
+The spec is silent on whether a signed body may carry batched JSON-RPC messages, and both
+readings are bad — signing a concatenation means the signature covers no single operation, and
+`protocol_methods_*` matching "the envelope's `method`" is undefined when there are several.
+Owner decision: **we implement as though batching is forbidden — one request, one call.**
+#1721 already processes only one task from an A2A batch, so this is consistent. Anything else
+is an AdCP v4 design question, not a 3.1.1 clarification; file it upstream as such.
 
 ## Decision 3 — every one of our raise sites loses its message
 
