@@ -329,7 +329,7 @@ _MCP_ACCEPT = "application/json, text/event-stream"
 #: import here. Each entry is where PRODUCTION reads the config on that transport,
 #: which is genuinely not the same place — see ``_a2a_message_send_body``.
 _OPERATION_CREDENTIAL_LOCATION: dict[str, str] = {
-    "a2a": "SendMessage params.configuration.task_push_notification_config",
+    "a2a": "the AdCP request body's push_notification_config (the SendMessage DataPart)",
     "mcp": "the tools/call arguments' push_notification_config",
     "rest": "the AdCP request body's push_notification_config",
     "e2e_rest": "the AdCP request body's push_notification_config",
@@ -366,26 +366,6 @@ def _by_signature_code(samples: dict[tuple[tuple[str, str], ...], float]) -> dic
     return out
 
 
-#: The A2A JSON-RPC method a buyer registers webhook credentials with WITHOUT
-#: invoking any skill — the SECOND credential location this transport carries.
-#: Named as the NATIVE 1.0 method, ``JsonRpcDispatcher.METHOD_TO_MODEL``'s own key.
-#: The 0.3 spelling (``tasks/pushNotificationConfig/set``) is NOT served — see
-#: :data:`_A2A_VERSION_HEADER` — and naming it put ``-32601 Method not found`` on the
-#: wire, which reads as a seller that declined to refuse.
-#:
-#: It is a REACHABLE ROUTE and an UNVERIFIED one, which is the whole reason a scenario
-#: sends here: ``AdCPRequestHandler.on_create_task_push_notification_config``
-#: (``src/a2a_server/adcp_a2a_server.py``) declines with
-#: ``PushNotificationNotSupportedError`` without ever calling ``invoke_tool``, so the
-#: verifier inside ``_resolve_identity`` never sees the registration. That is the
-#: second of the two classes named by ``src/core/signing/verifier.py`` § "What the
-#: boundary cannot see"; grading it is how this harness keeps the gap visible.
-_A2A_PUSH_CONFIG_SET = "CreateTaskPushNotificationConfig"
-
-#: How a failure names the location above.
-_A2A_PUSH_CONFIG_SET_LOCATION = f"the {_A2A_PUSH_CONFIG_SET} params"
-
-
 def _a2a_jsonrpc_body(method: str, params: Any) -> dict[str, Any]:
     """One JSON-RPC 2.0 frame for ``/a2a``, with *params* rendered by proto JSON.
 
@@ -407,9 +387,7 @@ def _a2a_jsonrpc_body(method: str, params: Any) -> dict[str, Any]:
     }
 
 
-def _a2a_message_send_body(
-    skill_name: str, parameters: dict[str, Any], push_notification_config: Any = None
-) -> dict[str, Any]:
+def _a2a_message_send_body(skill_name: str, parameters: dict[str, Any]) -> dict[str, Any]:
     """The native 1.0 ``SendMessage`` JSON-RPC envelope naming *skill_name* explicitly.
 
     ``SendMessage``, not the 0.3 ``message/send``: ``src/app.py`` builds ``/a2a``
@@ -426,42 +404,28 @@ def _a2a_message_send_body(
     (``src/a2a_server/adcp_a2a_server.py``), which is also what the signing layer
     names the operation from.
 
-    A ``push_notification_config`` travels in the A2A PROTOCOL ENVELOPE, not in the
-    skill parameters, because that is where PRODUCTION reads it on this transport:
-    ``on_message_send`` takes it from
-    ``params.configuration.task_push_notification_config`` and threads it into the
-    skill handler. Putting it in the parameters instead would be the harness
-    choosing a different registration channel than the one an A2A buyer uses — and
-    would make a webhook-registration scenario grade a payload shape nobody sends.
+    A ``push_notification_config`` travels in *parameters*, with every other field of
+    the AdCP request, because that is where AdCP declares it and where PRODUCTION reads
+    it on this transport as on the other three: the boundary reads it off the VALIDATED
+    request (``src/core/signing/webhook_credentials.py``), and on A2A the AdCP request
+    is the DataPart.
+
+    This used to lift it into ``params.configuration.task_push_notification_config`` on
+    the stated grounds that ``on_message_send`` read it there. It did not — it read
+    ``params.message.parts`` and nothing else, so everything sent to the envelope was
+    silently dropped and every A2A webhook scenario graded a registration that never
+    happened. Production now DECLINES that envelope field outright
+    (``AdCPRequestHandler._refuse_envelope_push_config``), which is what the agent card's
+    ``push_notifications=False`` always said: AdCP defines no protocol-envelope
+    registration channel, so this transport has exactly one place to put a webhook and
+    it is the same place as everywhere else.
     """
     from a2a.types.a2a_pb2 import SendMessageRequest
 
     from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
     request = SendMessageRequest(message=create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters))
-    if push_notification_config is not None:
-        request.configuration.CopyFrom(_a2a_send_message_configuration(push_notification_config))
     return _a2a_jsonrpc_body("SendMessage", request)
-
-
-def _a2a_push_config_set_body(config: Any, *, task_id: str) -> dict[str, Any]:
-    """The native 1.0 ``CreateTaskPushNotificationConfig`` JSON-RPC envelope for *config*.
-
-    A2A's SECOND credential location, and the one nothing graded before
-    ``salesagent-jj90f``: a buyer registers a webhook and its credentials here
-    WITHOUT invoking any skill, so the registration never appears in a
-    ``SendMessage`` envelope or in any tool's arguments.
-
-    The params of this method ARE a ``TaskPushNotificationConfig`` — not a wrapper
-    around one — which is what ``METHOD_TO_MODEL`` declares, so the config is handed
-    to :func:`_a2a_jsonrpc_body` directly.
-
-    *task_id* is required by the model but NOT by the seller: our handler upserts
-    a config for whatever id it is handed (``task_id or "*"``), which is precisely
-    why this is a registration channel of its own rather than a rider on an
-    existing task.
-    """
-    return _a2a_jsonrpc_body(_A2A_PUSH_CONFIG_SET, _a2a_task_push_notification_config(config, task_id=task_id))
 
 
 def _a2a_jsonrpc_result(response: Any) -> dict[str, Any]:
@@ -582,13 +546,13 @@ def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
 def _a2a_task_push_notification_config(spec: Any, *, task_id: str = "") -> Any:
     """An AdCP ``push_notification_config`` as the A2A protocol layer carries it.
 
-    THE ONE translation, shared by all three places this transport registers a
-    webhook — the in-process ``SendMessageConfiguration``
-    (:func:`_a2a_send_message_configuration`), the HTTP ``SendMessage`` envelope's
-    ``configuration``, and the standalone ``CreateTaskPushNotificationConfig``
-    method (:func:`_a2a_push_config_set_body`). A second copy would be free to drop
-    the credential on one of them, and a credential-registration scenario that
-    registered nothing is a false green.
+    THE ONE translation for the A2A protocol envelope, reached through
+    :func:`_a2a_send_message_configuration`. A webhook a buyer really registers with
+    this seller does NOT come through here — it is a declared AdCP field and travels
+    in the request like any other, on this transport as on the rest. What is left is
+    the protocol channel the seller DECLINES
+    (``AdCPRequestHandler._refuse_envelope_push_config``), which a test can still
+    address explicitly through ``a2a_push_notification_config``.
 
     The two vocabularies name the same thing differently and the translation is the
     TRANSPORT's, not the scenario's. AdCP's ``Authentication`` is ``{schemes: [...],
@@ -1272,51 +1236,47 @@ class BaseTestEnv:
         grades the seller's answer at each of them and names the location that
         answered wrongly. The first entry is always *operation_result* — the
         dispatch the caller already made — labelled with where THAT transport
-        carries the config. Any further entry is a channel this transport offers
-        that no operation dispatch touches; the env sends it here.
+        carries the config. Any further entry would be a channel this transport
+        offers that no operation dispatch touches; the env would send it here.
 
-        WHY THIS EXISTS AT ALL, and why one entry is not enough. A2A has TWO
-        credential locations and they are not variants of each other:
+        TODAY EVERY TRANSPORT HAS EXACTLY ONE, and the A2A story is the reason this
+        seam exists at all. A2A carries two protocol-level places a buyer could
+        attach a webhook — ``params.configuration.task_push_notification_config`` on
+        ``SendMessage``, and the standalone ``CreateTaskPushNotificationConfig``
+        method — and this function used to return the second as a location of its
+        own, on the stated grounds that the handler "persists the credentials and
+        returns a config id".
 
-        1. ``params.configuration.task_push_notification_config`` on
-           ``message/send`` — a webhook registered ALONGSIDE a skill invocation,
-           read by ``adcp_a2a_server.on_message_send``;
-        2. the ``tasks/pushNotificationConfig/set`` params — a webhook registered
-           on its OWN JSON-RPC method with no skill in sight, read by
-           ``adcp_a2a_server.on_create_task_push_notification_config``, which
-           persists the credentials and returns a config id.
+        It does not, and has not since #1721. AdCP defines no protocol-envelope
+        registration channel — a webhook is a declared field of the AdCP request —
+        so this agent declines the whole A2A push-notification capability: the agent
+        card advertises ``push_notifications=False`` and all five entry points refuse
+        (the four ``tasks/pushNotificationConfig/*`` handlers, and
+        ``on_message_send``'s envelope check, ``_refuse_envelope_push_config``).
+        A place where a buyer CANNOT hand this seller credentials is not a credential
+        location, and grading it for a signature challenge asks the verifier to
+        enforce signing on a channel refused above it — which it never sees.
 
-        Grading only (1) leaves (2) an unexercised bypass; MOVING the grading from
-        (1) to (2) trades one bypass for the other and un-grades the first. Both,
-        or the claim "this seller refuses unsigned credential registrations" is
-        false about a surface nothing looked at.
+        THE LOCATION THAT MATTERS WAS THE ONE NOT BEING SENT TO. The A2A operation
+        entry pointed at the protocol envelope too, so the AdCP field — the one place
+        an A2A buyer really does register a webhook, and the one the :1462-1465
+        escalation reads — was graded on no transport but MCP and REST. It is graded
+        on all four now. That is the opposite of the coverage trade this docstring
+        used to warn about: nothing moved off a surface the seller serves.
 
-        MCP and REST return a single entry because they genuinely have one such
-        place, not because the others were not looked for. If a transport grows a
-        second, it is added HERE — the scenario text does not change, because the
-        scenario's claim ("a registration carrying credentials is refused unless
-        signed") never mentioned a location in the first place.
+        If a transport grows a second SERVED location it is added HERE — the scenario
+        text does not change, because the scenario's claim ("a registration carrying
+        credentials is refused unless signed") never mentioned a location in the first
+        place.
 
-        *config* is the ``push_notification_config`` the operation dispatch
-        carried; ``None`` means the caller registered no credentials, so there is
-        nothing to send anywhere else and only the operation entry comes back.
-        *signed* must match the operation dispatch's own, or the extra locations
-        would be a different experiment from the one the scenario set up. That
-        includes a FAILURE realization: this frame is a credential registration the
-        SCENARIO put under test, not a harness enabling frame, so a ``"malformed"``
-        or ``"tampered"`` realization reaches it VERBATIM. Signing it correctly
-        because it is "not the operation frame" would sign the one surface a
-        credential-location scenario most needs to grade with a failure realization
-        — the A2A credential-location bypass ``_refuse_signed_impl``'s own docstring
-        cites as the reason refusing beats ignoring.
+        *config* is the ``push_notification_config`` the operation dispatch carried;
+        ``None`` means the caller registered no credentials. *signed* is kept in the
+        signature for the same reason: an added location must be dispatched with the
+        operation's OWN realization, failure realizations included, or it would be a
+        different experiment from the one the scenario set up.
         """
         location = _OPERATION_CREDENTIAL_LOCATION.get(transport.value, _UNSTATED_CREDENTIAL_LOCATION)
-        registrations: list[tuple[str, TransportResult]] = [(location, operation_result)]
-        if config is not None and transport.value == "a2a":
-            registrations.append(
-                (_A2A_PUSH_CONFIG_SET_LOCATION, self._a2a_credential_registration(config, signed=signed))
-            )
-        return tuple(registrations)
+        return ((location, operation_result),)
 
     # -- Request signing ----------------------------------------------------
 
@@ -1986,11 +1946,12 @@ class BaseTestEnv:
         self._commit_factory_data()
         self._seed_ambient_tenant(credential)
 
-        # Lifted OUT of the skill parameters and into the protocol envelope, where
-        # production reads it on this transport — see ``_a2a_message_send_body``.
-        push_notification_config = kwargs.pop("push_notification_config", None)
+        # ``push_notification_config`` is NOT lifted out: it is a declared field of the
+        # AdCP request and travels in the DataPart with the rest of it, which is what the
+        # in-process leg has always done and what production reads. See
+        # ``_a2a_message_send_body``.
         parameters = self._a2a_skill_parameters(kwargs)
-        body = _a2a_message_send_body(skill_name, parameters, push_notification_config)
+        body = _a2a_message_send_body(skill_name, parameters)
         # /a2a with NO trailing slash: src/app.py 307-redirects /a2a/, and httpx
         # would replay the pre-redirect signature against the new target-uri —
         # a genuine signature failing as request_signature_invalid.
@@ -2027,63 +1988,6 @@ class BaseTestEnv:
             artifact_data=artifact_data,
             response_cls=response_cls,
         )
-
-    def _a2a_credential_registration(self, config: Any, *, signed: SignatureRealization) -> TransportResult:
-        """A2A's SECOND credential location, dispatched and wrapped like any other.
-
-        Wrapped through ``a2a_transport_result`` — the same wrapper
-        ``A2ADispatcher`` uses — so this result carries a refusal's raw HTTP
-        response exactly as an operation dispatch would, and
-        ``assert_signature_challenge`` can read the challenge off it. A second,
-        local way of turning a POST into a ``TransportResult`` would be free to
-        drop that response, and a dropped response is graded as "no evidence",
-        which reads like a harness bug rather than the acceptance it would be.
-        """
-        from tests.harness.dispatchers import a2a_transport_result
-
-        return a2a_transport_result(lambda: self._run_a2a_push_config_set(config, signed=signed))
-
-    def _run_a2a_push_config_set(self, config: Any, *, signed: SignatureRealization) -> Any:
-        """POST ``CreateTaskPushNotificationConfig`` to ``/a2a`` on ``src.app.app``.
-
-        Same route, same middleware chain, the same ``A2A-Version`` header and the
-        same ``wire_request`` seam as ``_run_a2a_over_http`` — deliberately, because
-        the ONLY difference this leg is allowed to have from the ``SendMessage`` one
-        is the JSON-RPC method and where the credentials sit inside it. Anything
-        else (a different bearer, a missing tenant hint, a re-serialized body) would
-        make the two locations incomparable, and the finding is precisely that the
-        seller treats them differently.
-
-        ``credentialed=True``: the buyer registering a webhook IS authenticated.
-        That is not a convenience — the escalation at security.mdx @ v3.1.1
-        :1462-1465 is deliberately NOT subject to the composition rule's
-        bearer exemption, so an unsigned registration carrying a valid bearer is
-        exactly the request that must be refused.
-
-        Returns the parsed config rather than a ``DeliverResult``: this is a
-        registration, not an operation dispatch, so it has no success-path wire a
-        Then step grades. The wire that matters on a REFUSAL is the raw response,
-        which ``_a2a_credential_registration`` carries out through
-        ``a2a_transport_result``.
-        """
-        from a2a.types import TaskPushNotificationConfig
-        from google.protobuf import json_format
-
-        self._commit_factory_data()
-        body = _a2a_push_config_set_body(config, task_id=f"task_{uuid.uuid4().hex[:12]}")
-        raw, headers = self.wire_request(
-            path=_A2A_PATH,
-            body=body,
-            extra=dict(_A2A_VERSION_HEADER),
-            signed=signed,
-            credentialed=True,
-        )
-        response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
-        # Parsed back through the SDK's own message, for the reason
-        # ``_a2a_jsonrpc_body`` gives about the request half: a field the seller
-        # renames must fail here rather than read as a config that registered
-        # nothing.
-        return json_format.ParseDict(_a2a_jsonrpc_result(response), TaskPushNotificationConfig())
 
     def _run_mcp_client(
         self,
@@ -2606,9 +2510,8 @@ class BaseTestEnv:
         )
 
         # Re-checked here rather than trusted from ``call_via``: this seam is also
-        # reached directly (``_a2a_credential_registration``, the e2e dispatcher), and a
-        # realization that arrived by one of those paths must not fall through to the
-        # correct-signature arm below.
+        # reached directly (the e2e dispatcher), and a realization that arrived by one
+        # of those paths must not fall through to the correct-signature arm below.
         signed = realization(signed)
         capability = self.signing
         token = capability.token if credentialed else None

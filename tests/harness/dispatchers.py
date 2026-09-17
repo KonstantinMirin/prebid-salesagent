@@ -210,10 +210,9 @@ def a2a_transport_result(call: Callable[[], DeliverResult | Any]) -> TransportRe
             envelope={"transport": "a2a"},
             wire_response=delivered.wire_response,
         )
-    # The credential registration leg: a bare payload, no success-path wire
-    # captured by design (``_run_a2a_push_config_set`` — the operation dispatch
-    # owns that capture), so it declares has_wire=False rather than claiming a
-    # wire whose body it never stashed.
+    # A leg that returned a bare payload rather than a ``DeliverResult``: no
+    # success-path wire was captured, so it declares has_wire=False rather than
+    # claiming a wire whose body it never stashed.
     return TransportResult(payload=delivered, envelope={"transport": "a2a"}, has_wire=False)
 
 

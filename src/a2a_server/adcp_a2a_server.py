@@ -221,6 +221,11 @@ class AdCPRequestHandler(RequestHandler):
         """
         logger.info("Handling SendMessage request: %s", params)
 
+        # Before anything runs, and for the same reason a two-skill message is refused whole:
+        # an envelope carrying something this agent will not honour is not a request it
+        # half-serves. See ``_refuse_envelope_push_config``.
+        self._refuse_envelope_push_config(params)
+
         text_parts: list[str] = []
         skill: str | None = None
         parameters: Any = {}
@@ -455,6 +460,34 @@ class AdCPRequestHandler(RequestHandler):
     ) -> None:
         """Handle 'tasks/pushNotificationConfig/delete'. Declined: this agent advertises push_notifications=False."""
         raise PushNotificationNotSupportedError()
+
+    def _refuse_envelope_push_config(self, params: SendMessageRequest) -> None:
+        """The FIFTH entry point to the same declined capability. Here, beside the other four.
+
+        A2A lets a buyer attach a webhook to a skill invocation through
+        ``params.configuration.task_push_notification_config``. AdCP defines no such channel
+        — a webhook is a declared field of the AdCP request itself, ``push_notification_config``
+        on the tool's own schema, which on this transport travels in the DataPart like every
+        other request field. So the A2A push-notification capability is declined WHOLESALE:
+        the agent card advertises ``push_notifications=False`` (``create_agent_card``, :571)
+        and the four ``tasks/pushNotificationConfig/*`` methods above refuse.
+
+        This envelope field was the one entry point that did neither. ``on_message_send``
+        read ``params.message.parts`` and nothing else, so a registration sent here was
+        silently DROPPED: the buyer received 200 for a webhook that was never registered.
+        Worse, since the config never reached the validated request, neither the
+        security.mdx @ v3.1.1 :1464 log duty nor the :1465 signature escalation ran for a
+        payload carrying ``authentication`` — the two obligations the AdCP field triggers on
+        every transport, including this one. Dropping and declining are indistinguishable
+        from inside this agent and opposite from outside it.
+
+        REFUSING, not threading it into the skill's parameters. Merging it would build an
+        AdCP registration channel out of a transport-specific one, which is precisely what
+        declining the capability decided against; refusing says what the agent card already
+        said. A buyer that wants a webhook on this seller declares it in the AdCP request.
+        """
+        if params.HasField("configuration") and params.configuration.HasField("task_push_notification_config"):
+            raise PushNotificationNotSupportedError()
 
     async def on_get_extended_agent_card(
         self,
