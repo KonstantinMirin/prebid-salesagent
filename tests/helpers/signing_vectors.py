@@ -200,8 +200,13 @@ def _idempotency_key(vector_id: str) -> str:
 
     Spelled to the pin's ``^[A-Za-z0-9_.:-]{16,255}$``: the vector id's ``/`` is the one
     character in it the pattern refuses.
+
+    The prefix carries NO local name. It used to be ``b3-``, this repo's own task
+    reference, and these keys travel: ``tests/storyboard/corrected_vectors.py`` writes them
+    into a corpus proposed to the spec, where a reader has no way to learn what ``b3``
+    meant. Only the two properties above are load-bearing.
     """
-    return f"b3-vector-{vector_id.replace('/', '-')}"
+    return f"vector-{vector_id.replace('/', '-')}"
 
 
 @cache

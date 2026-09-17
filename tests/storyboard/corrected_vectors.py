@@ -81,6 +81,21 @@ _BUCKETS = ("positive", "negative")
 _FLIGHT_START = "2027-01-04T00:00:00Z"
 _FLIGHT_END = "2027-02-01T00:00:00Z"
 
+#: The advertiser every corrected body names.
+#:
+#: RESERVED, never registrable. ``CreateMediaBuyRequestFactory`` defaults to
+#: ``testbrand.com``, which is a real domain somebody can register and point anywhere; in a
+#: SPEC's conformance corpus that would mean every agent that ever runs these vectors sends
+#: a payload naming a host under a stranger's control. ``.example`` is reserved by RFC 2606
+#: §2 and is therefore guaranteed unreachable — the same rule
+#: ``tests/unit/test_guards_no_fabricated_example_domain.py`` enforces from the other
+#: direction, and the style the rest of the payload already uses
+#: (``acmeoutdoor.example``, ``pinnacle-agency.example``).
+#:
+#: Overridden HERE rather than in the factory: the factory's default is a repo-wide
+#: question, and this corpus leaves the repo.
+_BRAND = {"domain": "brand.example"}
+
 #: ``request.url``'s final segment names the AdCP operation the runner dispatches: in MCP
 #: mode it becomes ``params.name`` of the ``tools/call`` envelope
 #: (``builder.mjs`` ``extractOperationFromVectorUrl``). A vector's body therefore has to
@@ -110,6 +125,7 @@ def _create_media_buy_body(vector_id: str) -> dict[str, Any]:
     payload: dict[str, Any] = dict(create_media_buy_body(vector_id))
     payload["start_time"] = _FLIGHT_START
     payload["end_time"] = _FLIGHT_END
+    payload["brand"] = dict(_BRAND)
     return payload
 
 
@@ -135,6 +151,7 @@ def _update_media_buy_body(vector_id: str, vector: dict[str, Any]) -> dict[str, 
     payload: dict[str, Any] = UpdateMediaBuyRequestFactory.payload(
         idempotency_key=_idempotency_key(vector_id),
         media_buy_id=sent.get("media_buy_id", "mb_001"),
+        brand=dict(_BRAND),
     )
     registered = sent.get("push_notification_config") or {}
     if registered.get("authentication") is not None:
