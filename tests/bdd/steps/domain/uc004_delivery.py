@@ -594,6 +594,34 @@ def _set_active_webhook(ctx: dict, mb_id: str) -> None:
     }
     if getattr(env, "_session", None) is not None:
         _persist_webhook_config_if_needed(ctx, env)
+        _ensure_delivery_log_parent(env)
+
+
+def _ensure_delivery_log_parent(env: Any) -> None:
+    """Give ``webhook_delivery_log.media_buy_id`` the ``media_buys`` row it references.
+
+    The senders SWALLOW the integrity error and log it, so without the parent row the
+    insert fails silently, leaves zero rows, and every delivery-log assertion grades
+    nothing -- which is how ``assert_rejection_logged`` came to pass while scanning a
+    ForeignKeyViolation message for the very status code it was supposed to be grading.
+
+    LAZY, and from this Given rather than from the env's ``__enter__``. Seeding at enter
+    pre-created the tenant, and the 18 tests in
+    ``tests/integration/test_delivery_service_behavioral.py`` that build their own with a
+    raw ``TenantFactory(tenant_id="t1")`` then died on a duplicate key. The Given runs
+    after the test's own setup, which is exactly why it belongs here.
+
+    ``deliver_webhook``'s default id, because that is what the senders stamp on the row --
+    the scenario's own "mb-001" spelling never reaches the database.
+    """
+    if not hasattr(env, "make_media_buy"):
+        return
+    from sqlalchemy import select
+
+    from src.core.database.models import MediaBuy
+
+    if env._session.scalars(select(MediaBuy).filter_by(media_buy_id="mb_001")).first() is None:
+        env.make_media_buy(media_buy_id="mb_001")
 
 
 def _canonical_scheme(scheme: str) -> AuthenticationScheme:

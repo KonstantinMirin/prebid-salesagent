@@ -11,8 +11,6 @@ Requires: integration_db fixture.
 
 from __future__ import annotations
 
-from typing import Any
-
 from tests.harness._base import IntegrationEnv
 
 
@@ -37,19 +35,9 @@ class TaskManagementEnv(IntegrationEnv):
     def _configure_mocks(self) -> None:
         """No mocks needed -- real WorkflowUoW."""
 
-    def call_impl(self, **kwargs: Any) -> dict[str, Any]:
-        """Call list_tasks directly with real DB (no transport dispatch)."""
-        import asyncio
-
-        # ``_list_tasks_impl``, not ``list_tasks``: #1721 split every tool into a
-        # transport-agnostic ``_<tool>_impl(req, identity)`` and left no bare ``list_tasks``
-        # in the module. The old name raised AttributeError at CALL time, not import time,
-        # because the import is function-local -- the same shape as the AdCPError import in
-        # tests/harness/_base.py. Request-shaped, like every sibling harness call_impl.
-        from src.core.schemas import ListTasksRequest
-        from src.core.tools.task_management import _list_tasks_impl
-
-        self._commit_factory_data()
-        identity = kwargs.pop("identity", self.identity)
-        req = kwargs.pop("req", None) or ListTasksRequest(**kwargs)
-        return asyncio.run(_list_tasks_impl(req=req, identity=identity))
+    # No ``call_impl``. There was one, reaching ``_list_tasks_impl`` directly, and it had
+    # NO CALLER: the one live consumer (tests/integration/test_get_task_principal_scope.py)
+    # dispatches through ``env.call_via(Transport.MCP, ...)``, and the BDD step that looked
+    # like a caller bypassed this env entirely. #1721 deleted ``Transport.IMPL``, so an
+    # impl leg on a harness env is a route to nowhere -- kept alive only by the dangling
+    # ``list_tasks`` import it carried. Deleted rather than repaired.

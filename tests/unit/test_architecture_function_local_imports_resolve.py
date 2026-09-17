@@ -1,5 +1,21 @@
 """Every function-local ``from src.* import NAME`` names something that EXISTS.
 
+SCAFFOLDING. DELETE THIS FILE WHEN THE IMPORT CYCLES ARE GONE.
+
+Owner ruling, and it is the right one: wrong architecture should be UNREPRESENTABLE, not
+guarded -- you cannot enumerate the infinite ways of writing bad code, and every guard added
+instead of a fix is a permanent tax that still misses the next variant.
+
+This file does not pass that bar, and the proof is in its own subject. ``AdCPError`` ALREADY
+did not exist; the breakage was already unrepresentable. What failed is that a FUNCTION-LOCAL
+import defers the NameError to call time instead of import time. The 555 function-local
+``from src.*`` imports in ``src/`` and 2011 in ``tests/`` exist to break import cycles -- so
+the real fix is the module graph, and with no cycles every rename fails eagerly at import,
+for free, with no guard at all and no allowlist to rot.
+
+So this is a stopgap that buys visibility until that work lands. It is not the answer, it
+must not be cited as precedent for adding another guard, and it comes out with the cycles.
+
 WHY THIS GUARD EXISTS, and why nothing else catches it.
 
 A module-level import that names a deleted symbol fails at IMPORT time, so collection goes

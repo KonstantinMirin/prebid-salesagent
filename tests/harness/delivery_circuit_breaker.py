@@ -93,13 +93,6 @@ class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, Integratio
         process-global logger for every later test.
         """
         super()._enter_post()
-        # The delivery log's foreign key. Every delivery this env drives records a
-        # ``webhook_delivery_log`` row keyed on ``deliver_webhook``'s default
-        # ``media_buy_id="mb_001"``, and ``webhook_delivery_log.media_buy_id`` references
-        # ``media_buys``. The writers SWALLOW the integrity error and log it, so without the
-        # parent row the insert fails silently and every delivery-log assertion grades zero
-        # rows. Seeded here, once, rather than in each scenario that happens to read one.
-        self.make_media_buy(media_buy_id="mb_001")
         self._log_handler = LogCaptureHandler()
         webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
         webhook_logger.addHandler(self._log_handler)
