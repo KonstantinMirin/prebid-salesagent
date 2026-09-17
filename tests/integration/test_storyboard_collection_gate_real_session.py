@@ -9,9 +9,9 @@ string; the CI job sets neither and never has). The gate short-circuits on
 env-set-ness, so the bundle derivation ``_bundle_path()`` was written to perform
 is unreachable in every automated context.
 
-**Core Invariant.** A conformance session is "unconfigured" only when the pinned
-bundle cannot be RESOLVED — never merely because an env var is unset — and an
-unconfigured session says which resolved path was missing.
+**Core Invariant.** Whether a conformance session can grade is decided by
+RESOLVING the pinned bundle — never by whether an env var is set — and a session
+that cannot grade says which resolved path was missing.
 
 Three cases, all collection-time properties of production's own
 ``pytest_generate_tests``, graded through a real nested pytest session so that
@@ -25,10 +25,13 @@ what is measured is the session's OUTCOME (skipped vs. errored) and the exact
     ``tests/storyboard/runner/adcp-<version>/`` (the derivation CI actually
     depends on, since ``.github/actions/_adcp-bundle`` extracts it there).
 
-(b) NOTHING resolvable -> the sentinel is still produced, the session SKIPS
-    rather than failing hard, and the skip reason names the resolved PATHS that
-    were looked for. A contributor without the bundle must not get a hard
-    failure, and must not be sent after an env var that was never the mechanism.
+(b) pin resolvable but NOTHING on disk and nothing fetchable -> the session
+    grades one FAILING ``bundle-not-present`` check, and its reason names both
+    why materialization failed and the resolved PATHS that were looked for. The
+    bundle was obtainable, so a run that grades zero conformance checks and exits
+    0 is indistinguishable from a clean run — that is how a bundle-path
+    regression survives. The reason must still not send anyone after an env var
+    that was never the mechanism.
 
 (c) resolution FAILS -- the gate now runs ``storyboard_spec.pinned_version()``
     at collection in EVERY session (via ``adcp_home()``), and that function
@@ -81,7 +84,17 @@ _PROBE_REASON = "synthetic failure injected by the collection-gate grader"
 # exception), not just a path".
 _PIN_FAILURE_MESSAGE = "synthetic pin drift injected by the collection-gate grader"
 
+# Why the bundle could not be produced. Every nested session here stubs
+# materialization (``rig.stub_unmaterializable_bundle``) so none of them reaches
+# the HTTPS fetch that is production's last resort; case (b) additionally grades
+# that this reason reaches the failure the contributor reads.
+_MATERIALIZE_FAILURE_MESSAGE = "synthetic fetch failure injected by the collection-gate grader"
+
 _SENTINEL_ID = "environment-not-configured"
+
+# The gate's other test id: the pin resolved, so an absent bundle is a defect in
+# this environment rather than a session that was never asked to grade.
+_BUNDLE_ABSENT_ID = "bundle-not-present"
 
 
 def _expected_probe_checks() -> dict[str, dict[str, object]]:
@@ -182,6 +195,7 @@ def _collect_with_resolvable_bundle(
 ) -> tuple[dict[str, dict[str, object]], subprocess.CompletedProcess[str]]:
     """Collect the conformance module with NO ``STORYBOARD_*`` env set."""
     stub_name, stub_env = rig.stub_runner(tmp_path, rig.synthetic_summaries(list(_PROBE_CHECKS), _PROBE_REASON))
+    fetch_name, fetch_env = rig.stub_unmaterializable_bundle(tmp_path, _MATERIALIZE_FAILURE_MESSAGE)
     capture_name, capture_env, sink = rig.capture_params(tmp_path)
     proc = rig.run_conformance_session(
         tmp_path,
@@ -189,9 +203,10 @@ def _collect_with_resolvable_bundle(
             **rig.without(_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV),
             **adcp_home,
             **stub_env,
+            **fetch_env,
             **capture_env,
         },
-        plugins=(stub_name, capture_name),
+        plugins=(stub_name, fetch_name, capture_name),
         args=("--collect-only",),
     )
     return _read_captured(sink, proc), proc
@@ -227,34 +242,53 @@ def test_resolvable_in_repo_bundle_parametrizes_real_checks(tmp_path: Path, in_r
     assert {cid: captured.get(cid) for cid in expected} == expected, output[-4000:]
 
 
-def test_unresolvable_bundle_skips_and_names_the_resolved_paths(tmp_path: Path) -> None:
-    """(b) Nothing resolvable: the sentinel is produced, the session SKIPS, the reason names the paths."""
+def test_unresolvable_bundle_fails_and_names_the_resolved_paths(tmp_path: Path) -> None:
+    """(b) Nothing resolvable: one FAILING check, and its reason names the paths.
+
+    The pin resolves here, so the bundle was obtainable — already extracted, a
+    tarball beside the runner, or the pinned release asset. That it is still
+    absent is a defect in this environment, and the only outcome that surfaces it
+    is a failure: a session grading zero conformance checks and exiting 0 is
+    indistinguishable from a clean run at a glance, which is how a bundle-path
+    regression survives unnoticed. (Case (c) below keeps the skip for the one
+    environment that genuinely cannot grade — an unresolvable PIN.)
+
+    Naming the resolved paths is the invariant that carries over unchanged:
+    whichever disposition the gate takes, it must say which path it looked for
+    and not point at an env var that was never the mechanism.
+    """
     missing_bundle = tmp_path / "no-bundle-here"
+    fetch_name, fetch_env = rig.stub_unmaterializable_bundle(tmp_path, _MATERIALIZE_FAILURE_MESSAGE)
     capture_name, capture_env, sink = rig.capture_params(tmp_path)
     proc = rig.run_conformance_session(
         tmp_path,
         env={
             **rig.without(_COMPLIANCE_DIR_ENV, _SCHEMA_ROOT_ENV),
             "ADCP_HOME": str(missing_bundle),
+            **fetch_env,
             **capture_env,
         },
-        plugins=(capture_name,),
+        plugins=(fetch_name, capture_name),
     )
 
     output = proc.stdout + proc.stderr
-    assert rig.outcome_counts(proc) == {"skipped": 1}, (
-        f"an unresolvable bundle must skip, not fail or error:\n{output[-4000:]}"
+    assert rig.outcome_counts(proc) == {"failed": 1}, (
+        f"an absent bundle must fail as exactly one graded check, not skip or error:\n{output[-4000:]}"
     )
-    assert proc.returncode == 0, output[-4000:]
+    assert proc.returncode != 0, output[-4000:]
 
     captured = _read_captured(sink, proc)
-    assert set(captured) == {_SENTINEL_ID}, output[-4000:]
-    check = captured[_SENTINEL_ID]
-    assert check["status"] == "skip"
+    assert set(captured) == {_BUNDLE_ABSENT_ID}, output[-4000:]
+    check = captured[_BUNDLE_ABSENT_ID]
+    assert check["status"] == "fail"
     assert check["reason_kind"] == "config"
+    assert _MATERIALIZE_FAILURE_MESSAGE in check["reason"], (
+        f"the failure reason must say why the bundle could not be produced, not only that it is "
+        f"absent: {check['reason']!r}"
+    )
     for resolved in _resolved_bundle_dirs(missing_bundle):
         assert resolved in check["reason"], (
-            f"the skip reason must name the resolved path that was looked for and not found; "
+            f"the failure reason must name the resolved path that was looked for and not found; "
             f"{resolved!r} is absent from {check['reason']!r}"
         )
 

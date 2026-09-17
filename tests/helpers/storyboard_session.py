@@ -80,6 +80,27 @@ def pytest_collection_modifyitems(items):
     Path(os.environ["CAPTURE_STORYBOARD_PARAMS"]).write_text(json.dumps(captured), encoding="utf-8")
 """
 
+# Injected via ``-p``. Replaces the bundle MATERIALIZATION, whose last resort is
+# an HTTPS download of the pinned release asset. No nested session here may reach
+# the network: a real fetch is slow, flaky, behaves differently offline, and
+# writes the bundle into the repo tree as a side effect. The stub reports the
+# reason a fetch-less environment reports, so the "cannot materialize" branch is
+# the same on every machine.
+#
+# Sessions whose bundle paths DO resolve never read that reason (``_bundle_gate``
+# discards it), so the one stub serves both the graded absent-bundle case and the
+# configured cases that only need to stay offline.
+UNMATERIALIZABLE_BUNDLE_PLUGIN = """
+import os
+
+
+def pytest_configure(config):
+    from tests.storyboard import test_storyboard_conformance as mod
+
+    message = os.environ["STUB_BUNDLE_MATERIALIZE_FAILURE"]
+    mod._materialize_bundle = lambda: message
+"""
+
 # Injected via ``-p``. Makes the pinned-version resolution that the bundle
 # derivation runs through blow up, which is what a drifted or incomplete
 # checkout does to a contributor.
@@ -138,6 +159,12 @@ def stub_runner(tmp_path: Path, summaries: dict[str, dict[str, Any]]) -> tuple[s
     summaries_path = tmp_path / "summaries.json"
     summaries_path.write_text(json.dumps(summaries), encoding="utf-8")
     return "_stub_storyboard_runner", {"STUB_STORYBOARD_SUMMARIES": str(summaries_path)}
+
+
+def stub_unmaterializable_bundle(tmp_path: Path, message: str) -> tuple[str, dict[str, str]]:
+    """Materialize the offline bundle-materialization stub; returns its ``-p`` name and env."""
+    (tmp_path / "_stub_unmaterializable_bundle.py").write_text(UNMATERIALIZABLE_BUNDLE_PLUGIN, encoding="utf-8")
+    return "_stub_unmaterializable_bundle", {"STUB_BUNDLE_MATERIALIZE_FAILURE": message}
 
 
 def stub_raising_pinned_version(tmp_path: Path, exc_name: str, message: str) -> tuple[str, dict[str, str]]:
