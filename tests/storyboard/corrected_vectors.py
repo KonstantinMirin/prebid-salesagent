@@ -52,6 +52,7 @@ stated where they are defined.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -180,14 +181,35 @@ def corrected_body(vector_id: str, vector: dict[str, Any]) -> str | None:
     return json.dumps(payload, separators=(",", ":"))
 
 
-def correct_vector(vector_id: str, vector: dict[str, Any]) -> dict[str, Any]:
-    """*vector* with a parseable body. Every other key is the pinned bytes."""
+#: ``"body": "<json string>"`` — the ONE member :func:`correct_vector_text` rewrites.
+#: ``(?:[^"\\]|\\.)*`` is a JSON string body: any character that is neither a quote nor a
+#: backslash, or any backslash-escape, so an escaped quote inside the payload does not end
+#: the match.
+_BODY_MEMBER = re.compile(r'("body"\s*:\s*)"(?:[^"\\]|\\.)*"')
+
+
+def correct_vector_text(vector_id: str, source: str) -> str:
+    """*source* with its ``request.body`` replaced — every other byte untouched.
+
+    A TEXT edit, not a re-serialization, and that is the whole point. Round-tripping
+    through ``json.dumps`` reformats members this change does not touch: the corpus writes
+    short arrays inline (``"jwks_ref": ["test-ed25519-2026"]``) and a dumper expands them,
+    so a body-only correction arrived as a 326-line diff across 37 files with the actual
+    edit buried in it. Upstream cannot review that, and neither can a reader asking whether
+    a vector's graded fault survived.
+
+    Exactly one member is rewritten, and a corpus where that stops being true is an ERROR
+    rather than a silent partial edit — a second ``"body"`` key would mean the vector shape
+    changed and this transformation no longer describes it.
+    """
+    vector = json.loads(source)
     body = corrected_body(vector_id, vector)
     if body is None:
-        return vector
-    corrected = dict(vector)
-    corrected["request"] = {**vector["request"], "body": body}
-    return corrected
+        return source
+    replaced, count = _BODY_MEMBER.subn(lambda m: m.group(1) + json.dumps(body), source, count=2)
+    if count != 1:
+        raise ValueError(f"{vector_id}: expected exactly one 'body' member, found {count}")
+    return replaced
 
 
 def corrected_compliance_tree(source: Path, dest: Path) -> Path:
@@ -211,12 +233,8 @@ def corrected_compliance_tree(source: Path, dest: Path) -> Path:
         raise FileNotFoundError(f"no request-signing vectors under {vectors}")
     for bucket in _BUCKETS:
         for path in sorted((vectors / bucket).glob("*.json")):
-            vector = json.loads(path.read_text())
-            corrected = correct_vector(f"{bucket}/{path.stem}", vector)
-            if corrected is not vector:
-                # ``ensure_ascii=False`` so the re-serialization is a ONE-LINE diff against
-                # the pinned file. The corpus is full of em-dashes in ``$comment`` and
-                # ``expected_signature_base``; escaping them would rewrite lines this change
-                # does not touch, and the upstream PR has to show the body edit alone.
-                path.write_text(json.dumps(corrected, indent=2, ensure_ascii=False) + "\n")
+            source_text = path.read_text()
+            corrected = correct_vector_text(f"{bucket}/{path.stem}", source_text)
+            if corrected != source_text:
+                path.write_text(corrected)
     return dest
