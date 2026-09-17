@@ -30,7 +30,7 @@ emit codes outside that set, and receivers MUST decode an unknown one by reading
 
 DERIVED FROM THE SDK'S OWN TAXONOMY, NOT RE-LISTED
 ---------------------------------------------------
-The 27 members come from ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, which is the
+The 28 members come from ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE`` (27 of them), which is the
 table the SDK's verifier raises from. A transcribed copy would be a second source for a
 string the spec grades byte-for-byte, and it would drift the first time the SDK's
 taxonomy grew — silently, as an unclassified code reaching ``CodeEntry`` construction.
@@ -45,6 +45,16 @@ from typing import TYPE_CHECKING, Final
 from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 
 from src.core.errors._entry import CodeEntry, Recovery
+from src.core.signing.canonical import REQUEST_TARGET_URI_MALFORMED, WEBHOOK_TARGET_URI_MALFORMED
+
+#: The SDK's retag table plus the ONE row it omits at ``adcp==6.6.0``.
+#:
+#: ``REQUEST_TO_WEBHOOK_CODE`` maps each request-profile code to its webhook-profile twin,
+#: and it is missing ``request_target_uri_malformed`` -> ``webhook_target_uri_malformed``
+#: (upstream fix: adcp-client-python PR #987 / fbab8f44). Merged here rather than
+#: transcribed, so the other 27 rows still come from the SDK and the local addition
+#: disappears by itself when the pin advances past the fix.
+_TAXONOMY: Final = {**REQUEST_TO_WEBHOOK_CODE, REQUEST_TARGET_URI_MALFORMED: WEBHOOK_TARGET_URI_MALFORMED}
 
 __all__ = ["SIGNATURE_CODE_TABLE", "SignatureErrorCode", "challenge_for"]
 
@@ -59,14 +69,14 @@ if TYPE_CHECKING:
     # the tree names a member by attribute, which is what makes the erasure free -- production
     # resolves a code through ``CODE_BY_VALUE[wire_string]``, because what it holds IS a wire
     # string (off a ``SignatureVerificationError``, or off a finished response body), and the
-    # 27 attribute names would only ever be a second spelling of those strings.
+    # 28 attribute names would only ever be a second spelling of those strings.
     class SignatureErrorCode(StrEnum): ...
 
 else:
     #: Every request-family signature code. The member NAME is the upper-cased code and the
     #: VALUE is the wire string, which is the one that matters: it is what reaches
     #: ``error.code`` and the ``WWW-Authenticate`` challenge.
-    SignatureErrorCode = StrEnum("SignatureErrorCode", {code.upper(): code for code in sorted(REQUEST_TO_WEBHOOK_CODE)})
+    SignatureErrorCode = StrEnum("SignatureErrorCode", {code.upper(): code for code in sorted(_TAXONOMY)})
 
 
 #: Codes the BUYER can act on by changing the request and sending it again. Read as
@@ -103,7 +113,7 @@ def _recovery_for(code: str) -> Recovery:
     return Recovery.TERMINAL
 
 
-#: What a buyer is TOLD, per recovery class. One sentence each rather than 27, because the
+#: What a buyer is TOLD, per recovery class. One sentence each rather than 28, because the
 #: distinguishing information is the CODE — which is on the wire, twice (``error.code`` and
 #: the challenge) — and because a buyer-facing message must not narrate which checklist step
 #: refused: AdCP 3.1.1 ``transport-errors.mdx`` § Security Considerations forbids putting
@@ -149,7 +159,7 @@ def challenge_for(code: str) -> str:
     SDK's ``unauthorized_response_headers`` reduced to its f-string, because the renderer
     that needs it holds a CODE read off a finished response body and not the exception the
     SDK's helper takes. ``tests/unit/test_signature_challenge_string.py`` pins this against
-    that helper for all 27 codes, so the SDK stays the cross-check.
+    that helper for all 28 codes, so the SDK stays the cross-check.
 
     No ``realm`` and no other parameters, per the pin.
     """

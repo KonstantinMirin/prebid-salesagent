@@ -88,13 +88,26 @@ tests/integration/test_create_media_buy_behavioral.py::TestMainFlowObligations::
 # --- Cluster G (salesagent-e30o7.7) ------------------------------------------------
 # An adapter that must hold no vendor client when unconfigured. "dry_run" is the tell:
 # that channel through create_media_buy is gone, so a test named for it may be asserting
-# a mode that no longer exists.
+# a mode that no longer exists. Both remaining entries are exactly that: Kevel and
+# Triton now refuse to construct at all without credentials (base.py _require_config),
+# so "a dry-run adapter holds no vendor client" has no subject left to grade.
+#
+# Graduated: the three test_require_vendor_refuses_an_unconfigured_client entries. They
+# were ledgered because the test asserted the vendor name through exc.internal_detail as
+# a str, an API #1721 retyped to BaseException | None (the non-wire CAUSE). The merge
+# re-expressed the same obligation on exc.details.provider, which require_vendor really
+# populates from its argument (src/adapters/vendor_http.py:127) — so the entries are
+# stale, not passing vacuously.
 tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]
 tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]
-tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Kevel]
-tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Triton Digital]
-tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Xandr]
-tests/integration/test_webhook_refusal_reaches_both_seats.py::TestSeatTwoTheStashPathRefusesWithoutAnOutcome::test_a_stored_legacy_row_stops_delivering_and_says_so[sub-32 credential-schemes1-sssssssssssssssssssssssssssssss-Bearer]
+#
+# Graduated: the test_webhook_refusal_reaches_both_seats sub-32 entry. It was ledgered
+# because the rehydration refusal's operator log line stringified exc.internal_detail,
+# which #1721 made pydantic's own ValidationError: that text names no scheme unless the
+# objection was about schemes, and for a short credential it renders input_value — the
+# BUYER'S CREDENTIAL — into an ERROR log. The line now composes from the refusal's own
+# structured facts (field + details.rejected_value, src/core/context_manager.py), which
+# is where from_stash deliberately puts the scheme. A production fix, not a stale entry.
 
 # --- Cluster H (salesagent-e30o7.8) ------------------------------------------------
 # A response field, status or envelope production now produces differently. Spec question

@@ -66,7 +66,7 @@ from src.core.idempotency_replay import cache_success, lookup_cached_replay, may
 from src.core.resolved_identity import PublicIdentity, TransportProtocol
 from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
 from src.core.signing.capture import HttpExchange, SignatureSubject
-from src.core.signing.webhook_credentials import registers_webhook_credentials
+from src.core.signing.webhook_credentials import log_arriving_webhook_credentials, registers_webhook_credentials
 from src.core.tool_error_logging import record_boundary_error
 from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_version
 
@@ -329,6 +329,16 @@ async def invoke_tool(
     # tenant-dependent half of the row's policy (``requires_credential(tenant)``) is handed
     # over for the resolver to ask once it holds the tenant.
     account_ref = req.get_account()
+
+    # The escalation's input, and the seller's LOG duty on the same fact. security.mdx @
+    # v3.1.1 :1464 is per REQUEST and unqualified by posture, so it is discharged HERE --
+    # the one place a request has arrived and been read -- rather than inside the verifier,
+    # which runs only after a bearer resolved and only while the kill switch is on. See
+    # ``log_arriving_webhook_credentials``.
+    registers_credentials = registers_webhook_credentials(req)
+    if registers_credentials:
+        log_arriving_webhook_credentials(tool_name)
+
     try:
         identity = await asyncio.to_thread(
             _resolve_identity,
@@ -338,7 +348,7 @@ async def invoke_tool(
             credential_required_for=spec.requires_credential,
             signature_subject=SignatureSubject(
                 operation=tool_name,
-                registers_credentials=registers_webhook_credentials(req),
+                registers_credentials=registers_credentials,
                 exchange=exchange,
             ),
         )

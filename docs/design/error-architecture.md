@@ -252,7 +252,7 @@ merely failed during seller-side aggregation and the entry stays `AGENT_UNREACHA
 with `field="formats"`, naming the response section it degrades. AdCP 3.1.1 is explicit
 about the first half — "Requested `format_id` doesn't exist, or referenced creative
 agent is unavailable / not accessible. `error.field` MUST identify which typed parameter
-failed to resolve" (`dist/docs/3.1.1/creative/task-reference/list_creative_formats.mdx:654`).
+failed to resolve" (`v3.1.1:docs/creative/task-reference/list_creative_formats.mdx:654`).
 
 The split is buyer-visible in `recovery`, which is the point: `AGENT_UNREACHABLE` is
 `transient`, so retrying the same request may work, and `REFERENCE_NOT_FOUND` is

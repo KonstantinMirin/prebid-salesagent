@@ -34,18 +34,39 @@ from src.core.schemas import Principal
 from src.core.signing.capture import SignatureSubject
 from src.core.signing.verifier import verify_inbound_signature
 from src.core.tenant_context import TenantContext
+from tests.helpers.signing import posture_declaration_document
 
 A_PROTECTED_OPERATION = "create_media_buy"
+
+#: Dotted, so the derived trust-root pointer is ``https://`` — see the fixture below.
+AN_AGENT_HOST = "composition.example.com"
 
 
 @contextmanager
 def _tenant_requiring_signatures(**declared: Any) -> Iterator[TenantContext]:
-    yield TenantContext(
-        tenant_id="t-composition",
-        name="Composition Rule",
-        capability_declarations={
-            "request_signing": {"supported": True, "required_for": [A_PROTECTED_OPERATION], **declared}
-        },
+    """A tenant whose declaration really does bucket ``A_PROTECTED_OPERATION`` as ``required``.
+
+    The stored document is built by :func:`posture_declaration_document` — the ONE shape
+    every suite writes — rather than by literalling the ``request_signing`` block alone,
+    because a posture is unreadable without its trust-root pointer: any non-empty bucket
+    fires the pinned ``identity.brand_json_url`` ``required_when`` trigger, so
+    ``CapabilityDeclarations.from_tenant`` refuses the whole document and
+    ``posture_for_tenant`` downgrades that refusal to ``UNSUPPORTED_POSTURE``. A fixture
+    that skips the pointer therefore yields a tenant enforcing NOTHING, and the refusal
+    tests below would grade the unreadable-declaration path while reading as though they
+    graded the declared one.
+
+    ``virtual_host`` is dotted for the same reason the integration writer's is: the
+    pointer is DERIVED from ``src.core.agent_identity``, and on ``localhost`` it derives
+    ``http://``, which the pin's ``^https://`` (correctly) refuses.
+    """
+    tenant = TenantContext(tenant_id="t-composition", name="Composition Rule", virtual_host=AN_AGENT_HOST)
+    yield tenant.model_copy(
+        update={
+            "capability_declarations": posture_declaration_document(
+                tenant, {"supported": True, "required_for": [A_PROTECTED_OPERATION], **declared}
+            )
+        }
     )
 
 

@@ -89,8 +89,24 @@ from src.vendor.adcp_canonical.canonical import (
 from src.vendor.adcp_canonical.canonical import canonicalize_authority as _vendored_canonicalize_authority
 from src.vendor.adcp_canonical.canonical import canonicalize_target_uri as _vendored_canonicalize_target_uri
 
+#: The WEBHOOK-profile twin of ``REQUEST_TARGET_URI_MALFORMED``.
+#:
+#: It lives HERE, beside the request code and the one canonicalizer both profiles share,
+#: because it names the same refusal judged on the same bytes — a target URI the comparer
+#: will not canonicalize — and only the PROFILE differs. The pre-merge branch carried it in a
+#: vendored ``signing_contract/_upstream/errors.py``; that package is retired (its
+#: canonicalization is this module, its vocabulary is ``src.core.signing.vocabulary``), and a
+#: whole vendored module for one string would be the second source this seam exists to remove.
+#:
+#: The SDK's ``REQUEST_TO_WEBHOOK_CODE`` does not carry this row at ``adcp==6.6.0``: the
+#: request->webhook retag table omits ``request_target_uri_malformed``. Upstream fix:
+#: adcp-client-python PR #987 / fbab8f44. Until the pin advances, the row is added locally in
+#: ``src.core.errors.signature_codes`` rather than transcribing the other 27.
+WEBHOOK_TARGET_URI_MALFORMED = "webhook_target_uri_malformed"
+
 __all__ = [
     "REQUEST_TARGET_URI_MALFORMED",
+    "WEBHOOK_TARGET_URI_MALFORMED",
     "TargetUriMalformedError",
     "canonical_authority",
     "canonical_target_uri",

@@ -41,10 +41,13 @@ own handlers, which do not call the boundary. See the module docstring of
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from typing import Any
 
 from src.core.schemas._base import BuyerRequest
+
+logger = logging.getLogger(__name__)
 
 
 def _authenticated(config: Any) -> bool:
@@ -81,3 +84,32 @@ def registers_webhook_credentials(req: BuyerRequest) -> bool:
     if _authenticated(req.__dict__.get("push_notification_config")):
         return True
     return any(_authenticated(config) for config in _configs_of(req.__dict__.get("accounts") or ()))
+
+
+def log_arriving_webhook_credentials(operation: str) -> None:
+    """Record one arriving request that hands this seller webhook credentials.
+
+    security.mdx @ v3.1.1 :1464 — "Sellers MUST log every request that arrives with a
+    non-empty ``authentication`` block." Per REQUEST, and unqualified by posture: :1465
+    sends a seller that cannot ENFORCE the signing requirement here rather than exempting
+    it, so this fires whatever the tenant declared.
+
+    Called from ``invoke_tool`` beside the predicate above, which is the one place a
+    request ARRIVES in the sense :1464 means. Not from
+    :func:`~src.core.signing.verifier.verify_inbound_signature`, which is reached only
+    after the bearer resolved and only while the verifier kill switch is on: a rejected
+    token and a rolled-back verifier both leave the arrival unlogged, and the second is
+    exactly the non-enforcing seller :1465 routes to the log. Not from the escalation
+    either — ``_bucket_for`` reads ``registers_credentials and posture.supported``, which
+    cannot fire for a seller declaring ``supported: false``.
+
+    The message deliberately does not name the posture or whether the request was signed:
+    neither is readable at the boundary, which reads no header and no capture.
+    """
+    logger.warning(
+        "Inbound request carries a non-empty webhook authentication block "
+        "(push_notification_config or accounts[].notification_configs): operation=%r. "
+        "Legacy HMAC was selected by the buyer rather than RFC 9421 — alarm on this if the "
+        "buyer expected 9421 (security.mdx @ v3.1.1 :1464).",
+        operation,
+    )

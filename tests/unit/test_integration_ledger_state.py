@@ -1,6 +1,6 @@
 """Lock test for the integration known-failures ledger.
 
-``tests/integration/known_failures.txt`` is a SHRINKING work-list: 48 integration tests
+``tests/integration/known_failures.txt`` is a SHRINKING work-list: 44 integration tests
 xfailed pending rewrite under epic salesagent-e30o7, one child issue per cluster. This
 test pins that state so the ledger cannot drift silently:
 
@@ -27,9 +27,11 @@ from tests.helpers.ledger import load_ledger_nodeids
 
 LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 
-#: The count the ledger was created with. A bound, never a target — see
-#: ``test_the_ledger_never_grows``.
-CEILING = 48
+#: The high-water mark the ledger is held under. A bound, never a target — see
+#: ``test_the_ledger_never_grows``. Lowered 48 -> 45 when the three
+#: ``test_require_vendor_refuses_an_unconfigured_client`` entries graduated, and
+#: 45 -> 44 when the ``test_webhook_refusal_reaches_both_seats`` sub-32 entry did.
+CEILING = 44
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -69,13 +71,18 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_create_media_buy_behavioral.py::TestCreativeUploadFailure::test_creative_upload_failure_raises_tool_error",
         "tests/integration/test_create_media_buy_behavioral.py::TestInlineCreativeObligations::test_inline_creatives_uploaded_and_assigned",
         "tests/integration/test_create_media_buy_behavioral.py::TestMainFlowObligations::test_auto_approval_determination",
-        # Cluster G (salesagent-e30o7.7) — vendor-client refusal for a dry-run adapter
+        # Cluster G (salesagent-e30o7.7) — vendor-client refusal for a dry-run adapter.
+        # The three test_require_vendor_refuses_an_unconfigured_client entries graduated:
+        # they graded the vendor name through the retired str internal_detail, and now
+        # grade it on details.provider, which require_vendor really fills from its
+        # argument. See the ledger file for the full note.
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[kevel]",
         "tests/integration/test_vendor_egress.py::test_a_dry_run_adapter_holds_no_vendor_client[triton]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Kevel]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Triton Digital]",
-        "tests/integration/test_vendor_egress.py::test_require_vendor_refuses_an_unconfigured_client[Xandr]",
-        "tests/integration/test_webhook_refusal_reaches_both_seats.py::TestSeatTwoTheStashPathRefusesWithoutAnOutcome::test_a_stored_legacy_row_stops_delivering_and_says_so[sub-32 credential-schemes1-sssssssssssssssssssssssssssssss-Bearer]",
+        # The test_webhook_refusal_reaches_both_seats sub-32 entry graduated: the
+        # rehydration refusal now composes its operator line from the refusal's own
+        # field + details.rejected_value, so it names the stored scheme again and no
+        # longer renders pydantic's input_value — the buyer's credential — into a log.
+        # See the ledger file for the full note.
         # Cluster H (salesagent-e30o7.8) — wire and status expectations that drifted
         "tests/integration/test_admin_media_buy_reject_webhook.py::TestAdminMediaBuyRejectWebhook::test_approve_webhook_echoes_buyer_request_context",
         "tests/integration/test_bdd_dispatch_seam.py::TestCallViaForwardsReqWholeAndTheEnvUnpacksIt::test_a_format_ids_filter_still_reaches_the_tool[mcp]",

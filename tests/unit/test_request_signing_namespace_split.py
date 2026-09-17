@@ -37,10 +37,11 @@ import pytest
 from src.core.exceptions import AdCPConfigurationError, AdCPRequestSignatureError
 from src.core.schemas.capability_declarations import CapabilityDeclarations
 from src.core.signing.capture import SignatureSubject
-from src.core.signing.posture import RequestSigningPosture
+from src.core.signing.posture import RequestSigningPosture, posture_for_tenant
 from src.core.signing.verifier import verify_inbound_signature
 from src.core.tenant_context import TenantContext
 from src.core.tools.registry import TOOLS, is_adcp_operation
+from tests.helpers.signing import posture_declaration_document
 
 
 @contextmanager
@@ -52,12 +53,35 @@ def _tenant_declaring(request_signing: dict[str, Any]) -> Iterator[TenantContext
     ``tenant.capability_declarations`` — rather than from a posture object handed to it
     directly. That parse is part of what is being graded: a declaration the store refused
     would resolve to ``supported: false`` and make every assertion below vacuous.
+
+    Which is why ``identity.brand_json_url`` is declared alongside the posture and why the
+    yield is gated on the parse. Naming any of the four trigger buckets fires the pinned
+    ``identity.brand_json_url`` ``required_when`` rule
+    (``_validate_identity_relations``), so a posture-only row is a CONFIGURATION_ERROR and
+    ``posture_for_tenant`` downgrades it to :data:`UNSUPPORTED_POSTURE` with a warning —
+    every operation lands in ``none`` and the namespace wall is never exercised. The
+    assertion turns that silent downgrade into a failure.
     """
-    yield TenantContext(
+    # The document shape has ONE owner (tests/helpers/signing.posture_declaration_document),
+    # and it is the owner because the identity pointer is DERIVED from the tenant rather than
+    # authored: a hand-written brand_json_url is refused on the capabilities read path. The
+    # virtual_host must be dotted for the same reason the sibling composition-rule fixture
+    # says — src.core.agent_identity derives http:// for a single-label host, and the pin's
+    # ^https:// (correctly) refuses that.
+    base = TenantContext(
         tenant_id="t-namespace",
         name="Namespace Split",
-        capability_declarations={"request_signing": {"supported": True, **request_signing}},
+        virtual_host="namespace-split.example.com",
     )
+    tenant = base.model_copy(
+        update={"capability_declarations": posture_declaration_document(base, {"supported": True, **request_signing})}
+    )
+    assert posture_for_tenant(tenant).supported is True, (
+        "the declaration must be one the store ACCEPTS — an unreadable one resolves to "
+        "supported: false, which puts every operation in the 'none' bucket and makes the "
+        "cross-namespace assertions below pass without grading anything"
+    )
+    yield tenant
 
 
 #: A name from each namespace, chosen so neither is a plausible member of the other: one is a

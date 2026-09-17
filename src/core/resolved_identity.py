@@ -415,21 +415,93 @@ def _resolve_identity(
     # absent credential and step 2 must not refuse on it alone.
     presented_signature = _carries_signature(signature_subject)
 
-    # Step 2: NO credential presented, on a surface that requires one.
+    # Step 2: the seller this request addresses, identified from the host and loaded. The
+    # tenant comes first because a principal is a row in a tenant: a credential is only
+    # ever verified inside the tenant the request reached, never looked up across tenants.
+    #
+    # IT ALSO COMES BEFORE EVERY REFUSAL, which is the ordering the composition rule forces
+    # and the one thing this function must not get wrong. security.mdx @ v3.1.1 :1268 makes
+    # ``request_signature_required`` the answer an UNAUTHENTICATED caller earns on a
+    # ``required_for`` operation, and "unauthenticated" is defined at :1224 to include a
+    # caller presenting a bearer this seller does not accept. Whether the operation is in
+    # that bucket is SELLER data, so it cannot be known before the tenant row is read --
+    # which is exactly why the ASGI middleware #1291 replaced resolved its own tenant. The
+    # merge that folded the middleware into this function dropped that ordering, and
+    # ``negative/001``/``negative/027`` of the pinned conformance corpus caught it: both were
+    # answered on the bearer (AUTH_MISSING / AUTH_INVALID) with the checklist never run.
+    #
+    # The cost this pays is a tenant lookup for an anonymous caller, which the earlier
+    # ordering avoided. That saving was never available to a seller that enforces signing:
+    # the posture has to be read to answer the request at all.
+    tenant_id = _detect_tenant(headers)
+    tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
+
+    # Step 3: the SELLER's policy. A public tool's row does not require a credential, but
+    # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
+    # BR-UC-001 INV-1). The policy is seller data, so it can only be asked once the tenant
+    # is loaded; the answer is the same AUTH_MISSING the row-level check mints below.
+    if not require_valid_token and tenant is not None and credential_required_for is not None:
+        require_valid_token = credential_required_for(tenant)
+
+    # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
+    #
+    # Resolved, NOT yet refused on. ``bearer_rejected`` is latched here rather than re-read
+    # after step 4b, because a signature may establish a principal below and the AUTH_INVALID
+    # question is about the BEARER alone.
+    principal: Principal | None = None
+    if auth_token and tenant is not None:
+        principal = get_principal_from_token(auth_token, tenant.tenant_id)
+    bearer_rejected = bool(auth_token) and principal is None
+
+    # Step 4b: the OTHER credential, and the one place the composition rule is decided for a
+    # caller the bearer did not resolve. Both of its inputs are now present and neither was
+    # available to the ASGI middleware this replaces: the tenant row carries the posture to
+    # enforce, and whether a principal resolved is the third term of the spec's three-way AND
+    # ("...AND the caller presents no other credential the verifier accepts", :1224).
+    #
+    # BEFORE the two bearer refusals below, and that is the whole of the fix the conformance
+    # corpus forced. A request with no acceptable credential on a ``required_for`` operation
+    # owes the buyer ``request_signature_required``; refusing it on the bearer first answers
+    # AUTH_MISSING (nothing presented) or AUTH_INVALID (a bearer this seller does not accept),
+    # both of which :1224 explicitly folds into "unauthenticated" rather than treating as the
+    # answer. A seller declaring no posture is unaffected: ``verify_inbound_signature`` reads
+    # an inert ``UNSUPPORTED_POSTURE``, refuses nothing, and the refusals below run exactly as
+    # they did.
+    #
+    # What has NOT changed is that a signature cannot launder a rejected bearer. The verifier
+    # may refuse here and it may establish a counterparty, but ``bearer_rejected`` is still
+    # terminal immediately afterwards, so a caller presenting a bad token plus a good
+    # signature is answered AUTH_INVALID exactly as before.
+    principal = _signature_credential(signature_subject, headers=headers, tenant=tenant, principal=principal)
+
+    # Presented, and not a principal of the tenant addressed: AUTH_INVALID, on EVERY row.
+    # The pinned enum (3.1/enums/error-code.json, AUTH_INVALID) keys the MUST on one thing --
+    # "an `Authorization` header was present but verification failed" -- and names no task.
+    # The public-task carve-out in compliance/3.1.1/universal/security.yaml is "return 200
+    # WITHOUT credentials by design": it covers the absent credential, which the check below
+    # lets through, and says nothing about a presented one. A public tool used to take a
+    # rejected credential as absent and serve the caller anonymously; the storyboard's own
+    # narrative calls an agent that 200s a bad credential one that "is ignoring credentials
+    # entirely". (No tenant means no lookup ran, which is the same outcome: nothing resolved.)
+    if bearer_rejected:
+        from src.core.exceptions import AdCPAuthenticationError
+
+        raise AdCPAuthenticationError()
+
+    # NO credential presented, on a surface that requires one.
     #
     # AUTH_MISSING, not AUTH_INVALID: the v3.1.1 enum keys the split on whether a credential
     # was PRESENTED. Nothing was. A credential that is presented and fails to resolve is
-    # AUTH_INVALID, raised in step 4.
+    # AUTH_INVALID, raised just above.
     #
-    # Before tenant detection, which is three DB lookups an anonymous caller has not earned.
-    # Both transports that had this check ran it in this order for that reason; it is here
-    # so that all of them get it, MCP included -- MCP had none, carried a principal-less
-    # identity into the tool, and _impl code grew its own AdCPAuthRequiredError raises to
-    # compensate.
+    # One check rather than the two this used to be (the row's declaration, then the seller's
+    # policy): ``require_valid_token`` now carries both by the time it is read.
     #
     # ``require_valid_token`` is the TOOL's declaration (``ToolSpec.auth``) travelling down
     # from the boundary, never a transport's own opinion. A discovery tool passes False and
-    # still resolves anonymously.
+    # still resolves anonymously. It is here so that all transports get it, MCP included --
+    # MCP had none, carried a principal-less identity into the tool, and _impl code grew its
+    # own AdCPAuthRequiredError raises to compensate.
     #
     # This function raises TYPED errors and knows nothing about HTTP. Turning AUTH_MISSING
     # into a 401 with a challenge is ``AuthChallengeResponder``'s job, done on a finished
@@ -438,72 +510,23 @@ def _resolve_identity(
     #
     # ``not presented_signature`` is the amendment #1291 makes to this check, and it is the
     # whole of it: a signed request HAS presented a credential, so refusing it here for a
-    # missing bearer would answer AUTH_MISSING to a caller that presented one. The signature
-    # is read below, once the tenant is loaded, and either establishes a principal or refuses
-    # with its own code.
+    # missing bearer would answer AUTH_MISSING to a caller that presented one. Step 4b has
+    # already either established a principal from it or refused with its own code.
     if require_valid_token and not auth_token and not presented_signature:
         from src.core.exceptions import AdCPAuthRequiredError
 
         raise AdCPAuthRequiredError()
-
-    # Step 3: the seller this request addresses, identified from the host and loaded. The
-    # tenant comes first because a principal is a row in a tenant: a credential is only
-    # ever verified inside the tenant the request reached, never looked up across tenants.
-    tenant_id = _detect_tenant(headers)
-    tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
-
-    # Step 3b: the SELLER's policy. A public tool's row does not require a credential, but
-    # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
-    # BR-UC-001 INV-1). The policy is seller data, so it can only be asked once the tenant
-    # is loaded; the answer is the same AUTH_MISSING the row-level check mints above.
-    if not require_valid_token and tenant is not None and credential_required_for is not None:
-        require_valid_token = credential_required_for(tenant)
-        if require_valid_token and not auth_token and not presented_signature:
-            from src.core.exceptions import AdCPAuthRequiredError
-
-            raise AdCPAuthRequiredError()
-
-    # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
-    principal: Principal | None = None
-    if auth_token and tenant is not None:
-        principal = get_principal_from_token(auth_token, tenant.tenant_id)
-
-    # Presented, and not a principal of the tenant addressed: AUTH_INVALID, on EVERY row.
-    # The pinned enum (3.1/enums/error-code.json, AUTH_INVALID) keys the MUST on one thing --
-    # "an `Authorization` header was present but verification failed" -- and names no task.
-    # The public-task carve-out in compliance/3.1.1/universal/security.yaml is "return 200
-    # WITHOUT credentials by design": it covers the absent credential, which step 2 already
-    # let through, and says nothing about a presented one. A public tool used to take a
-    # rejected credential as absent and serve the caller anonymously; the storyboard's own
-    # narrative calls an agent that 200s a bad credential one that "is ignoring credentials
-    # entirely". (No tenant means no lookup ran, which is the same outcome: nothing resolved.)
-    if auth_token and principal is None:
-        from src.core.exceptions import AdCPAuthenticationError
-
-        raise AdCPAuthenticationError()
-
-    # Step 4b: the OTHER credential. Placed here, after step 4, because both of its inputs are
-    # now resolved and neither was available to the ASGI middleware this replaces: the tenant
-    # row carries the posture to enforce, and whether a principal resolved is the third term
-    # of the composition rule's three-way AND ("...AND the caller presents no other credential
-    # the verifier accepts", security.mdx @ v3.1.1 :1224).
-    #
-    # AFTER the AUTH_INVALID check above, deliberately. A bearer that was presented and
-    # rejected is terminal on its own; verifying a signature for such a caller would let a
-    # valid signature launder a rejected token into a served request, and answering the
-    # signature's code instead of AUTH_INVALID would misreport which credential failed.
-    principal = _signature_credential(signature_subject, headers=headers, tenant=tenant, principal=principal)
 
     # A public tool takes whoever arrived: a resolved caller, or -- with nothing presented
     # -- nobody.
     if not require_valid_token:
         return PublicIdentity(principal=principal, tenant=tenant)
 
-    # A protected row: step 2 or 3b refused an absent credential and the check above refused
-    # a rejected one. A caller that presented ONLY a signature reached here with both of those
-    # satisfied, so this is the one place the postcondition can still fail -- the signature
-    # verified but named nobody this seller onboarded, which is a credential that did not
-    # resolve. Same answer as a token that did not: AUTH_INVALID.
+    # A protected row: the checks above refused an absent credential and a rejected one. A
+    # caller that presented ONLY a signature reached here with both of those satisfied, so
+    # this is the one place the postcondition can still fail -- the signature verified but
+    # named nobody this seller onboarded, which is a credential that did not resolve. Same
+    # answer as a token that did not: AUTH_INVALID.
     if tenant is None or principal is None:
         from src.core.exceptions import AdCPAuthenticationError
 

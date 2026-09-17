@@ -184,3 +184,64 @@ async def test_the_capture_lands_where_every_transport_reads_it() -> None:
     assert seen["exchange"] is not None
     assert captured_exchange({"state": {CAPTURED_EXCHANGE: seen["exchange"]}}) is seen["exchange"]
     assert captured_exchange({}) is None, "and an invocation outside an HTTP request presents nothing"
+
+
+def test_the_a2a_leg_really_reads_the_capture(monkeypatch) -> None:
+    """The A2A transport's leg of the claim above, EXECUTED rather than asserted in prose.
+
+    ``test_the_capture_lands_where_every_transport_reads_it`` names all three transports and
+    drives two: ``/mcp`` and ``/api/v1``. A2A was the one leg no test ran, and it is the leg
+    where a fork would be least visible — ``/mcp`` is a Starlette ``Mount`` (which mutates the
+    one scope dict), while ``/a2a`` is a ``Route`` appended straight onto the app's route
+    table, reached through ``AdCPCallContextBuilder`` rather than through the scope directly.
+    Two different route kinds and two different sourcing paths for the ONE derivation that
+    must not fork: if it did, every signed A2A request would fail while MCP passed, and
+    nothing in the suite would say so.
+
+    So this drives the REAL app over HTTP and asserts on the exchange the A2A context builder
+    actually placed — the four things a signature covers, each compared against what the
+    client sent rather than against a value the test also computed.
+    """
+    from starlette.testclient import TestClient
+
+    from src.a2a_server import context_builder
+    from src.app import app
+
+    placed: list = []
+    build = context_builder.AdCPCallContextBuilder.build
+
+    def _record(self, request):
+        context = build(self, request)
+        placed.append(context.state.get(context_builder.EXCHANGE_STATE_KEY))
+        return context
+
+    # Observing the real builder, not standing in for it: the value asserted below is the one
+    # production put on the call context.
+    monkeypatch.setattr(context_builder.AdCPCallContextBuilder, "build", _record)
+
+    # The bytes are written out here rather than re-serialized from a dict, because they ARE
+    # the subject: a Content-Digest covers this exact octet sequence, and two json.dumps calls
+    # with different separators produce two different digests over the same object.
+    sent = (
+        b'{"jsonrpc":"2.0","id":"1","method":"SendMessage","params":{"message":'
+        b'{"messageId":"m1","role":"ROLE_USER","parts":[{"text":"hi"}]}}}'
+    )
+    with TestClient(app) as client:
+        client.post("/a2a", content=sent, headers={"Content-Type": "application/json"})
+
+    assert placed, "the A2A context builder never ran — this test stopped grading the leg it exists for"
+    exchange = placed[0]
+    assert exchange is not None, (
+        "the A2A leg received no capture. /a2a is a Route appended to the app's route table "
+        "rather than a Mount, so this is where the capture would be missed — and a missing "
+        "exchange reads to the verifier as 'this request presented no signature', which "
+        "fails every signed A2A request while MCP keeps passing."
+    )
+    assert exchange.method == "POST"
+    assert exchange.url == "http://testserver/a2a", "@target-uri must be the URL the CLIENT addressed"
+    assert exchange.body == sent, (
+        "the capture must carry the exact bytes the client sent — a Content-Digest is over these bytes and nothing else"
+    )
+    assert any(name.lower() == b"content-type" for name, _ in exchange.raw_headers), (
+        "the raw header LINES must survive to the A2A leg, not a collapsed dict view"
+    )
