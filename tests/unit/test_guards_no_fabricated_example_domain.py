@@ -56,11 +56,17 @@ ALLOWLIST: set[tuple[str, int]] = {
     #
     # This allowlist is keyed by LINE NUMBER, so any edit above a violation re-reports it
     # as new AND its old coordinate as stale; re-keying it on (file, symbol) is tracked as
-    # a follow-up on #1757. This is the third such re-pin, all three caused by an unrelated
-    # edit ABOVE the violations rather than by any change to them.
-    ("src/core/database/models.py", 448),
-    ("src/core/database/models.py", 458),
-    ("src/core/database/models.py", 468),
+    # a follow-up on #1757. The three re-pins above were all caused by an unrelated edit
+    # ABOVE the violations rather than by any change to them.
+    #
+    # SHRUNK, 3 -> 1, and this one is NOT a re-pin. The three entries were three IDENTICAL
+    # copies of the fallback, inline in `Product.effective_properties`'s by_id, by_tag and
+    # `all` branches. They are now one `Product.publisher_domain` property, so there is one
+    # violation where there were three. The fabrication itself is unfixed and keeps
+    # FIXME(#1845); what changed is that fixing it is now a single edit rather than three
+    # that could diverge. (The same commit strips a port from the value for a separate
+    # reason -- see the property's docstring -- which does not touch this shape.)
+    ("src/core/database/models.py", 491),
 }
 
 
