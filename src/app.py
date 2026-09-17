@@ -52,6 +52,7 @@ from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
+from src.routes.well_known import router as well_known_router
 
 logger = logging.getLogger(__name__)
 
@@ -383,7 +384,7 @@ logger.info("A2A routes added: /a2a, /.well-known/agent-card.json")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
-async def a2a_trailing_slash_redirect():
+async def a2a_trailing_slash_redirect() -> RedirectResponse:
     """Preserve historical /a2a/ compatibility.
 
     The admin root fallback mount would otherwise catch `/a2a/` and hand it to
@@ -611,6 +612,11 @@ app.include_router(health_router)
 # at composition, rather than answering 404 per request from inside the route.
 if settings.debug_routes_enabled:
     app.include_router(health_debug_router)
+
+# Trust root (#1291 A3): /.well-known/{brand,adagents,jwks}.json and the signed
+# revocation list. Registered at import time so it is matched before
+# _install_admin_mounts() re-appends the Flask "" catch-all at lifespan startup.
+app.include_router(well_known_router)
 
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):

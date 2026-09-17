@@ -28,12 +28,13 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, backref, mapped_column, relationship
 from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
@@ -47,6 +48,11 @@ from src.core.json_validators import JSONValidatorMixin
 # (src/core/schemas/notification.py): a stored row reads back as the same type the request
 # chain carries, so nothing downstream holds two spellings of the block.
 from src.core.schemas.notification import NotificationConfig
+from src.core.signing.algorithms import (
+    REQUEST_SIGNING,
+    signing_alg_check_clause,
+    signing_purpose_check_clause,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,8 +247,13 @@ class Tenant(Base, JSONValidatorMixin):
 
     @property
     def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host or subdomain-based)."""
-        return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
+        """Get primary domain for this tenant (virtual_host), or None if unconfigured.
+
+        Never fabricates a <subdomain>.example.com placeholder (salesagent-piyo) --
+        callers (e.g. admin/blueprints/inventory_profiles.py) rely on None to signal
+        "no real domain configured" and refuse to proceed.
+        """
+        return self.virtual_host
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -2713,6 +2724,110 @@ class WebhookDeliveryLog(Base):
     )
 
 
+class SigningKey(Base):
+    """An RFC 9421 signing key this tenant owns (#1291 A2, salesagent-z6nr.8).
+
+    Each tenant is a distinct seller identity with its own brand domain, so key
+    material is per-tenant. One row binds a unique ``kid`` to the public JWK we
+    publish AND to a reference the process resolves for the private half it never
+    stores — so the key we sign with, the key we publish, and the key material on
+    disk cannot silently disagree.
+
+    ``private_key_ref`` is a scheme-prefixed opaque reference (``db:<kid>``,
+    ``env:NAME``, ``file:/abs/path``), never key material. Which schemes resolve
+    is an agent-level posture (``SigningSettings.allowed_key_ref_schemes``), so a
+    deployment can forbid ``file:`` without touching tenant rows.
+
+    ``db:`` is the scheme this agent MINTS, and ``private_key_pem_encrypted`` is
+    where its private half lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+    exactly as ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned
+    it, encrypted under the deployment KEK
+    (``SigningSettings.key_passphrase_env``). No envelope format and no encryption
+    code of ours sits between the two — the ciphertext IS the PEM. The column is
+    nullable because ``env:``/``file:`` rows point at material this process did
+    not write and must not copy; provisioning refuses ``db:`` outright when no
+    KEK is configured, so a NULL here can never mean "plaintext key in the
+    database".
+
+    ``not_before`` / ``not_after`` are OURS, not the spec's — the published
+    ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
+    The window governs which key we SIGN with; PUBLICATION is governed by
+    ``revoked_at`` plus that schema's grace period. A publisher filtering the
+    JWKS by ``not_after`` would un-publish a key while signatures made under it
+    are still inside their verification window — the exact gap rotation overlap
+    exists to prevent.
+
+    ``not_after IS NULL`` means open-ended (+infinity). The current key is always
+    open-ended, so that is the common case, not an edge case.
+
+    N rows per ``(tenant, purpose)`` distinguished by ``kid`` serve BOTH rotation
+    overlap and the webhook blast-radius isolation security.mdx describes
+    ("isolation comes from the kid"). One mechanism, not two.
+    """
+
+    __tablename__ = "signing_keys"
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tenant_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    kid: Mapped[str] = mapped_column(String(255), nullable=False)
+    alg: Mapped[str] = mapped_column(String(50), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
+    public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
+    private_key_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    private_key_pem_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+    # Relationships
+    # passive_deletes=True defers to the database's ON DELETE CASCADE below.
+    # Without it, deleting a Tenant through the ORM makes SQLAlchemy load the
+    # children and NULL their tenant_id instead — which the NOT NULL column
+    # rejects, so an ORM tenant delete fails outright once the tenant owns a key.
+    tenant = relationship("Tenant", backref=backref("signing_keys", passive_deletes=True))
+
+    __table_args__ = (
+        ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),
+        # security.mdx: "Unique within the JWKS. MUST NOT collide with any other
+        # entry's kid regardless of adcp_use." One JWKS is published per tenant.
+        UniqueConstraint("tenant_id", "kid", name="uq_signing_keys_tenant_kid"),
+        # Both CHECK bodies are TAKEN WHOLE from src.core.signing.algorithms, never
+        # composed here (#1521, salesagent-n78j0.3). Asking for the clause rather than
+        # for the value-set is what removes the choice of column name, operator and
+        # rendering from this call site — the freedom that let this constraint and the
+        # one in migration e7a2c40b91d5 be assembled independently. Pinned by
+        # tests/unit/test_signing_alg_parity.py.
+        CheckConstraint(
+            signing_alg_check_clause(),
+            name="ck_signing_keys_alg",
+        ),
+        CheckConstraint(
+            signing_purpose_check_clause(),
+            name="ck_signing_keys_purpose",
+        ),
+        Index("idx_signing_keys_tenant_purpose_active", "tenant_id", "purpose", "not_after"),
+    )
+
+    def __repr__(self):
+        return (
+            f"<SigningKey("
+            f"id='{self.id}', "
+            f"tenant_id='{self.tenant_id}', "
+            f"kid='{self.kid}', "
+            f"alg='{self.alg}', "
+            f"purpose='{self.purpose}', "
+            f"private_key_ref='***', "
+            f"not_before={self.not_before}, "
+            f"not_after={self.not_after}, "
+            f"revoked_at={self.revoked_at}"
+            f")>"
+        )
+
+
 class ReplayNonce(Base):
     """One live claim on an RFC 9421 ``(keyid, nonce)`` pair (#1291 A4).
 
@@ -2752,3 +2867,6 @@ class ReplayNonce(Base):
         # so the composite carries the whole predicate.
         Index("adcp_replay_keyid_expires_idx", "keyid", "expires_at"),
     )
+
+    def __repr__(self):
+        return f"<ReplayNonce(keyid='{self.keyid}', nonce='{self.nonce}', expires_at={self.expires_at})>"
