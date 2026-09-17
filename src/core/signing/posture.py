@@ -27,22 +27,36 @@ second, verifier-owned tenant lookup (``_detect_tenant_for_posture``) that exist
 because the ASGI middleware ran BEFORE identity resolution. Inside ``_resolve_identity``
 there is exactly one tenant read, so the projection, the second lookup and the
 swallow-everything failure mode around it are all deleted.
+
+``webhook_signing`` sits beside it and is DERIVED, never declared: ``supported`` from key
+material plus trust-root publishability, ``algorithms`` from the ACTIVE key row,
+``profile`` from the SDK tag the signer emits. :func:`webhook_signing_posture` is its one
+producer, and the outbound delivery signer
+(``src.core.signing.outbound.webhook_delivery_signer``) gates on the same key state, so
+the wire and the socket cannot disagree about whether we sign or with what.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
+from adcp.signing.webhook_signer import WEBHOOK_TAG
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Identity as LibraryIdentity
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import KeyOrigins
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
-from pydantic import ConfigDict, RootModel
+from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
+from pydantic import AnyUrl, ConfigDict, RootModel, model_validator
 
 from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps this module free of DB imports
+    from src.core.database.models import SigningKey
+    from src.core.database.repositories.signing_key import SigningKeyRepository
     from src.core.schemas.capability_declarations import CapabilityDeclarations
     from src.core.tenant_context import TenantContext
 
@@ -289,4 +303,390 @@ def request_signing_buckets_declared(posture: RequestSigningPosture) -> bool:
             posture.protocol_methods_supported_for,
             posture.protocol_methods_required_for,
         )
+    )
+
+
+def requires_trust_root(posture: RequestSigningPosture, *, webhook_signing_supported: bool) -> bool:
+    """Whether the pinned ``identity.brand_json_url`` ``required_when`` fires.
+
+    ``#/properties/identity/properties/brand_json_url/x-adcp-validation.required_when``
+    lists SIX triggers: the four ``request_signing`` buckets of
+    :func:`request_signing_buckets_declared`, ``webhook_signing.supported === true``,
+    and any ``identity.key_origins`` subfield. The third is handled at its own layer —
+    we only ever emit ``key_origins`` where anchoring already holds, so it cannot
+    self-trigger.
+
+    What is NOT a trigger, and this is what makes the conservative default shippable:
+    ``request_signing.supported == true`` on its own, and ``warn_for`` in either
+    namespace. A keyless tenant with no trust root can therefore declare
+    ``supported: true`` with empty buckets and stay conformant.
+    """
+    return webhook_signing_supported or request_signing_buckets_declared(posture)
+
+
+class IdentityDeclaration(LibraryIdentity):
+    """The trust-root pointer: DECLARED for validation, DERIVED for emission (#1291 D1).
+
+    ``extra="forbid"`` is RESTATED because the library type is ``extra="allow"``:
+    inherited as-is, an operator's typo'd key would be silently ACCEPTED and their
+    intent would never reach the wire with no indication why. Same reason
+    ``MeasurementDeclaration`` restates it.
+
+    Two layers, and neither substitutes for the other:
+
+    * DECLARED, for VALIDATION (``src/core/schemas/capability_declarations.py``). The
+      store carries the block so a declaration naming a signing posture WITHOUT
+      ``brand_json_url`` is rejectable at all — which is what BR-UC-010's
+      ``posture_declared_identity_absent`` / ``..._identity_empty`` rows grade. A value
+      that were always derived could never be missing.
+    * DERIVED, for EMISSION (:func:`emitted_identity`). What goes on the wire comes from
+      ``src/core/agent_identity.py``, so a response carrying a posture always carries a
+      conformant pointer. A declared value that DIFFERS from the derived one is a
+      ``CONFIGURATION_ERROR`` naming the field, because a second literal for a key origin
+      is a ``request_signature_key_origin_mismatch`` waiting to happen.
+
+    It lives HERE, beside :class:`RequestSigningPosture` and
+    :class:`WebhookSigningPosture`, because this module is the one place the library
+    signing types may be constructed — the AST-detectable form of the two deleted
+    ``capabilities.py`` literals, guarded by
+    ``tests/unit/test_architecture_signing_block_construction.py``.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+def emitted_identity(
+    *,
+    posture: RequestSigningPosture,
+    webhook_signing_supported: bool,
+    brand_json_url: str | None,
+    jwks_origin: str | None,
+) -> IdentityDeclaration | None:
+    """The ``identity`` block to put on the wire, or ``None`` when none is owed.
+
+    Emitted exactly when :func:`requires_trust_root` fires, and never otherwise: the
+    block's whole purpose is to anchor a declared signing posture, so a tenant with no
+    posture and no key publishes nothing to anchor. Omission there is not silence about
+    a fact — there is no fact.
+
+    ``key_origins.request_signing`` is emitted ONLY where
+    :func:`request_signing_buckets_declared` holds, even though a JWKS is published at
+    that origin for every keyed tenant. Two reasons, both the pin's: the
+    ``purpose_anchoring`` constraint requires a declared origin to have its posture, and
+    an unconditional emission would SELF-TRIGGER ``required_when`` — turning the
+    conservative default into a rule about itself.
+
+    ``brand_json_url`` absent means the origin cannot serve https (see
+    :func:`origin_is_publishable`), so there is nothing conformant to emit.
+    """
+    if brand_json_url is None or not requires_trust_root(posture, webhook_signing_supported=webhook_signing_supported):
+        return None
+    anchored = jwks_origin is not None and request_signing_buckets_declared(posture)
+    origins = KeyOrigins(request_signing=AnyUrl(jwks_origin)) if anchored and jwks_origin else None
+    return IdentityDeclaration(
+        # AnyUrl(...), not cast(Any, ...) (#1879). Both fields are declared
+        # ``AnyUrl | None``; a cast is a RUNTIME NO-OP, so a malformed URL reached the
+        # served capabilities document unvalidated. Constructing the type validates it
+        # here, where the declaration is, instead of asserting it is already right.
+        brand_json_url=AnyUrl(brand_json_url),
+        key_origins=origins,
+    )
+
+
+class WebhookSigningPosture(LibraryWebhookSigning):
+    """A tenant's ``webhook_signing`` block — what we advertise AND what we emit.
+
+    #1291 C1, design step 5. The sibling of :class:`RequestSigningPosture`, and frozen
+    for the same reason: one posture is resolved per delivery and then read twice — once
+    to decide whether the RFC 9421 arm is reachable at all, once to check the algorithm
+    we are about to sign with is one we would declare. A posture that could change
+    between those reads would let a webhook be signed under one rule and advertised
+    under another.
+
+    Two invariants are structural rather than remembered:
+
+    * ``profile`` defaults to the SDK's :data:`WEBHOOK_TAG` — the SAME constant
+      ``adcp.signing.webhook_signer.sign_webhook`` pins into the emitted
+      ``Signature-Input`` ``tag=`` parameter. The schema types the field as a closed
+      ``Literal``, so if the SDK constant ever drifts from the schema enum this
+      becomes a loud pydantic failure at construction instead of a silent
+      advertise/emit mismatch (``get-adcp-capabilities-response.json``
+      ``#/properties/webhook_signing/profile``: the value "MUST match the ``tag=``
+      parameter … so receivers can statically validate the declared profile against
+      the on-wire tag").
+    * ``algorithms`` is the set we WILL SIGN WITH (security.mdx @ v3.1.1 :1419), so
+      :func:`webhook_signing_posture` derives it from the tenant's ACTIVE key rows —
+      never from ``SIGNING_ALG_VALUES``, which is the ALLOWED set. A tenant holding
+      one ed25519 key that declared both algorithms would promise one it never emits.
+
+    This object goes on the ``get_adcp_capabilities`` wire. It is never parsed FROM a
+    tenant declaration: the block is derived platform state, listed in
+    ``_DERIVED_BLOCKS`` so an operator declaring it is told why rather than told it is
+    unimplemented — see :func:`webhook_signing_is_declarable`.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _profile_defaults_to_the_emitted_tag(cls, data: Any) -> Any:
+        """Fill ``profile`` from the SDK constant the signer actually emits — but
+        ONLY when we sign.
+
+        Done as a validator rather than by re-declaring the field so the schema's
+        own ``Literal`` annotation (and its description) stay the single definition
+        — the constant is CHECKED against the enum here instead of being copied
+        beside it. (Re-declaring it would also owe the schema-inheritance guard an
+        allowlist row for a redeclaration that introduces a default.)
+
+        The ``supported`` guard is a spec obligation, not a nicety. In AdCP 3.1.1
+        (``dist/schemas/3.1.1/bundled/protocol/get-adcp-capabilities-response.json``)
+        ``webhook_signing.required`` is ``["supported"]`` alone, ``profile`` is
+        optional, and its description fixes its meaning: *"Identifier of the
+        webhook-signing profile version the agent emits. Value MUST match the
+        ``tag=`` parameter emitted in the RFC 9421 ``Signature-Input`` header … so
+        receivers can statically validate the declared profile against the on-wire
+        tag."* ``supported: false`` means *"receivers MUST NOT expect a Signature
+        header"* — there is no ``Signature-Input`` and no ``tag=`` to match, so a
+        declared profile would be a claim about a header we never send and its one
+        documented use would be unsatisfiable. The graded scenario
+        ``@T-UC-010-v31-webhook-signing`` asserts the profile is ABSENT when
+        unsupported, and it is right to (#1291 D1).
+        """
+        if isinstance(data, dict) and data.get("profile") is None and data.get("supported"):
+            return {**data, "profile": WEBHOOK_TAG}
+        return data
+
+
+def webhook_signing_is_declarable() -> bool:
+    """Whether any tenant CAN declare a ``webhook_signing`` posture.
+
+    False, and permanently so — but for a DIFFERENT reason from an unbacked block.
+    ``webhook_signing`` is DERIVED platform state (key material plus trust-root
+    publishability), so it is not the operator's to declare at all; the store lists it
+    in ``_DERIVED_BLOCKS`` rather than ``_UNBACKED_BLOCKS``.
+    :func:`is_block_declarable` reads both tables, so this predicate and the
+    verifier-side gates keep consulting ONE function.
+    """
+    from src.core.schemas.capability_declarations import is_block_declarable
+
+    return is_block_declarable("webhook_signing")
+
+
+def origin_is_publishable(origin: str | None) -> bool:
+    """Whether a conformant ``identity.brand_json_url`` can exist for *origin*.
+
+    The pin fixes ``brand_json_url`` to ``pattern: "^https://"`` and security.mdx
+    rejects anything else with ``request_signature_brand_json_url_missing``, while
+    ``_get_protocol_for_domain`` (``src/core/domain_config.py``) deliberately derives
+    ``http`` for localhost and single-label hosts — neither can present a
+    publicly-trusted certificate, and advertising https there publishes a trust root
+    nothing can reach.
+
+    The two constraints are irreconcilable on such a host, so the honest answer is to
+    claim nothing: every signature we emitted there would be one no conformant receiver
+    can resolve a key for (security.mdx @ v3.1.1 :1226). That makes this a gate on the
+    SHARED posture object rather than on the advertise side alone — see
+    :func:`webhook_signing_posture`, and the same predicate gates the outbound request
+    signer in ``src.core.helpers.adapter_helpers.request_signer_for_tenant``.
+    """
+    return origin is not None and origin.startswith("https://")
+
+
+def unsupported_webhook_signing_posture() -> WebhookSigningPosture:
+    """The block for an agent that does NOT sign its outbound webhooks.
+
+    ``algorithms`` is absent because there is no active key to name one from, which is
+    the whole difference from the supported case. ``profile`` is absent for the same
+    kind of reason: it names the ``tag=`` of a ``Signature-Input`` header this posture
+    promises NOT to send, so declaring it would be a claim about a header that never
+    goes out (see :meth:`WebhookSigningPosture._profile_defaults_to_the_emitted_tag`
+    for the schema citation). This CHANGES the pre-#1291-D1 wire, which filled the
+    profile unconditionally. ``legacy_hmac_fallback`` is derived either way; it
+    describes the OTHER arm, which stays reachable whether or not we sign.
+
+    The ONE construction of the unsupported block, so the no-tenant capabilities
+    response, a keyless tenant's response and the sender's own refusal path cannot
+    drift into three answers.
+    """
+    from src.core.security.webhook_egress import legacy_hmac_fallback_supported
+
+    return WebhookSigningPosture(
+        supported=False,
+        profile=None,
+        legacy_hmac_fallback=legacy_hmac_fallback_supported(),
+    )
+
+
+def webhook_signing_posture(
+    repo: SigningKeyRepository,
+    *,
+    now: datetime,
+    origin: str | None,
+    key_backing: KeyBacking | None = None,
+) -> WebhookSigningPosture:
+    """The posture *repo*'s tenant can HONESTLY hold at *now* on *origin*.
+
+    Derived from platform state, never from a constant or a declaration:
+
+    * ``supported`` is :func:`signing_key_backed`'s ``signs`` (the ONE key-presence
+      derivation) AND :func:`origin_is_publishable` — a key we can open, published
+      under a trust root a receiver can actually fetch;
+    * ``algorithms`` is the algorithm of the key that would actually be used;
+    * ``profile`` is the SDK tag the signer emits (see the class docstring);
+    * ``legacy_hmac_fallback`` is the legacy arm's own reachability, owned beside that
+      arm in ``src.core.security.webhook_egress`` — the ``AuthenticationScheme.HMAC_SHA256``
+      branch of ``_headers_for`` is the arm it describes.
+
+    A keyless tenant — or a keyed one on an unpublishable origin — gets
+    :func:`unsupported_webhook_signing_posture`: the schema's own wording for "webhooks
+    are delivered with legacy Bearer or HMAC-SHA256 auth only and receivers MUST NOT
+    expect a Signature header". ``src.core.signing.outbound.webhook_delivery_signer``
+    gates on the SAME key state, so the wire and the socket cannot disagree in either
+    direction.
+
+    The ``legacy_hmac_fallback`` predicate is imported function-locally, the same shape
+    as the function-local ``get_settings`` in :func:`signing_key_backed`: this module
+    must stay free of transport and DB imports at module scope.
+
+    *key_backing*: pass an already-derived :class:`KeyBacking` when the caller also
+    needs ``.publishes`` (e.g. capabilities' identity/key_origins gate) so
+    :func:`signing_key_backed` runs ONCE per request instead of being re-derived here
+    -- a second derivation is how the advertised posture and the enforced one drift
+    apart (see :class:`KeyBacking`'s own docstring). Defaults to ``None`` for callers
+    that hold only a repository.
+    """
+    from src.core.security.webhook_egress import legacy_hmac_fallback_supported
+
+    backing = key_backing if key_backing is not None else signing_key_backed(repo, now=now)
+    if not (backing.signs and origin_is_publishable(origin)):
+        return unsupported_webhook_signing_posture()
+
+    active = repo.active_at(now=now)
+    # ``signs`` is True, so ``active_at`` returned a row: the two read the same
+    # selector. Narrowed for mypy rather than re-derived (ADR-009).
+    assert active is not None
+    return WebhookSigningPosture(
+        supported=True,
+        algorithms=[active.alg],
+        legacy_hmac_fallback=legacy_hmac_fallback_supported(),
+    )
+
+
+class KeyBacking(NamedTuple):
+    """What this tenant's own signing keys let it honestly declare.
+
+    THE single key-presence derivation. Both the outbound signer and the declaration
+    builder consume this one — a second derivation of "does this tenant have a key" is
+    how the advertised posture and the enforced one drift apart, which is the whole
+    reason this module exists.
+
+    Two fields rather than one, because the facts they back sit on opposite sides
+    of a distinction the repository calls load-bearing
+    (``SigningKeyRepository.active_at`` vs ``publishable_at``):
+
+    ======================================  ===============================  ================
+    field                                   means                            selector
+    ======================================  ===============================  ================
+    ``signs`` -> ``webhook_signing``        this agent SIGNS                 ``active_at``
+    ``publishes`` -> ``identity``           this agent PUBLISHES             ``publishable_at``
+    ======================================  ===============================  ================
+
+    A key inside its revocation grace window, or one with a future
+    ``not_before``, is publishable but not active. Collapsing the two would push
+    the choice down a layer into whichever consumer guessed first.
+
+    ``signs`` additionally requires that this deployment can OPEN the row's private
+    half; ``publishes`` does not, because a JWKS needs only the public one. See
+    :func:`_private_half_is_resolvable`.
+    """
+
+    signs: bool
+    publishes: bool
+
+
+def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, now: datetime) -> bool:
+    """Whether this deployment can ACTUALLY DECRYPT *row*'s private key.
+
+    A ``db:`` row stores the private PEM ENCRYPTED under the deployment-wide key
+    encryption key named by ``SigningSettings.key_passphrase_env``. Minting refuses
+    without it (``src/core/signing/keys.py``) and ``resolve_signing_material`` needs it
+    again at every use — so a row minted under a KEK that was later unset, or under a
+    DIFFERENT KEK than this process holds (a rotated KEK, a per-environment mismatch, a
+    stale secret), is a key we cannot open, and reporting it as backing means the wire
+    says ``supported: true`` while every delivery raises.
+
+    This ATTEMPTS the real resolution (via :func:`~src.core.signing.provider.resolve_signing_material`)
+    rather than only checking that SOME passphrase is configured — presence is not
+    correctness. The three WARNINGs are deliberately distinct so an operator can tell
+    "no key" from "a passphrase is configured but it's the wrong one": the first two are
+    provisioning gaps, the third is a deployment misconfiguration with the key material
+    intact. Reuses the SAME per-(tenant, kid) resolution cache signing itself uses
+    (``_provider_cache``) — cache success, never errors, so a later-fixed KEK is retried
+    on the next call rather than pinned as permanently unresolvable.
+
+    ``env:`` / ``file:`` refs are resolved by the process's own environment or mount at
+    use time and carry no KEK of ours, so their resolvability is not knowable here —
+    they are taken at face value, exactly as before.
+
+    Matched on the scheme PREFIX rather than through ``parse_key_ref``, which RAISES on a
+    malformed reference. This function answers "what may this tenant honestly declare",
+    and it is called on the capabilities read path and on the admin setup checklist:
+    turning a malformed row into an exception there would fail discovery for a fault that
+    belongs to resolution, which reports it loudly at the point of use.
+    """
+    from src.core.config import get_settings
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.signing.provider import DB_SCHEME, resolve_signing_material
+
+    if not (row.private_key_ref or "").startswith(f"{DB_SCHEME}:"):
+        return True
+    if get_settings().signing.key_passphrase is None:
+        logger.warning(
+            "Tenant %s holds ACTIVE signing key %s whose private half is encrypted under the "
+            "deployment key encryption key, but SigningSettings.key_passphrase_env resolves to "
+            "nothing — the key cannot be opened, so this agent declares and performs NO signing "
+            "with it (#1291)",
+            row.tenant_id,
+            row.kid,
+        )
+        return False
+    try:
+        resolve_signing_material(repo, tenant_id=row.tenant_id, purpose=row.purpose, now=now, kid=row.kid)
+    except AdCPConfigurationError as exc:
+        logger.warning(
+            "Tenant %s holds ACTIVE signing key %s and a passphrase IS configured, but this "
+            "deployment could not decrypt the key's private half (%s) — the configured KEK is "
+            "wrong for this row, so this agent declares and performs NO signing with it (#1291)",
+            row.tenant_id,
+            row.kid,
+            exc,
+        )
+        return False
+    return True
+
+
+def signing_key_backed(repo: SigningKeyRepository, *, now: datetime) -> KeyBacking:
+    """Whether *repo*'s tenant has key material backing each declared fact.
+
+    Takes a repository and opens NO session: the caller (the admin blueprint, the setup
+    checklist, the capabilities builder) already owns one, and a per-call unit of work
+    inside this module would add a second session to a capabilities request that already
+    holds one.
+
+    It does NOT back ``request_signing``. That block declares whether this agent
+    VERIFIES signatures on INCOMING requests, which uses the COUNTERPARTY's keys — it is
+    backed by ``SigningSettings.verifier_enabled`` plus the verifier that runs inside
+    ``_resolve_identity``, and is completely independent of whether this tenant owns a
+    key of its own. The asymmetry is the spec's: v3.1.1
+    ``get-adcp-capabilities-response.json`` defines ``request_signing.supported``
+    as "Whether this agent VERIFIES RFC 9421 signatures on incoming requests" and
+    ``webhook_signing.supported`` as "Whether this agent SIGNS outbound webhooks".
+    """
+    from src.core.config import get_settings
+
+    active = repo.active_at(now=now)
+    return KeyBacking(
+        signs=active is not None and _private_half_is_resolvable(repo, active, now=now),
+        publishes=bool(repo.publishable_at(now=now, grace_seconds=get_settings().signing.grace_seconds)),
     )

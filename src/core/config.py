@@ -321,17 +321,63 @@ def _validate_explicit_keyid(key: str, field_name: str) -> None:
         )
 
 
-class SigningSettings(BaseSettings):
-    """Deployment-level posture for inbound RFC 9421 request verification (#1291 B1-B4).
+def _cache_max_age_seconds() -> int:
+    """The Cache-Control max-age this agent publishes on its trust-root documents.
 
-    Everything about verification that is a property of the DEPLOYMENT rather than of a
-    tenant. Verifier POSTURE is per-tenant and lives in the tenant's declaration
-    (:class:`src.core.signing.posture.RequestSigningPosture`), never here — the knobs below
-    are transport limits, a kill switch, and two conformance-grading relaxations that a
-    production signal forbids outright.
+    Read at CONSTRUCTION, through a function-local import, not at the top of this module:
+    :mod:`src.core.signing.algorithms` reaches :mod:`src.core.exceptions` ->
+    :mod:`src.core.errors.details`, which imports THIS module for
+    :func:`get_pydantic_extra_mode`, so a module-level import here would close a cycle.
+    Nothing builds a :class:`Settings` at import time (see the module docstring), so by the
+    time a default or a validator asks for the number, every module is loaded.
+
+    One definition site: the constant lives beside the value-sets that the published
+    documents and the ``signing_keys`` CHECK constraints share, and is never restated here.
+    """
+    from src.core.signing.algorithms import CACHE_MAX_AGE_SECONDS
+
+    return CACHE_MAX_AGE_SECONDS
+
+
+class SigningSettings(BaseSettings):
+    """Deployment-level posture for RFC 9421 message signing, inbound and outbound (#1291).
+
+    Everything about signing that is a property of the DEPLOYMENT rather than of a tenant.
+    Both directions land here because both are deployment facts: the inbound knobs are
+    transport limits, a kill switch, and two conformance-grading relaxations that a
+    production signal forbids outright; the outbound knobs say where this process is willing
+    to READ its own private key material from.
+
+    POSTURE is per-tenant in both directions and never here — inbound in the tenant's
+    declaration (:class:`src.core.signing.posture.RequestSigningPosture`), outbound in
+    :class:`src.core.signing.posture.WebhookSigningPosture` and the tenant's ``signing_keys``
+    rows. The split the key fields encode: the STORE KIND is agent-level (one process, one
+    key store), while each key's LOCATION is per-tenant and lives on the ``signing_keys``
+    row's ``private_key_ref``. Each tenant is a distinct seller identity with its own brand
+    domain and therefore its own key material, so a single agent-level key location is
+    unimplementable.
     """
 
     model_config = SettingsConfigDict(env_prefix="ADCP_SIGNING_", case_sensitive=False, extra="ignore")
+
+    # -- our own key material, for the signatures this agent PRODUCES ------
+    provider: Literal["in_memory", "kms"] = Field(
+        default="in_memory",
+        description="SigningProvider implementation: in_memory (default) or kms",
+    )
+    allowed_key_ref_schemes: str = Field(
+        default="db,env,file",
+        description=(
+            "Comma-separated private_key_ref schemes this deployment will resolve. "
+            "db: the encrypted PEM on the signing_keys row — the only scheme this agent MINTS. "
+            "env: a PEM handed to the process by the orchestrator, for single-tenant deployments. "
+            "file: read-only, for material someone else provisioned onto a mounted secret"
+        ),
+    )
+    key_passphrase_env: str | None = Field(
+        default=None,
+        description="Name of the env var holding the PEM passphrase (the passphrase itself is never a config value)",
+    )
 
     # -- the kill switch ---------------------------------------------------
     verifier_enabled: bool = Field(
@@ -390,6 +436,35 @@ class SigningSettings(BaseSettings):
     )
     revocation_issuer_origin: str | None = Field(default=None)
 
+    # -- what this agent PUBLISHES: trust root and revocation list ---------
+    # Both are derived from the Cache-Control max-age of the documents themselves rather
+    # than configured beside it, so a deployment cannot set a grace window that contradicts
+    # the TTL it advertises. See :func:`_cache_max_age_seconds` for why the constant is read
+    # at construction and not imported at the top of this module.
+    grace_seconds: int = Field(
+        default_factory=lambda: 2 * _cache_max_age_seconds(),
+        description=(
+            "How long a revoked key keeps appearing (with its revoked_at marker) in the published "
+            "trust root. Derived from the published Cache-Control max-age, not configured beside it"
+        ),
+    )
+    revocation_interval_seconds: int = Field(
+        default_factory=_cache_max_age_seconds,
+        le=1800,
+        description=(
+            "Declared cadence for the published /.well-known/governance-revocations.json list's "
+            "next_update. security.mdx :717 states a 60s floor and a 1800s (30 min) ceiling; the "
+            "floor ENFORCED here is CACHE_MAX_AGE_SECONDS (300s), not the spec's bare 60s, because "
+            ":1103 bounds our published brand.json cache TTL BY this interval and "
+            "CACHE_MAX_AGE_SECONDS is a fixed module constant that cannot itself shrink below "
+            "300s — any interval under 300s would violate that relation against our own "
+            "unmodified brand.json unconditionally. The pinned SDK's own consumer "
+            "(CachingRevocationChecker) clamps its effective polling at MAX_POLLING_INTERVAL_SECONDS "
+            "(900s, adcp.signing.revocation_fetcher) regardless of what we declare above that — a "
+            "value in (900, 1800] is spec-legal to PUBLISH and shrinks only OUR OWN polling"
+        ),
+    )
+
     # -- conformance-grading key trust ------------------------------------
     counterparty_registry: dict[str, CounterpartyRegistryEntry] = Field(
         default_factory=dict,
@@ -413,6 +488,98 @@ class SigningSettings(BaseSettings):
         ``ADCP_SIGNING_REVOKED_KEYIDS=test-revoked-2026`` would raise at startup.
         """
         return [keyid.strip() for keyid in self.revoked_keyids.split(",") if keyid.strip()]
+
+    @property
+    def key_ref_scheme_list(self) -> list[str]:
+        """Allowed ``private_key_ref`` schemes as a list.
+
+        A comma-joined ``str`` for the same reason as :attr:`revoked_keyid_list`. This is the
+        gate that lets a deployment forbid ``file:`` in production — the one field least worth
+        making awkward to set.
+        """
+        return [scheme.strip() for scheme in self.allowed_key_ref_schemes.split(",") if scheme.strip()]
+
+    @property
+    def key_passphrase(self) -> bytes | None:
+        """Resolve the configured PEM passphrase, or None.
+
+        Resolved from the environment on every call rather than held as a field: CPython
+        cannot zero a ``bytes``, so the SDK's guidance is to source the passphrase per use
+        rather than pin a literal in process memory for the life of the settings object. This
+        is the one read of ``os.environ`` after import that the module docstring's rule bends
+        for, and it bends for a stated reason.
+        """
+        return self.secret_from_env(self.key_passphrase_env)
+
+    def secret_from_env(self, name: str | None) -> bytes | None:
+        """The secret held in the environment variable *name*, or None if unset or empty.
+
+        THE one dynamic environment read this deployment makes, and it is here because this
+        module is the process's one environment reader (``ruff-environment.toml``, whose
+        exemption list is three files and is explicitly not an allowlist).
+
+        It cannot be a settings FIELD, which is why the rule needs a named bend rather than
+        another entry: the variable's NAME is operator data, not a fact this module knows.
+        ``key_passphrase_env`` names it for the PEM passphrase, and a signing key's
+        ``private_key_ref`` of the form ``env:SOME_VAR`` names it per key row
+        (``src/core/signing/provider.py``). A field per possible name is not expressible.
+
+        Read per call rather than cached: CPython cannot zero a ``bytes``, so the SDK's
+        guidance is to source key material per use rather than pin a literal in process
+        memory for the life of the settings object.
+        """
+        if not name:
+            return None
+        value = os.getenv(name)
+        return value.encode() if value else None
+
+    @field_validator("provider")
+    @classmethod
+    def validate_provider(cls, v: str) -> str:
+        """Reject ``kms`` until a KMS provider exists.
+
+        Fires on every ``SigningSettings()`` construction, so selecting an unimplemented
+        provider kills the process where the app is composed, not at the first signature.
+        """
+        if v == "kms":
+            raise ValueError(
+                "ADCP_SIGNING_PROVIDER='kms' is not implemented — no KMS SigningProvider exists yet. Use 'in_memory'."
+            )
+        return v
+
+    @field_validator("grace_seconds")
+    @classmethod
+    def validate_grace_seconds(cls, v: int) -> int:
+        """The grace window must EXCEED the cache TTL we publish, not merely equal it.
+
+        ``core/agent-signing-key.json`` allows removal once the TTL has elapsed "across all
+        verifiers" — equal values leave zero margin for an intermediary that adds its own
+        delay, so a verifier could still be serving a cached document from which the key has
+        already vanished WITHOUT its revocation marker.
+        """
+        max_age = _cache_max_age_seconds()
+        if v <= max_age:
+            raise ValueError(
+                f"ADCP_SIGNING_GRACE_SECONDS must exceed the published cache max-age ({max_age}s), got {v}"
+            )
+        return v
+
+    @field_validator("revocation_interval_seconds")
+    @classmethod
+    def validate_revocation_interval_seconds(cls, v: int) -> int:
+        """Floor the declared cadence at the published cache max-age.
+
+        A ``ge=`` on the field would need the constant while the class body runs, which is
+        the import this module cannot make; the floor is the same rule either way — see the
+        field's own description for why 300s and not the spec's bare 60s.
+        """
+        max_age = _cache_max_age_seconds()
+        if v < max_age:
+            raise ValueError(
+                f"ADCP_SIGNING_REVOCATION_INTERVAL_SECONDS must be at least the published cache "
+                f"max-age ({max_age}s), got {v}"
+            )
+        return v
 
     @field_validator("per_keyid_cap")
     @classmethod
