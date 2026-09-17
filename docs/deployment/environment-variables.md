@@ -1,8 +1,27 @@
-# Environment Variables Reference
+# Environment variables reference
 
 Complete reference for all environment variables supported by the Prebid Sales Agent.
 
-## Quick Start
+The environment is read once, when the application is composed, into the typed settings
+object in `src/core/config.py`. Every variable below is a field there, and the code reads
+named facts off that object rather than the environment: a request never asks what
+environment it is in. If a variable is missing from `src/core/config.py`, nothing reads it.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Authentication](#authentication)
+- [Database](#database)
+- [AI features](#ai-features)
+- [Google Ad Manager (GAM)](#google-ad-manager-gam)
+- [Multi-tenant mode](#multi-tenant-mode)
+- [Environment and deployment](#environment-and-deployment)
+- [External integrations](#external-integrations)
+- [Development and debugging](#development-and-debugging)
+- [Categorized summary](#categorized-summary)
+- [Related documentation](#related-documentation)
+
+## Quick start
 
 For a minimal working deployment:
 
@@ -14,38 +33,40 @@ DATABASE_URL=postgresql://user:password@host:5432/adcp
 GEMINI_API_KEY=your-key
 ```
 
-Authentication is configured **per-tenant** via the Admin UI. No OAuth environment variables required.
+Authentication is configured **per-tenant** in the Admin UI. No OAuth environment variables are required.
 
 ## Authentication
 
-### Per-Tenant SSO (Recommended)
+### Per-tenant SSO (recommended)
 
-Each tenant configures their own SSO provider via the Admin UI (**Users & Access** page). This is the recommended approach for all deployments.
+Each tenant configures their own SSO provider in the Admin UI (**Users & Access** page). This is the recommended approach for all deployments.
 
-**Setup Flow:**
-1. Start with `CREATE_DEMO_TENANT=true` for initial access
-2. Log in with test credentials (Setup Mode is enabled by default for new tenants)
-3. Configure SSO in **Users & Access** - supports Google, Microsoft, Okta, Auth0, Keycloak, or any OIDC provider
-4. Test your SSO login
-5. Disable Setup Mode once SSO is working
+**Setup flow:**
 
-See [SSO Setup Guide](../user-guide/sso-setup.md) for detailed instructions.
+1. Start the system. The first startup creates a default tenant with Setup Mode enabled.
+2. Log in with test credentials (Setup Mode enables them for new tenants).
+3. Configure SSO in **Users & Access** - supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
+4. Test your SSO login.
+5. Disable Setup Mode once SSO is working.
 
-### Setup Mode (Per-Tenant)
+See the [SSO setup guide](../user-guide/sso-setup.md) for detailed instructions.
+
+### Setup Mode (per-tenant)
 
 New tenants start with `auth_setup_mode=true`, which enables test credentials:
+
 - Email: `test_super_admin@example.com`
 - Password: `test123`
 
 Once SSO is configured and tested, disable Setup Mode from the Users & Access page. After that, only SSO authentication works for that tenant.
 
-### Legacy: Global Test Mode
+### Legacy: global test mode
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ADCP_AUTH_TEST_MODE` | `false` | Enable test authentication globally. **Deprecated - use per-tenant Setup Mode instead.** |
 
-### Legacy: Environment Variable OAuth
+### Legacy: environment variable OAuth
 
 These variables configure a **global** OAuth provider shared by all tenants. For new deployments, use per-tenant SSO configuration instead.
 
@@ -59,14 +80,14 @@ These variables configure a **global** OAuth provider shared by all tenants. For
 | `OAUTH_SCOPES` | `openid email profile` | OAuth scopes to request |
 | `OAUTH_PROVIDER` | `google` | Provider name for display |
 
-### Legacy: Super Admin Access Control
+### Legacy: super admin access control
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SUPER_ADMIN_EMAILS` | - | Comma-separated super admin emails. **Deprecated - use per-tenant user management.** |
 | `SUPER_ADMIN_DOMAINS` | - | Comma-separated domains for admin access. **Deprecated.** |
 
-> **Note**: Per-tenant SSO configuration replaces `SUPER_ADMIN_EMAILS`. Users are managed per-tenant via the Users & Access page, with authorized emails/domains configured per-tenant.
+> **Note**: Per-tenant SSO configuration replaces `SUPER_ADMIN_EMAILS`. Users are managed per-tenant on the Users & Access page, with authorized emails and domains configured per-tenant.
 
 ---
 
@@ -89,7 +110,7 @@ Or use individual variables:
 | `DB_PASSWORD` | - | Database password |
 | `DB_SSLMODE` | `prefer` | PostgreSQL SSL mode |
 
-### Connection Pool
+### Connection pool
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -106,9 +127,15 @@ Or use individual variables:
 
 ---
 
-## AI Features
+## AI features
 
 AI features (creative review, product suggestions) are configured **per-tenant** in the Admin UI. Each tenant sets their own Gemini API key.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_API_KEY` | - | Server-wide fallback Gemini API key. Tenants can configure their own keys in the Admin UI. |
+| `PYDANTIC_AI_PROVIDER` | `gemini` | AI provider for pydantic-ai features |
+| `PYDANTIC_AI_MODEL` | `gemini-2.0-flash` | Model used by pydantic-ai features |
 
 ### Observability
 
@@ -132,15 +159,16 @@ For GAM adapter integration:
 
 ---
 
-## Multi-Tenant Mode
+## Multi-tenant mode
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode with subdomain routing |
-| `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (e.g., `sales-agent.example.com`) |
-| `BASE_DOMAIN` | - | Top-level domain for cookies (e.g., `example.com`) |
+| `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
+| `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
+| `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
 
-### SSO Requirements by Deployment Mode
+### SSO requirements by deployment mode
 
 The SSO requirement varies based on deployment mode:
 
@@ -149,62 +177,77 @@ The SSO requirement varies based on deployment mode:
 
 ---
 
-## Environment & Deployment
+## Environment and deployment
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENVIRONMENT` | `development` | `development` (strict validation) or `production` (lenient) |
+| `ENVIRONMENT` | `development` | `development` or `production` |
 | `PRODUCTION` | `false` | Set to `true` for production deployments |
-| `ADMIN_UI_URL` | `http://localhost:8000` | Public URL for Admin UI (used in notifications) |
+| `FLY_APP_NAME` | unset | Set by Fly.io; its presence also marks the deployment as production |
 
-### Demo Data
+Any one of `PRODUCTION=true`, `ENVIRONMENT=production` or a `FLY_APP_NAME` makes the
+deployment production, and every production-dependent behaviour reads that one answer:
+lenient request validation, structured JSON logging, secure session cookies, the trust in
+proxy headers, and the absence of verbose auth logging.
+| `ADMIN_UI_URL` | `http://localhost:8001` | Public URL for the Admin UI (used in notifications) |
+
+### Demo data
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `CREATE_DEMO_TENANT` | `false` | **Local testing only.** Creates "Default Publisher" tenant with mock adapter. Do NOT use in production. |
-| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, etc. |
+| `CREATE_DEMO_TENANT` | `false` | **Local testing only.** Creates a "Demo Sales Agent" tenant with the mock adapter. Do NOT use in production. |
+| `CREATE_SAMPLE_DATA` | `false` | Create sample products, media buys, and related records (requires the demo tenant) |
 
 ### Security
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENCRYPTION_KEY` | auto-generated | Key for encrypting sensitive data in database |
-| `FLASK_SECRET_KEY` | dev key | Flask session secret (auto-generated in production) |
+| `ENCRYPTION_KEY` | - | Fernet key for encrypting stored secrets (OIDC client secrets, API keys). The application refuses to encrypt or decrypt without it. Generate with `python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'` |
+| `FLASK_SECRET_KEY` | auto-generated at startup | Flask session secret. Set it explicitly so sessions survive restarts and work across multiple processes. |
 | `WEBHOOK_SECRET` | - | Secret for verifying incoming webhooks |
 
 ---
 
-## External Integrations
+## External integrations
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `APPROXIMATED_API_KEY` | - | Approximated proxy service API key |
+| `APPROXIMATED_BACKEND_URL` | `adcp-sales-agent.fly.dev` | Backend address that Approximated proxies custom domains to |
 
 ---
 
-## Development & Debugging
+## Development and debugging
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `FLASK_DEBUG` | `0` | Enable Flask debug mode |
 | `FLASK_ENV` | `production` | Flask environment |
-| `ADCP_DRY_RUN` | `false` | Run operations without making actual changes |
-| `ADCP_TESTING` | `false` | Enable testing mode (internal) |
+| `ADCP_TESTING` | `false` | A test deployment. Selects, at composition: the reference-formats creative registry (no creative agent is dialled), the debug and reset routes, loopback webhook targets, the mock ad server's seeded delivery rows, the setup checklist counting the mock adapter as configured, and relaxed brand validation in `get_products`. Each is a named property on the settings; nothing reads the flag itself. |
 
-### Service Startup
+### Service startup
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
+| `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
 | `SKIP_CRON` | `false` | Skip cron job scheduling |
 
+Every variable above is read once, by `src/core/config.py`, when a process is composed; an
+empty value means unset. Knobs that only the repo's own scripts read (`ADCP_HOME`,
+`ADCP_REQ_PATH`, `BDD_LIVENESS_ARTIFACT`, `STORYBOARD_LEDGER_PATH`,
+`ALLOW_LIVE_CREATIVE_AGENT`) are fields on `ToolingSettings` in the same module.
+
+`CONDUCTOR_PORT` (default `8000`) is read by `docker-compose.yml` only - it sets the host port the nginx proxy publishes, which is useful when running multiple worktrees.
+
 ---
 
-## Categorized Summary
+## Categorized summary
 
-### Secrets (set via `fly secrets set` or secure vault)
+### Secrets
 
-These contain sensitive credentials and should never be in config files:
+Set these through your platform's secret store (for example, `fly secrets set`) or a secure vault - never in config files:
 
 - `DATABASE_URL`
 - `ENCRYPTION_KEY`
@@ -214,21 +257,30 @@ These contain sensitive credentials and should never be in config files:
 - `WEBHOOK_SECRET`
 - `FLASK_SECRET_KEY`
 
-> **Note**: Admin OAuth credentials (`GOOGLE_CLIENT_ID`, etc.) are now configured per-tenant via the Admin UI instead of environment variables.
+> **Note**: Admin OAuth credentials (`GOOGLE_CLIENT_ID` and the other legacy OAuth variables) are configured per-tenant in the Admin UI instead of environment variables.
 
-### Environment Variables (can be in fly.toml, docker-compose, etc.)
+### Non-sensitive configuration
 
-Non-sensitive configuration:
+These can live in `fly.toml`, `docker-compose.yml`, or similar config files:
 
 - `ENVIRONMENT`, `PRODUCTION`
-- `ADCP_MULTI_TENANT`, `BASE_DOMAIN`, `SALES_AGENT_DOMAIN`
+- `ADCP_MULTI_TENANT`, `SALES_AGENT_DOMAIN`, `ADMIN_DOMAIN`
 - `ADMIN_UI_URL`
 - `CREATE_DEMO_TENANT`
 - `SKIP_NGINX`, `SKIP_CRON`
 
-### Variables with Sensible Defaults (usually don't need to set)
+### Variables with sensible defaults
+
+You usually don't need to set the following variables:
 
 - All `DB_*` individual variables (use `DATABASE_URL` instead)
-- All `*_PORT` variables (hardcoded in nginx)
+- `ADCP_SALES_PORT` (nginx configuration expects the default)
 - `DATABASE_*_TIMEOUT` variables
 - `PYDANTIC_AI_*` variables
+
+## Related documentation
+
+- [Single-tenant deployment](single-tenant.md) - the default deployment mode
+- [Multi-tenant setup](multi-tenant.md) - subdomain routing and per-tenant domains
+- [Security and authentication](../security.md) - how secrets and sessions are handled
+- [Architecture guide](../development/architecture.md) - deployment topology and component map
