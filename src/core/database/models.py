@@ -443,32 +443,56 @@ class Product(Base, JSONValidatorMixin):
             return ensure_selection_type(self.properties)
         elif self.property_ids:
             # AdCP 2.0.0 by_id variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
             return [
-                {"publisher_domain": publisher_domain, "property_ids": self.property_ids, "selection_type": "by_id"}
+                {
+                    "publisher_domain": self.publisher_domain,
+                    "property_ids": self.property_ids,
+                    "selection_type": "by_id",
+                }
             ]
         elif self.property_tags:
             # AdCP 2.0.0 by_tag variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
             return [
-                {"publisher_domain": publisher_domain, "property_tags": self.property_tags, "selection_type": "by_tag"}
+                {
+                    "publisher_domain": self.publisher_domain,
+                    "property_tags": self.property_tags,
+                    "selection_type": "by_tag",
+                }
             ]
 
         # Default: Use "all" variant (all properties from this publisher)
         # This ensures products always have publisher_properties as required by AdCP spec
-        if hasattr(self, "tenant") and self.tenant:
-            publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-        else:
-            publisher_domain = "unknown"
-        return [{"publisher_domain": publisher_domain, "selection_type": "all"}]
+        return [{"publisher_domain": self.publisher_domain, "selection_type": "all"}]
+
+    @property
+    def publisher_domain(self) -> str:
+        """The domain this product's inventory is published under.
+
+        A DOMAIN, with no port. ``virtual_host`` is the tenant's own HOST and may carry one
+        (an e2e or staging front rarely sits on 443), but every consumer of this value reads
+        it as a bare domain: the pinned ``publisher_properties`` schema fixes a domain
+        pattern that a colon fails, and a verifier resolves the publisher's adagents.json at
+        ``https://<publisher_domain>/.well-known/adagents.json``, where a port is not part of
+        the name either. So the port is dropped rather than propagated — the alternative is a
+        value no schema accepts and no fetch resolves.
+
+        Measured: a tenant whose ``virtual_host`` was ``storyboard.adcp.test:8443`` produced
+        ``publisher_domain`` values that failed the pattern, which knocked out the matching
+        member of the ``publisher_properties`` union and surfaced as an ``INTERNAL_ERROR``
+        from ``get_products`` — a 500-class answer to a well-formed request, three frames
+        from anything naming the port.
+
+        One derivation, where there were three copies of it inline above. They were already
+        identical, and a fix applied to one of them would have left the other two emitting
+        the unusable value.
+        """
+        if not (hasattr(self, "tenant") and self.tenant):
+            return "unknown"
+        host = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
+        # rpartition, not split: an IPv6 literal authority is bracketed (``[::1]:8443``) and
+        # splitting on the first colon would truncate the address itself.
+        domain, _, port = host.rpartition(":")
+        return domain if domain and port.isdigit() else host
 
     @property
     def effective_property_tags(self) -> list[str] | None:
