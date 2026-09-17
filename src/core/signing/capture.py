@@ -47,6 +47,8 @@ from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any, Final
 
+from src.core.http_utils import path_from_asgi_scope
+
 logger = logging.getLogger(__name__)
 
 Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
@@ -67,6 +69,10 @@ def is_adcp_surface(path: str) -> bool:
 
     THE boundary predicate, with the segment rule written once. A bare ``str.startswith``
     would match ``/mcpx`` and silently pull a non-AdCP surface under the capture.
+
+    *path* is a ROUTE path — decoded, ``root_path`` stripped — because this predicate must
+    agree with the router, and the router matches on that one
+    (``src.core.http_utils.path_from_asgi_scope``). Do not hand it ``scope["path"]``.
     """
     return any(path == prefix or path.startswith(f"{prefix}/") for prefix in ADCP_SURFACE_PREFIXES)
 
@@ -266,7 +272,19 @@ class SignedExchangeCapture:
         self.app = app
 
     async def __call__(self, scope: MutableMapping[str, Any], receive: Receive, send: Send) -> None:
-        if scope.get("type") != "http" or not is_adcp_surface(str(scope.get("path", ""))):
+        # ``path_from_asgi_scope``, never ``scope["path"]``: this predicate has to select
+        # exactly the requests the ROUTER dispatches, and Starlette routes on the path with
+        # ``root_path`` stripped (``starlette.routing.get_route_path``). Read raw, the two
+        # disagree the moment the app is mounted under a prefix — uvicorn ``--root-path``,
+        # ``FastAPI(root_path=...)``, a proxy that sets one — and they disagree SILENTLY in
+        # the one direction that matters: the router reaches every AdCP tool while nothing
+        # captures the message, so ``SignatureSubject.exchange`` is ``None`` and the verifier
+        # reads every signed request as unsigned. Nothing raises and nothing logs.
+        #
+        # ``_signed_path`` below is the deliberate OPPOSITE and must stay that way: it feeds
+        # ``@target-uri``, whose only authority is the URL the client dialled, prefix and
+        # percent-encoding intact. One rule per question, and the two are not the same rule.
+        if scope.get("type") != "http" or not is_adcp_surface(path_from_asgi_scope(scope)):
             await self.app(scope, receive, send)
             return
 

@@ -53,7 +53,13 @@ So:
 * inside that scope, the surface predicate in ``SignedExchangeCapture.__call__``
   is ALLOWLISTED BY NAME with its reason: it feeds ``is_adcp_surface``, which
   decides whether to capture at all, and it must select the same requests the
-  router dispatches to ``/mcp``, ``/a2a`` and ``/api/v1``;
+  router dispatches to ``/mcp``, ``/a2a`` and ``/api/v1``. It reads
+  ``path_from_asgi_scope`` — the published route-table rule — and not
+  ``scope["path"]``, because those two are not the same path: ``scope["path"]``
+  still carries ``root_path``, the router strips it, and under any prefix mount
+  the predicate stopped selecting requests the router was still dispatching. The
+  capture then recorded nothing and the verifier read every signed request as
+  unsigned, silently. The row names the helper form for that reason;
 * the documented fallback inside ``_signed_path`` (``raw_path`` absent or
   non-ASCII -> the decoded path, degradation stated at the source) is
   allowlisted, and ``test_signed_path_reads_raw_path`` separately pins that the
@@ -120,8 +126,12 @@ _DECODED_PATH_ALLOWLIST: set[tuple[str, str, str]] = {
     ("src/core/signing/capture.py", _SIGNED_PATH_FN, _FORM_GET),
     # Routing predicate: SignedExchangeCapture.__call__ asks is_adcp_surface()
     # whether to capture at all, so it must select the same requests the
-    # Starlette router dispatches to the AdCP surfaces (decoded).
-    ("src/core/signing/capture.py", _CAPTURE_ASGI_FN, _FORM_GET),
+    # Starlette router dispatches to the AdCP surfaces. It reads the PUBLISHED
+    # route-path rule (path_from_asgi_scope) rather than scope["path"], which is
+    # what makes "the same requests" true rather than merely intended: read raw,
+    # the predicate and the router disagreed under any root_path mount and the
+    # capture silently recorded nothing.
+    ("src/core/signing/capture.py", _CAPTURE_ASGI_FN, _FORM_HELPER),
 }
 
 #: Sites OUTSIDE ``src/core/signing/`` that must STAY decoded. This is the other

@@ -41,6 +41,7 @@ from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
+from src.core.http_utils import path_from_asgi_scope
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import TransportProtocol
@@ -546,7 +547,10 @@ _replace_routes()
 @app.middleware("http")
 async def a2a_messageid_compatibility_middleware(request: Request, call_next):
     """Handle both numeric and string messageId for backward compatibility."""
-    if request.url.path == "/a2a" and request.method == "POST":
+    # ``path_from_asgi_scope``, not ``request.url.path``: this predicate selects a ROUTE, so
+    # it has to read the path the router matches on — ``root_path`` stripped. Mounted under
+    # a prefix, ``request.url.path`` is ``/adcp/a2a`` and this never fires again.
+    if path_from_asgi_scope(request.scope) == "/a2a" and request.method == "POST":
         body = await request.body()
         try:
             data = json.loads(body)
