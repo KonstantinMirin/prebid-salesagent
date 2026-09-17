@@ -105,6 +105,27 @@ def json_safe(value: Any) -> Any:
     return value
 
 
+def _presents_a_credential(credential: Any) -> bool:
+    """Whether a caller-supplied headers mapping actually carries a CREDENTIAL.
+
+    ``bool(credential)`` is not that question, and the difference is the whole bug this
+    replaced. ``env.credential(token=None)`` -- what every "the Buyer has no authentication
+    credentials" Given passes -- returns ``{"x-adcp-tenant": "..."}``: a non-empty mapping
+    that presents NO credential. Truthiness read that as credentialed, so the signing legs
+    attached the capability's bearer to a call the scenario had asked to make anonymous, the
+    request became authenticated, and security.mdx :1269 then makes an unsigned authenticated
+    request a spec-correct 200. The refusal never fired and the scenarios reported, accurately,
+    that the request was ACCEPTED.
+
+    A tenant hint addresses a seller. It does not authenticate anyone. Only the credential
+    header does, which is what this reads -- case-insensitively, because the harness and
+    production both spell it either way on different legs.
+    """
+    if not credential:
+        return False
+    return any(str(name).lower() == "authorization" for name in credential)
+
+
 class WireError(Exception):
     """A transport failure carrying the envelope the buyer received, VERBATIM.
 
@@ -1942,7 +1963,10 @@ class BaseTestEnv:
         # refusal branch at all: security.mdx :1269 makes an unsigned request
         # carrying a valid bearer a spec-correct 200.
         raw, headers = self.wire_request(
-            path=_A2A_PATH, body=body, signed=self._signed_dispatch, credentialed=bool(credential)
+            path=_A2A_PATH,
+            body=body,
+            signed=self._signed_dispatch,
+            credentialed=_presents_a_credential(credential),
         )
         response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
@@ -2178,7 +2202,7 @@ class BaseTestEnv:
         # it applies to the handshake frames too, because a session opened under a
         # bearer and used without one would differ from the anonymous request under
         # test by more than the credential.
-        credentialed = bool(credential)
+        credentialed = _presents_a_credential(credential)
         with preserved_global_app_state(), TestClient(app) as client:
             session_id = self._mcp_open_session(client, credentialed=credentialed)
             envelope = self._mcp_post(
@@ -2401,7 +2425,9 @@ class BaseTestEnv:
         # asked to make anonymous. It is the ONLY way an in-process leg reaches the
         # verifier's refusal branch at all: security.mdx :1269 makes an unsigned request
         # carrying a valid bearer a spec-correct 200.
-        raw, headers = self.wire_request(path=endpoint, body=body, signed=signed, credentialed=bool(credential))
+        raw, headers = self.wire_request(
+            path=endpoint, body=body, signed=signed, credentialed=_presents_a_credential(credential)
+        )
         return client.post(endpoint, content=raw, headers=headers)
 
     @property
