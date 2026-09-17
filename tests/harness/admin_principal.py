@@ -33,23 +33,27 @@ class AdminPrincipalEnv:
     DEFAULT_TENANT_ID = "admin_principal_tenant"
 
     def __init__(self, *, tenant_id: str | None = None) -> None:
+        """Build the admin app up front. Deliberately NOT a context manager.
+
+        ``tests/harness/test_harness_base.py`` allows ``__enter__``/``__exit__`` in exactly
+        two declared homes — ``BaseTestEnv``, which owns the one unwind guard, and
+        ``AdminAccountEnv``, a named and separately tested exception — and that list only
+        shrinks, so a third home is not the way to add an env. The rule is also right here
+        on its own terms: this env acquires nothing that needs releasing. It constructs a
+        Flask app and hands out short-lived test clients from ``with`` blocks that close
+        themselves, so there is no resource for an unwind guard to protect and the
+        lifecycle methods would have been ceremony around a plain constructor.
+        """
+        from src.admin.app import create_app
+
         self._tenant_id = tenant_id or self.DEFAULT_TENANT_ID
-        self._app: Any = None
+        self._app: Any = create_app()
+        self._app.config["TESTING"] = True
+        self._app.config["WTF_CSRF_ENABLED"] = False
 
     @property
     def tenant_id(self) -> str:
         return self._tenant_id
-
-    def __enter__(self) -> AdminPrincipalEnv:
-        from src.admin.app import create_app
-
-        self._app = create_app()
-        self._app.config["TESTING"] = True
-        self._app.config["WTF_CSRF_ENABLED"] = False
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._app = None
 
     # ── seeding ────────────────────────────────────────────────────────────
 

@@ -25,13 +25,12 @@ position to declare the failure.
 **Reordering alone was not enough, and the positive test below is why that was caught.**
 ``log_admin_action`` read the tenant from ``kwargs`` only. Flask passes URL parameters to
 the OUTERMOST wrapper as kwargs, so that worked while the audit decorator was outermost and
-silently yielded ``None`` once it was not — ``require_tenant_access`` calls
-``f(tenant_id, *args, **kwargs)`` positionally. Since the row is written only
-``if tenant_id``, the swap turned auditing OFF on this route rather than fixing it. The
-decorator now resolves the tenant from ``request.view_args`` as well, which holds the URL
-parameters whatever the wrapper chain did with them. Anyone reordering the remaining 54
-sites under GH #2110 needs that fix first, or they will silently disable admin auditing
-wholesale.
+silently yielded ``None`` once it was not — ``require_tenant_access`` passes the tenant id
+positionally. Since the row is written only when a tenant id is present, the swap turned
+auditing OFF on this route rather than fixing it. The decorator now resolves the tenant from
+``request.view_args`` as well, which holds the URL parameters whatever the wrapper chain did
+with them. Anyone reordering the remaining 54 sites under GH #2110 needs that fix first, or
+they will silently disable admin auditing wholesale.
 
 WHY INTEGRATION AND NOT BDD. The subject is an admin HTML route, so the BDD lane that
 parametrizes a2a/mcp/rest does not reach it. This repo does have a hand-authored admin BDD
@@ -57,24 +56,23 @@ ROTATE_OPERATION = "AdminUI.rotate_principal_token"
 @pytest.mark.requires_db
 def test_unauthenticated_rotate_token_writes_no_success_row(integration_db):
     """No session, so no audit row claiming the rotation succeeded."""
-    with AdminPrincipalEnv(tenant_id="audit_order_tenant") as env:
-        principal_id = env.seed_principal(principal_id="audit_order_principal")
+    env = AdminPrincipalEnv(tenant_id="audit_order_tenant")
+    principal_id = env.seed_principal(principal_id="audit_order_principal")
 
-        response = env.post_rotate_token(
-            principal_id,
-            authenticated=False,
-            form={"attacker_supplied": "value"},
-        )
+    response = env.post_rotate_token(
+        principal_id,
+        authenticated=False,
+        form={"attacker_supplied": "value"},
+    )
 
-        # Which refusal it is — a redirect to login or a 401 — is the framework's business.
-        # What this test owns is that nothing was AUDITED as a success.
-        assert response.status_code != 200, (
-            f"an unauthenticated POST reached the handler (status {response.status_code}); "
-            "require_tenant_access should have refused it"
-        )
+    # Which refusal it is — a redirect to login or a 401 — is the framework's business.
+    # What this test owns is that nothing was AUDITED as a success.
+    assert response.status_code != 200, (
+        f"an unauthenticated POST reached the handler (status {response.status_code}); "
+        "require_tenant_access should have refused it"
+    )
 
-        forged = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
-
+    forged = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
     assert not forged, (
         f"{len(forged)} audit row(s) record {ROTATE_OPERATION} as success=True for an "
         "UNAUTHENTICATED request. The audit decorator is running outside "
@@ -97,15 +95,15 @@ def test_authorized_rotate_token_still_rotates_and_is_audited(integration_db):
     auditing, which a refusal-only test reported as a clean fix. The endpoint had no test
     of any kind before this file, and it is the route that issues tenant credentials.
     """
-    with AdminPrincipalEnv(tenant_id="audit_order_ok_tenant") as env:
-        principal_id = env.seed_principal(principal_id="audit_order_ok_principal")
-        before = env.token_hash(principal_id)
+    env = AdminPrincipalEnv(tenant_id="audit_order_ok_tenant")
+    principal_id = env.seed_principal(principal_id="audit_order_ok_principal")
+    before = env.token_hash(principal_id)
 
-        response = env.post_rotate_token(principal_id, authenticated=True)
-        assert response.status_code in (200, 302), f"authorized rotation was refused with {response.status_code}"
+    response = env.post_rotate_token(principal_id, authenticated=True)
+    assert response.status_code in (200, 302), f"authorized rotation was refused with {response.status_code}"
 
-        after = env.token_hash(principal_id)
-        audited = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
+    after = env.token_hash(principal_id)
+    audited = [row for row in env.audit_rows(ROTATE_OPERATION) if row.success]
 
     assert after != before, "the stored token hash did not change, so nothing was rotated"
     assert audited, (
