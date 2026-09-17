@@ -504,7 +504,23 @@ jobs:
       # before then is what manufactures a failure with no defect behind it.
       - name: Publish the storyboard runner score
         if: always()
-        run: uv run python scripts/audit/storyboard_runner_score.py --repo . --markdown >> "$GITHUB_STEP_SUMMARY"
+        # tee, not >>: the summary is readable by a person in the web UI and by
+        # nothing else — GitHub exposes no API for a step summary. Sending the
+        # table to stdout as well puts it in the job LOG, where `gh run view
+        # --job <id> --log` can find it, which is the difference between a human
+        # being able to see the figure and this repo being able to check it. The
+        # first version of this step wrote only to the summary and so left the
+        # number exactly as unverifiable as the memory it was meant to replace.
+        #
+        # `set -o pipefail` because a pipe hides the exit code of everything but
+        # its last command: without it the status is tee's, which is 0 whatever
+        # the script did, so a crashed report would read as a published one. An
+        # ABSENT artifact is not a crash and exits 0 by design — this catches the
+        # instrument breaking, which is the one thing a reporting step must not
+        # do quietly.
+        run: |
+          set -o pipefail
+          uv run python scripts/audit/storyboard_runner_score.py --repo . --markdown | tee -a "$GITHUB_STEP_SUMMARY"
       # Publish the machinery's OUTPUT, not a committed copy of it (#1858).
       # These three reports used to live in docs/test-obligations/; a committed
       # report obliges you to prove regeneration is byte-identical, and the
