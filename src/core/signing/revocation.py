@@ -171,10 +171,17 @@ class _ResolutionCacheJwksResolver:
         self._match_all = match_all
 
     def __call__(self, keyid: str) -> dict[str, Any] | None:
-        # Imported here rather than at module scope: B1's middleware imports
-        # `checker_for` from this module, so a top-level import back into it would
-        # be a cycle. The name is bound to the same dict object either way.
-        from src.core.signing.request_verifier_middleware import AGENT_RESOLUTION_CACHE
+        # Imported here rather than at module scope: the verifier imports `checker_for`
+        # from this module, so a top-level import back into it would be a cycle. The name is
+        # bound to the same dict object either way.
+        #
+        # The module moved: the pre-merge branch kept the cache in the ASGI
+        # `request_verifier_middleware`, which #1721 replaced with `verifier.py` when
+        # verification moved into `_resolve_identity`. A function-local import is invisible to
+        # every import-time check, so this line survived the stage-0 port pointing at a module
+        # that no longer exists and would only have failed at checklist step 9 -- on a signed
+        # request from a counterparty publishing a revocation list, which no unit test reaches.
+        from src.core.signing.verifier import AGENT_RESOLUTION_CACHE
 
         for resolution in list(AGENT_RESOLUTION_CACHE.values()):
             if not self._match_all and _origin_of(resolution.brand_json_url) != self._origin:

@@ -14,6 +14,7 @@ from typing import Any, cast
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.requests import ClientDisconnect
 
 from src.core.exceptions import AdcpFailure
 from src.core.resolved_identity import TransportProtocol
@@ -42,8 +43,21 @@ async def _payload(request: Request) -> Any:
     Both go to ``validated_request``, which refuses a non-object the same way, so a body that
     is not JSON earns the same INVALID_REQUEST as a JSON list rather than a decode error
     escaping to a handler that types it differently.
+
+    A body that never finished arriving joins them. Starlette raises ``ClientDisconnect`` out
+    of ``body()`` when the receive channel answers ``http.disconnect`` instead of the chunk it
+    promised, and it DISCARDS what did arrive, so there is nothing left to parse. That is a
+    truncated request, not a server fault: it earns the boundary's INVALID_REQUEST like every
+    other unparseable body. Letting it escape would leave the one route function that reads
+    its own body raising past ``except AdcpFailure`` into a 500 — the reads FastAPI does for a
+    declared body model are wrapped this way too (``fastapi/routing.py``, "There was an error
+    parsing the body"), and this route declares ``Request`` precisely so that
+    ``validated_request`` owns the refusal.
     """
-    raw = await request.body()
+    try:
+        raw = await request.body()
+    except ClientDisconnect:
+        raw = b""
     try:
         return json.loads(raw)
     except ValueError:
