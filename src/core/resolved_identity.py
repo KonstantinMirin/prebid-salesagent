@@ -449,3 +449,48 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
         return ResolvedIdentity(principal=principal, tenant=tenant)
     account_ref = AccountReference(root=AccountReferenceById(account_id=account_id))
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
+
+
+def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
+    """The tenant a request names, with no caller. For a root endpoint outside ``serve``.
+
+    The third sanctioned entry into this module's one resolution, after
+    ``_resolve_identity`` (a tool request) and ``identity_of`` (server-initiated work).
+    It exists for the A2A agent card, which is reachable at three ROOT paths that the A2A
+    specification fixes, answers before any AdCP exchange, and therefore cannot be a
+    registry row: it carries no AdCP envelope, and a row for it would advertise itself as
+    a skill on the card it serves. What it does need is the same answer to "which tenant
+    is this request for" that every tool gets -- so it asks here rather than deriving one
+    of its own.
+
+    That derivation used to be ``route_landing_page``, which reads ``Host`` and
+    ``Apx-Incoming-Host`` and NOT ``x-adcp-tenant``. The consequence was measurable: a
+    storyboard run sends ``x-adcp-tenant`` (a token only verifies inside a tenant), so
+    every tool call resolved the CI tenant while the card, on the same request, resolved
+    none and fell back to echoing the caller's Host. The agent disagreed with itself about
+    its own identity. ``ruff-boundary.toml`` already names this disease on
+    ``_detect_tenant``: "a caller that detects its own tenant is a second tenant resolver,
+    and the two WILL disagree".
+
+    NO CREDENTIAL IS READ, and that is deliberate rather than a simplification.
+    ``_resolve_identity`` raises ``AUTH_INVALID`` for a credential that was presented and
+    rejected, even where none is required. Routed through it, a client holding a stale
+    token would be answered 401 by the card -- the one document that tells it which
+    version to speak and where to send a request, i.e. how to authenticate at all. So
+    discovery stays anonymous: the returned identity's ``principal`` is always ``None``,
+    and a caller wanting the principal too is making a tool call and goes through
+    ``serve``.
+
+    Returns a ``PublicIdentity`` whose ``tenant`` is ``None`` when this request resolves to
+    no tenant, and the caller decides what that means in its own terms. Two different
+    situations reach that one answer: the headers name no tenant at all, and they name one
+    that does not load. The second is reachable because the ``x-adcp-tenant`` strategy takes
+    its hint as a literal id when no subdomain matches it, unverified (see ``_detect_tenant``),
+    so a nonsense hint yields an id that ``TenantContext.load`` answers ``None`` for. Neither
+    is distinguished here, because no caller has yet needed to tell them apart -- the agent
+    card answers 404 to both, since a host we do not serve has no card either way.
+    """
+    tenant_id = _detect_tenant(headers)
+    if tenant_id is None:
+        return PublicIdentity(principal=None, tenant=None)
+    return PublicIdentity(principal=None, tenant=TenantContext.load(tenant_id))

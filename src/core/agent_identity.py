@@ -46,7 +46,7 @@ from src.core.config import get_settings
 from src.core.domain_config import _get_protocol_for_domain, get_sales_agent_domain
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
-    from src.core.database.models import Tenant
+    from src.core.tenant_context import TenantContext
 
 # The paths a counterparty actually reaches this agent at, keyed by transport.
 # Values are what the running app resolves to AFTER any redirect it issues —
@@ -73,7 +73,7 @@ _ID_ILLEGAL = re.compile(r"[^a-z0-9]+")
 _AGENT_ENTRY_ID_MAX_LENGTH = 100
 
 
-def _agent_host(tenant: Tenant) -> str | None:
+def _agent_host(tenant: TenantContext) -> str | None:
     """The host this tenant is reachable at, or None when nothing is configured.
 
     ``virtual_host`` is the tenant's own host (it may carry a port). Otherwise
@@ -88,7 +88,7 @@ def _agent_host(tenant: Tenant) -> str | None:
     return None
 
 
-def canonical_agent_url(tenant: Tenant) -> str:
+def canonical_agent_url(tenant: TenantContext) -> str:
     """The tenant's canonical ORIGIN — scheme + host, no path, no trailing slash.
 
     This is the anchor, not an endpoint: brand.json is served here, the JWKS
@@ -110,7 +110,7 @@ def canonical_agent_url(tenant: Tenant) -> str:
     return runtime.local_base_url
 
 
-def agent_origin_host(tenant: Tenant) -> str:
+def agent_origin_host(tenant: TenantContext) -> str:
     """The host (with port, if any) of the tenant's canonical agent URL.
 
     Derived by splitting the canonical URL rather than re-deriving the host, so
@@ -121,7 +121,7 @@ def agent_origin_host(tenant: Tenant) -> str:
     return canonical_agent_url(tenant).split("://", 1)[1]
 
 
-def agent_endpoint_urls(tenant: Tenant) -> dict[str, str]:
+def agent_endpoint_urls(tenant: TenantContext) -> dict[str, str]:
     """The URLs a counterparty invokes this tenant at, keyed by transport.
 
     One entry per endpoint we actually serve. brand.json publishes one
@@ -149,7 +149,7 @@ class AgentIdentity:
     endpoints: dict[str, str]
 
 
-def agent_identity_for_tenant(tenant: Tenant) -> AgentIdentity:
+def agent_identity_for_tenant(tenant: TenantContext) -> AgentIdentity:
     """*tenant*'s published identity — PURE, and reads no session.
 
     Takes an already-loaded row deliberately. A caller that holds its own session must be
@@ -164,27 +164,7 @@ def agent_identity_for_tenant(tenant: Tenant) -> AgentIdentity:
     return AgentIdentity(origin=canonical_agent_url(tenant), endpoints=agent_endpoint_urls(tenant))
 
 
-def agent_identity_for_tenant_id(tenant_id: str) -> AgentIdentity | None:
-    """Re-read *tenant_id* in its own unit of work and derive its identity, or ``None``.
-
-    The convenience half, for callers that hold NO session and were each writing the same
-    four lines: open a ``TenantConfigUoW``, assert the repository, re-read the tenant, derive.
-    ``None`` when the tenant does not resolve — every caller of this shape already had to
-    handle a vanished tenant, and each did it differently (a ``None`` return, a
-    ``ValueError``); the shape is preserved at the call sites rather than decided here.
-
-    Deliberately NOT used by callers that already hold a session — see
-    :func:`agent_identity_for_tenant`.
-    """
-    from src.core.database.repositories.uow import TenantConfigUoW
-
-    with TenantConfigUoW(tenant_id) as uow:
-        assert uow.tenant_config is not None
-        tenant = uow.tenant_config.get_tenant()
-        return agent_identity_for_tenant(tenant) if tenant is not None else None
-
-
-def agent_entry_id(tenant: Tenant, transport: str) -> str:
+def agent_entry_id(tenant: TenantContext, transport: str) -> str:
     """The ``brand_agent_entry.id`` for this tenant's *transport* endpoint.
 
     Distinct per endpoint because the SDK's ``_pick_agent`` disambiguates
@@ -196,17 +176,17 @@ def agent_entry_id(tenant: Tenant, transport: str) -> str:
     return slug[:_AGENT_ENTRY_ID_MAX_LENGTH]
 
 
-def brand_json_url(tenant: Tenant) -> str:
+def brand_json_url(tenant: TenantContext) -> str:
     """Where this tenant's brand.json is served — D1 publishes this as ``identity.brand_json_url``."""
     return canonical_agent_url(tenant) + BRAND_JSON_PATH
 
 
-def adagents_json_url(tenant: Tenant) -> str:
+def adagents_json_url(tenant: TenantContext) -> str:
     """Where this tenant's adagents.json is served."""
     return canonical_agent_url(tenant) + ADAGENTS_JSON_PATH
 
 
-def jwks_uri(tenant: Tenant) -> str:
+def jwks_uri(tenant: TenantContext) -> str:
     """Where this tenant's JWKS is served.
 
     Emitted EXPLICITLY on every ``agents[]`` entry rather than relying on the
@@ -215,7 +195,7 @@ def jwks_uri(tenant: Tenant) -> str:
     return canonical_agent_url(tenant) + JWKS_PATH
 
 
-def jwks_origin(tenant: Tenant) -> str:
+def jwks_origin(tenant: TenantContext) -> str:
     """The origin the JWKS resolves at — D1's ``identity.key_origins.request_signing``.
 
     Imported rather than re-literalled: a second literal is a
