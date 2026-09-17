@@ -21,33 +21,24 @@ The ledger holds no entries, so the storyboard grades every check it collects.
 one file without the other fails this module.
 
 RE-SEEDING is a standing rule, not a one-off: whenever a run seeds or retires
-entries, update the ledger file AND ``EXPECTED_LEDGER`` below in the same change.
-Same discipline as the e2e_rest docstring — a removed entry that creeps back is a
-graduation regression; a genuine-gap entry deleted without landing the underlying fix
-is a silent gap-hiding regression.
+entries, update the ledger file AND ``EXPECTED_LEDGER`` (in
+``tests/helpers/storyboard_ledger_pin.py``, which also carries the seed
+provenance) in the same change. Same discipline as the e2e_rest docstring — a
+removed entry that creeps back is a graduation regression; a genuine-gap entry
+deleted without landing the underlying fix is a silent gap-hiding regression.
+
+The pin itself lives in ``tests/helpers/`` rather than here because the
+storyboard fitness function
+(``tests/integration/test_storyboard_ledger_fitness_real_session.py``) grades
+against the same pin, and a module whose job is to BE a test must not double as
+a helper library — see ``test_architecture_no_cross_test_module_imports.py``.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from scripts.audit import ledger
 from tests.helpers.ledger import load_ledger_nodeids
-
-# --- ledger pin ---
-# The ledger is EMPTY by decision: the storyboard grades every check it collects, so
-# every conformance gap reddens the job instead of xfailing quietly. The trade the
-# emptiness buys and costs is written into tests/storyboard/known_failures.txt.
-#
-# An empty pin is not a disabled pin — it is the strictest one this file can hold. Any
-# entry added to the ledger fails test_ledger_matches_expected_genuine_gaps until it is
-# named here too, so re-ledgering a check is a deliberate, reviewable act rather than a
-# quiet one. Seed an entry only from a MEASURED in-network run, and update both files in
-# the same change.
-EXPECTED_LEDGER: frozenset[str] = frozenset()
-
-
-_LEDGER_PATH = Path(__file__).parent.parent / "storyboard" / "known_failures.txt"
+from tests.helpers.storyboard_ledger_pin import EXPECTED_LEDGER, LEDGER_PATH
 
 
 def _load_ledger_nodeids() -> frozenset[str]:
@@ -56,7 +47,7 @@ def _load_ledger_nodeids() -> frozenset[str]:
     Same format as ``tests/bdd/e2e_rest_known_failures.txt``: one test-id-equivalent
     identifier per line, ``#``-prefixed comment lines and blank lines dropped.
     """
-    return load_ledger_nodeids(_LEDGER_PATH)
+    return load_ledger_nodeids(LEDGER_PATH)
 
 
 def test_ledger_matches_expected_genuine_gaps() -> None:
@@ -101,6 +92,6 @@ def test_conftest_loader_reads_this_ledger() -> None:
     """
     from tests.storyboard import conftest
 
-    assert conftest._LEDGER_PATH.resolve() == _LEDGER_PATH.resolve()
-    assert _LEDGER_PATH.is_file(), f"the pinned ledger file is missing: {_LEDGER_PATH}"
+    assert conftest._LEDGER_PATH.resolve() == LEDGER_PATH.resolve()
+    assert LEDGER_PATH.is_file(), f"the pinned ledger file is missing: {LEDGER_PATH}"
     assert conftest._STORYBOARD_KNOWN_FAILURES == EXPECTED_LEDGER
