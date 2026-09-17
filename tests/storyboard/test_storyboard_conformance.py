@@ -532,6 +532,63 @@ def _graded_total(summary: dict[str, Any]) -> int:
     return sum(int(summary.get(key, 0)) for key in ("passed", "failed"))
 
 
+#: Per-protocol floor on the runner's own ``passed`` count, the one number no pytest
+#: outcome can carry. See :func:`_below_pass_floor`.
+_PASS_FLOOR_PATH = _REPO_ROOT / ".storyboard-pass-floor"
+
+
+def _pass_floor(protocol: str) -> int:
+    """The recorded floor for *protocol*, or 0 when none is recorded."""
+    if not _PASS_FLOOR_PATH.is_file():
+        return 0
+    return int(json.loads(_PASS_FLOOR_PATH.read_text(encoding="utf-8")).get(protocol, 0))
+
+
+def _below_pass_floor(protocol: str, summary: dict[str, Any]) -> dict[str, Any] | None:
+    """One synthetic FAILING check when *protocol* graded fewer passes than the floor.
+
+    THE HOLE THIS CLOSES. A parametrized item exists only for a FAILURE or a SKIP:
+    ``_collect_checks`` builds them from ``summary["failures"]`` and
+    ``summary["skip_causes"]``, because the runner publishes no per-check pass record,
+    so a passing check has no id to carry. The item count therefore moves INVERSELY
+    to health, and the pass count reaches pytest through nothing at all.
+
+    So a check that regresses from PASS to SKIP makes the suite greener: its failing
+    item never existed, its skip item does not fail, and the only trace is a number in
+    a JSON artifact. 30 passes could become 5 with every item still xfail-or-skip and
+    CI still green. ``agent_reachability`` catches only the total collapse to zero.
+
+    Only reached when the runner graded SOMETHING: a run that graded nothing is
+    ``agent_reachability``'s case, and reporting both would double-count one cause.
+
+    ONE-DIRECTIONAL, deliberately. A surplus does not fail; it prints in the
+    scoreboard so the floor gets raised on purpose. The mypy and duplication ratchets
+    fail on slack because their counts are deterministic -- this one is a live run
+    against a real stack, where one environment-dependent skip cause moves the number,
+    and a ratchet that manufactures a red for GOOD news teaches people to edit the
+    file without reading it.
+    """
+    floor = _pass_floor(protocol)
+    passed = int(summary.get("passed", 0))
+    if passed >= floor:
+        return None
+    return {
+        "protocol": protocol,
+        "track": "_runner",
+        "storyboard_id": ledger.PASS_FLOOR_STORYBOARD_ID,
+        "step_id": ledger.PASS_FLOOR_STEP_ID,
+        "status": "fail",
+        "reason": (
+            f"graded {passed} passing checks against {summary.get('agent_url')}, "
+            f"below the recorded floor of {floor}. Either a check regressed (look at "
+            f"skip_causes: a pass that became a SKIP removes its own failing item and "
+            f"shows up nowhere else), or the floor in {_PASS_FLOOR_PATH.name} is stale "
+            f"and lowering it is a deliberate decision."
+        ),
+        "reason_kind": "below_pass_floor",
+    }
+
+
 def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
     """The one synthetic FAILING check for a protocol the runner graded nothing on.
 
@@ -590,8 +647,21 @@ def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
         f"passed={summary.get('passed')} failed={summary.get('failed')} "
         f"skipped={summary.get('skipped')} not_selected={summary.get('not_selected_count')} "
         f"storyboards_executed={len(summary.get('storyboards_executed', []))} "
+        f"floor={_pass_floor(protocol)}{_surplus_note(protocol, summary)} "
         f"agent_url={summary.get('agent_url')}"
     )
+
+
+def _surplus_note(protocol: str, summary: dict[str, Any]) -> str:
+    """`` (+N, raise the floor)`` when this run beat the recorded floor.
+
+    The other half of the floor, and deliberately a PRINT rather than a failure: a
+    surplus is good news, and a ratchet that reds the build for good news gets its
+    file edited without being read. Named here so raising it is a decision someone
+    makes on seeing the number, not a thing nobody knows to do.
+    """
+    surplus = int(summary.get("passed", 0)) - _pass_floor(protocol)
+    return f" (+{surplus}, raise the floor)" if surplus > 0 else ""
 
 
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
@@ -636,7 +706,13 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
                 }
             )
     if _graded_total(summary) == 0:
+        # The total collapse. Reported by ``agent_reachability`` alone: the floor below
+        # would also fire here, and two failing checks for one cause reads as two
+        # problems. The floor covers "graded FEWER than before", which only means
+        # anything once the runner graded something at all.
         checks.append(_no_graded_checks(protocol, summary))
+    elif (breach := _below_pass_floor(protocol, summary)) is not None:
+        checks.append(breach)
     return checks
 
 
