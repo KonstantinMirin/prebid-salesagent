@@ -42,7 +42,8 @@ import pytest
 
 from scripts.audit import ledger, storyboard_spec
 from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
-from tests.storyboard import collected
+from scripts.setup.storyboard_signing import STORYBOARD_VIRTUAL_HOST
+from tests.storyboard import collected, corrected_vectors
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -100,9 +101,15 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
 # that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
 # `/a2a` suffix would ask for `/a2a/.well-known/agent-card.json`, which 404s.
+#
+# The ORIGIN is imported, not spelled here. `scripts/setup/storyboard_signing.py` writes it
+# onto the tenant as its `virtual_host`, which is what makes a BEARER-LESS signed vector
+# resolve a tenant at all — those probes carry no `x-adcp-tenant`, so `_detect_tenant` has
+# only the Host. Two literals of it is a posture nothing enforces and 20+ negative vectors
+# answered 200, with the two spellings looking identical in review.
 _DEFAULT_AGENT_URLS: dict[str, str] = {
-    "mcp": "https://storyboard.adcp.test:8443/mcp/",
-    "a2a": "https://storyboard.adcp.test:8443",
+    "mcp": f"https://{STORYBOARD_VIRTUAL_HOST}/mcp/",
+    "a2a": f"https://{STORYBOARD_VIRTUAL_HOST}",
 }
 
 # Env vars the storyboard-conformance job MAY set. The compliance/schema paths
@@ -412,6 +419,28 @@ def _bundle_path(env_name: str) -> str:
     return str((storyboard_spec.adcp_home(_REPO_ROOT) / _BUNDLE_SUBDIR[env_name]).resolve())
 
 
+def _graded_compliance_dir() -> str:
+    """The compliance tree the runner is pointed at: the pinned one, bodies corrected.
+
+    THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
+    covered by the runner directory's existing ``adcp-*/`` ignore) whose request-signing
+    vectors carry bodies an AdCP seller can parse, and hands the runner that. Every other
+    storyboard in the tree is copied through byte-for-byte, so pointing ``--compliance-dir``
+    here changes which BODIES the signed-requests vectors send and nothing else about the
+    run.
+
+    Why it is needed: a seller validates the payload before it authenticates the caller, so
+    the corpus's stub bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST``
+    and the RFC 9421 checklist never runs — measured here as all 27 graded signed-requests
+    checks failing with ``got 200 (error="(none)")``. See
+    ``tests/storyboard/corrected_vectors.py`` and adcontextprotocol/adcp#7567; this is a
+    local stand-in until the corrected corpus lands upstream.
+    """
+    source = Path(_bundle_path(_COMPLIANCE_DIR_ENV))
+    dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
+    return str(corrected_vectors.corrected_compliance_tree(source, dest))
+
+
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     """CLI args + extra env that let the runner host a reachable webhook receiver.
 
@@ -478,7 +507,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         "--compliance-version",
         storyboard_spec.pinned_version(_REPO_ROOT),
         "--compliance-dir",
-        _bundle_path(_COMPLIANCE_DIR_ENV),
+        _graded_compliance_dir(),
         "--schema-root",
         _bundle_path(_SCHEMA_ROOT_ENV),
         "--timeout",

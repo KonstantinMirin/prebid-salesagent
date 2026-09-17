@@ -110,6 +110,11 @@ cmd_up() {
     export GEMINI_API_KEY="${GEMINI_API_KEY:-test_key}"
     export ENCRYPTION_KEY="${ENCRYPTION_KEY:-PEg0SNGQyvzi4Nft-ForSzK8AGXyhRtql1MgoUsfUHk=}"  # TEST ONLY — never use in production
 
+    # The storyboard agent's signed-requests test-kit configuration, so the
+    # `adcp-server-storyboard` service definition can interpolate it. Sourced before
+    # `dc up` because these are settings the SERVER PROCESS reads at boot.
+    source scripts/dev/storyboard-signing-env.sh
+
     # The tls-proxy service bind-mounts .test-tls/; without the material the
     # mount materialises an empty directory and nginx refuses to start. Idempotent
     # — a current certificate is left exactly as it is, so concurrent stacks

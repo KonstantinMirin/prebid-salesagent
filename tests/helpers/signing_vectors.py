@@ -235,13 +235,30 @@ def transplant_body(vector_id: str) -> bytes:
     ``Content-Digest`` and signed, and ``negative/016`` sends it twice.
     """
     vector = load_signing_vectors()[vector_id]
-    original = vector["request"].get("body", "").encode()
     if not TRANSPLANT[vector_id].route_named:
-        return original
+        return vector["request"].get("body", "").encode()
+    return json.dumps(create_media_buy_body(vector_id), separators=(",", ":")).encode()
 
+
+def create_media_buy_body(vector_id: str) -> dict[str, Any]:
+    """The conformant ``create_media_buy`` payload *vector_id* transplants onto.
+
+    The THREE CLAUSES, without the routing gate. :func:`transplant_body` asks a REST
+    question first — does this vector's wire URL name a registry binding, so that a DTO
+    ever sees the body — and answers the body question only if it does. The corrected
+    storyboard corpus (``tests/storyboard/corrected_vectors.py``) asks the body question
+    ALONE, because the storyboard runner's MCP mode routes every vector to the MCP
+    endpoint and names the operation in the ``tools/call`` envelope, so the URL's shape
+    decides nothing about whether the payload is parsed.
+
+    Split out rather than copied so there is still ONE conformant payload in this repo:
+    a second builder here is the drift that makes a vector pass at one layer and fail at
+    the other for reasons nobody can see.
+    """
     from tests.factories import CreateMediaBuyRequestFactory
     from tests.factories.webhook import PushNotificationConfigRequestFactory, hmac_authentication
 
+    original = load_signing_vectors()[vector_id]["request"].get("body", "").encode()
     payload = CreateMediaBuyRequestFactory.payload(idempotency_key=_idempotency_key(vector_id))
     sent = json.loads(original) if original.strip().startswith(b"{") else {}
     if "plan_id" in sent:
@@ -251,7 +268,7 @@ def transplant_body(vector_id: str) -> bytes:
         payload["push_notification_config"] = PushNotificationConfigRequestFactory.payload(
             url=registered["url"], authentication=hmac_authentication()
         )
-    return json.dumps(payload, separators=(",", ":")).encode()
+    return payload
 
 
 def recomputes_digest(vector_id: str) -> bool:

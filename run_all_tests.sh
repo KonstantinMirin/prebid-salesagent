@@ -311,6 +311,13 @@ done
 echo "Ensuring the test stack's TLS material..."
 scripts/dev/ensure-test-tls.sh || dc run --rm --no-deps -T tests python scripts/dev/gen_test_tls.py
 
+# The storyboard agent's signed-requests test-kit settings, exported for the
+# `adcp-server-storyboard` service definition to interpolate. Before `up`, because the
+# server reads them from its environment at boot. Stdlib only, so the in-network job's
+# bare python3 is enough.
+echo "Deriving the storyboard agent's signed-requests configuration..."
+source scripts/dev/storyboard-signing-env.sh
+
 # Allocate this stack's network slice BEFORE `up` (salesagent-mp53.9). The e2e
 # network is pinned to a NON-PRIVATE range so the server can reach its webhook
 # receiver at an address production's SSRF gate accepts on its own terms — but a
