@@ -41,8 +41,15 @@ class TaskManagementEnv(IntegrationEnv):
         """Call list_tasks directly with real DB (no transport dispatch)."""
         import asyncio
 
-        from src.core.tools.task_management import list_tasks
+        # ``_list_tasks_impl``, not ``list_tasks``: #1721 split every tool into a
+        # transport-agnostic ``_<tool>_impl(req, identity)`` and left no bare ``list_tasks``
+        # in the module. The old name raised AttributeError at CALL time, not import time,
+        # because the import is function-local -- the same shape as the AdCPError import in
+        # tests/harness/_base.py. Request-shaped, like every sibling harness call_impl.
+        from src.core.schemas import ListTasksRequest
+        from src.core.tools.task_management import _list_tasks_impl
 
         self._commit_factory_data()
         identity = kwargs.pop("identity", self.identity)
-        return asyncio.run(list_tasks(identity=identity, **kwargs))
+        req = kwargs.pop("req", None) or ListTasksRequest(**kwargs)
+        return asyncio.run(_list_tasks_impl(req=req, identity=identity))

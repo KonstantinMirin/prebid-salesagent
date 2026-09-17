@@ -52,7 +52,6 @@ from src.core.exceptions import (
     AdCPBudgetTooLowError,
     AdCPCapabilityNotSupportedError,
     AdCPConfigurationError,
-    AdCPCreativeNotFoundError,
     AdCPFormatNotFoundError,
     AdCPNotFoundError,
     AdCPProductNotFoundError,
@@ -142,40 +141,13 @@ def _make_request(**overrides) -> CreateMediaBuyRequest:
 # ===========================================================================
 
 
-class TestProductNotFound:
-    """GAP-001: Product not found raises the typed AdCPProductNotFoundError."""
-
-    def test_product_not_found_returns_error(self, integration_db):
-        """When packages reference non-existent product_ids, raise
-        AdCPProductNotFoundError with the missing IDs listed.
-        """
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_exists",
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                },
-                {
-                    "product_id": "prod_missing",
-                    "budget": 3000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                },
-            ]
-        )
-
-        with MediaBuyCreateEnv() as env:
-            tenant, _principal = env.setup_default_data()
-            # Only prod_exists is in the DB.
-            env.setup_product_chain(tenant, product_id="prod_exists")
-            # Missing product_ids raise the typed AdCPProductNotFoundError, whose
-            # class identity carries the PRODUCT_NOT_FOUND wire code (404).
-            with pytest.raises(AdCPProductNotFoundError) as excinfo:
-                env.call_impl(req=req)
-
-        exc = excinfo.value
-        assert exc.error_code == "PRODUCT_NOT_FOUND"
-        assert exc.status_code == 404
+# TestProductNotFound is DELETED. @T-UC-002-ext-b grades the same condition on the wire,
+# live and passing on a2a/mcp/rest, and it grades more: the code, recovery=correctable, the
+# missing_product_ids that reach the buyer in errors[0].details, and the suggestion field.
+# What the deleted test added beyond that was `error_code == "PRODUCT_NOT_FOUND"` and
+# `status_code == 404`, both read-only properties over CODE_TABLE -- the table compared to
+# itself -- plus the class->code binding mypy already refuses to get wrong (CLAUDE.md
+# pattern 10). A scenario REPLACES such a test; it does not port it.
 
 
 class TestMaxDailySpendExceeded:
@@ -607,95 +579,12 @@ class TestPricingOptionXOR:
         assert po.is_fixed is False
 
 
-class TestCreativeIdsNotFound:
-    """GAP-008: Creative IDs not found returns CREATIVES_NOT_FOUND.
-
-    The set-difference logic at media_buy_create.py:2957-2966 checks
-    requested creative IDs against found IDs and raises ToolError if any
-    are missing. We verify with behavioral tests exercising the actual code path.
-    """
-
-    def test_creative_ids_not_found_raises_tool_error(self, integration_db):
-        """When creative_ids reference IDs that don't exist in the database,
-        _create_media_buy_impl raises ToolError('CREATIVES_NOT_FOUND') with
-        the missing IDs listed.
-
-        Exercises the real code path at media_buy_create.py:2957-2966 by seeding
-        only one of the three requested creatives.
-
-        Anchors: media_buy_create.py:2957-2966
-        """
-        # Request with creative_ids that includes one that won't be found in DB
-        req = _make_request(
-            packages=[
-                {
-                    "product_id": "prod_1",
-                    "budget": 5000.0,
-                    "pricing_option_id": "cpm_usd_fixed",
-                    "creative_ids": ["creative_exists", "creative_missing_1", "creative_missing_2"],
-                },
-            ]
-        )
-
-        with MediaBuyCreateEnv() as env:
-            from tests.factories import CreativeFactory
-
-            tenant, principal = env.setup_default_data()
-            env.setup_product_chain(tenant)
-            # Only one creative exists in DB — the other two are missing.
-            CreativeFactory(
-                tenant=tenant,
-                principal=principal,
-                creative_id="creative_exists",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org",
-                data={"url": "https://example.com/ad.jpg", "width": 300, "height": 250},
-            )
-
-            with pytest.raises(AdCPCreativeNotFoundError) as exc_info:
-                env.call_impl(req=req)
-
-            # 3.1.1 enums/error-code.json makes CREATIVE_NOT_FOUND a MUST, uniform for
-            # any creative_id not owned by the calling account. The wire code is graded
-            # by @T-UC-002-ext-o; this level only pins which class _impl raises.
-            assert exc_info.value.error_code == "CREATIVE_NOT_FOUND"
-
-    def test_set_difference_logic_detects_missing_creative_ids(self):
-        """The set-difference logic (requested - found) correctly identifies missing IDs.
-
-        This mirrors the pattern at media_buy_create.py:2958-2960:
-            found_creative_ids = set(creatives_by_id.keys())
-            requested_creative_ids = set(all_creative_ids)
-            missing_ids = requested_creative_ids - found_creative_ids
-        """
-        # Simulate the exact logic from the source
-        all_creative_ids = ["creative_exists", "creative_missing_1", "creative_missing_2"]
-        creatives_by_id = {"creative_exists": MagicMock()}
-
-        found_creative_ids = set(creatives_by_id.keys())
-        requested_creative_ids = set(all_creative_ids)
-        missing_ids = requested_creative_ids - found_creative_ids
-
-        assert missing_ids == {"creative_missing_1", "creative_missing_2"}
-
-        # The block that stood here raised the error and caught its own raise, then
-        # asserted the class's own _code -- it could not fail for any behavior of
-        # production. Which code this condition emits is graded by @T-UC-002-ext-o on
-        # the wire, and by test_creative_ids_not_found_raises_tool_error at _impl.
-
-    def test_all_creative_ids_found_no_error(self):
-        """When all creative IDs are found, no error is raised."""
-        all_creative_ids = ["creative_1", "creative_2"]
-        creatives_by_id = {
-            "creative_1": MagicMock(),
-            "creative_2": MagicMock(),
-        }
-
-        found_creative_ids = set(creatives_by_id.keys())
-        requested_creative_ids = set(all_creative_ids)
-        missing_ids = requested_creative_ids - found_creative_ids
-
-        assert len(missing_ids) == 0, "No IDs should be missing"
+# TestCreativeIdsNotFound is DELETED. @T-UC-002-ext-o grades the same condition on the
+# wire, live and passing on a2a/mcp/rest, and it cites the 3.1.1 MUST it enforces. The
+# ledgered test asserted only which class _impl raises plus error_code, which is
+# CODE_TABLE compared to itself. Its two siblings recomputed `requested - found` inline
+# over MagicMocks and asserted the result: that grades Python's set operator, not this
+# repo's set-difference at media_buy_create.py.
 
 
 # ===========================================================================

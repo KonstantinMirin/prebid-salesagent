@@ -295,6 +295,23 @@ def measured_status(*, gated: bool, failing: bool, step_controller: bool, storyb
     return MEASURED_NOT_MEASURED
 
 
+def _tool_step_keys(adcp: Path) -> set[tuple[str, str]]:
+    """Ledger keys for pinned steps that invoke a tool and grade no ``check:``.
+
+    Walks EVERY storyboard in the pinned tree, not only the ones ``build``
+    indexes: the question this answers is whether the pin declares the step at
+    all, which does not depend on the storyboard's coverage status.
+
+    A storyboard shipped in both ``domains/`` and ``protocols/`` yields the same
+    keys twice; the set absorbs it.
+    """
+    return {
+        (ledger.join_id(storyboard_spec.storyboard_id(sb.text), sb.stem), step_id)
+        for sb in storyboard_spec.storyboards(adcp)
+        for step_id, _task in storyboard_spec.tool_steps_without_checks(sb.text)
+    }
+
+
 def build(repo: Path, adcp: Path) -> dict[str, Any]:
     coverage = storyboard_coverage_map.build(repo, adcp)
     dist = storyboard_spec.dist_root(adcp, coverage["pinned_version"])
@@ -459,11 +476,23 @@ def build(repo: Path, adcp: Path) -> dict[str, Any]:
     #     listed by name.
     #   * the runner-level synthetic (ledger.RUNNER_SYNTHETIC_KEY), emitted when
     #     the runner grades nothing at all.
+    #   * a step invoking a real TOOL with no `check:` line. The runner runs it
+    #     and reports pass or fail on the INVOCATION — the tool answered or it
+    #     did not — while the index, keyed on `check:` lines, produces no row.
+    #     `media_buy_seller/creative_reception::list_formats` is the measured
+    #     case: declared by the 3.1.1 pin under section
+    #     `discover_accepted_formats`, carrying zero checks, and genuinely
+    #     FAILING on both protocols. Derived by
+    #     storyboard_spec.tool_steps_without_checks() from the pinned tree,
+    #     never listed by name, so a storyboard reshaped upstream moves it.
     #
-    # So the join universe is the index keys plus those two families. Measured
+    # So the join universe is the index keys plus those three families. Measured
     # when this landed: index-only leaves 40 orphans, this universe leaves 0.
     known_step_keys = (
-        {(r.storyboard_id, r.step_id) for r in records} | ledger.vector_step_keys(adcp) | {ledger.RUNNER_SYNTHETIC_KEY}
+        {(r.storyboard_id, r.step_id) for r in records}
+        | ledger.vector_step_keys(adcp)
+        | {ledger.RUNNER_SYNTHETIC_KEY}
+        | _tool_step_keys(adcp)
     )
     orphan_ledger_rows = sorted(
         f"{storyboard_id}::{step_id}"

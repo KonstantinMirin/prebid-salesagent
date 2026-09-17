@@ -127,10 +127,38 @@ class RuntimeSettings(BaseSettings):
 
 
 class TestingSettings(BaseSettings):
-    """Facts that exist only for test and demo deployments.
+    """Settings that say A SUITE IS RUNNING. Every one of them is a defect.
 
-    ``adcp_testing`` is never read by business code directly: the allowances it implies
-    are named on :class:`Settings` and selected at composition.
+    A production path that consults any of these serves a different seller under test than
+    in deployment, which makes the suite's verdict conditional on the suite being what ran
+    it (CLAUDE.md pattern 11). So this class is a WORK LIST, not a configuration surface:
+    it may only lose fields, which ``tests/unit/test_testing_settings_only_shrinks.py``
+    pins. Nothing may be added.
+
+    Each field's production readers, and what has to happen before it can go:
+
+    * ``adcp_testing`` -- one decision, ``webhook_validator.py:196``, which loosens
+      ``EgressPolicy.check_registration``'s loopback check while a suite runs. The
+      replacement is reachable loopback origins in the test environments -- the same work
+      the outbound private-address hatch needs. That hatch's env var is deliberately not
+      spelled out here: ``test_architecture_no_outbound_insecure_hatch`` counts a literal
+      mention as a declaration site, which is the right reading for a flag that can
+      disable the address gate, so naming it in prose would quietly widen its pin. The
+      seven properties on this class that used to fork on ``adcp_testing`` are already
+      pinned shrink-only (GH #2255).
+    * ``adcp_auth_test_mode`` -- one reader, ``src/admin/app.py:351``, deciding whether
+      the test-credential login blueprint is COMPOSED. It goes when first-run admin setup
+      has an answer that is not a test flag (salesagent-091d8): today that blueprint is
+      the only non-SSO path to a first admin session, and the deployment docs instruct
+      operators to use it.
+    * the six ``test_*`` credentials -- read at ONE site, ``test_auth.py:63,68,73``, as
+      that blueprint's credential table. They go with the blueprint.
+
+    Provisioning facts a deployment legitimately sets -- seed a demo tenant, seed sample
+    data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. They sat
+    in this class and that was the confusion worth removing: a name implying everything
+    inside is a test artifact hides which fields are actually defects, and a demo
+    deployment genuinely wants a demo tenant.
     """
 
     model_config = _ENV
@@ -143,6 +171,19 @@ class TestingSettings(BaseSettings):
     test_tenant_admin_password: str = "test123"
     test_tenant_user_email: str = "test_tenant_user@example.com"
     test_tenant_user_password: str = "test123"
+
+
+class ProvisioningSettings(BaseSettings):
+    """What an operator asks a fresh deployment to create on first boot.
+
+    Real deployment inputs, read once at init (``src/core/database/database.py``,
+    ``scripts/setup/init_database.py``): a demo deployment wants a demo tenant, and
+    ``skip_migrations`` is an ops decision about who runs alembic. None of them asks
+    whether a suite is running, which is why they are not :class:`TestingSettings`.
+    """
+
+    model_config = _ENV
+
     create_demo_tenant: bool = False
     create_sample_data: bool = False
     skip_migrations: bool = False
@@ -685,13 +726,14 @@ class Settings:
     """Everything the environment says, as one object.
 
     A plain composite, deliberately not a ``BaseSettings``: the groups read the environment,
-    and this object only holds them. As a ``BaseSettings`` its six field names were themselves
+    and this object only holds them. As a ``BaseSettings`` its field names would themselves be
     environment variables, so a shell with ``TESTING=1`` or ``DATABASE=x`` could not start
     the process.
     """
 
     runtime: RuntimeSettings
     testing: TestingSettings
+    provisioning: ProvisioningSettings
     database: DatabaseSettings
     auth: AuthSettings
     integrations: IntegrationSettings
@@ -703,6 +745,7 @@ class Settings:
         return cls(
             runtime=RuntimeSettings(),
             testing=TestingSettings(),
+            provisioning=ProvisioningSettings(),
             database=DatabaseSettings(),
             auth=AuthSettings(),
             integrations=IntegrationSettings(),

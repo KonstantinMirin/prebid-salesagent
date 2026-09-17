@@ -36,19 +36,73 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LEDGER_PATH = REPO_ROOT / "tests" / "storyboard" / "known_failures.txt"
 
 # --- ledger pin ---
-# The ledger is EMPTY by decision: the storyboard grades every check it collects, so
-# every conformance gap reddens the job instead of xfailing quietly. The trade the
-# emptiness buys and costs is written into tests/storyboard/known_failures.txt.
+# Seeded from ONE measured in-network run, test-results/innet_160926_1917, which scored
+# passed=30 failed=21 on both protocols with zero disparity. 23 mcp + 23 a2a, every failing
+# check failing on both surfaces -- so an asymmetric pair appearing here is an mcp-only fix
+# that left its a2a twin behind, which is the drift the per-protocol split exists to expose.
 #
-# An empty pin is not a disabled pin — it is the strictest one this file can hold. Any
-# entry added to the ledger fails test_ledger_matches_expected_genuine_gaps until it is
-# named here too, so re-ledgering a check is a deliberate, reviewable act rather than a
-# quiet one. Seed an entry only from a MEASURED in-network run, and update both files in
-# the same change.
+# The ledger was EMPTY before this, deliberately, to show the whole gap surface at once. That
+# surface has been seen; the entries below are it. What the reversal costs is written at the
+# top of tests/storyboard/known_failures.txt: conftest xfails these with strict=False, so a
+# regression inside a ledgered check no longer reddens the job.
 #
-# The pre-merge signing branch carried an 81-entry seed here (run 32478296091, job
-# 96759107129, head_sha 0ec6637dd, @adcp/sdk 11.0.0). It is NOT carried forward and must
-# not be restored by arithmetic: it was measured against the pre-#1721 transport
-# architecture and an older runner pin, and this tree has neither. Recover it from git
-# history if a future re-seed wants a starting point, then RE-MEASURE.
-EXPECTED_LEDGER: frozenset[str] = frozenset()
+# Re-seed both files in the same change, always, and only from a measured run.
+#
+# MERGE NOTE: the 46 entries and the provenance above are #1721's (77b34c1ea) -- that
+# machinery is theirs and it is measured. The HOME is ours: this pin lives in
+# ``tests/helpers/`` rather than inside ``tests/unit/test_storyboard_ledger_state.py``
+# because the storyboard fitness function
+# (``tests/integration/test_storyboard_ledger_fitness_real_session.py``) grades against the
+# same pin, and a module whose job is to BE a test must not double as a helper library --
+# ``test_architecture_no_cross_test_module_imports.py`` fails on that shape. Neither side
+# subsumes the other, so the merge keeps both: their data, our location.
+EXPECTED_LEDGER: frozenset[str] = frozenset(
+    (
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::get_products_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::get_products_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::list_formats]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::list_formats]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::missing_fields]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::error_compliance::supported_major_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::missing_fields]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::error_compliance::supported_major_version]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::stale_response_advisory::no_stale_on_healthy_upstream]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment_cardinality::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/creative_fate_after_cancellation::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment_cardinality::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_legacy_format]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::update_unknown_package]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::get_products_brief]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::assert_mechanism]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::security::security_baseline::probe_api_key]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::assert_mechanism]",
+        "tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::security::security_baseline::probe_api_key]",
+    )
+)

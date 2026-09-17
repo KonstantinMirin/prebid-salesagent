@@ -110,6 +110,20 @@ printf '%s\n' 'src/x.py:1:1: error: Name "y" is not defined  [name-defined]' \
 echo "   ok (control: matcher recognizes an error line; 0 errors)"
 [ "$MAX" -lt 5 ] && exit 0
 
+# ---- layer 4b: function-local imports resolve ---------------------------------
+# WHOLE TREE, always, regardless of scope. This is the one layer that cannot be scoped to
+# the diff: it catches a file REFERENCING a symbol the merge removed, and such a file may be
+# one NEITHER side edited -- so no surface computed from changed files can contain it. Three
+# shipped during this merge (AdCPError in tests/harness/_base.py, list_tasks in
+# tests/harness/task_management.py and tests/bdd/steps/domain/uc002_task_query.py), each a
+# function-local import that fails at CALL time rather than at import, and each invisible to
+# every other layer here including collection.
+echo "== layer 4b: function-local imports resolve =="
+.venv/bin/python -m pytest -c pytest.ini tests/unit/test_architecture_function_local_imports_resolve.py \
+  -q -p no:randomly -o addopts="" >/tmp/gate_fli.txt 2>&1 || { cat /tmp/gate_fli.txt; fail 4 "function-local imports"; }
+echo "   ok ($(grep -oE '[0-9]+ passed' /tmp/gate_fli.txt | head -1))"
+[ "$MAX" -lt 5 ] && exit 0
+
 # ---- layer 5: import-all / collection -----------------------------------------
 echo "== layer 5: collection =="
 for suite in unit integration bdd e2e admin; do

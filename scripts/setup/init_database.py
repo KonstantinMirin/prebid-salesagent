@@ -65,7 +65,7 @@ def init_db(exit_on_error=False):
                 print(f"✅ Updated tenant management domains: {tenant_management_domains}")
 
         # Check if demo tenant creation is enabled (default: false for production deployments)
-        create_demo_tenant = settings.testing.create_demo_tenant
+        create_demo_tenant = settings.provisioning.create_demo_tenant
 
         # Check if default tenant already exists (idempotent for CI/testing)
         from sqlalchemy import select
@@ -198,7 +198,7 @@ def init_db(exit_on_error=False):
                 session.add(product)
 
             # Only create sample advertisers if this is a development environment
-            if settings.testing.create_sample_data:
+            if settings.provisioning.create_sample_data:
                 principals_data = [
                     {
                         "principal_id": "acme_corp",
@@ -331,7 +331,7 @@ def init_db(exit_on_error=False):
                     raise
 
             # Update the print statement based on whether sample data was created
-            if settings.testing.create_sample_data:
+            if settings.provisioning.create_sample_data:
                 print(
                     """
 ╔══════════════════════════════════════════════════════════════════╗

@@ -187,10 +187,15 @@ def given_task_type_filter_boundary(ctx: dict, config: str) -> None:
 
 def _dispatch_list_tasks(env: Any, **params: Any) -> Any:
     """Dispatch list_tasks through the env, keeping production import in harness layer."""
-    from src.core.tools.task_management import list_tasks
+    # See tests/harness/task_management.py: the bare ``list_tasks`` name does not exist
+    # under #1721's ``_<tool>_impl`` convention, and a function-local import defers the
+    # failure to call time.
+    from src.core.schemas import ListTasksRequest
+    from src.core.tools.task_management import _list_tasks_impl
 
     env._commit_factory_data()
-    return asyncio.run(list_tasks(identity=env.identity, **params))
+    req = params.pop("req", None) or ListTasksRequest(**params)
+    return asyncio.run(_list_tasks_impl(req=req, identity=env.identity))
 
 
 def _dispatch_list_tasks_e2e(ctx: dict, **params: Any) -> dict:
