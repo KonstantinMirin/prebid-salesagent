@@ -448,9 +448,20 @@ def _a2a_jsonrpc_result(response: Any) -> dict[str, Any]:
     """
     envelope = _jsonrpc_body(response, surface=_A2A_PATH)
     if "error" in envelope:
-        from src.core.exceptions import AdCPError
+        from src.core.errors.codes import AppErrorCode
+        from src.core.exceptions import AdCPSalesAgentError
 
-        raise AdCPError(f"A2A JSON-RPC error: {envelope['error']}")
+        # #1721 renamed the base to ``AdCPSalesAgentError`` and removed the positional
+        # message: buyer-facing text resolves from CODE_TABLE per read, so no raise site
+        # authors it. The JSON-RPC error body is the CAUSE and goes nowhere near the wire
+        # text -- it is carried on ``internal_detail`` for the server log, exactly as the
+        # sibling raise in ``_a2a_task_outcome`` does. The import was function-local and
+        # named ``AdCPError``, so it raised ImportError only when an /a2a call actually
+        # failed -- which the harness then reported as "no envelope to grade".
+        raise AdCPSalesAgentError(
+            error_code=AppErrorCode.INTERNAL_ERROR,
+            internal_detail=RuntimeError(f"A2A JSON-RPC error: {envelope['error']}"),
+        )
     return envelope.get("result") or {}
 
 
