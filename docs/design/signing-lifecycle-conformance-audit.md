@@ -22,16 +22,17 @@ it: 401 plus the exact challenge for two distinct codes over REST, MCP and A2A, 
 pinned 40-vector conformance corpus is green (82 passed).
 
 Six defects survived. None is in the shape of the design; all six are in places the design
-documents assumed were settled:
+documents assumed were settled. **V1, V2 and V5 are fixed** — see
+[What was fixed](#what-was-fixed) for the commits and the re-run probes.
 
-| # | Defect | Severity |
-|---|---|---|
-| V1 | The capture's surface gate reads `scope["path"]` without stripping ASGI `root_path`, so under a root-path deployment the router reaches every AdCP tool while the capture records nothing and the verifier silently sees an unsigned request | High, latent |
-| V2 | A repeated header line resolves **first-wins on REST and A2A, last-wins on MCP** — for `Signature`, for `Authorization` and for `x-adcp-tenant`. `Signature` is not in the single-line list that exists to close exactly this | Medium |
-| V3 | `SignedExchangeCapture` is not the innermost middleware, contradicting its own docstring: a body-rewriting `BaseHTTPMiddleware` sits below it | Low in effect (see V4), claim false |
-| V4 | That body-rewriting middleware (`a2a_messageid_compatibility_middleware`) has been a no-op since Starlette's `call_next` stopped honouring a rebuilt request's `receive`. It logs a conversion it does not perform | Medium (not a signing bug; it is why V3 is currently harmless) |
-| V5 | An A2A `SendMessage` registering webhook credentials through `params.configuration.task_push_notification_config` is answered `200` with no `request_signature_required` and no `:1464` log. The other three locations enforce | Medium |
-| V6 | `docs/development/request-lifecycle.md` is stale on three claims that touch this path (middleware count, the AUTH_MISSING-before-tenant ordering, the A2A context builder) | Doc |
+| # | Defect | Severity | Status |
+|---|---|---|---|
+| V1 | The capture's surface gate reads `scope["path"]` without stripping ASGI `root_path`, so under a root-path deployment the router reaches every AdCP tool while the capture records nothing and the verifier silently sees an unsigned request | High, latent | **FIXED** `5d87631cb` |
+| V2 | A repeated header line resolves **first-wins on REST and A2A, last-wins on MCP** — for `Signature`, for `Authorization` and for `x-adcp-tenant`. `Signature` is not in the single-line list that exists to close exactly this | Medium | **FIXED** `18e2b31c6` |
+| V3 | `SignedExchangeCapture` is not the innermost middleware, contradicting its own docstring: a body-rewriting `BaseHTTPMiddleware` sits below it | Low in effect (see V4), claim false | open |
+| V4 | That body-rewriting middleware (`a2a_messageid_compatibility_middleware`) has been a no-op since Starlette's `call_next` stopped honouring a rebuilt request's `receive`. It logs a conversion it does not perform | Medium (not a signing bug; it is why V3 is currently harmless) | open |
+| V5 | An A2A `SendMessage` registering webhook credentials through `params.configuration.task_push_notification_config` is answered `200` with no `request_signature_required` and no `:1464` log. The other three locations enforce | Medium | **FIXED** `51006ea38` |
+| V6 | `docs/development/request-lifecycle.md` is stale on three claims that touch this path (middleware count, the AUTH_MISSING-before-tenant ordering, the A2A context builder) | Doc | open |
 
 Plus one design-doc claim that is false of the code (V7, `posture_for_tenant(None)` is
 still reachable) and two test-side defects (T1, T2) that are not production faults.
@@ -39,6 +40,65 @@ still reachable) and two test-side defects (T1, T2) that are not production faul
 Every verdict below names the probe that produced it, and for the VIOLATED ones the probe
 is shown failing on the tree and passing on a control, or passing on the tree and failing
 on a named mutation.
+
+## What was fixed
+
+Three of the six, on this branch, one commit each. The other three (V3, V4, V6) are
+recorded and open.
+
+| # | Commit | What changed | Re-run evidence |
+|---|---|---|---|
+| V1 | `5d87631cb` | `capture.py`'s surface predicate and `src/app.py`'s `/a2a` predicate read `path_from_asgi_scope`; the guard's allowlist row moves to the helper form | P-ROOTPATH: `root_path=/adcp` now `exchange_captured=True`, control `root_path=""` unchanged, old read reddens it |
+| V2 | `18e2b31c6` | `joined_headers` is the one header derivation (RFC 9110 §5.3) and `_resolve_identity` reads it whenever the request was captured; `_MALFORMED_VALUE_RULES` gains the `signature` row | P-HEADERS: duplicated line → identical challenge on all three transports, none reaching the checklist; single line → identical value; transport container reddens it |
+| V5 | `51006ea38` | `on_message_send` declines `params.configuration.task_push_notification_config`; the harness sends the AdCP field where AdCP declares it | P-A2ACFG: three AdCP locations refuse + log, the declined channel answers `-32003`; `tests/bdd/test_request_signing_enforcement.py` 27 passed |
+
+### Verification of the three fixes
+
+Full-suite offload, `cassini run` id `sa-a101ded1` / run `30466356458349febd9e5072406ec5b5`,
+launched 2026-09-17T17:03:06Z, results `test-results/innet_170926_1703/`. Per-suite counts
+read from the reports, and the current run resolved by each report's embedded `created`
+field — `innet_170926_0547` carries a LATER directory mtime than `innet_170926_0629`
+despite being the older run, so neither name nor mtime decides which directory is current.
+Baseline is `innet_170926_0926` (earliest report 09:30Z), the last full run before these
+fixes.
+
+| suite | baseline `_0926` | this run `_1703` | delta |
+|---|---|---|---|
+| unit | 6513 pass, 1 fail | 6514 pass, **0 fail** | −1 fail |
+| integration | 3049 pass, 24 fail, 0 err | 3066 pass, **4 fail, 3 err** | −20 bad, +3 new err (below) |
+| bdd_inprocess | 4254 pass, 16 fail, 114 xpass | 4270 pass, **0 fail**, 114 xpass | −16 fail |
+| bdd_e2e | 1238 pass, 4 fail, 14 xpass | 1240 pass, **2 fail**, 14 xpass | −2 fail |
+| e2e | 134 pass, 4 fail | 134 pass, 4 fail | — |
+| admin / ui / quality | 140 / 5 / 4 pass, 0 fail | identical | — |
+| storyboard | 1 pass, 58 fail, 46 xfail | 1 pass, **58 fail**, 46 xfail | **identical set, 0 new, 0 fixed** |
+
+**The xpass set is unchanged.** `bdd_inprocess` 114 → 114 and `bdd_e2e` 14 → 14, with a
+node-id set difference of **zero in both directions**. All 114 in-process xpasses are in
+`tests/bdd/test_uc026_package_media_buy.py`, routed by `_UC026_XFAIL_TAGS` with
+`strict=False` (`tests/bdd/conftest.py:3998-4004`) — the conftest states outright that
+tag-level xfailing an outline that fails a minority of its rows "converts the other ten
+from passing to xpassed". Their reasons are UC-026 production gaps (REST update dispatch
+not wired, keyword-targeting ops not implemented, `creative_assignments` /
+`optimization_goals` replacement missing) and none of them touches headers, signing or a
+transport. They are present at 114 in all three pre-fix runs. A targeted local run of that
+module on the fixed tree reports **420 passed, 195 xfailed, 114 xpassed, 0 failed**, which
+is the baseline count exactly. Verdict: pre-existing, non-strict, not graduated by these
+fixes.
+
+**`storyboard`'s 58 failures are pre-existing and byte-identical to the baseline** — every
+`security_transport::signed_requests` check on the `a2a` and `mcp` transports, all failing
+in the storyboard runner's own probe (`request_signing_probe threw: MCP initialize
+precondition failed … Error POSTing to endpoint: <!doctype html`). The suite is not in
+cassini's declared roster either. Not this change's blast radius, and not diagnosed here.
+
+**The 3 new integration errors are box contention, not a defect.** All three are
+`test_mcp_tool_roundtrip_minimal.py` setup errors reading
+`RuntimeError: MCP server failed to start on port <n> within 60s. STDOUT: N/A STDERR: N/A`
+— a spawned server subprocess that never came up, three in a row on one xdist worker
+(`gw13`/`gw8`) with three different ports. Re-run locally on the fixed tree: **11 passed**,
+the whole module. The remaining 4 integration failures are all pre-existing: T1 and T2
+below, plus two `test_template_url_validation` rows that are `XPASS(strict)` against
+`tests/integration/known_failures.txt` and were already failing in the baseline.
 
 ## Method, and how to re-run any of it
 
@@ -107,7 +167,7 @@ document or commit that authorises it. An uncitable SUPERSEDED is reported as VI
 | SD-1 | "Landed: … The stack is still **three** middlewares and none of them reads a credential" | **VIOLATED** (count) / TRUE (credential) | P-STACK |
 | SD-2 | Decision 1 — verification moves into `_resolve_identity` | TRUE | `resolved_identity.py:475`; P-ORDER |
 | SD-3 | ":104 ONE capture, one derivation, three readers … it still decides nothing — no `raise`, no `401`, no `status_code`, no early `send`" | TRUE | P-CAPTURE(a) |
-| SD-4 | ":110 the capture is scoped by an **allowlist** of AdCP surfaces … an allowlist cannot forget" | **VIOLATED** | P-ROOTPATH — the allowlist selects a different request set than the router under `root_path` |
+| SD-4 | ":110 the capture is scoped by an **allowlist** of AdCP surfaces … an allowlist cannot forget" | ~~VIOLATED~~ → TRUE (`5d87631cb`) | P-ROOTPATH — the allowlist now reads `path_from_asgi_scope`, so it selects the router's own request set under any `root_path` |
 | SD-5 | ":115 the buffer must be lossless on **every** exit" | TRUE | P-CAPTURE(b) — six exits, two named mutations redden it |
 | SD-6 | ":120 the SPECIFIC signature code must survive byte-for-byte into the envelope and reach `_challenge_for_code`" | TRUE | P-CHALLENGE (2 codes × 3 transports) + mutation |
 | SD-7 | ":138 the `posture_for_tenant(None)` case "should become unreachable, since the resolver always has a tenant by then"" | **VIOLATED** | `resolved_identity.py:437` yields `None` for a Host naming no tenant; `posture.py:267-269` documents the case as reachable |
@@ -126,8 +186,8 @@ document or commit that authorises it. An uncitable SUPERSEDED is reported as VI
 | C-1 | `capture.py:260` "It must be registered **INNERMOST** of the app's middlewares" | **VIOLATED** | P-STACK — index 2 of 4 |
 | C-2 | `capture.py:87` the header list is kept as received, not a collapsed dict | TRUE | `tests/unit/test_signed_exchange_capture.py::test_the_raw_header_list_survives_a_repeated_header` |
 | C-3 | `capture.py:101` `presents_signature()` answers "either header present" | TRUE | code + `negative/002` (one header without the other → `header_malformed`) |
-| V-1 | `verifier.py:823` "Headers that **MUST** arrive on exactly one line when a signature covers the request" | **VIOLATED** | P-HEADERS — the list omits `signature`; the collapse then differs per transport |
-| V-2 | `verifier.py:37` "What the boundary cannot see" enumerates two classes of unverified request | TRUE but incomplete | P-VARIANTS / P-A2ACFG — two further classes found (V5 and the wrong-method case under T1) |
+| V-1 | `verifier.py:823` "Headers that **MUST** arrive on exactly one line when a signature covers the request" | ~~VIOLATED~~ → TRUE (`18e2b31c6`) | P-HEADERS — `signature` is in the list, and one `joined_headers` view removes the per-transport collapse the list was guarding against |
+| V-2 | `verifier.py:37` "What the boundary cannot see" enumerates two classes of unverified request | TRUE but incomplete | P-VARIANTS / P-A2ACFG — one further class stands (the wrong-method / unrouted case under T1). The A2A envelope class is no longer unverified-but-served: it is DECLINED (`51006ea38`) |
 
 ### Patterns, guards, egress
 
@@ -149,8 +209,8 @@ document or commit that authorises it. An uncitable SUPERSEDED is reported as VI
 | :1226 | a malformed `Signature-Input` is refused even outside `required_for`, and blocks bearer fallback | TRUE | P-MALFORMED — POST with `MALFORMED_SIGNATURE_HEADERS` and a valid bearer, `supported` bucket → `401 Signature error="request_signature_header_malformed"` |
 | :1269 | unsigned but bearer-authenticated on a `required_for` operation MUST NOT be rejected | TRUE | `verifier.py:301`; `tests/unit/test_request_signature_composition_rule.py` (6 passed) |
 | :1053 | verifiers MUST NOT cross-namespace match | TRUE | SD-9 |
-| :1375 / :1465 | a payload carrying webhook `authentication` requires a signature regardless of bucket | TRUE on 3 of 4 locations, **VIOLATED on the 4th** | P-A2ACFG |
-| :1464 | sellers MUST log every request arriving with a non-empty `authentication` block | TRUE on 3 of 4 locations, **VIOLATED on the 4th** | P-A2ACFG |
+| :1375 / :1465 | a payload carrying webhook `authentication` requires a signature regardless of bucket | ~~VIOLATED on 1 of 4~~ → TRUE (`51006ea38`) | P-A2ACFG — the three AdCP locations refuse; the fourth was never an AdCP location and is now declined outright |
+| :1464 | sellers MUST log every request arriving with a non-empty `authentication` block | ~~VIOLATED on 1 of 4~~ → TRUE (`51006ea38`) | P-A2ACFG — same three locations log; the declined channel never becomes a registration to log |
 | "`WWW-Authenticate` format" | `Signature error="<code>"`, no `realm`, no other parameters | TRUE | `challenge_for` at `signature_codes.py`; `tests/unit/test_signature_challenge_string.py` pins all 28 against the SDK helper |
 
 ---
@@ -158,6 +218,16 @@ document or commit that authorises it. An uncitable SUPERSEDED is reported as VI
 ## VIOLATED findings
 
 ### V1 — the capture's surface gate ignores ASGI `root_path`, so a root-path deployment runs with the verifier silently off
+
+> **FIXED, `5d87631cb`.** The predicate reads `path_from_asgi_scope(scope)`, the published
+> route-table rule that had no callers; `src/app.py`'s `/a2a` predicate was blind the same
+> way and reads it too. `_signed_path` still reads `raw_path` WITH the prefix — the two
+> rules are opposites and both sites say so. The guard's allowlist row moved from the
+> `scope.get("path")` form to the `path_from_asgi_scope()` form: same site, same count, and
+> its stated reason is now satisfied by the helper rather than asserted over a read that did
+> not satisfy it. P-ROOTPATH re-run: `root_path=/adcp` reports `exchange_captured=True`
+> where it reported `False`, with `root_path=""` as the control; restoring the old read
+> reddens it again.
 
 **Site.** `src/core/signing/capture.py:269`
 
@@ -223,6 +293,19 @@ it dialled. The two rules are opposites and the module already says so at `captu
 compat shim of V4 and matters less, but fix it in the same pass.
 
 ### V2 — a repeated header line resolves first-wins on REST and A2A and last-wins on MCP
+
+> **FIXED, `18e2b31c6`,** with the structural half rather than the allowlist row alone.
+> `joined_headers` (`src/core/signing/capture.py`) is one derivation from the captured
+> LINES, per RFC 9110 §5.3 — repeated lines are one comma-joined value — and
+> `_resolve_identity` reads it whenever the request was captured, so the bearer, the tenant
+> hint, `_parse_keyid` and the SDK checklist all share it. `_target_uri` goes through it
+> too, having previously built its own last-wins dict. A joined value discards no line, so
+> the ambiguity now reaches a rule that can refuse it; where no rule exists it fails closed
+> identically everywhere. `_MALFORMED_VALUE_RULES` gains the `signature` row it was missing,
+> so a duplicate `Signature` is `request_signature_header_malformed` at checklist step 1 on
+> every transport. P-HEADERS re-run through the real app: duplicated, all three answer the
+> identical challenge and none reaches the checklist; sent once, all three read the same
+> value. Restoring the transport's own container reddens it.
 
 **Sites.**
 - `src/routes/api_v1.py:100` passes `request.headers` — a Starlette `Headers`, whose
@@ -377,6 +460,33 @@ schema and refusing it is a defensible answer. Whichever is chosen, the log line
 claiming a conversion.
 
 ### V5 — an A2A `SendMessage` registering webhook credentials in the protocol envelope is neither logged nor refused
+
+> **FIXED, `51006ea38`,** by the owner's ruling: refuse, do not merge. AdCP defines no
+> protocol-envelope registration channel, so #1721 declined the A2A push-notification
+> capability wholesale (`push_notifications=False` on the agent card, four
+> `tasks/pushNotificationConfig/*` handlers refusing). This envelope field was the fifth
+> entry point to that same capability and the only one that neither served nor refused;
+> `AdCPRequestHandler._refuse_envelope_push_config` refuses it now, beside the other four.
+> Merging it into the skill parameters would have built an AdCP registration channel out of
+> a transport-specific one, which is what declining the capability decided against.
+>
+> The harness half mattered more than the drop. It was sending the AdCP field to that
+> envelope on the stated grounds that production read it there, so the AdCP location on A2A
+> — the DataPart, where an A2A buyer really does register a webhook — was graded on no
+> transport but MCP and REST. It travels in the skill parameters now, as it already did on
+> the in-process leg. P-A2ACFG re-run: the three AdCP locations answer
+> `401 Signature error="request_signature_required"` with the `:1464` log, and the envelope
+> answers `-32003 Push Notification is not supported` instead of a completed operation.
+>
+> **What this cost.** `CreateTaskPushNotificationConfig` is no longer a credential location
+> in `credential_registrations` — a place a buyer cannot register at is not a place to grade
+> a signature challenge — and its dispatch chain is deleted rather than left dead. Nothing
+> now exercises that route, so a regression that started SERVING it would go unnoticed.
+> That is a real loss and it is recorded rather than papered over; the seam for adding a
+> second SERVED location is unchanged.
+>
+> Both BDD scenarios that reported "got None (HTTP 200)" are green:
+> `tests/bdd/test_request_signing_enforcement.py` is 27 passed.
 
 **Site.** `src/a2a_server/adcp_a2a_server.py:212-311`. `on_message_send` reads
 `params.message.parts` and nothing else; `params.configuration` is never touched.
@@ -548,10 +658,13 @@ is written at the site — but worth a sentence there saying the warn bypass is 
   `.claude/notes/BRIEF-harness-wire-carrier.md` records 13 BDD failures with a known harness
   cause that was still being fixed in the working tree. I did not run them, so I am making no
   claim about the e2e_rest leg or about `e2e_rest_known_failures.txt`.
-- **Whether V5's dropped config is stored anywhere.** I measured that `on_message_send` never
-  reads `params.configuration` and that the request is answered `200` with no log and no
-  refusal. I did not trace whether the a2a-sdk persists the config elsewhere before dispatch;
-  the claim above is scoped to what was observed.
+- **Whether V5's dropped config was stored anywhere.** Moot since `51006ea38` — the channel
+  is refused before any handler runs — but it was never traced: the original finding was
+  scoped to what was observed on the wire (`200`, no log, no refusal), not to whether the
+  a2a-sdk persisted the config somewhere before dispatch.
+- **That the declined A2A push-config route stays declined.** Deleting the second credential
+  location took the only dispatcher that could send `CreateTaskPushNotificationConfig` with
+  it. The five declines are asserted by reading the code, not by driving the route.
 - **`protocol_methods_*` enforcement.** Ungraded by construction and already recorded as such
   in `src/core/signing/verifier.py:37-59`. I confirmed the premise that makes it acceptable
   (all four `pushNotificationConfig/*` handlers decline, the namespace has zero registry rows)
