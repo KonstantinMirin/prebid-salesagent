@@ -15,7 +15,6 @@ from typing import Any
 
 from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import create_jsonrpc_routes
-from a2a.server.routes.agent_card_routes import create_agent_card_routes
 from a2a.types import AgentCard as A2AAgentCard
 from a2wsgi import WSGIMiddleware
 from fastapi import FastAPI, Request
@@ -366,15 +365,14 @@ _a2a_rpc_routes = [
     Route(path=route.path, endpoint=_restore_a2a_wire_integers(route.endpoint), methods=list(route.methods or []))
     for route in _a2a_rpc_routes_raw
 ]
-_a2a_card_routes = create_agent_card_routes(
-    agent_card=_agent_card,
-    card_url="/.well-known/agent-card.json",
-)
-
-# Add routes directly to the FastAPI app
-for route in _a2a_rpc_routes + _a2a_card_routes:
+# The card's routes are NOT taken from the SDK factory. It mounts one static path from
+# one card object, which is a second statement of two facts `create_agent_card()` already
+# owns -- which paths serve the card, and what the card says. The card routes are derived
+# from _AGENT_CARD_PATHS below instead, so there is one declaration and nothing to
+# reconcile it against.
+for route in _a2a_rpc_routes:
     app.routes.append(route)
-logger.info("A2A routes added: /a2a, /.well-known/agent-card.json")
+logger.info("A2A routes added: /a2a")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
@@ -484,53 +482,33 @@ def _create_dynamic_agent_card(request: Request):
     return _card_with_url(server_url)
 
 
-# Override the SDK's static agent card endpoints with dynamic ones.
-# We replace routes by matching path — SDK routes were added above.
-
+# The paths the agent card is served on. This set is the declaration; every card route
+# derives from it, so there is nothing for a route table to disagree with. /.well-known/
+# agent.json is the path AdCP's own guide names and the one the tenant landing page links
+# to; /agent.json is the legacy spelling. Sorted so the route table is deterministic.
 _AGENT_CARD_PATHS = {"/.well-known/agent-card.json", "/.well-known/agent.json", "/agent.json"}
 
 
-def _replace_routes():
-    """Replace SDK agent card routes with dynamic versions that read request headers."""
+def _install_agent_card_routes():
+    """Serve the card on every declared path, from the one handler.
+
+    One closure serves all of them, so their bodies are byte-identical by construction
+    rather than by convention. Appending at import time is safe because
+    _install_admin_mounts() re-appends the Flask "" catch-all during lifespan startup,
+    after this runs.
+    """
 
     async def dynamic_agent_card(request: Request):
-        # to_thread: the card now reads the tenant's stored host from the
-        # database, and this endpoint is unauthenticated.
+        # to_thread: the card reads the tenant's stored host from the database, and
+        # this endpoint is unauthenticated.
         card = await asyncio.to_thread(_create_dynamic_agent_card, request)
         return JSONResponse(agent_card_to_dict(card))
 
-    replaced_paths: set[str] = set()
-    new_routes = []
-    for route in app.routes:
-        path = getattr(route, "path", None)
-        if path in _AGENT_CARD_PATHS:
-            new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
-            replaced_paths.add(path)
-        else:
-            new_routes.append(route)
-
-    # The SDK's route factory mounts exactly ONE path (a2a-sdk's
-    # AGENT_CARD_WELL_KNOWN_PATH), so a pass that only REPLACES leaves every other
-    # declared path unrouted -- /.well-known/agent.json (the path AdCP's own guide
-    # names, and the one the tenant landing page publishes a link to) and
-    # /agent.json both 404'd. Create what there was nothing to replace, reusing the
-    # SAME handler and methods: one closure serves every path, so their bodies are
-    # byte-identical by construction rather than by convention. Sorted for a
-    # deterministic route table. Appending at import time is safe because
-    # _install_admin_mounts() re-appends the Flask "" catch-all during lifespan
-    # startup, after this runs.
-    for path in sorted(_AGENT_CARD_PATHS - replaced_paths):
-        new_routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
-        replaced_paths.add(path)
-
-    app.router.routes = new_routes
-
-    missing = _AGENT_CARD_PATHS - replaced_paths
-    if missing:
-        logger.warning(f"_replace_routes: expected SDK routes not found for paths: {sorted(missing)}")
+    for path in sorted(_AGENT_CARD_PATHS):
+        app.routes.append(Route(path, dynamic_agent_card, methods=["GET", "OPTIONS"]))
 
 
-_replace_routes()
+_install_agent_card_routes()
 
 # ---------------------------------------------------------------------------
 # A2A messageId compatibility middleware (body rewriting, unrelated to auth)
