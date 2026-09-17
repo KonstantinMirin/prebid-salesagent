@@ -205,10 +205,21 @@ def given_request_registers_authenticated_webhook(ctx: dict) -> None:
 
     Spec: security.mdx @ v3.1.1 :1462-1465, ``push_notification_config.authentication``
     named verbatim as a trigger; the pinned vector 027 registers exactly this shape.
+
+    THE SHAPE IS AdCP's, and the plural ``schemes`` is not a typo. What this step writes
+    goes into the AdCP request body on MCP and REST, where the pinned
+    ``adcp.types.Authentication`` declares ``schemes: [<AuthenticationScheme>]``
+    (``minItems``/``maxItems`` 1) under ``additionalProperties: false``. The singular
+    ``scheme`` this used to write is the A2A PROTOBUF spelling
+    (``a2a.types.a2a_pb2.AuthenticationInfo``), and sending it here made both transports
+    refuse the request as ``INVALID_REQUEST`` at body validation — above the boundary, so
+    the escalation never ran and the scenario graded a schema rejection while claiming to
+    grade a signature refusal. The A2A translation to the singular spelling belongs to the
+    transport (``tests.harness._base._a2a_task_push_notification_config``), not here.
     """
     ctx["push_notification_config"] = {
         "url": _WEBHOOK_URL,
-        "authentication": {"scheme": "HMAC-SHA256", "credentials": _WEBHOOK_CREDENTIAL},
+        "authentication": {"schemes": ["HMAC-SHA256"], "credentials": _WEBHOOK_CREDENTIAL},
     }
     ctx[GRADE_EVERY_CREDENTIAL_LOCATION] = True
 

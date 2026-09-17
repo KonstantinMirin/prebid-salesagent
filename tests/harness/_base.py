@@ -140,10 +140,18 @@ class WireError(Exception):
     dispatch can still raise -- callers up the stack expect an exception -- while the
     thing being asserted stays the envelope, reachable as ``.envelope`` and published
     by the dispatchers as ``TransportResult.wire_error_envelope``.
+
+    *response* is the raw HTTP response this envelope arrived on, when it arrived on
+    one. An envelope is not always the whole refusal: ``WWW-Authenticate: Signature
+    error="<code>"`` lives in the HEADERS, so a leg that raised the envelope alone
+    left ``assert_signature_challenge`` with nothing to read and it refused to grade
+    (correctly -- tests/CLAUDE.md, assert on the wire, never on a reconstruction).
+    ``None`` on the in-process legs, which have no response to carry.
     """
 
-    def __init__(self, envelope: dict) -> None:
+    def __init__(self, envelope: dict, response: Any = None) -> None:
         self.envelope = envelope
+        self.response = response
         errors = envelope.get("errors") or [{}]
         code = errors[0].get("code") if isinstance(errors[0], dict) else None
         super().__init__(f"wire error {code or '(no code)'}")
@@ -203,7 +211,7 @@ def _mcp_wire_envelope(exc: Exception) -> dict | None:
     return None
 
 
-def _mcp_wire_error(exc: Exception) -> Exception:
+def _mcp_wire_error(exc: Exception, response: Any = None) -> Exception:
     """The :class:`WireError` an MCP failure stands for, or *exc* unchanged.
 
     The one place the HTTP leg's two error branches (a JSON-RPC ``error`` frame and an
@@ -212,9 +220,13 @@ def _mcp_wire_error(exc: Exception) -> Exception:
     parse the in-memory leg uses — rather than rebuilding a typed production exception
     from wire bytes: what the buyer received is the envelope, and reconstruction was
     lossy for most codes.
+
+    *response* is the raw HTTP response, carried through onto the ``WireError`` so the
+    refusal's HEADERS survive the raise alongside its body — see
+    :class:`WireError`. Absent on the in-memory leg, which has no response.
     """
     envelope = _mcp_wire_envelope(exc)
-    return WireError(envelope) if envelope is not None else exc
+    return WireError(envelope, response) if envelope is not None else exc
 
 
 def _wire_envelope(envelope: dict) -> dict | None:
@@ -285,6 +297,23 @@ def _a2a_wire_envelope(exc: Exception) -> dict | None:
 #: ``request_signature_invalid`` — a fixture bug wearing a verifier bug's clothes.
 _A2A_PATH = "/a2a"
 
+#: ``/a2a`` speaks NATIVE a2a-sdk 1.0 ONLY. ``src/app.py`` builds the route with
+#: ``create_jsonrpc_routes`` and deliberately does NOT pass ``enable_v0_3_compat``
+#: (the comment there records why: the 0.3 adapter's catch-all rebuilt every raised
+#: exception as ``CoreInternalError``, discarding the AdCP envelope an auth refusal
+#: carries, so a refusal answered 200 instead of 401). Without the version header the
+#: SDK's ``validate_version`` reads the request as 0.3 and the handler raises
+#: ``VersionNotSupportedError``.
+_A2A_VERSION_HEADER = {"A2A-Version": "1.0"}
+
+#: The A2A task states both legs normalize onto, keyed by the PROTOBUF ENUM NAME.
+#: That key is what proto JSON puts on the HTTP wire verbatim, and what
+#: ``TaskState.Name()`` gives the in-process leg for the same enum — so one table
+#: serves both and the two legs cannot disagree about which outcome a task had.
+#: Anything absent normalizes to ``""``, which ``_a2a_task_outcome`` reads as
+#: "completed, grade the artifact".
+_A2A_TASK_STATES = {"TASK_STATE_FAILED": "failed", "TASK_STATE_SUBMITTED": "submitted"}
+
 #: The MCP streamable-HTTP endpoint. WITH the trailing slash, same reason: the
 #: mount answers ``/mcp`` with a 307 to ``/mcp/``.
 _MCP_PATH = "/mcp/"
@@ -300,7 +329,7 @@ _MCP_ACCEPT = "application/json, text/event-stream"
 #: import here. Each entry is where PRODUCTION reads the config on that transport,
 #: which is genuinely not the same place — see ``_a2a_message_send_body``.
 _OPERATION_CREDENTIAL_LOCATION: dict[str, str] = {
-    "a2a": "message/send params.configuration.task_push_notification_config",
+    "a2a": "SendMessage params.configuration.task_push_notification_config",
     "mcp": "the tools/call arguments' push_notification_config",
     "rest": "the AdCP request body's push_notification_config",
     "e2e_rest": "the AdCP request body's push_notification_config",
@@ -339,150 +368,132 @@ def _by_signature_code(samples: dict[tuple[tuple[str, str], ...], float]) -> dic
 
 #: The A2A JSON-RPC method a buyer registers webhook credentials with WITHOUT
 #: invoking any skill — the SECOND credential location this transport carries.
-#: Served by the pinned a2a SDK's v0.3 compat adapter
-#: (``a2a/compat/v0_3/jsonrpc_adapter.py`` ``METHOD_TO_MODEL``) and answered by
-#: OUR OWN handler, ``AdCPRequestHandler.on_create_task_push_notification_config``
-#: (``src/a2a_server/adcp_a2a_server.py``), which persists the credentials it is
-#: given. Not a hypothetical surface: it is live, implemented and reachable.
-_A2A_PUSH_CONFIG_SET = "tasks/pushNotificationConfig/set"
+#: Named as the NATIVE 1.0 method, ``JsonRpcDispatcher.METHOD_TO_MODEL``'s own key.
+#: The 0.3 spelling (``tasks/pushNotificationConfig/set``) is NOT served — see
+#: :data:`_A2A_VERSION_HEADER` — and naming it put ``-32601 Method not found`` on the
+#: wire, which reads as a seller that declined to refuse.
+#:
+#: It is a REACHABLE ROUTE and an UNVERIFIED one, which is the whole reason a scenario
+#: sends here: ``AdCPRequestHandler.on_create_task_push_notification_config``
+#: (``src/a2a_server/adcp_a2a_server.py``) declines with
+#: ``PushNotificationNotSupportedError`` without ever calling ``invoke_tool``, so the
+#: verifier inside ``_resolve_identity`` never sees the registration. That is the
+#: second of the two classes named by ``src/core/signing/verifier.py`` § "What the
+#: boundary cannot see"; grading it is how this harness keeps the gap visible.
+_A2A_PUSH_CONFIG_SET = "CreateTaskPushNotificationConfig"
 
 #: How a failure names the location above.
 _A2A_PUSH_CONFIG_SET_LOCATION = f"the {_A2A_PUSH_CONFIG_SET} params"
 
 
+def _a2a_jsonrpc_body(method: str, params: Any) -> dict[str, Any]:
+    """One JSON-RPC 2.0 frame for ``/a2a``, with *params* rendered by proto JSON.
+
+    THE producer for this leg, and the reason it takes a protobuf message rather
+    than a dict: ``JsonRpcDispatcher`` ``ParseDict``s ``params`` back into the model
+    ``METHOD_TO_MODEL`` names, so a field this harness spells by hand can differ
+    from the one the server parses and the difference is silent. Rendering the
+    SDK's own message through ``json_format`` makes the wire body what a real 1.0
+    client sends, and a renamed field an error here rather than a dropped value
+    there.
+    """
+    from google.protobuf import json_format
+
+    return {
+        "jsonrpc": "2.0",
+        "id": str(uuid.uuid4()),
+        "method": method,
+        "params": json_format.MessageToDict(params),
+    }
+
+
 def _a2a_message_send_body(
     skill_name: str, parameters: dict[str, Any], push_notification_config: Any = None
 ) -> dict[str, Any]:
-    """The ``message/send`` JSON-RPC envelope naming *skill_name* explicitly.
+    """The native 1.0 ``SendMessage`` JSON-RPC envelope naming *skill_name* explicitly.
 
-    Built from the a2a-sdk's own v0.3 request model — the SAME model the server's
-    compat adapter validates the body against
-    (``a2a/compat/v0_3/jsonrpc_adapter.py`` ``METHOD_TO_MODEL``) — rather than a
-    hand-rolled dict, so a field the SDK renames or requires cannot silently
-    diverge here. Explicit-skill invocation is the ``data`` part shape
-    ``{"skill": ..., "parameters": ...}`` (``src/a2a_server/adcp_a2a_server.py``),
-    which is also what ``src/core/signing/operations.py`` names the operation from.
+    ``SendMessage``, not the 0.3 ``message/send``: ``src/app.py`` builds ``/a2a``
+    without ``enable_v0_3_compat``, so the 0.3 family is not served at all and a
+    frame naming it is answered ``-32601 Method not found`` at HTTP 200 — no
+    handler, no boundary, no ``_resolve_identity``, and therefore no verifier. A
+    signing scenario reads that as a seller that declined to refuse. See
+    :data:`_A2A_VERSION_HEADER` for the companion header.
+
+    The message is built by ``create_a2a_message_with_skill`` — the SAME helper the
+    in-process leg calls (``_run_a2a_handler``) — so the two legs differ by how the
+    frame reaches the server and by nothing else. Explicit-skill invocation is the
+    ``data`` part shape ``{"skill": ..., "parameters": ...}``
+    (``src/a2a_server/adcp_a2a_server.py``), which is also what the signing layer
+    names the operation from.
 
     A ``push_notification_config`` travels in the A2A PROTOCOL ENVELOPE, not in the
     skill parameters, because that is where PRODUCTION reads it on this transport:
     ``on_message_send`` takes it from
-    ``params.configuration.task_push_notification_config``
-    (``src/a2a_server/adcp_a2a_server.py:657-659``) and threads it into the skill
-    handler. Putting it in the parameters instead would be the harness choosing a
-    different registration channel than the one an A2A buyer uses — and would make
-    a webhook-registration scenario grade a payload shape nobody sends.
+    ``params.configuration.task_push_notification_config`` and threads it into the
+    skill handler. Putting it in the parameters instead would be the harness
+    choosing a different registration channel than the one an A2A buyer uses — and
+    would make a webhook-registration scenario grade a payload shape nobody sends.
     """
-    import uuid
+    from a2a.types.a2a_pb2 import SendMessageRequest
 
-    from a2a.compat.v0_3 import types as v03
+    from tests.utils.a2a_helpers import create_a2a_message_with_skill
 
-    configuration = None
+    request = SendMessageRequest(message=create_a2a_message_with_skill(skill_name=skill_name, parameters=parameters))
     if push_notification_config is not None:
-        configuration = v03.MessageSendConfiguration(
-            push_notification_config=_a2a_push_notification_config(push_notification_config)
-        )
-
-    request = v03.SendMessageRequest(
-        id=str(uuid.uuid4()),
-        params=v03.MessageSendParams(
-            message=v03.Message(
-                message_id=str(uuid.uuid4()),
-                role=v03.Role.user,
-                parts=[v03.Part(root=v03.DataPart(data={"skill": skill_name, "parameters": parameters}))],
-            ),
-            configuration=configuration,
-        ),
-    )
-    return request.model_dump(mode="json", by_alias=True, exclude_none=True)
-
-
-def _a2a_push_notification_config(config: Any) -> Any:
-    """An AdCP ``push_notification_config`` as the A2A protocol layer carries it.
-
-    The two vocabularies name the same thing differently and the translation is
-    the transport's, not the scenario's: AdCP's ``authentication`` is
-    ``{scheme, credentials}`` (``core/push-notification-config.json``) while A2A's
-    ``PushNotificationAuthenticationInfo`` is ``{schemes: [...], credentials}``.
-    Built from the SDK's own v0.3 models so a renamed field fails here rather than
-    silently dropping the credential — which, for the scenario that exists to prove
-    a credential-carrying registration is refused, would be a false green.
-    """
-    from a2a.compat.v0_3 import types as v03
-
-    raw = config.model_dump(mode="json", exclude_none=True) if hasattr(config, "model_dump") else dict(config)
-    authentication = raw.get("authentication")
-    info = None
-    if authentication is not None:
-        scheme = authentication.get("scheme")
-        info = v03.PushNotificationAuthenticationInfo(
-            schemes=[scheme] if scheme else list(authentication.get("schemes") or []),
-            credentials=authentication.get("credentials"),
-        )
-    return v03.PushNotificationConfig(
-        url=raw.get("url"),
-        id=raw.get("id"),
-        token=raw.get("token"),
-        authentication=info,
-    )
+        request.configuration.CopyFrom(_a2a_send_message_configuration(push_notification_config))
+    return _a2a_jsonrpc_body("SendMessage", request)
 
 
 def _a2a_push_config_set_body(config: Any, *, task_id: str) -> dict[str, Any]:
-    """The ``tasks/pushNotificationConfig/set`` JSON-RPC envelope for *config*.
+    """The native 1.0 ``CreateTaskPushNotificationConfig`` JSON-RPC envelope for *config*.
 
     A2A's SECOND credential location, and the one nothing graded before
     ``salesagent-jj90f``: a buyer registers a webhook and its credentials here
     WITHOUT invoking any skill, so the registration never appears in a
-    ``message/send`` envelope or in any tool's arguments.
+    ``SendMessage`` envelope or in any tool's arguments.
 
-    Built from the SDK's own ``SetTaskPushNotificationConfigRequest`` — the SAME
-    model the server's compat adapter validates the body against — for the reason
-    ``_a2a_message_send_body`` gives: a field the SDK renames must fail HERE, not
-    silently drop the credential and leave a credential-registration scenario
-    passing because it registered nothing.
+    The params of this method ARE a ``TaskPushNotificationConfig`` — not a wrapper
+    around one — which is what ``METHOD_TO_MODEL`` declares, so the config is handed
+    to :func:`_a2a_jsonrpc_body` directly.
 
     *task_id* is required by the model but NOT by the seller: our handler upserts
     a config for whatever id it is handed (``task_id or "*"``), which is precisely
     why this is a registration channel of its own rather than a rider on an
     existing task.
     """
-    from a2a.compat.v0_3 import types as v03
-
-    request = v03.SetTaskPushNotificationConfigRequest(
-        id=str(uuid.uuid4()),
-        params=v03.TaskPushNotificationConfig(
-            task_id=task_id,
-            push_notification_config=_a2a_push_notification_config(config),
-        ),
-    )
-    return request.model_dump(mode="json", by_alias=True, exclude_none=True)
+    return _a2a_jsonrpc_body(_A2A_PUSH_CONFIG_SET, _a2a_task_push_notification_config(config, task_id=task_id))
 
 
 def _a2a_jsonrpc_result(response: Any) -> dict[str, Any]:
-    """The ``result`` of an ``/a2a`` answer, or its ``error`` raised as an AdCPError.
+    """The ``result`` of an ``/a2a`` answer, or its ``error`` raised as a CARRIER.
 
-    One reader for every method this harness POSTs to ``/a2a``: a refusal that
-    never produced an envelope surfaces as ``WireRefusal`` (carrying the response,
-    so a bodyless 401's ``WWW-Authenticate`` survives), a JSON-RPC error surfaces
-    as a typed ``AdCPError``, and anything else is the result object. Shared so a
-    second method cannot grow a second, differently-wrong way to read the same
-    wire.
+    One reader for every method this harness POSTs to ``/a2a``. Both refusal arms
+    carry *response*, and that is the whole contract of this function:
+
+    * an HTTP refusal that never produced a JSON-RPC envelope at all surfaces as
+      :class:`WireRefusal` (raised by :func:`_jsonrpc_body`);
+    * a JSON-RPC ``error`` frame surfaces as :class:`WireError` when its ``data``
+      holds a real two-layer AdCP envelope, and as :class:`WireRefusal` when it does
+      not -- the SDK's own protocol errors (``-32601 Method not found``,
+      ``PushNotificationNotSupportedError``) carry no ``adcp_error``, and
+      SYNTHESIZING one would hand a scenario an envelope the seller never emitted;
+    * anything else is the result object.
+
+    It used to raise a reconstructed ``AdCPSalesAgentError`` here and DROP the
+    response. That is the lossy reconstruction tests/CLAUDE.md § "Error
+    Verification Policy" rules out: an error frame answered at HTTP 401 carries its
+    ``WWW-Authenticate: Signature error="<code>"`` in the headers, not in the body,
+    so raising past the response left ``assert_signature_challenge`` with nothing to
+    read and it refused to grade -- reporting a real wire refusal as "no wire".
     """
     envelope = _jsonrpc_body(response, surface=_A2A_PATH)
     if "error" in envelope:
-        from src.core.errors.codes import AppErrorCode
-        from src.core.exceptions import AdCPSalesAgentError
-
-        # #1721 renamed the base to ``AdCPSalesAgentError`` and removed the positional
-        # message: buyer-facing text resolves from CODE_TABLE per read, so no raise site
-        # authors it. The JSON-RPC error body is the CAUSE and goes nowhere near the wire
-        # text -- it is carried on ``internal_detail`` for the server log, exactly as the
-        # sibling raise in ``_a2a_task_outcome`` does. The import was function-local and
-        # named ``AdCPError``, so it raised ImportError only when an /a2a call actually
-        # failed -- which the harness then reported as "no envelope to grade".
-        raise AdCPSalesAgentError(
-            error_code=AppErrorCode.INTERNAL_ERROR,
-            internal_detail=RuntimeError(f"A2A JSON-RPC error: {envelope['error']}"),
-        )
+        error = envelope["error"]
+        data = error.get("data") if isinstance(error, dict) else None
+        wire = _wire_envelope(data) if isinstance(data, dict) else None
+        if wire is not None:
+            raise WireError(wire, response)
+        raise WireRefusal(f"{_A2A_PATH} answered JSON-RPC error: {error!r}", response)
     return envelope.get("result") or {}
 
 
@@ -568,34 +579,57 @@ def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
     raise AssertionError(f"{surface} SSE response carried no JSON-RPC envelope: {response.text[:800]!r}")
 
 
-def _a2a_send_message_configuration(spec: dict[str, Any]) -> Any:
-    """Build the A2A ``SendMessageConfiguration`` carrying a protocol-level push config.
+def _a2a_task_push_notification_config(spec: Any, *, task_id: str = "") -> Any:
+    """An AdCP ``push_notification_config`` as the A2A protocol layer carries it.
 
-    ``message/send`` registers a webhook one level ABOVE the AdCP tool
-    parameters: ``params.configuration.task_push_notification_config``
-    (``src/a2a_server/adcp_a2a_server.py`` — ``on_message_send`` reads it before
-    any skill routing happens). It is therefore not reachable by putting a
-    ``push_notification_config`` in the skill parameters, and it exists on no
-    other transport — MCP and REST have no equivalent protocol envelope.
+    THE ONE translation, shared by all three places this transport registers a
+    webhook — the in-process ``SendMessageConfiguration``
+    (:func:`_a2a_send_message_configuration`), the HTTP ``SendMessage`` envelope's
+    ``configuration``, and the standalone ``CreateTaskPushNotificationConfig``
+    method (:func:`_a2a_push_config_set_body`). A second copy would be free to drop
+    the credential on one of them, and a credential-registration scenario that
+    registered nothing is a false green.
 
-    *spec* is the plain dict a step writes (``{"url": ..., "authentication":
-    {"scheme": ..., "credentials": ...}}``). Note the SINGULAR ``scheme``: the
-    A2A wire type is the protobuf ``AuthenticationInfo``, not the AdCP
-    ``Authentication`` object with its ``schemes`` array. Absent credentials are
-    sent as the protobuf default (empty string) rather than omitted, because
-    that is what a buyer's client actually puts on the wire for an unset
-    protobuf string — the field cannot be "missing" in proto3.
+    The two vocabularies name the same thing differently and the translation is the
+    TRANSPORT's, not the scenario's. AdCP's ``Authentication`` is ``{schemes: [...],
+    credentials}`` — plural, ``minItems``/``maxItems`` 1, ``additionalProperties:
+    false`` (``adcp.types.Authentication``). A2A's wire type is the protobuf
+    ``AuthenticationInfo``, ``{scheme, credentials}``, SINGULAR. *spec* is the AdCP
+    shape a step writes; the singular spelling is produced here and nowhere else.
+
+    Absent credentials are sent as the protobuf default (empty string) rather than
+    omitted, because that is what a buyer's client actually puts on the wire for an
+    unset proto3 string — the field cannot be "missing".
     """
-    from a2a.types import AuthenticationInfo, SendMessageConfiguration, TaskPushNotificationConfig
+    from a2a.types import AuthenticationInfo, TaskPushNotificationConfig
 
-    fields: dict[str, Any] = {"url": spec["url"]}
-    authentication = spec.get("authentication")
+    raw = spec.model_dump(mode="json", exclude_none=True) if hasattr(spec, "model_dump") else dict(spec)
+    fields: dict[str, Any] = {"url": raw["url"]}
+    if task_id:
+        fields["task_id"] = task_id
+    authentication = raw.get("authentication")
     if authentication is not None:
+        schemes = list(authentication.get("schemes") or [])
         fields["authentication"] = AuthenticationInfo(
-            scheme=authentication.get("scheme") or "",
+            scheme=schemes[0] if schemes else "",
             credentials=authentication.get("credentials") or "",
         )
-    return SendMessageConfiguration(task_push_notification_config=TaskPushNotificationConfig(**fields))
+    return TaskPushNotificationConfig(**fields)
+
+
+def _a2a_send_message_configuration(spec: Any) -> Any:
+    """Build the A2A ``SendMessageConfiguration`` carrying a protocol-level push config.
+
+    ``SendMessage`` registers a webhook one level ABOVE the AdCP tool parameters:
+    ``params.configuration.task_push_notification_config``
+    (``src/a2a_server/adcp_a2a_server.py`` — ``on_message_send`` reads it before any
+    skill routing happens). It is therefore not reachable by putting a
+    ``push_notification_config`` in the skill parameters, and it exists on no other
+    transport — MCP and REST have no equivalent protocol envelope.
+    """
+    from a2a.types import SendMessageConfiguration
+
+    return SendMessageConfiguration(task_push_notification_config=_a2a_task_push_notification_config(spec))
 
 
 def _a2a_call_context(credential: dict[str, str]) -> Any:
@@ -1825,15 +1859,12 @@ class BaseTestEnv:
 
         from a2a.types import TaskState
 
-        # Normalize the protobuf state onto the v0.3 spelling the shared outcome
-        # helper reads — the HTTP leg receives that spelling straight off the wire.
-        protobuf_states = {
-            TaskState.TASK_STATE_FAILED: "failed",
-            TaskState.TASK_STATE_SUBMITTED: "submitted",
-        }
-
         return self._a2a_task_outcome(
-            state=protobuf_states.get(task_result.status.state, ""),
+            # Through the SAME table the HTTP leg uses, keyed by the protobuf enum
+            # NAME. The local dict this replaces was keyed by the enum VALUE and
+            # mapped onto the v0.3 spelling, which was only shareable while the HTTP
+            # leg spoke 0.3; it does not (``_a2a_message_send_body``).
+            state=_A2A_TASK_STATES.get(TaskState.Name(task_result.status.state), ""),
             status=task_result.status,
             task_id=task_result.id,
             artifact_data=(extract_data_from_artifact(task_result.artifacts[0]) if task_result.artifacts else None),
@@ -1924,24 +1955,32 @@ class BaseTestEnv:
         """A2A dispatch as a real POST to ``/a2a`` on ``src.app.app``.
 
         The leg the signing capability needs, and strictly MORE production than
-        the in-process one: the request traverses ``UnifiedAuthMiddleware`` →
-        ``RequestSignatureMiddleware`` → the SDK's JSON-RPC route → the integer-
-        restoring wrapper (``src/app.py``) → the same ``AdCPRequestHandler``.
-        Identity is not fabricated here — it is resolved from the real bearer
-        ``wire_request`` puts on ``Authorization``, by the same
+        the in-process one: the request traverses ``UnifiedAuthMiddleware`` → the
+        SDK's JSON-RPC route → the integer-restoring wrapper (``src/app.py``) → the
+        same ``AdCPRequestHandler`` → ``invoke_tool`` → ``_resolve_identity``, where
+        the verifier runs. Identity is not fabricated here — it is resolved from the
+        real bearer ``wire_request`` puts on ``Authorization``, by the same
         ``AdCPCallContextBuilder`` a live buyer would meet.
 
-        The wire method is ``message/send``, NOT the a2a-sdk 1.0 native
-        ``SendMessage``. The pinned AdCP 3.1.1 capabilities schema constrains
-        every ``protocol_methods_*`` bucket with
-        ``pattern: ^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$``, so ``SendMessage`` is
-        UNREPRESENTABLE in any posture bucket — a request naming it can never
-        land anywhere but the ``none`` bucket, where the verifier is never
-        called and a signing assertion would be vacuous. ``message/send`` reaches
-        the same handler through the SDK's v0.3 compat adapter
-        (``enable_v0_3_compat=True``, ``src/app.py``) and resolves through
-        ``src/core/signing/operations.py`` to the SKILL as the operation, which
-        is the namespace ``required_for`` actually grades.
+        The wire method is the a2a-sdk 1.0 native ``SendMessage``, because that is
+        the only family ``/a2a`` serves (``src/app.py`` passes no
+        ``enable_v0_3_compat``). This leg used to send the 0.3 ``message/send`` on
+        the reasoning that ``SendMessage`` is unrepresentable in a
+        ``protocol_methods_*`` bucket (the pinned capabilities schema constrains
+        those with ``pattern: ^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$``) and so could only
+        land in ``none``, making a signing assertion vacuous. That reasoning
+        described a verifier reading the JSON-RPC METHOD off an ASGI middleware, and
+        #1721 has no such middleware: the verifier runs inside ``_resolve_identity``,
+        which ``invoke_tool`` reaches only once ``TOOLS[tool_name]`` resolved, so the
+        operation graded against the posture is the SKILL and the ``protocol_methods_*``
+        namespace is never consulted at all (``verifier._bucket_for``, whose docstring
+        states it structurally: no ``protocol_method`` is passed because there is no
+        value at that boundary that COULD be graded against it).
+
+        Meanwhile ``message/send`` was not merely representable but unserved: the
+        dispatcher routes by method name before any version check, answers an unknown
+        name ``-32601 Method not found`` at HTTP 200, and nothing downstream runs. A
+        signing scenario read that as a seller that declined to refuse.
         """
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
@@ -1965,19 +2004,24 @@ class BaseTestEnv:
         raw, headers = self.wire_request(
             path=_A2A_PATH,
             body=body,
+            # Merged BEFORE signing, like every other transport's framing headers, so
+            # the header set the signature covers is the one sent (``wire_request``
+            # rule 1 applied to headers).
+            extra=dict(_A2A_VERSION_HEADER),
             signed=self._signed_dispatch,
             credentialed=_presents_a_credential(credential),
         )
         response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
         result = _a2a_jsonrpc_result(response)
-        # v1.0 wraps the task; v0.3 returns it bare. Accept both so this parse does
-        # not silently start returning {} if the compat arm is ever retired.
+        # ``SendMessageResponse`` is a oneof: proto JSON renders the task arm as
+        # ``{"task": {...}}``. Accept a bare task too, so a oneof rendered without its
+        # wrapper does not silently parse as an empty task.
         task = result.get("task", result)
         artifacts = task.get("artifacts") or []
         artifact_data = _a2a_first_data_part(artifacts[0]) if artifacts else None
         return self._a2a_task_outcome(
-            state=(task.get("status") or {}).get("state", ""),
+            state=_A2A_TASK_STATES.get((task.get("status") or {}).get("state", ""), ""),
             status=task.get("status"),
             task_id=task.get("id", ""),
             artifact_data=artifact_data,
@@ -2000,14 +2044,14 @@ class BaseTestEnv:
         return a2a_transport_result(lambda: self._run_a2a_push_config_set(config, signed=signed))
 
     def _run_a2a_push_config_set(self, config: Any, *, signed: SignatureRealization) -> Any:
-        """POST ``tasks/pushNotificationConfig/set`` to ``/a2a`` on ``src.app.app``.
+        """POST ``CreateTaskPushNotificationConfig`` to ``/a2a`` on ``src.app.app``.
 
-        Same route, same middleware chain and the same ``wire_request`` seam as
-        ``_run_a2a_over_http`` — deliberately, because the ONLY difference this
-        leg is allowed to have from the ``message/send`` one is the JSON-RPC
-        method and where the credentials sit inside it. Anything else (a
-        different bearer, a missing tenant hint, a re-serialized body) would make
-        the two locations incomparable, and the finding is precisely that the
+        Same route, same middleware chain, the same ``A2A-Version`` header and the
+        same ``wire_request`` seam as ``_run_a2a_over_http`` — deliberately, because
+        the ONLY difference this leg is allowed to have from the ``SendMessage`` one
+        is the JSON-RPC method and where the credentials sit inside it. Anything
+        else (a different bearer, a missing tenant hint, a re-serialized body) would
+        make the two locations incomparable, and the finding is precisely that the
         seller treats them differently.
 
         ``credentialed=True``: the buyer registering a webhook IS authenticated.
@@ -2022,13 +2066,24 @@ class BaseTestEnv:
         which ``_a2a_credential_registration`` carries out through
         ``a2a_transport_result``.
         """
-        from a2a.compat.v0_3 import types as v03
+        from a2a.types import TaskPushNotificationConfig
+        from google.protobuf import json_format
 
         self._commit_factory_data()
         body = _a2a_push_config_set_body(config, task_id=f"task_{uuid.uuid4().hex[:12]}")
-        raw, headers = self.wire_request(path=_A2A_PATH, body=body, signed=signed, credentialed=True)
+        raw, headers = self.wire_request(
+            path=_A2A_PATH,
+            body=body,
+            extra=dict(_A2A_VERSION_HEADER),
+            signed=signed,
+            credentialed=True,
+        )
         response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
-        return v03.TaskPushNotificationConfig.model_validate(_a2a_jsonrpc_result(response))
+        # Parsed back through the SDK's own message, for the reason
+        # ``_a2a_jsonrpc_body`` gives about the request half: a field the seller
+        # renames must fail here rather than read as a config that registered
+        # nothing.
+        return json_format.ParseDict(_a2a_jsonrpc_result(response), TaskPushNotificationConfig())
 
     def _run_mcp_client(
         self,
@@ -2205,18 +2260,21 @@ class BaseTestEnv:
         credentialed = _presents_a_credential(credential)
         with preserved_global_app_state(), TestClient(app) as client:
             session_id = self._mcp_open_session(client, credentialed=credentialed)
-            envelope = self._mcp_post(
+            envelope, response = self._mcp_post(
                 client,
                 _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
                 session_id=session_id,
                 credentialed=credentialed,
             )
 
+        # Both arms hand the RESPONSE to the error they raise. They used to raise the
+        # reconstructed envelope alone, which strands the refusal's headers — and the
+        # signature challenge lives there.
         if "error" in envelope:
-            raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]))
+            raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]), response)
         result = envelope.get("result") or {}
         if result.get("isError"):
-            raise _mcp_wire_error(_mcp_error_to_exception(result))
+            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
         structured = result.get("structuredContent")
         if structured is None:
             raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
@@ -2350,20 +2408,23 @@ class BaseTestEnv:
 
     def _mcp_post(
         self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
-    ) -> dict[str, Any]:
-        """POST one MCP frame and return its JSON-RPC envelope.
+    ) -> tuple[dict[str, Any], Any]:
+        """POST one MCP frame and return ``(JSON-RPC envelope, raw response)``.
 
         THE GRADED FRAME: the realization reaches the wire VERBATIM here
         (``self._signed_dispatch``, not ``bool(...)``). ``_run_mcp_over_http`` sends
         the ``tools/call`` — the frame the scenario named — through this method and
         nothing else through it.
+
+        The response travels back BESIDE the envelope rather than being dropped: an
+        envelope is not always the whole refusal, because ``WWW-Authenticate:
+        Signature error="<code>"`` is a HEADER. Returning the envelope alone left the
+        caller nothing to attach to the error it raised.
         """
-        return _jsonrpc_body(
-            self._mcp_send(
-                client, body, session_id=session_id, credentialed=credentialed, signed=self._signed_dispatch
-            ),
-            surface=_MCP_PATH,
+        response = self._mcp_send(
+            client, body, session_id=session_id, credentialed=credentialed, signed=self._signed_dispatch
         )
+        return _jsonrpc_body(response, surface=_MCP_PATH), response
 
     def _pop_credential(self, kwargs: dict[str, Any]) -> dict[str, str]:
         """Pop ``credential`` from dispatch kwargs, defaulting to this env's credential.

@@ -93,15 +93,22 @@ if TYPE_CHECKING:
 def _refusal_response(exc: Exception) -> Any | None:
     """The raw HTTP response a JSON-RPC leg was refused with, if it was.
 
-    The ``/a2a`` and ``/mcp`` legs read an ENVELOPE, so a refusal that never
-    produced one (the verifier's bodyless 401) can only be graded from the
-    response itself. ``_base.WireRefusal`` carries it; every other exception
+    The ``/a2a`` and ``/mcp`` legs read an ENVELOPE, and an envelope is not the
+    whole refusal: ``WWW-Authenticate: Signature error="<code>"`` is a HEADER, and
+    the verifier's bodyless 401 has no envelope at all. Both harness carriers hold
+    the response for that reason — ``WireRefusal`` (no envelope existed) and
+    ``WireError`` (one did, on a response worth keeping). Every other exception
     yields ``None``, which ``assert_signature_challenge`` reports as "no raw HTTP
     response" rather than passing for want of evidence.
-    """
-    from tests.harness._base import WireRefusal
 
-    return exc.response if isinstance(exc, WireRefusal) else None
+    Matched on the CARRIER TYPES, not on ``getattr(exc, "response", None)``: a
+    duck-typed read would also pick up whatever an httpx or SDK exception happens to
+    hang off that name, and a response this harness never saw put on the wire is not
+    evidence of the refusal under test.
+    """
+    from tests.harness._base import WireError, WireRefusal
+
+    return exc.response if isinstance(exc, WireRefusal | WireError) else None
 
 
 def _carrying_refusal_response(result: TransportResult, exc: Exception) -> TransportResult:
@@ -109,8 +116,8 @@ def _carrying_refusal_response(result: TransportResult, exc: Exception) -> Trans
 
     The error unwraps live in ``client.py`` and are shared with
     ``AdCPTestClient`` — they know about ENVELOPES, which is the right thing for
-    them to know. A signature refusal produces no envelope at all, so its only
-    evidence is the response ``WireRefusal`` carries; it is re-attached here
+    them to know. A signature refusal's challenge is not in the envelope, so its
+    evidence is the response the carrier holds; it is re-attached here
     rather than inside the shared unwrap because it is a fact about the
     EXCEPTION, not about the transport family. One helper, every error arm: a leg
     that dropped the response would be graded "no wire to read" instead of as the
