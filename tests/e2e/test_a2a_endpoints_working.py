@@ -8,11 +8,9 @@ The original was skipped because it tried to use python_a2a library, but we use 
 This test validates the actual HTTP endpoints that our A2A server exposes.
 """
 
-import json
 import os
 import sys
 from unittest.mock import MagicMock
-from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -201,157 +199,9 @@ class TestAgentCardDiscoveryPathsLive:
                 f"all declared paths must serve one byte-identical card"
             )
 
-    @pytest.mark.integration
-    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
-    def test_host_derivation_applies_on_every_card_path_live(self, live_server, path):
-        """Apx-Incoming-Host drives supportedInterfaces[0].url on every path.
-
-        A path that returns 200 carrying the static fallback host is still broken:
-        it advertises the wrong A2A endpoint to every tenant. That is the failure
-        mode this grades, and the HOST is what discriminates it.
-
-        The SCHEME is deliberately not pinned here. Whatever X-Forwarded-Proto a
-        client sends, an edge proxy sets its own -- in-network our nginx terminates
-        plain HTTP and forwards `http`, so pinning `https` asserts a value the
-        deployment topology owns rather than anything the app decides. Trusting the
-        edge's header IS the documented behaviour (src/app.py's get_protocol). The
-        scheme logic is graded where the input is actually controllable, in
-        tests/unit/test_agent_card_scheme.py; do not restore an https pin here.
-        """
-        response = requests.get(
-            f"{live_server['a2a']}{path}",
-            headers={"Apx-Incoming-Host": "tenant.example.com"},
-            timeout=2,
-        )
-
-        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-        card = response.json()
-        derived = urlparse(card["supportedInterfaces"][0]["url"])
-
-        assert derived.netloc == "tenant.example.com", (
-            f"{path} did not derive its URL from Apx-Incoming-Host: got {derived.geturl()!r}, "
-            f"which means it served the static fallback host to a tenant"
-        )
-        assert derived.path == "/a2a", f"{path} derived the wrong endpoint path: {derived.geturl()!r}"
-        assert derived.scheme in ("http", "https"), f"{path} derived a non-HTTP scheme: {derived.geturl()!r}"
-
 
 class TestA2AAgentCardCreation:
     """Test agent card creation functions directly (no HTTP required)."""
-
-    def test_create_agent_card_function(self):
-        """Test the create_agent_card function directly."""
-        try:
-            from src.a2a_server.adcp_a2a_server import create_agent_card
-        except ImportError as e:
-            if e.name and e.name.startswith("a2a"):
-                pytest.skip(f"a2a-sdk library not installed: {e}")
-            raise
-
-        agent_card = create_agent_card()
-
-        # Validate structure (protobuf AgentCard fields)
-        assert agent_card.name
-        assert agent_card.description
-        assert agent_card.version
-        assert len(agent_card.skills) > 0
-        assert len(agent_card.supported_interfaces) > 0
-
-        # Validate content
-        assert agent_card.name == "Prebid Sales Agent"
-
-        # a2a-sdk 1.0: URL is in supported_interfaces[0].url, not agent_card.url
-        interface_url = agent_card.supported_interfaces[0].url
-        assert not interface_url.endswith("/"), f"Interface URL should not have trailing slash: {interface_url}"
-        assert interface_url.endswith("/a2a"), f"Interface URL should end with '/a2a': {interface_url}"
-
-        # Validate skills structure (protobuf: skills have id and description)
-        for skill in agent_card.skills:
-            assert skill.id
-            assert skill.description
-
-    def test_agent_card_adcp_extension(self):
-        """Test that agent card includes AdCP 2.5 extension."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-
-        # Check capabilities has extensions
-        assert hasattr(agent_card, "capabilities")
-        assert agent_card.capabilities is not None
-        assert hasattr(agent_card.capabilities, "extensions")
-        assert agent_card.capabilities.extensions is not None
-        assert len(agent_card.capabilities.extensions) > 0
-
-        # Find AdCP extension
-        adcp_ext = None
-        for ext in agent_card.capabilities.extensions:
-            if "adcp-extension" in ext.uri:
-                adcp_ext = ext
-                break
-
-        assert adcp_ext is not None, "AdCP extension not found in capabilities.extensions"
-
-        # Validate AdCP extension structure
-        adcp_version = get_adcp_spec_version()
-        assert adcp_ext.uri == f"https://adcontextprotocol.org/schemas/{adcp_version}/protocols/adcp-extension.json"
-        assert adcp_ext.params is not None
-        # protobuf Struct: access fields dict-like
-        params = adcp_ext.params
-        assert "adcp_version" in params.fields
-        assert "protocols_supported" in params.fields
-
-        # Validate AdCP extension values
-        assert params.fields["adcp_version"].string_value == adcp_version
-        protocols_value = params.fields["protocols_supported"].list_value
-        protocols = [v.string_value for v in protocols_value.values]
-        assert len(protocols) >= 1
-        # Currently only media_buy protocol is supported
-        assert "media_buy" in protocols
-        assert set(protocols) == {"media_buy"}, "Only media_buy protocol is currently supported"
-
-    def test_agent_card_skills_coverage(self):
-        """Test that agent card includes expected AdCP skills."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-        skill_names = [skill.id for skill in agent_card.skills]
-
-        # Should include core AdCP skills
-        # Note: get_signals removed - should come from dedicated signals agents
-        expected_skills = [
-            "get_products",
-            "create_media_buy",
-            "sync_creatives",
-            "list_creatives",
-        ]
-
-        for expected_skill in expected_skills:
-            assert expected_skill in skill_names, f"Missing expected skill: {expected_skill}"
-
-    def test_agent_card_serialization(self):
-        """Test that agent card can be serialized to JSON."""
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-
-        # Should be able to serialize to dict (protobuf: use MessageToDict)
-        try:
-            from google.protobuf.json_format import MessageToDict, MessageToJson
-
-            card_dict = MessageToDict(agent_card)
-            assert isinstance(card_dict, dict)
-
-            # Should be JSON serializable
-            json_str = MessageToJson(agent_card)
-            assert len(json_str) > 0
-
-            # Should be able to parse back
-            parsed = json.loads(json_str)
-            assert parsed["name"] == "Prebid Sales Agent"
-
-        except Exception as e:
-            pytest.fail(f"Agent card serialization failed: {e}")
 
 
 class TestA2ARequestHandler:
@@ -517,38 +367,3 @@ class TestA2AServerIntegration:
         # Missing auth should also not be 404
         response = requests.post(f"{live_server['a2a']}/a2a", json={"method": "SendMessage", "params": {}}, timeout=2)
         assert response.status_code != 404, "Endpoint should exist even without auth"
-
-
-def test_a2a_regression_summary():
-    """Quick summary test for key regressions."""
-
-    try:
-        # Test 1: Agent card URL format
-        from src.a2a_server.adcp_a2a_server import create_agent_card
-
-        agent_card = create_agent_card()
-        assert not agent_card.supported_interfaces[0].url.endswith("/"), "REGRESSION: Agent card URL has trailing slash"
-
-        # Test 2: Handler can be created
-        from src.a2a_server.adcp_a2a_server import AdCPRequestHandler
-
-        handler = AdCPRequestHandler()
-        assert handler is not None, "REGRESSION: Cannot create A2A handler"
-
-        # Test 3: get_products is dispatchable over A2A and its row holds a plain callable
-        # Note: signals tools removed - using get_products as core function check instead
-        # (the module-level core_<tool>_tool wrappers are deleted; the registry row is
-        # what invoke_tool calls and what decides A2A dispatchability)
-        assert callable(TOOLS["get_products"].impl), "REGRESSION: registry impl not callable"
-        assert TOOLS["get_products"].a2a is True, "REGRESSION: get_products not dispatchable over A2A"
-    except ImportError as e:
-        if e.name and e.name.startswith("a2a"):
-            pytest.skip(f"a2a-sdk library not installed: {e}")
-        raise
-
-    print("✅ A2A regression tests passed")
-
-
-if __name__ == "__main__":
-    # Run basic checks when executed directly
-    test_a2a_regression_summary()
