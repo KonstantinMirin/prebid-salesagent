@@ -47,7 +47,7 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.database.models import PushNotificationConfig
-from src.services.webhook_delivery_service import WebhookDeliveryService
+from src.services.webhook_delivery_service import DELIVERY_REPORT_TASK_TYPE, WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import CircuitBreakerMixin, WebhookOutcomeRowsMixin
 from tests.helpers.log_capture import LogCaptureHandler
@@ -93,6 +93,13 @@ class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, Integratio
         process-global logger for every later test.
         """
         super()._enter_post()
+        # The delivery log's foreign key. Every delivery this env drives records a
+        # ``webhook_delivery_log`` row keyed on ``deliver_webhook``'s default
+        # ``media_buy_id="mb_001"``, and ``webhook_delivery_log.media_buy_id`` references
+        # ``media_buys``. The writers SWALLOW the integrity error and log it, so without the
+        # parent row the insert fails silently and every delivery-log assertion grades zero
+        # rows. Seeded here, once, rather than in each scenario that happens to read one.
+        self.make_media_buy(media_buy_id="mb_001")
         self._log_handler = LogCaptureHandler()
         webhook_logger = logging.getLogger("src.services.webhook_delivery_service")
         webhook_logger.addHandler(self._log_handler)
@@ -103,6 +110,44 @@ class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, Integratio
         if self._log_handler is not None:
             logging.getLogger("src.services.webhook_delivery_service").removeHandler(self._log_handler)
             self._log_handler = None
+
+    def assert_rejection_logged(self, *, media_buy_id: str = "mb_001", http_status: int = 401) -> None:
+        """Assert the sender RECORDED this non-retryable rejection, with its status code.
+
+        Reads the ``webhook_delivery_log`` row through
+        :meth:`WebhookOutcomeRowsMixin.recorded_outcomes` rather than scraping this
+        process's log handler. Two things follow, and both are the point:
+
+        * it is observable over EVERY transport, e2e_rest included. The row is written by
+          whichever PROCESS delivered, so the live server's own delivery lands it in the
+          shared database; a log record emitted inside the container never reaches the
+          runner's handler, which is why the log form needed an e2e escape hatch and this
+          form needs none.
+        * it cannot pass on a coincidence. The previous form asked whether ANY captured
+          record contained ANY of the needles ``("client error", "401", "unauthorized")``,
+          and ``"401"`` matched a ForeignKeyViolation SQL parameter dump —
+          ``'http_status_code': 401`` inside the error text of a row that FAILED to insert.
+          Deleting production's entire ``logger.warning`` for the 4xx case left the
+          assertion green. It graded the FK failure, not the rejection.
+
+        ``make_media_buy`` is therefore a precondition, not decoration: the log's
+        ``media_buy_id`` is a foreign key into ``media_buys``, the writers swallow the
+        integrity error, and without the parent row there is nothing to read.
+        """
+        rows = self.recorded_outcomes(media_buy_id, task_type=DELIVERY_REPORT_TASK_TYPE, status="failed")
+        assert rows, (
+            f"the sender recorded no failed {DELIVERY_REPORT_TASK_TYPE} row for {media_buy_id!r}. "
+            "A non-retryable rejection must leave an operator-visible trace; if the row is "
+            "missing because media_buys has no such id, the harness owes a make_media_buy() call "
+            "(the writers swallow the foreign-key error and leave zero rows)."
+        )
+        statuses = [getattr(r, "http_status_code", None) for r in rows]
+        assert http_status in statuses, (
+            f"the recorded rejection must carry http_status_code={http_status}; the "
+            f"{len(rows)} failed row(s) carry {statuses}. The status code is the whole "
+            "content of this assertion -- a row recorded with no code, or with the wrong one, "
+            "says the sender did not attribute the rejection it actually received."
+        )
 
     def _configure_mocks(self) -> None:
         # random.uniform: return 0.0 for deterministic tests
