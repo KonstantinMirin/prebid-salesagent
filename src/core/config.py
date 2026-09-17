@@ -71,6 +71,16 @@ class RuntimeSettings(BaseSettings):
     flask_secret_key: str = Field(default_factory=lambda: secrets.token_hex(32))
     flask_debug: bool = False
     admin_server_type: str = "waitress"
+    adcp_pydantic_extra_mode: Literal["ignore", "forbid"] | None = Field(
+        default=None,
+        description=(
+            "Request-DTO handling of undeclared fields, stated explicitly. Unset (the normal "
+            "case) it is DERIVED from is_production, which is what every deployment should "
+            "leave it at. It exists because 'serve a newer buyer forward-compatibly' and 'this "
+            "is a production deployment' are two facts that were spelled with one variable, and "
+            "a grading deployment needs the first without claiming the second"
+        ),
+    )
 
     @property
     def is_production(self) -> bool:
@@ -122,8 +132,17 @@ class RuntimeSettings(BaseSettings):
     @property
     def pydantic_extra_mode(self) -> Literal["ignore", "forbid"]:
         """Production ignores undeclared request fields (a newer buyer is served); everywhere
-        else they are a hard rejection (an unimplemented spec field is loud)."""
-        return "ignore" if self.is_production else "forbid"
+        else they are a hard rejection (an unimplemented spec field is loud).
+
+        ``ADCP_PYDANTIC_EXTRA_MODE`` states it outright and wins. The one deployment that
+        sets it is the storyboard conformance agent, which grades a DEPLOYED seller's
+        boundary and must therefore be forward-compatible, while being the opposite of
+        production in the one way that matters to :class:`SigningSettings`: it registers a
+        test counterparty whose private keys are PUBLISHED in the conformance corpus. Under
+        one variable those two needs are contradictory, and the contradiction resolved in
+        favour of whichever was checked last.
+        """
+        return self.adcp_pydantic_extra_mode or ("ignore" if self.is_production else "forbid")
 
 
 class TestingSettings(BaseSettings):
@@ -399,7 +418,14 @@ class SigningSettings(BaseSettings):
     unimplementable.
     """
 
-    model_config = SettingsConfigDict(env_prefix="ADCP_SIGNING_", case_sensitive=False, extra="ignore")
+    # ``env_ignore_empty`` matches ``_ENV``, which every other settings class here uses. It is
+    # not cosmetic: compose interpolates an unset variable to the EMPTY STRING, and an empty
+    # string handed to a dict-typed field is a JSON parse error at construction — so a
+    # deployment that does not set the conformance relaxations would fail to boot because of
+    # the one that does.
+    model_config = SettingsConfigDict(
+        env_prefix="ADCP_SIGNING_", case_sensitive=False, extra="ignore", env_ignore_empty=True
+    )
 
     # -- our own key material, for the signatures this agent PRODUCES ------
     provider: Literal["in_memory", "kms"] = Field(
