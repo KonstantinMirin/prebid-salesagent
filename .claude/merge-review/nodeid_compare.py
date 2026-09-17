@@ -30,6 +30,7 @@ Usage: nodeid_compare.py collect <out-dir>     # collect the merged tree's node 
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -51,9 +52,23 @@ def collect(out: Path) -> int:
     rc = 0
     for suite in SUITES:
         proc = subprocess.run(
-            [".venv/bin/python", "-m", "pytest", f"tests/{suite}", "--collect-only", "-q",
-             "-o", "addopts=", "-p", "no:randomly", "-c", "pytest.ini"],
-            capture_output=True, text=True, cwd=HERE.parents[1],
+            [
+                ".venv/bin/python",
+                "-m",
+                "pytest",
+                f"tests/{suite}",
+                "--collect-only",
+                "-q",
+                "-o",
+                "addopts=",
+                "-p",
+                "no:randomly",
+                "-c",
+                "pytest.ini",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=HERE.parents[1],
         )
         ids = sorted({line.strip() for line in proc.stdout.splitlines() if "::" in line})
         (out / f"nodeids-merged-{suite}.txt").write_text("\n".join(ids) + "\n")
@@ -64,8 +79,49 @@ def collect(out: Path) -> int:
     return rc
 
 
-def _read(path: Path) -> set[str]:
-    return {line.strip() for line in path.read_text().splitlines() if line.strip()} if path.exists() else set()
+#: A parametrized id, e.g. ``...::test_x[e2e_rest]`` -> ``...::test_x``.
+_PARAM = re.compile(r"\[.*\]$")
+
+
+def _bare(nid: str) -> str:
+    """The node id without its parametrization suffix.
+
+    BOTH sides are compared bare, because the parent baselines were collected bare and a
+    mixed comparison is not a comparison: matching ``test_x`` against ``test_x[mcp]``
+    reports every parametrized test as both dropped AND gained. That is what it did on the
+    first run -- bdd showed 1159 "dropped" and 8550 "gained" with ONE id in common, which
+    reads as catastrophe and means nothing.
+
+    Parametrization is not thrown away: :func:`report` prints the per-suite param COUNT
+    beside the bare count, so a test that quietly loses a transport arm still shows up as a
+    falling ratio even though its bare id survives.
+    """
+    return _PARAM.sub("", nid)
+
+
+#: Explained drops: a bare id present on a parent, absent here, with its SUCCESSOR named.
+#: The gate's doctrine is that a drop is guilty until each member is individually explained —
+#: "deliberate retirement with citation, or deduplication with the surviving test named" — so
+#: an entry here is that explanation, written down, not a silencer. Each must name a test that
+#: exists in the merged tree and grades at least what the dropped one did.
+_RENAMED: dict[str, str] = {
+    # Renamed in the stage-7 behaviour pass, and STRENGTHENED in the same edit. The old test
+    # asserted a uc005 slice was live. The successor grades an EXACT partition of the same
+    # graded ids into ledgered-xfail and live-pass, reads which is which from the live
+    # ``_XFAIL_TAGS`` routing map rather than a frozen list, and requires a ledgered record to
+    # carry the ledger's own reason VERBATIM. Its docstring states why the relaxed
+    # "either live or ledgered" predicate it replaced was not good enough.
+    "tests/integration/test_bdd_scenario_liveness_real_run.py"
+    "::test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live": "tests/integration/test_bdd_scenario_liveness_real_run.py"
+    "::test_real_run_records_uc005_scenarios_as_ledgered_or_live",
+}
+
+
+def _read(path: Path, *, bare: bool = True) -> set[str]:
+    if not path.exists():
+        return set()
+    ids = (line.strip() for line in path.read_text().splitlines())
+    return {(_bare(i) if bare else i) for i in ids if i}
 
 
 def report(out: Path) -> int:
@@ -77,16 +133,34 @@ def report(out: Path) -> int:
 
     for suite in SUITES:
         merged = _read(out / f"nodeids-merged-{suite}.txt")
+        merged_raw = _read(out / f"nodeids-merged-{suite}.txt", bare=False)
+        print(
+            f"# {suite}: {len(merged)} bare ids over {len(merged_raw)} collected (param ratio "
+            f"{len(merged_raw) / max(len(merged), 1):.2f})"
+        )
         for side in ("ours", "mine"):
             parent = _read(BASE / f"nodeids-{side}-{suite}.txt")
             if not parent:
                 continue
             dropped = sorted(parent - merged)
             gained = sorted(merged - parent)
-            buckets = {"deleted-by-1721": [], "rewritten-by-1721": [], "in-surface": [], "UNEXPLAINED": []}
+            buckets = {
+                "deleted-by-1721": [],
+                "rewritten-by-1721": [],
+                "in-surface": [],
+                "renamed": [],
+                "UNEXPLAINED": [],
+            }
             for nid in dropped:
                 f = nid.split("::", 1)[0]
-                if f in deleted:
+                successor = _RENAMED.get(nid)
+                if successor:
+                    assert successor in merged, (
+                        f"{nid} is recorded as renamed to {successor}, but that successor is "
+                        "not in the merged tree — the explanation is stale and the drop is real"
+                    )
+                    buckets["renamed"].append(nid)
+                elif f in deleted:
                     buckets["deleted-by-1721"].append(nid)
                 elif f in rewritten:
                     buckets["rewritten-by-1721"].append(nid)
@@ -95,8 +169,10 @@ def report(out: Path) -> int:
                 else:
                     buckets["UNEXPLAINED"].append(nid)
             summary[f"{suite}/{side}"] = {
-                "parent": len(parent), "merged": len(merged),
-                "dropped": len(dropped), "gained": len(gained),
+                "parent": len(parent),
+                "merged": len(merged),
+                "dropped": len(dropped),
+                "gained": len(gained),
                 **{k: len(v) for k, v in buckets.items()},
             }
             if buckets["UNEXPLAINED"]:

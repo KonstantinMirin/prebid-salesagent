@@ -741,3 +741,49 @@ zero of them.
 | `TestANarrowedNoneRequestThatNeverFinishesArriving::test_a_mid_body_disconnect_passes_through_and_is_still_counted_as_ignored` | A deliberately truncated body on `get_adcp_capabilities`. It cannot parse, so INVALID_REQUEST is answered and `adcp_request_unsigned_total{reason='ignored'}` never moves. The buyer's observable answer is correct. |
 
 The buyer-visible outcome in every one is INVALID_REQUEST on a body that is in fact invalid.
+
+## Phase 7 layer 5 — bare node-id comparison against BOTH parents
+
+The layer a green suite cannot substitute for: it compares what EXISTS, so a test that slides
+from passing to expected-failure is visible where no assertion would fail.
+
+**Two traps, both hit before the numbers meant anything.**
+
+The first run reported bdd as 1159 dropped / 8550 gained with ONE id in common, which reads as
+catastrophe and means nothing: the parent baselines were collected BARE while the merged tree
+was collected with parametrization, so every parametrized test counted as both dropped AND
+gained. Both sides are now normalized to bare ids. Parametrization is not discarded — the
+report prints the per-suite param ratio beside the bare count (bdd 7.35, unit 1.28, admin 1.05),
+so an arm quietly disappearing still shows as a falling ratio.
+
+The second: a drop is only explained if its explanation is CHECKED. The rename entry asserts
+its named successor is present in the merged tree, so a stale explanation fails loudly instead
+of silencing a real drop.
+
+**Result — zero unexplained drops in any suite against either parent.**
+
+| suite / parent | parent | merged | dropped | explained by |
+|---|---|---|---|---|
+| unit / ours | 6144 | 4882 | 2003 | 1014 deleted-by-1721, 364 rewritten, 625 in-surface |
+| unit / mine | 4591 | 4882 | 18 | 18 in-surface |
+| integration / ours | 2802 | 2491 | 450 | 118 deleted, 97 rewritten, 234 in-surface, 1 renamed |
+| integration / mine | 2322 | 2491 | 1 | 1 renamed |
+| bdd / ours | 1159 | 1163 | 88 | 8 deleted, 65 rewritten, 15 in-surface |
+| bdd / mine | 1155 | 1163 | 0 | — |
+| e2e / ours | 166 | 136 | 37 | 10 deleted, 2 rewritten, 25 in-surface |
+| e2e / mine | 105 | 136 | 0 | — |
+| admin / ours | 134 | 136 | 1 | 1 in-surface |
+| admin / mine | 136 | 136 | 0 | — |
+
+Against OUR OWN side (`mine`) the merge drops **19 bare ids in total** — 18 in-surface unit ids
+and one rename — and gains 1,851. Nothing this branch graded was silently lost.
+
+**The one rename, and it was caught here rather than noticed.**
+`test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live` is absent from both parents
+and from the merged tree. It was renamed in the stage-7 behaviour pass — by this work, not by
+either parent — and STRENGTHENED in the same edit.
+`test_real_run_records_uc005_scenarios_as_ledgered_or_live` grades an EXACT partition of the
+same ids into ledgered-xfail and live-pass, reads which is which from the live `_XFAIL_TAGS`
+routing map rather than a frozen list, and requires a ledgered record to carry the ledger's own
+reason verbatim. Its own docstring says why the relaxed "either live or ledgered" predicate it
+replaced was not good enough. A stronger successor, named and pinned.
