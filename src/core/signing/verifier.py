@@ -746,29 +746,55 @@ def _reject_headers(message: str) -> NoReturn:
     raise SignatureVerificationError(REQUEST_SIGNATURE_HEADER_MALFORMED, step=1, message=message)
 
 
-def _duplicate_signature_input_label(value: str) -> str | None:
-    """Why one ``Signature-Input`` value is ambiguous, or ``None``.
+def _duplicate_dictionary_key(value: str, marker: str) -> str | None:
+    """Why one RFC 8941 Dictionary value is ambiguous, or ``None``. *marker* opens a member.
 
-    Multiple DISTINCT labels are legal and must stay legal —
-    ``positive/004-multiple-signature-labels`` ships ``sig1`` and ``sig2`` and is a vector we
-    must ACCEPT. Only a REPEATED key is the ambiguity: RFC 8941 §3.2 permits "rejecting the
-    input" or "retaining only the last value", and the second option would let a proxy smuggle
-    a weaker covered-component set past a verifier that read the first.
+    Multiple DISTINCT keys are legal and must stay legal —
+    ``positive/004-multiple-signature-labels`` ships ``sig1`` and ``sig2`` in both signature
+    headers and is a vector we must ACCEPT. Only a REPEATED key is the ambiguity: RFC 8941
+    §3.2 permits "rejecting the input" or "retaining only the last value", and the second
+    option would let a proxy smuggle a weaker covered-component set, or a different signature,
+    past a verifier that read the first.
 
     An entry this cannot parse yields ``None`` on purpose: an unparseable header is the SDK's
     to code (``negative/011``, ``negative/024``), and pre-empting it here would change a graded
     artifact that is already correct.
+
+    ONE function for both signature headers rather than two near-identical loops: they differ
+    only in what opens a member — ``=(`` an inner list, ``=:`` a byte sequence — and two copies
+    is two chances for one of them to stop rejecting (CLAUDE.md, DRY).
     """
     seen: set[str] = set()
     for entry in split_structured_field(value, ","):
-        marker = entry.find("=(")
-        if marker < 0:
+        at = entry.find(marker)
+        if at < 0:
             return None
-        label = entry[:marker].strip()
-        if label in seen:
-            return f"the dictionary key {label!r} appears twice, which RFC 8941 §3.2 leaves ambiguous"
-        seen.add(label)
+        key = entry[:at].strip()
+        if key in seen:
+            return f"the dictionary key {key!r} appears twice, which RFC 8941 §3.2 leaves ambiguous"
+        seen.add(key)
     return None
+
+
+def _duplicate_signature_input_label(value: str) -> str | None:
+    """``Signature-Input`` members are ``<label>=(<covered components>)``."""
+    return _duplicate_dictionary_key(value, "=(")
+
+
+def _duplicate_signature_label(value: str) -> str | None:
+    """``Signature`` members are ``<label>=:<base64>:``.
+
+    The CREDENTIAL CARRIER, and the row that was missing. Every other header the gate reads
+    was here; the one holding the signature bytes was not, so a second ``Signature`` line was
+    the one repeat nothing refused — and the value that then reached the checklist was
+    whichever line the transport's own header container happened to keep. ``joined_headers``
+    now makes the repeat visible as one comma-joined value, and this rule is what refuses it,
+    at checklist step 1, with the same code on every transport.
+
+    ``find("=:")`` takes the FIRST occurrence, which is the label separator; base64 padding
+    before the closing colon (``sig1=:AAA=:``) cannot be mistaken for it.
+    """
+    return _duplicate_dictionary_key(value, "=:")
 
 
 def _multi_valued_content_type(value: str) -> str | None:
@@ -805,15 +831,16 @@ def _duplicate_digest_algorithm(value: str) -> str | None:
     return None
 
 
-#: ``header -> what makes ONE of its values malformed``. A table rather than four
+#: ``header -> what makes ONE of its values malformed``. A table rather than five
 #: near-identical blocks: each rule is the same shape (read a value, name a reason or pass),
-#: and four copies is four chances for one of them to stop rejecting.
+#: and five copies is five chances for one of them to stop rejecting.
 #:
 #: ``host`` shares :func:`~src.core.signing.canonical.malformed_authority_reason` with the
 #: canonicalization seam so the authority rule has exactly ONE definition. Only the CODE
 #: differs by caller — checklist step 1 here, ``request_target_uri_malformed`` there — and
 #: that difference is deliberate (``negative/026`` grades the former).
 _MALFORMED_VALUE_RULES: tuple[tuple[bytes, Callable[[str], str | None]], ...] = (
+    (b"signature", _duplicate_signature_label),
     (b"signature-input", _duplicate_signature_input_label),
     (b"content-type", _multi_valued_content_type),
     (b"content-digest", _duplicate_digest_algorithm),
@@ -821,9 +848,15 @@ _MALFORMED_VALUE_RULES: tuple[tuple[bytes, Callable[[str], str | None]], ...] = 
 )
 
 #: Headers that MUST arrive on exactly one line when a signature covers the request. Not a
-#: style rule: every dict view of ASGI headers LAST-WINS on a repeated tuple rather than
-#: joining it, so a proxy-inserted second line rewrites a covered value with nothing anywhere
-#: to notice.
+#: style rule: a mapping cannot hold two lines of one name, so SOMETHING has to decide what a
+#: repeat means, and until :func:`~src.core.signing.capture.joined_headers` existed the three
+#: transports each decided differently from their own container — first line on REST and A2A,
+#: last on MCP. The join makes the repeat visible; this list is what refuses it, on the fields
+#: where a silently-chosen line changes what was verified.
+#:
+#: DERIVED from the table above, so a field gains both rules at once. ``signature`` was the
+#: field that had neither: the header carrying the credential itself was the one repeat
+#: nothing checked.
 _SINGLE_LINE_SIGNED_HEADERS: tuple[bytes, ...] = tuple(name for name, _rule in _MALFORMED_VALUE_RULES)
 
 

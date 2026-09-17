@@ -43,7 +43,7 @@ which must still reach the app.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, MutableMapping
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -75,6 +75,44 @@ def is_adcp_surface(path: str) -> bool:
     (``src.core.http_utils.path_from_asgi_scope``). Do not hand it ``scope["path"]``.
     """
     return any(path == prefix or path.startswith(f"{prefix}/") for prefix in ADCP_SURFACE_PREFIXES)
+
+
+def joined_headers(raw_headers: Iterable[tuple[bytes, bytes]]) -> dict[str, str]:
+    """THE mapping view of a request's header LINES. One derivation, every reader.
+
+    ``Mapping[str, str]`` cannot represent two lines of one name, so every mapping built
+    from ASGI headers has to answer what a repeat means — and until this function existed
+    each transport answered differently, from its own container, with nobody choosing:
+
+    * REST handed the resolver a Starlette ``Headers``, whose ``__getitem__`` returns the
+      FIRST line;
+    * MCP handed it ``get_http_headers(include_all=True)``, a dict built by iterating
+      ``.items()``, which yields every line and so keeps the LAST;
+    * A2A handed it ``dict(request.headers)``, which goes through ``keys()`` and
+      ``__getitem__`` and so keeps the FIRST.
+
+    One identical HTTP message therefore produced two different credentials, two different
+    tenants and two different signatures depending on the surface it arrived on. Nothing
+    chose that; it fell out of three container types.
+
+    The rule here is RFC 9110 §5.3: repeated field lines are equivalent to one value with
+    the lines joined by ``", "``. That is the only reading that discards no line, and it is
+    the one the strict pre-check already assumes — ``_multi_valued_content_type`` looks for
+    a comma, ``_duplicate_digest_algorithm`` splits on one. So a repeat now REACHES those
+    rules as an ambiguity they can refuse, instead of being resolved silently upstream of
+    them by whichever container the transport happened to use.
+
+    For a field with no such rule the join is still the safe answer: a joined
+    ``Authorization`` is a credential this seller does not accept (AUTH_INVALID) and a
+    joined ``x-adcp-tenant`` names no tenant. Both fail closed, and both fail the same way
+    on every transport, which is the property that was missing.
+    """
+    joined: dict[str, str] = {}
+    for raw_name, raw_value in raw_headers:
+        name = raw_name.decode("latin-1").lower()
+        value = raw_value.decode("latin-1")
+        joined[name] = f"{joined[name]}, {value}" if name in joined else value
+    return joined
 
 
 @dataclass(frozen=True)
@@ -122,6 +160,17 @@ class HttpExchange:
         present a credential.
         """
         return any(name.lower() in (b"signature", b"signature-input") for name, _value in self.raw_headers)
+
+    def headers(self) -> Mapping[str, str]:
+        """The captured lines as ONE mapping — what the resolver reads this request's headers from.
+
+        The same argument :func:`joined_headers` makes, in the place that makes it binding:
+        whenever an HTTP message WAS captured, its lines are the authority, and the three
+        transports stop each handing the resolver a container of their own. A transport that
+        captured nothing (an in-process invocation, MCP's ``get_http_headers`` returning
+        ``{}``) has no lines to be the authority, and the resolver keeps what it was given.
+        """
+        return joined_headers(self.raw_headers)
 
 
 def captured_exchange(scope: Mapping[str, Any]) -> HttpExchange | None:
@@ -237,8 +286,14 @@ def _target_uri(scope: Mapping[str, Any]) -> str:
     from proxy ROUTING state (``Apx-Incoming-Host`` and friends), which security.mdx step 10
     forbids deriving identity from: the signer signed the URL it dialed, and a rewritten one
     would fail ``@target-uri`` on every legitimate request behind TLS termination.
+
+    Through :func:`joined_headers`, not a dict comprehension of its own. This function used
+    to build one, and it collapsed last-wins — so a second ``Host`` line silently chose the
+    authority that entered the signature base while the resolver, reading its own container,
+    could choose the other. The ``Host`` rule has one answer per request now rather than one
+    per reader.
     """
-    headers = {name.decode("latin-1").lower(): value.decode("latin-1") for name, value in scope.get("headers", [])}
+    headers = joined_headers(scope.get("headers", []))
 
     forwarded = headers.get("x-forwarded-proto", "")
     scheme = forwarded.split(",")[0].strip().lower() if forwarded else ""

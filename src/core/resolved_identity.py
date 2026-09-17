@@ -172,14 +172,13 @@ def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
     return None
 
 
-def _carries_signature(subject: SignatureSubject | None) -> bool:
+def _carries_signature(exchange: HttpExchange | None) -> bool:
     """Whether this request presented an RFC 9421 signature at all.
 
-    Read off the CAPTURED header list rather than the collapsed mapping this function is
-    handed, so that this test and the checklist's own see the same bytes — one definition,
-    on the capture (:meth:`~src.core.signing.capture.HttpExchange.presents_signature`).
+    Read off the CAPTURED header LIST rather than any mapping view of it, so that this test
+    and the checklist's own see the same lines — one definition, on the capture
+    (:meth:`~src.core.signing.capture.HttpExchange.presents_signature`).
     """
-    exchange: HttpExchange | None = subject.exchange if subject is not None else None
     return exchange is not None and exchange.presents_signature()
 
 
@@ -408,12 +407,27 @@ def _resolve_identity(
     # helpers package, which imports this module for ``PublicIdentity``.
     from src.core.auth_utils import get_principal_from_token
 
+    # Step 0: WHICH headers. The transport handed over a mapping of its own making, and the
+    # three of them are three different types that answer a repeated header line three
+    # different ways -- Starlette ``Headers`` first-wins, FastMCP's ``get_http_headers`` dict
+    # last-wins, the A2A builder's ``dict(request.headers)`` first-wins. One identical HTTP
+    # message therefore presented a different bearer, a different tenant hint and a different
+    # signature depending on the surface it arrived on, and nothing anywhere chose that.
+    #
+    # Whenever the request WAS captured, the captured lines are the authority and every
+    # reader below shares one derivation (``HttpExchange.headers``, RFC 9110 §5.3). A
+    # transport that captured nothing -- an in-process invocation, MCP outside an HTTP
+    # request -- has no lines to be the authority, and what it passed stands.
+    exchange = signature_subject.exchange if signature_subject is not None else None
+    if exchange is not None:
+        headers = exchange.headers()
+
     # Step 1: the Bearer value, parsed here and nowhere else.
     auth_token = _extract_auth_token(headers)
     # ...and whether the OTHER kind of credential is present. A signature that resolves to a
     # counterparty establishes that principal (step 4b), so an absent bearer is not yet an
     # absent credential and step 2 must not refuse on it alone.
-    presented_signature = _carries_signature(signature_subject)
+    presented_signature = _carries_signature(exchange)
 
     # Step 2: the seller this request addresses, identified from the host and loaded. The
     # tenant comes first because a principal is a row in a tenant: a credential is only
