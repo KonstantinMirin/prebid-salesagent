@@ -154,6 +154,21 @@ _HOST_SCRIPT_STUBS = {
 # certificates. See _HOST_SCRIPT_STUBS.
 exit 0
 """,
+    # storyboard-signing-env.sh derives the storyboard agent's signed-requests settings by
+    # running `uv run python -m scripts.setup.storyboard_signing`, which resolves and builds
+    # project environments -- the same host-toolchain reach ensure-test-tls.sh is stubbed
+    # for, and none of it bears on which command the runner hands to tox.
+    #
+    # NO `exit 0` HERE, unlike the stub above: the runner SOURCES this one, so an `exit`
+    # would end run_all_tests.sh itself at that line and the test would be asserting on a
+    # run that never reached tox. Falling off the end returns 0, which is the faithful
+    # simulation -- the runner reads it as "the settings were derived" and proceeds with
+    # them unset, which is exactly what a stack brought up without them looks like.
+    "scripts/dev/storyboard-signing-env.sh": """#!/usr/bin/env bash
+# Stands in for scripts/dev/storyboard-signing-env.sh: exports nothing and returns 0,
+# without reaching the host's Python toolchain. See _HOST_SCRIPT_STUBS.
+:
+""",
 }
 
 
