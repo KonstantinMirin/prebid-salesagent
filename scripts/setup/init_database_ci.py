@@ -26,9 +26,12 @@ CI_TEST_SUBDOMAIN = "ci-test"
 #: The credential presented to that tenant: the plaintext token this script hashes into
 #: the CI principal's row. Owned here for the same reason as the subdomain above -- this
 #: script is what makes it resolvable -- and read by tests/integration/conftest_ci_seed.py
-#: and tests/storyboard/test_storyboard_conformance.py. ``tox.ini``'s
-#: ``STORYBOARD_AUTH_TOKEN`` default cannot import a Python constant and carries a literal
-#: that must be kept in step with this one; its comment says so.
+#: and the e2e clients.
+#:
+#: NOT the storyboard's credential. That suite has its own tenant, at the host it is
+#: actually served on, because the agent card publishes a tenant's STORED host and this
+#: tenant has none -- see scripts/setup/seed_storyboard_tenant.py, which owns
+#: STORYBOARD_TOKEN and is what tox.ini's STORYBOARD_AUTH_TOKEN default copies.
 CI_TEST_TOKEN = "ci-test-token"
 
 
