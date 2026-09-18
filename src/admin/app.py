@@ -41,8 +41,6 @@ from src.core.config import load_settings
 from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
-    get_tenant_url,
-    is_sales_agent_domain,
 )
 
 # Configure logging
@@ -226,9 +224,7 @@ def create_app(config=None, settings=None):
         External domains (via Approximated) should not serve admin UI due to OAuth cookie issues.
         Instead, redirect to the tenant's subdomain where OAuth works correctly.
         """
-        from flask import redirect, request
-
-        from src.core.config_loader import get_tenant_by_virtual_host
+        from flask import request
 
         # Check if this is an /admin request
         # Note: CustomProxyFix middleware strips /admin from request.path, so we check script_root
@@ -246,38 +242,15 @@ def create_app(config=None, settings=None):
             logger.debug(f"No Apx-Incoming-Host header for /admin request: {request.path}")
             return None  # Not from Approximated, allow normal routing
 
-        # Check if it's an external domain (not part of sales agent domain)
-        if is_sales_agent_domain(apx_host):
-            logger.debug(f"Subdomain request to /admin, allowing: {apx_host}")
-            return None  # Subdomain request, allow normal routing
-
-        # External domain detected - redirect to tenant subdomain
-        logger.info(f"External domain /admin request detected: {apx_host} -> {request.path}")
-        tenant_row = get_tenant_by_virtual_host(apx_host)
-        if not tenant_row:
-            logger.warning(f"No tenant found for external domain: {apx_host}")
-            return None  # Can't determine tenant, let normal routing handle it
-
-        tenant_subdomain = tenant_row.get("subdomain")
-        if not tenant_subdomain:
-            logger.warning(f"Tenant {tenant_row.get('tenant_id')} has no subdomain configured")
-            return None  # No subdomain configured, let normal routing handle it
-
-        # Build redirect URL to tenant subdomain
-        # Note: request.full_path is relative to script_root, so we need to add /admin back
-        path_with_admin = (
-            f"/admin{request.full_path}" if not request.full_path.startswith("/admin") else request.full_path
-        )
-
-        if is_production:
-            redirect_url = f"{get_tenant_url(tenant_subdomain)}{path_with_admin}"
-        else:
-            # Local dev: Use localhost with port (unified FastAPI port)
-            port = settings.runtime.adcp_sales_port
-            redirect_url = f"http://{tenant_subdomain}.localhost:{port}{path_with_admin}"
-
-        logger.info(f"Redirecting external domain {apx_host}/admin to subdomain: {redirect_url}")
-        return redirect(redirect_url, code=302)
+        # NO REDIRECT. This used to send a custom domain's /admin to the tenant's SUBDOMAIN
+        # URL — built from the subdomain column and SALES_AGENT_DOMAIN — on the premise that
+        # the subdomain was where a tenant's admin really lived and a custom domain was a
+        # front for it. With the subdomain strategy gone there is no
+        # such second address: a tenant is served at the host it declares, which is the host
+        # this request already arrived on. Bouncing it somewhere else could only send it to
+        # a name nothing serves.
+        logger.debug(f"Apx-Incoming-Host {apx_host} for /admin: serving in place, no subdomain to redirect to")
+        return None
 
     # Debug: Log Set-Cookie headers on auth-related responses
     @app.after_request
@@ -314,7 +287,7 @@ def create_app(config=None, settings=None):
 
         from src.core.database.database_session import get_db_session
         from src.core.database.models import Tenant
-        from src.core.domain_config import get_sales_agent_domain, get_support_email
+        from src.core.domain_config import get_support_email
 
         context = {}
 
@@ -323,8 +296,11 @@ def create_app(config=None, settings=None):
         # Inject support email (configurable via SUPPORT_EMAIL env var)
         context["support_email"] = get_support_email()
 
-        # Inject sales agent domain for URL generation in templates
-        context["sales_agent_domain"] = get_sales_agent_domain() or "example.com"
+        # NO sales_agent_domain. Templates built per-tenant URLs as
+        # `https://{{ tenant.subdomain }}.{{ sales_agent_domain }}/...`, which is the
+        # derivation removes — and its `or "example.com"` default made
+        # every such URL a plausible-looking fiction when the setting was unset. A tenant's
+        # URL comes from `tenant.virtual_host`, the host it is actually served at.
 
         # Inject fresh tenant data if user is logged in with a tenant
         tenant_id = session.get("tenant_id")

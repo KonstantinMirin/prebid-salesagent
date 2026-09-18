@@ -241,20 +241,23 @@ class Tenant(Base, JSONValidatorMixin):
 
     @property
     def primary_domain(self) -> str | None:
-        """The publisher domain this tenant is known by.
+        """The publisher domain this tenant is known by — a HOSTNAME, never an origin.
 
-        A plain read, deliberately: ``virtual_host`` holds a HOSTNAME because
-        ``config_loader.hostname_of`` drops the port on receipt, so there is nothing to
-        strip here. Re-stripping would be the defensive re-validation the architecture
-        forbids — it duplicates the write path's guarantee and hides a defect there.
+        ``virtual_host`` stores the origin the tenant is served at, port included, because
+        the agent card publishes that string and a card naming the wrong port sends every
+        client to a closed one. A publisher domain is a different part of the same fact:
+        AdCP constrains ``publisher_properties[].publisher_domain`` to a pattern admitting
+        no colon, so the port comes off here. Feeding it in failed every product of such a
+        tenant and answered INTERNAL_ERROR for the whole catalogue.
 
         It is the ONE derivation of this value. Four sites used to repeat the expression,
-        and when ``virtual_host`` still carried a port every one of them fed a colon into
-        ``publisher_properties[].publisher_domain``, which AdCP constrains to a pattern
-        admitting none — so ``get_products`` answered INTERNAL_ERROR for the tenant's whole
-        catalogue.
+        and every one of them fed the colon through.
         """
-        return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
+        from src.core.config_loader import hostname_of
+
+        if self.virtual_host:
+            return hostname_of(self.virtual_host)
+        return f"{self.subdomain}.example.com" if self.subdomain else None
 
     @property
     def is_gam_tenant(self) -> bool:

@@ -12,7 +12,7 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
-from src.core.domain_config import get_sales_agent_domain, get_sales_agent_url
+from src.core.domain_config import get_sales_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -245,13 +245,14 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
         Full redirect URI
     """
     if tenant.virtual_host:
-        # Custom domain takes highest priority
+        # The host this tenant is served at, and the only per-tenant answer. The branch
+        # that used to sit under this built one from the subdomain and SALES_AGENT_DOMAIN;
+        # it went with the subdomain strategy, because a redirect URI
+        # has to be a host the tenant is actually reachable at and only virtual_host says
+        # so. A tenant that declares none falls through to the deployment-wide answers.
         base = f"https://{tenant.virtual_host}"
-    elif tenant.subdomain and get_sales_agent_domain():
-        # Subdomain on main domain (multi-tenant mode with SALES_AGENT_DOMAIN set)
-        base = f"https://{tenant.subdomain}.{get_sales_agent_domain()}"
     elif main_url := get_sales_agent_url():
-        # Explicit SALES_AGENT_DOMAIN URL
+        # The deployment's own URL, for an install that serves one seller
         base = main_url
     elif fly_app := get_settings().runtime.fly_app_name:
         # Single-tenant mode on Fly.io - use the app's URL

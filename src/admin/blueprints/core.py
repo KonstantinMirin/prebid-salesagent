@@ -25,10 +25,6 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
-from src.core.domain_config import (
-    extract_subdomain_from_host,
-    is_sales_agent_domain,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +45,14 @@ def get_tenant_from_hostname():
             tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
             return tenant
 
-    # Fallback to direct domain routing
-    if is_sales_agent_domain(host) and not host.startswith("admin."):
-        tenant_subdomain = extract_subdomain_from_host(host)
+    # Host -> virtual_host, the one lookup. The branch that used to sit here asked whether
+    # the host was under SALES_AGENT_DOMAIN and then resolved the tenant from its first
+    # label — a second derivation of "which tenant is this host", deleted with the subdomain
+    # strategy. A deployment serving a tenant at a host declares that
+    # host on the tenant.
+    if host and not host.startswith("admin."):
         with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-            return tenant
+            return db_session.scalars(select(Tenant).filter_by(virtual_host=host)).first()
     return None
 
 

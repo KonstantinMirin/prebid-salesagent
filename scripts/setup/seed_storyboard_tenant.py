@@ -51,12 +51,13 @@ STORYBOARD_SUBDOMAIN = "storyboard"
 #: the shared tls-proxy whose ``map $ssl_server_name`` routes this SNI name to it
 #: (config/nginx/nginx-tls-test.conf.template, docker-compose.e2e.yml). Covered by the
 #: generated ``*.adcp.test`` wildcard certificate.
-#: A HOSTNAME, with no port: ``config_loader.hostname_of`` drops the port from an incoming
-#: ``Host`` on receipt, so the column holds the tenant's identity and the port stays a fact
-#: about where the front listens. Storing them together fed a colon into
-#: ``publisher_properties[].publisher_domain``, which AdCP's pattern admits no colon in,
-#: and get_products answered INTERNAL_ERROR for the whole catalogue.
-STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test"
+#: THE ORIGIN, PORT INCLUDED. This is the string the agent card publishes, and an A2A
+#: client connects to what the card says: advertising ``https://storyboard.adcp.test/a2a``
+#: for an agent listening on 8443 points every client at a closed port, which took the A2A
+#: conformance axis from 27 passing checks to zero. The port comes off at the two reads
+#: that want a hostname -- the tenant lookup and ``Tenant.primary_domain``, whose
+#: ``publisher_domain`` pattern admits no colon (``config_loader.hostname_of``).
+STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
 
 #: The credential the runner presents. Distinct from the CI token because a principal
 #: belongs to exactly one tenant: the resolver looks a token up INSIDE the detected tenant,
@@ -123,6 +124,7 @@ def seed_storyboard_tenant() -> str:
     from adcp.types import BrandReference
     from sqlalchemy import select
 
+    from scripts.setup.seed_products import seed_product
     from src.core.credentials import hash_token
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
@@ -130,7 +132,6 @@ def seed_storyboard_tenant() -> str:
         AgentAccountAccess,
         AuthorizedProperty,
         CurrencyLimit,
-        PricingOption,
         Product,
         PropertyTag,
         Tenant,
@@ -338,39 +339,10 @@ def seed_storyboard_tenant() -> str:
             },
         ]
         for p in products:
-            if session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=p["product_id"])).first():
+            if seed_product(session, tenant_id, p):
+                print(f"  ✓ Created product: {p['name']}")
+            else:
                 print(f"  ℹ️  Product already exists: {p['name']}")
-                continue
-            session.add(
-                Product(
-                    tenant_id=tenant_id,
-                    product_id=p["product_id"],
-                    name=p["name"],
-                    description=p["description"],
-                    format_ids=p["formats"],
-                    targeting_template=p["targeting_template"],
-                    delivery_type=p["delivery_type"],
-                    property_tags=["all_inventory"],
-                    measurement=None,
-                    creative_policy=None,
-                    price_guidance=None,
-                    countries=None,
-                    implementation_config=None,
-                    properties=None,
-                )
-            )
-            session.add(
-                PricingOption.create(
-                    tenant_id=tenant_id,
-                    product_id=p["product_id"],
-                    pricing_model=p["pricing"]["model"],
-                    rate=p["pricing"]["rate"],
-                    currency="USD",
-                    is_fixed=p["pricing"]["is_fixed"],
-                    price_guidance=None,
-                )
-            )
-            print(f"  ✓ Created product: {p['name']}")
 
         session.commit()
         seeded = session.scalars(select(Product).filter_by(tenant_id=tenant_id)).all()

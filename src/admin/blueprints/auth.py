@@ -25,11 +25,9 @@ from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 from src.core.domain_config import (
-    extract_subdomain_from_host,
     get_oauth_redirect_uri,
     get_sales_agent_url,
     get_super_admin_domain,
-    is_sales_agent_domain,
 )
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
@@ -230,19 +228,16 @@ def login():
                     f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
                 )
 
-    # Fallback to direct domain routing (subdomain detection)
-    if not tenant_context:
-        tenant_subdomain = None
-        if is_sales_agent_domain(host) and not host.startswith("admin."):
-            tenant_subdomain = extract_subdomain_from_host(host)
-
-        if tenant_subdomain:
-            with get_db_session() as db_session:
-                tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-                if tenant:
-                    tenant_context = tenant.tenant_id
-                    tenant_name = tenant.name
-                    logger.info(f"Detected tenant context from Host header: {tenant_subdomain} -> {tenant_context}")
+    # The Host, against virtual_host — one lookup. It used to resolve the tenant from the
+    # host's first label when the rest of it matched SALES_AGENT_DOMAIN, a second derivation
+    # of the same fact that is deleted with the subdomain strategy.
+    if not tenant_context and host and not host.startswith("admin."):
+        with get_db_session() as db_session:
+            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=host)).first()
+            if tenant:
+                tenant_context = tenant.tenant_id
+                tenant_name = tenant.name
+                logger.info(f"Detected tenant context from Host header: {host} -> {tenant_context}")
 
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
     if tenant_context:

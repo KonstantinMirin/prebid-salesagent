@@ -56,8 +56,7 @@ class TestRouteLandingPage:
 
     @patch("src.core.domain_routing.get_tenant_by_virtual_host")
     @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=False)
-    def test_custom_domain_with_tenant(self, mock_is_sales, mock_is_admin, mock_get_tenant):
+    def test_custom_domain_with_tenant(self, mock_is_admin, mock_get_tenant):
         """Custom domains with tenant should route to type=custom_domain."""
         mock_get_tenant.return_value = {
             "tenant_id": "publisher",
@@ -77,8 +76,7 @@ class TestRouteLandingPage:
 
     @patch("src.core.domain_routing.get_tenant_by_virtual_host")
     @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=False)
-    def test_custom_domain_without_tenant(self, mock_is_sales, mock_is_admin, mock_get_tenant):
+    def test_custom_domain_without_tenant(self, mock_is_admin, mock_get_tenant):
         """Custom domains without tenant should route to type=custom_domain with None tenant."""
         mock_get_tenant.return_value = None
 
@@ -88,42 +86,6 @@ class TestRouteLandingPage:
         assert result.type == "custom_domain"
         assert result.tenant is None
         assert result.effective_host == "unknown-domain.com"
-
-    @patch("src.core.domain_routing.get_tenant_by_subdomain")
-    @patch("src.core.domain_routing.extract_subdomain_from_host", return_value="mytenant")
-    @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=True)
-    def test_subdomain_with_tenant(self, mock_is_sales, mock_is_admin, mock_extract, mock_get_tenant):
-        """Sales-agent subdomains with tenant should route to type=subdomain."""
-        mock_get_tenant.return_value = {
-            "tenant_id": "mytenant",
-            "name": "My Tenant",
-            "subdomain": "mytenant",
-            "virtual_host": None,
-        }
-
-        headers = {"Host": "mytenant.sales-agent.example.com"}
-        result = route_landing_page(headers)
-
-        assert result.type == "subdomain"
-        assert result.tenant is not None
-        assert result.tenant["tenant_id"] == "mytenant"
-        assert result.effective_host == "mytenant.sales-agent.example.com"
-
-    @patch("src.core.domain_routing.get_tenant_by_subdomain")
-    @patch("src.core.domain_routing.extract_subdomain_from_host", return_value="nonexistent")
-    @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=True)
-    def test_subdomain_without_tenant(self, mock_is_sales, mock_is_admin, mock_extract, mock_get_tenant):
-        """Sales-agent subdomains without tenant should route to type=subdomain with None tenant."""
-        mock_get_tenant.return_value = None
-
-        headers = {"Host": "nonexistent.sales-agent.example.com"}
-        result = route_landing_page(headers)
-
-        assert result.type == "subdomain"
-        assert result.tenant is None
-        assert result.effective_host == "nonexistent.sales-agent.example.com"
 
     def test_no_host_header(self):
         """Missing host header should route to type=unknown."""
@@ -136,8 +98,7 @@ class TestRouteLandingPage:
 
     @patch("src.core.domain_routing.get_tenant_by_virtual_host")
     @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=False)
-    def test_approximated_header_takes_precedence(self, mock_is_sales, mock_is_admin, mock_get_tenant):
+    def test_approximated_header_takes_precedence(self, mock_is_admin, mock_get_tenant):
         """Apx-Incoming-Host should take precedence over Host header."""
         mock_get_tenant.return_value = {"tenant_id": "publisher", "name": "Publisher Inc"}
 
@@ -182,5 +143,7 @@ class TestRoutingResultDataclass:
         assert result.effective_host == ""
 
 
-# Tenant lookup functions (get_tenant_by_virtual_host, get_tenant_by_subdomain)
-# are imported from config_loader and tested there, so we don't duplicate those tests here.
+# get_tenant_by_virtual_host is imported from config_loader and tested there, so it is not
+# duplicated here. Its former sibling get_tenant_by_subdomain is gone with the subdomain
+# strategy, and so are the two scenarios that graded it: a host no
+# tenant declares now resolves no tenant, which test_custom_domain_without_tenant states.

@@ -248,7 +248,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/config_loader.py", "ensure_default_tenant_exists"),
     ("src/core/config_loader.py", "get_default_tenant"),
     ("src/core/config_loader.py", "get_tenant_by_id"),
-    ("src/core/config_loader.py", "get_tenant_by_subdomain"),
     ("src/core/config_loader.py", "get_tenant_by_virtual_host"),
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
@@ -272,8 +271,6 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/core/tools/media_buy_create.py", "execute_approved_media_buy"),
     ("src/core/tools/media_buy_list.py", "_fetch_creative_approvals"),
     # ── Routes ──
-    ("src/routes/health.py", "debug_db_state"),
-    ("src/routes/health.py", "debug_root_logic"),
     # ── Services ──
     ("src/services/auth_config_service.py", "delete_oidc_config"),
     ("src/services/auth_config_service.py", "disable_oidc"),

@@ -12,7 +12,7 @@ import logging
 from typing import Any
 from urllib.parse import urlsplit
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -79,32 +79,6 @@ def get_default_tenant() -> dict[str, Any] | None:
         raise
 
 
-def get_tenant_by_subdomain(subdomain: str) -> dict[str, Any] | None:
-    """Get tenant by subdomain.
-
-    Args:
-        subdomain: The subdomain to look up (e.g., 'wonderstruck' from wonderstruck.sales-agent.example.com)
-
-    Returns:
-        Tenant dict if found, None otherwise
-    """
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(subdomain=subdomain, is_active=True)
-            tenant = db_session.scalars(stmt).first()
-
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
-
-
 def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
     """Get tenant by tenant_id.
 
@@ -131,28 +105,37 @@ def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
         raise
 
 
+def _same_host(requested: str):
+    """Match a tenant whose stored origin names the same host as *requested*.
+
+    Host to host, so a request resolves whether or not either side spells the port:
+    ``storyboard.adcp.test`` and ``storyboard.adcp.test:8443`` are the same tenant, and
+    the deployment does not have to guess which form a proxy will forward.
+    """
+    return func.split_part(Tenant.virtual_host, ":", 1) == hostname_of(requested)
+
+
 def hostname_of(host: str) -> str:
-    """*host* without its port — the form ``tenants.virtual_host`` stores.
+    """*host* without its port.
 
     A ``Host`` header carries a port whenever the origin is not on the scheme's default
-    (``storyboard.adcp.test:8443``), and both proxies forward it intact because tenant
-    routing is an exact match. The PORT is a fact about where a server listens; the
-    virtual host is the tenant's identity. Storing them together conflated the two, and
-    the conflation escaped the routing code: ``Tenant.primary_domain`` fed the same value
-    to ``publisher_properties[].publisher_domain``, which AdCP constrains to
-    ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$`` — no colon. Every product of such a
-    tenant failed validation and ``get_products`` answered INTERNAL_ERROR for the whole
-    catalogue.
+    (``storyboard.adcp.test:8443``), and both proxies forward it intact. ``virtual_host``
+    stores the ORIGIN a tenant is served at, port included, because that is the string the
+    agent card has to publish -- a card advertising ``https://storyboard.adcp.test/a2a``
+    for an agent listening on 8443 sends every A2A client to a closed port, which is
+    exactly what took the A2A conformance axis from 27 passing checks to zero.
 
-    So the port is dropped HERE, on receipt, and the column holds a hostname. Readers of
-    the stored value then need no defensive stripping of their own — which is the point,
-    per the architecture's "trust the database, never validate on read".
+    So the port is dropped where a HOSTNAME is what the reader needs, and nowhere else.
+    Two readers need one: this module's tenant lookups, which compare host to host so a
+    request naming either form resolves; and ``Tenant.primary_domain``, which feeds
+    ``publisher_properties[].publisher_domain`` -- a field AdCP constrains to
+    ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no colon. Feeding the port
+    into that pattern failed every product of such a tenant and answered INTERNAL_ERROR
+    for the whole catalogue, which is the defect that first named these two jobs.
 
-    ``urlsplit`` does the parsing. A bare ``Host`` value is a netloc rather than a URL, so
-    it is prefixed with ``//`` to be read as one — the standard idiom. That hands back
-    ``.hostname``, which already strips the port, unwraps a bracketed IPv6 literal and
-    lowercases, none of which is worth hand-rolling: a manual ``split(":")`` truncates
-    ``[::1]:8443`` to ``[`` and gets the case rule wrong.
+    Projecting a stored origin onto a hostname is not the defensive re-validation the
+    architecture forbids: the column's contents are trusted exactly as stored, and what
+    happens here is that one reader wants a different part of the same fact.
     """
     return urlsplit(f"//{host}").hostname or host
 
@@ -161,7 +144,7 @@ def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
     """Get tenant by virtual host. A port on the incoming host is ignored."""
     try:
         with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(virtual_host=hostname_of(virtual_host), is_active=True)
+            stmt = select(Tenant).where(_same_host(virtual_host), Tenant.is_active.is_(True))
             tenant = db_session.scalars(stmt).first()
 
             if tenant:
@@ -176,8 +159,8 @@ def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
         raise
 
 
-def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = None) -> str | None:
-    """The tenant_id matching a host or subdomain, WITHOUT loading the tenant row.
+def tenant_id_for(*, virtual_host: str) -> str | None:
+    """The tenant_id served at *virtual_host*, WITHOUT loading the tenant row.
 
     Identification, not hydration. The token check is scoped by tenant_id
     (``get_principal_from_token(auth_token, tenant_id)``), so knowing WHICH tenant cannot be
@@ -189,16 +172,11 @@ def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = No
     hydration on every request and the identity then DISCARDED that row and re-queried it on
     first field access. This selects one indexed column instead.
     """
-    if not (virtual_host or subdomain):
+    if not virtual_host:
         return None
     try:
         with get_db_session() as db_session:
-            # hostname_of: a port on the incoming Host is ignored, because the column
-            # holds the tenant's hostname and not the port a server happens to listen on.
-            filters: dict[str, str] = (
-                {"virtual_host": hostname_of(virtual_host)} if virtual_host else {"subdomain": subdomain or ""}
-            )
-            stmt = select(Tenant.tenant_id).filter_by(is_active=True, **filters)
+            stmt = select(Tenant.tenant_id).where(_same_host(virtual_host), Tenant.is_active.is_(True))
             return db_session.scalars(stmt).first()
     except Exception as e:
         if "no such table" in str(e) or "does not exist" in str(e):

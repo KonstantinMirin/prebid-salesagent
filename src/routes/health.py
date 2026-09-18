@@ -11,12 +11,11 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import select
 
-from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
+from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
-from src.core.database.models import Tenant
+from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_config import extract_subdomain_from_host, is_sales_agent_domain
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -71,11 +70,17 @@ async def debug_db_state(request: Request):
             product_stmt = select(ModelProduct)
             all_products = session.scalars(product_stmt).all()
 
-            # The CI seed is identified the way the resolver identifies a caller: tenant
-            # first, by its stable subdomain, then the principal inside it. No token is
+            # The CI seed, by its stable slug, then the principal inside it. No token is
             # turned into a principal here; the seed tenant holds exactly one principal,
             # and this route only reports whether the seed exists.
-            seed_tenant_id = tenant_id_for(subdomain="ci-test")
+            #
+            # A direct read of a KNOWN row's id -- this is a debug report about the CI seed,
+            # not a request identifying its seller. The id is the seed's stable spelling
+            # (scripts/setup/init_database_ci.py CI_TEST_TENANT_ID); src/ does not import
+            # from scripts/, so the literal is repeated rather than shared.
+            seed_tenant_id = session.scalars(
+                select(ModelTenant.tenant_id).filter_by(tenant_id="ci-test", is_active=True)
+            ).first()
             principal = (
                 next(iter(PrincipalRepository(session, seed_tenant_id).list_all()), None) if seed_tenant_id else None
             )
@@ -90,7 +95,7 @@ async def debug_db_state(request: Request):
                     "tenant_id": principal.tenant_id,
                 }
 
-                tenant_stmt = select(Tenant).filter_by(tenant_id=principal.tenant_id)
+                tenant_stmt = select(ModelTenant).filter_by(tenant_id=principal.tenant_id)
                 tenant = session.scalars(tenant_stmt).first()
                 if tenant:
                     tenant_info = {
@@ -136,10 +141,16 @@ async def debug_tenant(request: Request):
             detection_method = "apx-incoming-host"
 
     if not tenant_id and host_header:
-        subdomain = host_header.split(".")[0] if "." in host_header else None
-        if subdomain and subdomain not in ["localhost", "adcp-sales-agent", "www", "sales-agent"]:
-            tenant_id = subdomain
-            detection_method = "host-subdomain"
+        # The Host, against virtual_host — the same lookup the resolver does. It used to
+        # report a "host-subdomain" method that guessed the tenant_id from the first label
+        # without consulting any row; that strategy is gone, and a
+        # debug endpoint claiming a detection method production does not have is worse than
+        # no endpoint.
+        tenant_row = get_tenant_by_virtual_host(host_header)
+        if tenant_row:
+            tenant_id = tenant_row.get("tenant_id")
+            tenant_name = tenant_row.get("name")
+            detection_method = "host"
 
     response_data = {
         "tenant_id": tenant_id,
@@ -233,21 +244,8 @@ async def debug_root_logic(request: Request):
         tenant_row = get_tenant_by_virtual_host(virtual_host)
         debug_info["exact_tenant_lookup"] = tenant_row is not None
 
-        if not tenant_row and is_sales_agent_domain(virtual_host) and not virtual_host.startswith("admin."):
-            debug_info["step"] = "subdomain_fallback"
-            subdomain = extract_subdomain_from_host(virtual_host)
-            debug_info["extracted_subdomain"] = subdomain
-
-            try:
-                with get_db_session() as db_session:
-                    stmt = select(Tenant).filter_by(subdomain=subdomain, is_active=True)
-                    tenant_obj = db_session.scalars(stmt).first()
-                    if tenant_obj:
-                        debug_info["subdomain_tenant_found"] = True
-                    else:
-                        debug_info["subdomain_tenant_found"] = False
-            except Exception as e:
-                debug_info["subdomain_error"] = str(e)
+        # No subdomain fallback to report: tenant detection has one host lookup
+        # , so an exact virtual_host miss IS the answer.
 
         if tenant_row:
             debug_info["step"] = "tenant_found"

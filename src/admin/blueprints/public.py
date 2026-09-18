@@ -11,7 +11,6 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.domain_config import extract_subdomain_from_host, get_sales_agent_domain, is_sales_agent_domain
 
 logger = logging.getLogger(__name__)
 
@@ -36,16 +35,14 @@ def landing():
                 flash("Signup is only available at the main site.", "info")
                 return redirect(url_for("auth.login"))
 
-        # Check subdomain routing
-        if is_sales_agent_domain(host) and not host.startswith("admin."):
-            tenant_subdomain = extract_subdomain_from_host(host)
-            sales_domain = get_sales_agent_domain()
-            if tenant_subdomain and tenant_subdomain != sales_domain.split(".")[0]:
-                tenant = db_session.scalars(select(Tenant).filter_by(subdomain=tenant_subdomain)).first()
-                if tenant:
-                    # On a tenant subdomain - redirect to login instead
-                    flash("Signup is only available at the main site.", "info")
-                    return redirect(url_for("auth.login"))
+        # The Host, against virtual_host — one lookup, replacing the subdomain derivation
+        # deleted. Signup belongs at the main site, so a host that
+        # BELONGS to a tenant is redirected to that tenant's login.
+        if host and not host.startswith("admin."):
+            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=host)).first()
+            if tenant:
+                flash("Signup is only available at the main site.", "info")
+                return redirect(url_for("auth.login"))
 
     # If user is already authenticated, redirect to their dashboard
     if "user" in session:

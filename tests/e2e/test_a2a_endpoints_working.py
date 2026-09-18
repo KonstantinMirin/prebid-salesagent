@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
 from tests.e2e.conftest import e2e_ca_bundle  # noqa: E402  (after the sys.path bootstrap)
+from tests.e2e.utils import declare_tenant_front  # noqa: E402
 from tests.helpers.credentials import credential_headers
 
 # Read the declared set from production: a path added to (or dropped from)
@@ -38,14 +39,7 @@ def card_origin(live_server) -> str:
     """The origin to fetch an agent card from, and NO tenant header goes with it.
 
     A card is discovery: a buyer has a hostname and nothing else, so the tenant has to be
-    resolvable from the HOST. Prefer the stack's named TLS front, which the CI tenant
-    declares as its ``virtual_host`` (scripts/setup/init_database_ci.ci_tenant_virtual_host),
-    so the request resolves the way a deployment resolves one — nginx derives
-    ``x-adcp-tenant`` from the host in production and no caller sends it.
-
-    Falls back to the plaintext origin on the host path, where the published TLS port is
-    per-session and so cannot be a stored identity; there the request reaches ``localhost``
-    and resolves the demo tenant through the loopback fallback.
+    resolvable from the HOST. Prefers the stack's named TLS front.
     """
     return live_server.get("tls") or live_server["a2a"]
 
@@ -169,10 +163,15 @@ class TestA2AEndpointsActual:
     def test_options_preflight_support(self, live_server):
         """Test that OPTIONS requests work for CORS preflight.
 
-        Carries the tenant header for the same reason the discovery-path tests do: the
-        card describes a resolved tenant, and in-network the stack is reached at a
-        compose service name that identifies none.
+        Declares the front for the same reason the discovery-path tests do: the card
+        describes a resolved tenant, and the host this stack is reached at is decided per
+        session, so the test is what states it.
         """
+        # The tenant declares the front this request names, because a card fetch carries
+        # no tenant header — a request naming a host no tenant declares is refused before
+        # the route's OPTIONS handling is ever reached.
+        declare_tenant_front(live_server, card_origin(live_server))
+
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         response = requests.options(
             f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
@@ -191,17 +190,18 @@ class TestAgentCardDiscoveryPathsLive:
     tests/unit/test_a2a_transport_contract.py cannot reach: here a 200 also
     proves the card routes are matched BEFORE the catch-all, not swallowed by it.
 
-    THE TENANT HEADER IS REQUIRED, and its absence is a real answer rather than a
-    setup detail. A card describes a resolved tenant, and a request naming none now
-    gets 404 — a host this deployment does not serve has no card. In-network the
-    stack is reached at a compose service name (`ADCP_TEST_HOST`, e.g. `proxy`):
-    no tenant claims it as a virtual_host, it carries no dot for the subdomain
-    strategy, and it is not loopback, so nothing identifies a tenant. On the host
-    path the same request resolves via localhost, which is why this passed locally
-    and 404'd in-network until the header was added. Every other e2e call selects
-    its tenant the same way (tests/e2e/conftest.py: "tenant selected via
-    x-adcp-tenant").
+    NO TENANT HEADER, and that is the point. A card fetch is discovery: a client has a
+    hostname and nothing else. So the tenant has to be resolvable from the HOST, which
+    means this stack's tenant must declare the front it is served at — a per-session fact
+    (a compose service name in-network, a dynamic TLS port on the host path) that the test
+    knows and states through ``declare_tenant_front``. A request naming a host no tenant
+    declares is refused, which the last test here grades.
     """
+
+    @pytest.fixture(autouse=True)
+    def _front_declared(self, live_server):
+        """This stack's tenant declares the host these tests fetch the card from."""
+        declare_tenant_front(live_server, card_origin(live_server))
 
     @pytest.mark.integration
     @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
@@ -216,14 +216,15 @@ class TestAgentCardDiscoveryPathsLive:
         assert response.headers["content-type"].startswith("application/json")
 
     @pytest.mark.integration
-    def test_a_request_naming_no_tenant_gets_no_card(self, live_server):
-        """No tenant, no card — the same answer a proxy gives for an unresolved host.
+    def test_a_request_naming_no_tenant_is_refused_as_a_misconfiguration(self, live_server):
+        """No tenant, no card — refused with the seller-side code, not a card.
 
-        The complement of the tests above, and the reason they carry a header: the
-        card publishes a tenant's stored identity, so with no tenant there is
-        nothing truthful to publish. It must NOT fall back to echoing the caller's
-        Host, which is what it did before #1440 and what let an attacker-supplied
-        `Host: evil.example.com` come back as the agent's own advertised URL.
+        The complement of the tests above: the card publishes a tenant's stored identity,
+        so with no tenant there is nothing truthful to publish. The refusal names what was
+        rejected, which is the operator's lever; what it must never do is publish the
+        caller's Host as the AGENT'S OWN advertised URL, which is what it did before #1440
+        and what let an attacker-supplied `Host: evil.example.com` come back as
+        `supportedInterfaces[0].url`.
         """
         response = requests.get(
             f"{card_origin(live_server)}/agent.json",
@@ -232,12 +233,18 @@ class TestAgentCardDiscoveryPathsLive:
             timeout=5,
         )
 
-        assert response.status_code == 404, (
-            f"a Host no tenant claims returned {response.status_code}; a card naming some "
-            f"other agent, or echoing the caller's own host, is worse than no card"
+        assert response.status_code == 500, (
+            f"a Host no tenant claims returned {response.status_code}; the deployment cannot "
+            f"tell which seller this request is for, which is a seller-side misconfiguration"
         )
-        assert "evil" not in response.text and "unclaimed.example" not in response.text, (
-            "the refusal echoed the caller's Host back"
+        body = response.json()
+        assert body["adcp_error"]["code"] == "CONFIGURATION_ERROR", body
+        assert body["adcp_error"]["recovery"] == "terminal", body
+        assert body["adcp_error"]["details"]["rejected_value"] == "unclaimed.example", (
+            "the refusal must name the host it could not serve, or an operator cannot act on it"
+        )
+        assert "supportedInterfaces" not in response.text, (
+            "the refusal published an agent URL built from the caller's own Host"
         )
 
     @pytest.mark.integration

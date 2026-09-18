@@ -1213,20 +1213,22 @@ class BaseTestEnv:
         if self._session:
             self._session.commit()
 
-    def _seed_e2e_identity(self) -> None:
-        """Seed tenant + principal into the server DB for discovery scenarios (e2e).
+    def _seed_identity(self) -> None:
+        """Seed the tenant + principal this env PRESENTS, so the seller it names exists.
 
-        Discovery scenarios (list_creative_formats, get_products) never run a
-        Given step that creates a tenant/principal — in-process they don't need
-        one (identity is a mock). Over e2e the live HTTP server authenticates the
-        request against its own DB, so the buyer's tenant/principal/token MUST
-        exist there or auth fails before the handler runs.
+        Discovery scenarios (list_creative_formats, get_products) never run a Given step
+        that creates a tenant, and this used to run in e2e mode only, on the reasoning that
+        in-process "they don't need one (identity is a mock)". That reasoning holds for a
+        mocked resolver and not for a real database: a request naming a tenant no row
+        matches is REFUSED (CONFIGURATION_ERROR), because a deployment that cannot tell
+        which seller a request is for has no rule to apply. So every real-database env
+        seeds, and an env addressing a phantom tenant is no longer a thing a test can do
+        by accident.
 
-        Called from ``__enter__`` in e2e mode. Delegates to the idempotent
-        ``setup_default_data`` (get-or-create) so it shares ONE seeding path and
-        envs that also call ``setup_default_data()`` themselves don't
-        double-create. Seeds the SAME ``tenant_id`` / ``principal_id`` the env
-        presents, so the token ``credential()`` later reads is the seeded row's.
+        Delegates to the idempotent ``setup_default_data`` (get-or-create) so there is ONE
+        seeding path and an env that calls it itself does not double-create. Seeds the SAME
+        ``tenant_id`` / ``principal_id`` the env presents, so the token ``credential()``
+        later reads is the seeded row's.
         """
         if not self._session:
             return
@@ -1345,11 +1347,19 @@ class BaseTestEnv:
 
             self._configure_mocks()
 
-            # 3. E2E discovery-path seeding: the live server authenticates against
-            #    its own DB, so seed tenant/principal even for scenarios that never
-            #    run a tenant-creating Given step. Idempotent; no-op in-process.
+            # 3. E2E discovery-path seeding: the live server authenticates against its own
+            #    DB, so seed tenant/principal even for scenarios that never run a
+            #    tenant-creating Given step. Idempotent.
+            #
+            #    SCOPED TO E2E ON PURPOSE. Seeding for every real-database env creates the
+            #    default principal in EVERY test, and the factory derives a principal's
+            #    token from its principal_id alone while `principals.token_hash` is
+            #    globally unique -- so a test that then creates the same principal_id under
+            #    its own tenant violates that constraint. Measured: 449 failures, all
+            #    `duplicate key ... principals_token_hash_key`. A test that dispatches
+            #    without creating a tenant calls `setup_default_data()` itself.
             if self.use_real_db and self.is_e2e:
-                self._seed_e2e_identity()
+                self._seed_identity()
 
             # 4. Subclass setup that needs the entered base and configured mocks.
             self._enter_post()
@@ -1567,7 +1577,7 @@ class IntegrationEnv(BaseTestEnv):
         Returns (tenant, principal) ORM instances. Uses self._tenant_id
         and self._principal_id from constructor. Idempotent: reuses existing
         rows rather than re-creating, so it is safe to call after the e2e
-        discovery-path auto-seed (``_seed_e2e_identity``) already created them.
+        ``__enter__`` auto-seed (``_seed_identity``) already created them.
 
         Extra ``tenant_kwargs`` are tenant policy columns the live e2e_rest
         server reads from the shared DB (e.g. ``human_review_required``).

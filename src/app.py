@@ -33,8 +33,9 @@ from src.admin.app import create_app
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
 from src.core.domain_routing import route_landing_page
+from src.core.errors.details import ConfigurationDetails
 from src.core.errors.issues import issues_from_validation_error
-from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
+from src.core.exceptions import AdCPConfigurationError, AdCPInvalidRequestError, AdCPSalesAgentError
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import TransportProtocol, public_identity_for
@@ -389,8 +390,8 @@ async def a2a_trailing_slash_redirect():
 # ---------------------------------------------------------------------------
 
 
-def _create_dynamic_agent_card(request: Request) -> A2AAgentCard | None:
-    """This tenant's agent card, or ``None`` when the request names no tenant.
+def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
+    """This tenant's agent card.
 
     Two calls and a render, and deliberately nothing else. Which tenant comes from
     the resolver's own seam, the same answer every tool request gets; what the card
@@ -398,22 +399,23 @@ def _create_dynamic_agent_card(request: Request) -> A2AAgentCard | None:
     two cannot describe the same seller differently. Neither the URL nor any field
     is derived here.
 
-    ``None`` means 404. A request whose headers name no tenant is asking for an agent
-    this deployment does not serve, and there is no card for it — the same answer a
-    reverse proxy gives for an unresolved virtual host. What used to happen instead
-    was a ladder over ``Apx-Incoming-Host`` / ``Host`` / ``X-Forwarded-Proto``, which
-    published whatever host the caller asked for: ``Host: evil.example.com`` came back
-    as ``supportedInterfaces[0].url == "https://evil.example.com/a2a"``, behind nothing
-    but a syntax check. Every value in that ladder was attacker-supplied on a direct
-    connection, and it answered a question ``canonical_agent_url`` already answers from
-    stored state.
+    A request naming no tenant this deployment serves is refused by the resolver, and a
+    tenant that declares no host of its own is refused here: a card whose ``url`` cannot
+    be stated is a card that cannot be published. Both are CONFIGURATION_ERROR, and both
+    are seller-side.
 
-    Local development is unaffected: tenant detection maps localhost and 127.0.0.1 to
-    the ``default`` tenant, so a developer stack resolves and gets a card.
+    What used to happen instead was a ladder over ``Apx-Incoming-Host`` / ``Host`` /
+    ``X-Forwarded-Proto``, which published whatever host the caller asked for:
+    ``Host: evil.example.com`` came back as
+    ``supportedInterfaces[0].url == "https://evil.example.com/a2a"``, behind nothing but a
+    syntax check. Every value in that ladder was attacker-supplied on a direct connection,
+    and it answered a question ``canonical_agent_url`` already answers from stored state.
     """
-    seller = describe_seller(public_identity_for(request.headers))
+    identity = public_identity_for(request.headers)
+    seller = describe_seller(identity)
     if seller.agent_url is None:
-        return None
+        tenant = identity.tenant
+        raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=tenant.tenant_id if tenant else None))
     return render_agent_card(seller)
 
 
@@ -436,12 +438,14 @@ def _install_agent_card_routes():
     async def dynamic_agent_card(request: Request):
         # to_thread: resolving the tenant and describing the seller both hit the
         # database, and this endpoint is unauthenticated.
-        card = await asyncio.to_thread(_create_dynamic_agent_card, request)
-        if card is None:
-            # A host this deployment does not serve has no agent card. 404 rather than
-            # a card naming some other agent -- the answer a reverse proxy gives for an
-            # unresolved virtual host, and the reason nothing here reads a request header.
-            return JSONResponse({"error": "no agent is served at this host"}, status_code=404)
+        try:
+            card = await asyncio.to_thread(_create_dynamic_agent_card, request)
+        except AdCPSalesAgentError as exc:
+            # The card is served OUTSIDE `serve`, so this route builds the failure the way
+            # every transport does for a fault in its own container handling -- one builder,
+            # so the envelope a buyer gets here is the envelope it gets anywhere.
+            failure = failure_response(TransportProtocol.A2A, "agent_card", exc)
+            return JSONResponse(status_code=failure.http_status, content=to_wire(failure))
         return JSONResponse(agent_card_to_dict(card))
 
     for path in sorted(_AGENT_CARD_PATHS):
