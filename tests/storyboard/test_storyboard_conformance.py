@@ -623,6 +623,36 @@ def _scoreboard(protocol: str, summary: dict[str, Any]) -> str:
     )
 
 
+def _drain_grading_replay_rows() -> None:
+    """Empty the replay cache of the conformance keyids before a protocol run.
+
+    THE TWO PROTOCOL RUNS SHARE ONE DEPLOYMENT AND ONE REPLAY STORE, and vector
+    ``020-rate-abuse`` deliberately drives ``test-ed25519-2026`` to its per-keyid cap. The
+    ``replay_ttl_overrides`` clamp drains those rows between VECTORS, which is what it was
+    sized for; it does not drain them between PROTOCOL RUNS, because the second run starts
+    seconds after the first ends rather than a TTL later.
+
+    Measured: with the a2a card grading for the first time, its first four signed vectors
+    were answered ``request_signature_rate_abuse`` — including ``positive/001`` and
+    ``negative/016``'s must-be-accepted first submission. That is the mcp run's cap bleeding
+    into the a2a run, not a verdict about either surface.
+
+    Deleting the rows rather than sleeping out the TTL: a sleep long enough to be safe is
+    longer than the run it protects, and an arithmetic relationship between two sleeps and a
+    clamp is the kind of thing that is right once and silently wrong after any of the three
+    moves.
+    """
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ReplayNonce
+    from sqlalchemy import delete
+
+    from scripts.setup.storyboard_signing import counterparty_registry
+
+    with get_db_session() as session:
+        session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(counterparty_registry()))))
+        session.commit()
+
+
 def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     """One entry per (protocol, track, storyboard_id, step_id): a failure or a skip.
 
@@ -631,6 +661,7 @@ def _collect_checks(protocol: str) -> list[dict[str, Any]]:
     passing check has no ledger identity to track; only failures and skips
     are gradeable per-check here.
     """
+    _drain_grading_replay_rows()
     summary = _run_storyboard_runner(protocol)
     _publish_summary(protocol, summary)
     print(_scoreboard(protocol, summary))
