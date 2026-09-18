@@ -528,14 +528,34 @@ class BaseTestEnv:
         ``x-adcp-tenant`` carries the tenant_id on every leg. ``_detect_tenant`` tries it as a
         subdomain and then takes it as the literal id, so it resolves either way.
         """
-        values: dict[str, Any] = {"tenant": self._tenant_id}
+        values: dict[str, Any] = {"tenant": self._tenant_id, "host": self._tenant_virtual_host()}
         if "token" not in overrides:
             values["token"] = self._principal_token()
-        unknown = set(overrides) - {"token", "tenant"}
+        unknown = set(overrides) - {"token", "tenant", "host"}
         if unknown:
-            raise TypeError(f"credential() takes token and tenant, not {sorted(unknown)}")
+            raise TypeError(f"credential() takes token, tenant and host, not {sorted(unknown)}")
         values.update(overrides)
         return credential_headers(**values)
+
+    def _tenant_virtual_host(self) -> str | None:
+        """The host this env's tenant answers on, READ off the row.
+
+        Read rather than derived: ``virtual_host`` is its own column with its own sequence
+        (tests/factories/CLAUDE.md — deriving one independent column from another invents a
+        shape constraint on the source), so the only truthful answer is what was persisted.
+
+        ``None`` in unit mode and when no row exists, and ``credential_headers`` then falls
+        back to ``x-adcp-tenant``: unit mode substitutes the resolver's database reads
+        outright, so there is no Host lookup for a Host to satisfy.
+        """
+        if not self.use_real_db or not self._session:
+            return None
+        from sqlalchemy import select
+
+        from src.core.database.models import Tenant
+
+        self._commit_factory_data()
+        return self._session.scalars(select(Tenant.virtual_host).filter_by(tenant_id=self._tenant_id)).first()
 
     def _principal_token(self) -> str | None:
         """The token the env principal presents, or ``None`` when no such principal exists.
