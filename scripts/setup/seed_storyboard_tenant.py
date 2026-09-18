@@ -127,6 +127,8 @@ def seed_storyboard_tenant() -> str:
         AgentAccountAccess,
         AuthorizedProperty,
         CurrencyLimit,
+        PricingOption,
+        Product,
         PropertyTag,
         Tenant,
     )
@@ -239,9 +241,7 @@ def seed_storyboard_tenant() -> str:
             )
         ).first():
             session.add(
-                AgentAccountAccess(
-                    tenant_id=tenant_id, principal_id=principal_id, account_id=STORYBOARD_ACCOUNT_ID
-                )
+                AgentAccountAccess(tenant_id=tenant_id, principal_id=principal_id, account_id=STORYBOARD_ACCOUNT_ID)
             )
 
         now = datetime.now(UTC)
@@ -260,9 +260,7 @@ def seed_storyboard_tenant() -> str:
                     )
                 )
 
-        if not session.scalars(
-            select(PropertyTag).filter_by(tenant_id=tenant_id, tag_id="all_inventory")
-        ).first():
+        if not session.scalars(select(PropertyTag).filter_by(tenant_id=tenant_id, tag_id="all_inventory")).first():
             session.add(
                 PropertyTag(
                     tag_id="all_inventory",
@@ -297,6 +295,87 @@ def seed_storyboard_tenant() -> str:
         except Exception as e:
             session.rollback()
             print(f"  ⚠️  Prerequisites race condition: {e}")
+
+        # A CATALOGUE. Measured, not assumed: moving the runner from the CI tenant to this
+        # one with an empty catalogue lost four checks that had been passing —
+        # error_compliance::nonexistent_product, error_compliance::reversed_dates_error,
+        # governance_conditions::get_products_brief and refine_products::get_products_brief
+        # — and left inventory_list_targeting failing, because get_products_brief is the
+        # FIRST step of those storyboards and everything downstream depends on it. The CI
+        # tenant's two products had been carrying every product-dependent storyboard
+        # invisibly; a tenant of this suite's own has to carry them itself.
+        #
+        # The test kit declares no products: per-storyboard catalogue state is what
+        # comply_test_controller seeds (#1834), and half the 249 skipped checks wait on it.
+        # These two are the generic catalogue a buy flow needs to get off the ground, the
+        # same shape the CI tenant carries.
+        products = [
+            {
+                "product_id": "storyboard_display_premium",
+                "name": "Premium Display Advertising",
+                "description": "High-impact display ads across premium content",
+                "formats": [
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"},
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "display_728x90"},
+                ],
+                "targeting_template": {"geo": ["US"], "device_type": "any"},
+                "delivery_type": "guaranteed",
+                "pricing": {"model": "cpm", "rate": 15.0, "is_fixed": True},
+            },
+            {
+                "product_id": "storyboard_video_premium",
+                "name": "Premium Video Advertising",
+                "description": "Pre-roll video ads with guaranteed completion rates",
+                "formats": [
+                    {"agent_url": "https://creative.adcontextprotocol.org", "id": "video_30s"},
+                ],
+                "targeting_template": {"geo": ["US"], "device_type": "any"},
+                "delivery_type": "guaranteed",
+                "pricing": {"model": "cpm", "rate": 25.0, "is_fixed": True},
+            },
+        ]
+        for p in products:
+            if session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=p["product_id"])).first():
+                print(f"  ℹ️  Product already exists: {p['name']}")
+                continue
+            session.add(
+                Product(
+                    tenant_id=tenant_id,
+                    product_id=p["product_id"],
+                    name=p["name"],
+                    description=p["description"],
+                    format_ids=p["formats"],
+                    targeting_template=p["targeting_template"],
+                    delivery_type=p["delivery_type"],
+                    property_tags=["all_inventory"],
+                    measurement=None,
+                    creative_policy=None,
+                    price_guidance=None,
+                    countries=None,
+                    implementation_config=None,
+                    properties=None,
+                )
+            )
+            session.add(
+                PricingOption.create(
+                    tenant_id=tenant_id,
+                    product_id=p["product_id"],
+                    pricing_model=p["pricing"]["model"],
+                    rate=p["pricing"]["rate"],
+                    currency="USD",
+                    is_fixed=p["pricing"]["is_fixed"],
+                    price_guidance=None,
+                )
+            )
+            print(f"  ✓ Created product: {p['name']}")
+
+        session.commit()
+        seeded = session.scalars(select(Product).filter_by(tenant_id=tenant_id)).all()
+        # Loudly, because an empty catalogue is exactly the failure this block exists to
+        # prevent and it shows up four storyboards later as a conformance gap.
+        if not seeded:
+            raise ValueError("storyboard tenant has no products; every get_products storyboard will fail")
+        print(f"  ✓ Catalogue: {len(seeded)} products")
 
     print("✅ Storyboard tenant ready")
     return tenant_id

@@ -20,6 +20,7 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN  # noqa: E402  (after the sys.path bootstrap)
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
 from tests.helpers.credentials import credential_headers
@@ -31,6 +32,12 @@ AGENT_CARD_PATHS = sorted(_AGENT_CARD_PATHS)
 
 # The one path the a2a-sdk factory mounts today — the regression guard.
 CANONICAL_AGENT_CARD_PATH = "/.well-known/agent-card.json"
+
+# WHICH SELLER's card to fetch. Imported from the seeding script that makes the value true
+# in the database rather than spelled again here: the tenant_id is a fresh uuid4 per seed,
+# so the subdomain is the only stable spelling. See TestAgentCardDiscoveryPathsLive for why
+# a card request has to name a tenant at all.
+_CARD_TENANT_HEADERS = {"x-adcp-tenant": CI_TEST_SUBDOMAIN}
 
 
 class TestA2AEndpointsActual:
@@ -150,9 +157,16 @@ class TestA2AEndpointsActual:
 
     @pytest.mark.integration
     def test_options_preflight_support(self, live_server):
-        """Test that OPTIONS requests work for CORS preflight."""
+        """Test that OPTIONS requests work for CORS preflight.
+
+        Carries the tenant header for the same reason the discovery-path tests do: the
+        card describes a resolved tenant, and in-network the stack is reached at a
+        compose service name that identifies none.
+        """
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-        response = requests.options(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        response = requests.options(
+            f"{live_server['a2a']}/.well-known/agent-card.json", headers=_CARD_TENANT_HEADERS, timeout=2
+        )
 
         # Should handle OPTIONS requests
         assert response.status_code in [200, 204], "OPTIONS request should be handled"
@@ -166,13 +180,24 @@ class TestAgentCardDiscoveryPathsLive:
     in-process TestClient probe in
     tests/unit/test_a2a_transport_contract.py cannot reach: here a 200 also
     proves the card routes are matched BEFORE the catch-all, not swallowed by it.
+
+    THE TENANT HEADER IS REQUIRED, and its absence is a real answer rather than a
+    setup detail. A card describes a resolved tenant, and a request naming none now
+    gets 404 — a host this deployment does not serve has no card. In-network the
+    stack is reached at a compose service name (`ADCP_TEST_HOST`, e.g. `proxy`):
+    no tenant claims it as a virtual_host, it carries no dot for the subdomain
+    strategy, and it is not loopback, so nothing identifies a tenant. On the host
+    path the same request resolves via localhost, which is why this passed locally
+    and 404'd in-network until the header was added. Every other e2e call selects
+    its tenant the same way (tests/e2e/conftest.py: "tenant selected via
+    x-adcp-tenant").
     """
 
     @pytest.mark.integration
     @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
     def test_declared_card_path_is_served_live(self, live_server, path):
         """GET on every path in _AGENT_CARD_PATHS returns 200 from the live server."""
-        response = requests.get(f"{live_server['a2a']}{path}", timeout=2)
+        response = requests.get(f"{live_server['a2a']}{path}", headers=_CARD_TENANT_HEADERS, timeout=2)
 
         assert response.status_code == 200, (
             f"{path} is declared in _AGENT_CARD_PATHS but the live server returned "
@@ -181,13 +206,36 @@ class TestAgentCardDiscoveryPathsLive:
         assert response.headers["content-type"].startswith("application/json")
 
     @pytest.mark.integration
+    def test_a_request_naming_no_tenant_gets_no_card(self, live_server):
+        """No tenant, no card — the same answer a proxy gives for an unresolved host.
+
+        The complement of the tests above, and the reason they carry a header: the
+        card publishes a tenant's stored identity, so with no tenant there is
+        nothing truthful to publish. It must NOT fall back to echoing the caller's
+        Host, which is what it did before #1440 and what let an attacker-supplied
+        `Host: evil.example.com` come back as the agent's own advertised URL.
+        """
+        response = requests.get(f"{live_server['a2a']}/agent.json", headers={"Host": "unclaimed.example"}, timeout=2)
+
+        assert response.status_code == 404, (
+            f"a Host no tenant claims returned {response.status_code}; a card naming some "
+            f"other agent, or echoing the caller's own host, is worse than no card"
+        )
+        assert "evil" not in response.text and "unclaimed.example" not in response.text, (
+            "the refusal echoed the caller's Host back"
+        )
+
+    @pytest.mark.integration
     def test_all_declared_card_paths_return_byte_identical_bodies_live(self, live_server):
         """The live server serves one byte-identical card on every declared path.
 
         Compares raw bytes, not the parsed dict: a caching fetcher keyed on bytes
         treats a re-serialization difference as a different document.
         """
-        bodies = {path: requests.get(f"{live_server['a2a']}{path}", timeout=2) for path in AGENT_CARD_PATHS}
+        bodies = {
+            path: requests.get(f"{live_server['a2a']}{path}", headers=_CARD_TENANT_HEADERS, timeout=2)
+            for path in AGENT_CARD_PATHS
+        }
 
         for path, response in bodies.items():
             assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
