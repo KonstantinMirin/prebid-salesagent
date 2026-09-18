@@ -71,7 +71,7 @@ Three details deserve attention:
   (`_canonical_a2a_url`, `src/app.py:416-432`), so the card publishes the same
   string the tenant's `brand.json` carries. A `Host` that routes to no tenant is
   REFUSED — `CONFIGURATION_ERROR`, recovery `terminal`, no card. It used to fall
-  back to an `Apx-Incoming-Host` / `Host` / `X-Forwarded-Proto` ladder, which
+  back to a ladder over request headers, which
   published whatever host the caller asked for: `Host: evil.example.com` came
   back as `supportedInterfaces[0].url`. A card states a tenant's stored identity,
   so with no tenant there is nothing truthful to publish
@@ -334,14 +334,13 @@ row once:
    principal lookup that is scoped by it. No proxy sets this header — the
    multi-tenant nginx used to inject it from the subdomain and no longer does.
 
-There is no third input. `Apx-Incoming-Host` was one: the Approximated proxy
-forwards to `APPROXIMATED_BACKEND_URL`, so the `Host` it sends names your backend
-rather than the publisher's domain, and the original arrived in that header. The
-edge now folds it into `Host` and drops it
-(`config/nginx/nginx-multi-tenant.conf`), which makes it deployment config. Reading
-it here as well was an active hazard, not just a duplicate: `_detect_tenant` tried
-`Host` first while `domain_routing` let the vendor header win, so one request could
-resolve to two different tenants depending on which resolver asked.
+There is no third input, and a second spelling of either of these two would not be
+a redundancy: two readers of one fact disagree, and then one request resolves to
+two different tenants depending on which one asked. A proxy that has to rewrite the
+host to make a deployment work does it at the edge, so that what arrives here is
+the `Host` (`config/nginx/nginx-multi-tenant.conf`, and
+[deployment/multi-tenant.md](../deployment/multi-tenant.md) for a deployment that
+needs one).
 
 Subdomain extraction is GONE, and so is the localhost fallback to the `default`
 tenant. A request that names no tenant this deployment serves is refused as a
