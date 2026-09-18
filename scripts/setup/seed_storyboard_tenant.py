@@ -66,7 +66,6 @@ STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
 #: import a Python constant — the two must move together.
 STORYBOARD_TOKEN = "storyboard-test-token"
 
-STORYBOARD_ACCOUNT_ID = "storyboard-account"
 
 #: The test kit 49 of the 52 pinned storyboards name as their ``prerequisites.test_kit``,
 #: relative to the bundle's ``compliance/`` root.
@@ -116,6 +115,80 @@ def kit_property_domains() -> tuple[str, ...]:
     return domains
 
 
+def kit_account_references() -> tuple[tuple[str, str, bool], ...]:
+    """The (brand_domain, operator, sandbox) accounts the storyboards will ASK FOR.
+
+    Read from the bundle, for the same reason the inventory is: a hand-written copy is
+    wrong the day the pin moves, and wrong silently. This one was worse than that -- it was
+    wrong on the day it was written (``acme-outdoor.example`` for a kit whose brand domain
+    is ``acmeoutdoor.example``, and the brand domain again where the operator goes), and the
+    symptom was 251 storyboard steps answering ACCOUNT_NOT_FOUND about products they never
+    reached.
+
+    THE DERIVATION. Every step's ``sample_request.account`` is the exact reference the
+    runner will send. A reference is ours to seed when its brand domain is one a test kit
+    DECLARES (``brand.house.domain``) -- that is what "this seller implements the kit"
+    means. ``otherbrand.example`` belongs to no kit, so it is not seeded and stays
+    ACCOUNT_NOT_FOUND, which is what the isolation steps that send it grade.
+
+    SANDBOX IS PART OF THE KEY, not a flag. ``AccountReference.sandbox`` defaults to false
+    and ``_scope_natural_key`` matches NULL-or-false for it, so a brand asked for both ways
+    needs TWO accounts -- which is exactly why the bundle ships ``acme-outdoor.yaml``
+    (sandbox) and ``acme-outdoor-live.yaml`` (live) under one brand domain.
+
+    A bare ``{"sandbox": true}`` reference is skipped by construction: ``AccountReference``
+    requires brand and operator, so such a payload is not an account reference at the pin
+    and has no natural key to seed.
+    """
+    import yaml
+
+    from scripts.audit import storyboard_spec
+
+    version = storyboard_spec.pinned_version(project_root)
+    compliance = storyboard_spec.adcp_home(project_root, version) / "compliance"
+    if not compliance.is_dir():
+        raise FileNotFoundError(
+            f"pinned compliance bundle not found at {compliance}. The storyboard tenant's accounts are READ "
+            f"from it, so there is nothing to seed without it — run .github/actions/_adcp-bundle."
+        )
+
+    kit_domains = set()
+    for kit_path in sorted((compliance / "test-kits").glob("*.yaml")):
+        kit = yaml.safe_load(kit_path.read_text(encoding="utf-8")) or {}
+        domain = ((kit.get("brand") or {}).get("house") or {}).get("domain")
+        if domain:
+            kit_domains.add(domain)
+
+    references: set[tuple[str, str, bool]] = set()
+    for path in sorted((compliance / "domains").rglob("*.yaml")):
+        try:
+            board = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except yaml.YAMLError:
+            continue
+        if not isinstance(board, dict) or "phases" not in board:
+            continue
+        for phase in board.get("phases") or []:
+            for step in phase.get("steps") or []:
+                account = (step.get("sample_request") or {}).get("account") or {}
+                domain = (account.get("brand") or {}).get("domain")
+                operator = account.get("operator")
+                if domain in kit_domains and operator:
+                    references.add((domain, operator, bool(account.get("sandbox"))))
+
+    if not references:
+        raise ValueError(
+            "no storyboard step names an account whose brand a test kit declares; "
+            "every account-bearing step would answer ACCOUNT_NOT_FOUND."
+        )
+    return tuple(sorted(references))
+
+
+def account_id_for(brand_domain: str, sandbox: bool) -> str:
+    """A stable id for a derived account. The natural key is what resolves it; this is the
+    handle the grant and the row need, so it only has to be deterministic."""
+    return f"{brand_domain.replace('.', '-')}-{'sandbox' if sandbox else 'live'}"
+
+
 def seed_storyboard_tenant() -> str:
     """Create (or converge) the storyboard tenant and everything it needs. Returns its id."""
     import uuid
@@ -142,10 +215,12 @@ def seed_storyboard_tenant() -> str:
     # Resolved BEFORE any write: a missing bundle is a refusal, and refusing after seeding
     # a tenant would leave the database half-configured for the next run to inherit.
     domains = kit_property_domains()
+    accounts = kit_account_references()
 
     print("=" * 60)
     print(f"Seeding storyboard conformance tenant ({STORYBOARD_SUBDOMAIN}) at {STORYBOARD_VIRTUAL_HOST}")
     print(f"Inventory from the pinned bundle's {STORYBOARD_TEST_KIT}: {len(domains)} properties")
+    print(f"Accounts derived from the bundle's storyboards: {len(accounts)}")
     print("=" * 60)
 
     with get_db_session() as session:
@@ -220,33 +295,34 @@ def seed_storyboard_tenant() -> str:
             principal_id = existing_principal.principal_id
             print(f"  ✓ Principal already exists (ID: {principal_id})")
 
-        # The account AND its grant. Resolution is access-scoped, so the account row alone
-        # answers AUTHORIZATION_ERROR — the grant is what makes it resolvable.
-        if not session.scalars(
-            select(Account).filter_by(tenant_id=tenant_id, account_id=STORYBOARD_ACCOUNT_ID)
-        ).first():
-            session.add(
-                Account(
-                    tenant_id=tenant_id,
-                    account_id=STORYBOARD_ACCOUNT_ID,
-                    name="Storyboard Conformance Account",
-                    status="active",
-                    operator="acme-outdoor.example",
-                    brand=BrandReference(domain="acme-outdoor.example"),
+        # THE ACCOUNTS THE RUNNER WILL ASK FOR, and a grant for each. Resolution is
+        # access-scoped, so an account row alone answers AUTHORIZATION_ERROR — the grant is
+        # what makes it resolvable.
+        for brand_domain, operator, sandbox in accounts:
+            account_id = account_id_for(brand_domain, sandbox)
+            if not session.scalars(select(Account).filter_by(tenant_id=tenant_id, account_id=account_id)).first():
+                session.add(
+                    Account(
+                        tenant_id=tenant_id,
+                        account_id=account_id,
+                        name=f"{brand_domain} via {operator}",
+                        status="active",
+                        operator=operator,
+                        brand=BrandReference(domain=brand_domain),
+                        sandbox=sandbox,
+                    )
                 )
-            )
-            # Composite FKs with no ORM relationship: the unit of work has nothing to order
-            # the INSERTs by, so the parent must be on the database first.
-            session.flush()
+                # Composite FKs with no ORM relationship: the unit of work has nothing to
+                # order the INSERTs by, so the parent must be on the database first.
+                session.flush()
 
-        if not session.scalars(
-            select(AgentAccountAccess).filter_by(
-                tenant_id=tenant_id, principal_id=principal_id, account_id=STORYBOARD_ACCOUNT_ID
-            )
-        ).first():
-            session.add(
-                AgentAccountAccess(tenant_id=tenant_id, principal_id=principal_id, account_id=STORYBOARD_ACCOUNT_ID)
-            )
+            if not session.scalars(
+                select(AgentAccountAccess).filter_by(
+                    tenant_id=tenant_id, principal_id=principal_id, account_id=account_id
+                )
+            ).first():
+                session.add(AgentAccountAccess(tenant_id=tenant_id, principal_id=principal_id, account_id=account_id))
+        print(f"  ✓ {len(accounts)} account(s) + grants: {', '.join(account_id_for(b, s) for b, _, s in accounts)}")
 
         now = datetime.now(UTC)
         # Budget validation refuses a currency with no limit row, and
