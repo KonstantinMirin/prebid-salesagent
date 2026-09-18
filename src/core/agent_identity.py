@@ -26,7 +26,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from src.core.config import get_settings
-from src.core.domain_config import _get_protocol_for_domain, get_sales_agent_domain
+from src.core.domain_config import _get_protocol_for_domain
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.tenant_context import TenantContext
@@ -39,18 +39,20 @@ AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp/", "a2a": "/a2a"}
 
 
 def _agent_host(tenant: TenantContext) -> str | None:
-    """The host this tenant is reachable at, or None when nothing is configured.
+    """The host this tenant is reachable at, or None when it declares none.
 
-    ``virtual_host`` is the tenant's own host (it may carry a port). Otherwise
-    the subdomain under the deployment's sales-agent domain. Both are stored
-    state, never request state.
+    ONE source: ``virtual_host``, the origin the tenant says it is served at (it may carry
+    a port, because the card publishes this string and a client connects to what the card
+    says). Stored state, never request state.
+
+    The fallback that stood here built ``f"{subdomain}.{SALES_AGENT_DOMAIN}"`` — and that is
+    what published ``ci-test.sales-agent.example.com`` on the CI tenant's card, a name
+    nothing on the network served, which the A2A runner followed and failed every check
+    against. A second derivation of "where is this tenant" is a second chance to be wrong
+    about it, and the tenant already answers the question. A tenant that declares no host
+    has no agent URL; inventing one produces a name nobody can reach.
     """
-    if tenant.virtual_host:
-        return tenant.virtual_host
-    sales_agent_domain = get_sales_agent_domain()
-    if sales_agent_domain and tenant.subdomain:
-        return f"{tenant.subdomain}.{sales_agent_domain}"
-    return None
+    return tenant.virtual_host
 
 
 def canonical_agent_url(tenant: TenantContext) -> str:
@@ -60,9 +62,8 @@ def canonical_agent_url(tenant: TenantContext) -> str:
     this string plus a path from :data:`AGENT_ENDPOINT_PATHS`.
 
     Takes the typed read projection the resolver hands on, not the ORM row. This is a
-    read, it touches two columns (``virtual_host``, ``subdomain``), and
-    ``TenantContext`` carries both — so nothing here opens a session, and a caller
-    holding a tenant already has everything it needs.
+    read, it touches one column (``virtual_host``), and ``TenantContext`` carries it — so
+    nothing here opens a session, and a caller holding a tenant already has what it needs.
     """
     host = _agent_host(tenant)
     if host:

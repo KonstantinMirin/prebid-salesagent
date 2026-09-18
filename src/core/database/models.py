@@ -252,12 +252,17 @@ class Tenant(Base, JSONValidatorMixin):
 
         It is the ONE derivation of this value. Four sites used to repeat the expression,
         and every one of them fed the colon through.
+
+        A tenant that declares no host has NO publisher domain, and returns None rather than
+        inventing one. The fallback that stood here built ``f"{subdomain}.example.com"`` — a
+        domain nobody owns, on a reserved TLD, handed to buyers as the publisher's own
+        (#1845). Callers that must state something say so explicitly; making ``virtual_host``
+        mandatory instead is a design change this does not make, because a publisher without
+        a domain is a real seller (a print title) rather than a misconfiguration.
         """
         from src.core.config_loader import hostname_of
 
-        if self.virtual_host:
-            return hostname_of(self.virtual_host)
-        return f"{self.subdomain}.example.com" if self.subdomain else None
+        return hostname_of(self.virtual_host) if self.virtual_host else None
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -447,18 +452,22 @@ class Product(Base, JSONValidatorMixin):
             return ensure_selection_type(self.properties)
         elif self.property_ids:
             # AdCP 2.0.0 by_id variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            # primary_domain, not virtual_host: the latter is a routing host and may
-            # carry a port, which the spec's publisher_domain pattern forbids.
+            # primary_domain is None for a tenant that declares no virtual_host — a real
+            # state (a print publisher has no domain), so this states a placeholder rather
+            # than refusing. What it no longer does is FABRICATE: the value here used to be
+            # f"{subdomain}.example.com", a domain nobody owns on a reserved TLD, handed to
+            # a buyer as the publisher's own (#1845).
             publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
             return [
                 {"publisher_domain": publisher_domain, "property_ids": self.property_ids, "selection_type": "by_id"}
             ]
         elif self.property_tags:
             # AdCP 2.0.0 by_tag variant
-            # Get publisher_domain from tenant (use subdomain or virtual_host)
-            # primary_domain, not virtual_host: the latter is a routing host and may
-            # carry a port, which the spec's publisher_domain pattern forbids.
+            # primary_domain is None for a tenant that declares no virtual_host — a real
+            # state (a print publisher has no domain), so this states a placeholder rather
+            # than refusing. What it no longer does is FABRICATE: the value here used to be
+            # f"{subdomain}.example.com", a domain nobody owns on a reserved TLD, handed to
+            # a buyer as the publisher's own (#1845).
             publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
             return [
                 {"publisher_domain": publisher_domain, "property_tags": self.property_tags, "selection_type": "by_tag"}
@@ -466,7 +475,7 @@ class Product(Base, JSONValidatorMixin):
 
         # Default: Use "all" variant (all properties from this publisher)
         # This ensures products always have publisher_properties as required by AdCP spec
-        # primary_domain, not virtual_host: see the note above.
+        # See the note above: a placeholder, never a fabricated domain (#1845).
         publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
         return [{"publisher_domain": publisher_domain, "selection_type": "all"}]
 
