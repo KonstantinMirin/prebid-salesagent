@@ -179,7 +179,8 @@ def enable_oidc(tenant_id: str) -> bool:
             logger.error(f"Cannot enable OIDC: no config for tenant {tenant_id}")
             return False
 
-        if not is_oidc_config_valid(tenant_id):
+        tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+        if not _config_is_verified_for(config, tenant, tenant_id):
             logger.error(f"Cannot enable OIDC: config not verified for tenant {tenant_id}")
             return False
 
@@ -264,6 +265,31 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
     return f"{base}/admin/auth/oidc/callback"
 
 
+def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | None, tenant_id: str) -> bool:
+    """Whether *config* is verified for *tenant*'s CURRENT redirect URI.
+
+    A predicate over rows the caller already has, so a caller inside a session asks it
+    without opening a second one. ``enable_oidc`` used to call the session-opening
+    :func:`is_oidc_config_valid` from inside its own session: the inner context's exit
+    removes the scoped session, which detaches the outer one, so the ``commit()`` after it
+    wrote NOTHING. The service logged "Enabled OIDC" and ``oidc_enabled`` stayed false --
+    a silent failure on the one step that turns a tenant's SSO on.
+    """
+    if not config or not tenant:
+        return False
+    if not config.oidc_verified_at or not config.oidc_verified_redirect_uri:
+        return False
+
+    current_uri = get_tenant_redirect_uri(tenant)
+    if config.oidc_verified_redirect_uri != current_uri:
+        logger.warning(
+            f"OIDC config invalid for tenant {tenant_id}: "
+            f"redirect URI changed from {config.oidc_verified_redirect_uri} to {current_uri}"
+        )
+        return False
+    return True
+
+
 def is_oidc_config_valid(tenant_id: str) -> bool:
     """Check if OIDC configuration is valid and verified.
 
@@ -279,33 +305,8 @@ def is_oidc_config_valid(tenant_id: str) -> bool:
     """
     with get_db_session() as session:
         config = session.scalars(select(TenantAuthConfig).filter_by(tenant_id=tenant_id)).first()
-
-        if not config:
-            return False
-
-        if not config.oidc_verified_at:
-            return False
-
-        if not config.oidc_verified_redirect_uri:
-            return False
-
-        # Get current redirect URI
         tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-
-        if not tenant:
-            return False
-
-        current_uri = get_tenant_redirect_uri(tenant)
-
-        # Check if verified URI matches current
-        if config.oidc_verified_redirect_uri != current_uri:
-            logger.warning(
-                f"OIDC config invalid for tenant {tenant_id}: "
-                f"redirect URI changed from {config.oidc_verified_redirect_uri} to {current_uri}"
-            )
-            return False
-
-        return True
+        return _config_is_verified_for(config, tenant, tenant_id)
 
 
 def get_oidc_config_for_auth(tenant_id: str) -> dict | None:
