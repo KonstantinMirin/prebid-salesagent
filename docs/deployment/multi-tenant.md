@@ -25,9 +25,7 @@ flowchart TD
         SD -- yes --> Ten
         SD -- no --> XH{"x-adcp-tenant header set?"}
         XH -- yes --> Ten
-        XH -- no --> APX{"Apx-Incoming-Host matches a custom domain?"}
-        APX -- yes --> Ten
-        APX -- no --> Err["No tenant context error"]
+        XH -- no --> Err["No tenant context error"]
     end
 ```
 
@@ -137,9 +135,12 @@ public landing page — reachable by naming that tenant's real host anyway. Cred
 verified inside the tenant they were issued for, so claiming another tenant's host grants
 nothing.
 
-A deployment that reaches the app **without** this nginx in front (`SKIP_NGINX=true`) does not
-get the normalization, and the app's own resolver still reads `Apx-Incoming-Host` as a third
-input for that case.
+The application reads exactly two tenant inputs — `Host` and `x-adcp-tenant` — and no third
+spelling of the first. It does not read `Apx-Incoming-Host` at all: that header is edge
+config, and folding it into `Host` is the edge's job. So a deployment serving custom domains
+needs an edge that performs this normalization; reaching the app without one
+(`SKIP_NGINX=true`) means a proxied request arrives naming the backend, and resolves the
+backend's tenant or none.
 
 ### Admin UI configuration
 
@@ -216,7 +217,9 @@ In multi-tenant mode, the system resolves the tenant from request headers, in th
 
 1. **Host header**: The tenant's custom domain is checked first, then the subdomain - `acme.sales-agent.yourdomain.com` → tenant `acme`.
 2. **x-adcp-tenant header**: Explicit tenant override, matched as a subdomain first and then as a tenant ID (advanced).
-3. **Apx-Incoming-Host header**: For Approximated proxy requests, matched against the tenant's custom domain.
+
+There is no third input. A request proxied by Approximated is resolved by its `Host` like
+any other, because the edge has already folded `Apx-Incoming-Host` into it.
 
 Example MCP client configuration:
 
@@ -242,7 +245,9 @@ The [request lifecycle](../development/request-lifecycle.md) explains what else 
 
 - Verify the subdomain or domain is configured for a tenant.
 - Check that the Host header is being passed correctly.
-- For Approximated: verify the `Apx-Incoming-Host` header is present.
+- For Approximated: the app never reads `Apx-Incoming-Host`, so check the EDGE — that nginx
+  is in front and its `$tenant_host` map folded the vendor header into the `Host` the app
+  received. `/debug/tenant` reports the `Host` that arrived and the tenant it resolved.
 
 ### Custom domain not working
 

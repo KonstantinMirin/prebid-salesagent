@@ -24,8 +24,19 @@
 #   addressed to an agent's URL, and how that deployment maps a host to a tenant
 #   is the seller's own concern. So these scenarios grade THIS SELLER's
 #   documented resolution order (src/core/resolved_identity._detect_tenant:
-#   Host -> x-adcp-tenant -> Apx-Incoming-Host), not a protocol obligation, and
-#   they are deliberately local rather than a BR-* storyboard.
+#   Host -> x-adcp-tenant), not a protocol obligation, and they are deliberately
+#   local rather than a BR-* storyboard.
+#
+# THE THIRD ROUTE IS GONE, AND ITS ABSENCE IS GRADED. `Apx-Incoming-Host` used to
+#   be a third input: the Approximated proxy serves a publisher's own domain and
+#   forwards to this backend, so the Host it sends names the BACKEND and the
+#   publisher's domain arrives in that header. The edge now folds it into Host and
+#   drops it (config/nginx/nginx-multi-tenant.conf), which makes it deployment
+#   config rather than application logic — and removes a real hazard, because the
+#   app's two host ladders disagreed about which of Host and the vendor header
+#   wins, so one request could resolve to two different tenants depending on which
+#   resolver asked. `@T-TENANTID-vendor-header-ignored` is what keeps a third
+#   input from coming back: it presents the header and requires it to buy nothing.
 #   What IS pinned is the consequence: `get_adcp_capabilities` describes the
 #   tenant that was resolved, so resolving the wrong one — or none — is
 #   buyer-visible.
@@ -63,6 +74,14 @@ Feature: A request identifies its seller by host or by header
   Scenario: A Host no tenant claims is refused as a misconfiguration
     Given the tenant is reachable at its own virtual host
     When the buyer requests capabilities naming a seller nobody serves
+    Then the response contains error code CONFIGURATION_ERROR
+    And the error recovery should be "terminal"
+    And the refusal names the host the request used
+
+  @T-TENANTID-vendor-header-ignored
+  Scenario: The proxy vendor header identifies no tenant
+    Given the tenant is reachable at its own virtual host
+    When the buyer requests capabilities naming the seller only by the proxy vendor header
     Then the response contains error code CONFIGURATION_ERROR
     And the error recovery should be "terminal"
     And the refusal names the host the request used

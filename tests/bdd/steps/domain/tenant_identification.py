@@ -78,6 +78,24 @@ def when_by_unserved_host(ctx: dict) -> None:
     _ask_capabilities(ctx, credential_headers(host=UNSERVED_HOST))
 
 
+@when("the buyer requests capabilities naming the seller only by the proxy vendor header")
+def when_by_vendor_header(ctx: dict) -> None:
+    """Present ``Apx-Incoming-Host`` naming a REAL tenant, over a Host naming none.
+
+    The two inputs disagree on purpose, so the answer says which one was read. The
+    application reads only the Host, so this must be refused exactly as the unserved-host
+    scenario is; resolving the tenant would mean a third input is back.
+
+    Why the header cannot simply be deleted from the tree and left ungraded: it was read
+    in eleven places, and the edge (``config/nginx/nginx-multi-tenant.conf``) still
+    receives it from the vendor. An input that production ignores is only known to be
+    ignored if something presents it.
+    """
+    headers = credential_headers(host=UNSERVED_HOST)
+    headers["Apx-Incoming-Host"] = _tenant_row(ctx).virtual_host
+    _ask_capabilities(ctx, headers)
+
+
 def _portfolio_description(body: dict) -> str | None:
     """The one field of the capabilities wire that NAMES the tenant that answered.
 

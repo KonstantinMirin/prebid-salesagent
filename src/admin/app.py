@@ -41,7 +41,6 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
-from src.core.http_utils import proxied_host
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -216,41 +215,14 @@ def create_app(config=None, settings=None):
     cache = Cache(app)
     app.cache = cache  # Make cache available to blueprints
 
-    # Redirect external domain /admin requests to tenant subdomain
-    @app.before_request
-    def redirect_external_domain_admin():
-        """Redirect /admin/* requests from external domains to tenant subdomain.
-
-        External domains (via Approximated) should not serve admin UI due to OAuth cookie issues.
-        Instead, redirect to the tenant's subdomain where OAuth works correctly.
-        """
-        from flask import request
-
-        # Check if this is an /admin request
-        # Note: CustomProxyFix middleware strips /admin from request.path, so we check script_root
-        # In production with SCRIPT_NAME=/admin, script_root will be '/admin'
-        # But we need to also check that the path isn't just root (/)
-        is_admin_request = (request.script_root == "/admin" and request.path != "/") or request.path.startswith(
-            "/admin"
-        )
-        if not is_admin_request:
-            return None
-
-        # Check for Apx-Incoming-Host header (indicates request from Approximated)
-        apx_host = proxied_host(request.headers)
-        if not apx_host:
-            logger.debug(f"No Apx-Incoming-Host header for /admin request: {request.path}")
-            return None  # Not from Approximated, allow normal routing
-
-        # NO REDIRECT. This used to send a custom domain's /admin to the tenant's SUBDOMAIN
-        # URL — built from the subdomain column and SALES_AGENT_DOMAIN — on the premise that
-        # the subdomain was where a tenant's admin really lived and a custom domain was a
-        # front for it. With the subdomain strategy gone there is no
-        # such second address: a tenant is served at the host it declares, which is the host
-        # this request already arrived on. Bouncing it somewhere else could only send it to
-        # a name nothing serves.
-        logger.debug(f"Apx-Incoming-Host {apx_host} for /admin: serving in place, no subdomain to redirect to")
-        return None
+    # NO before_request hook for "external domain" /admin requests. One stood here named
+    # redirect_external_domain_admin, and by the time it was deleted it returned None on
+    # every path it could reach: the redirect it named had already gone with the subdomain
+    # strategy (a tenant is served at the host it declares, so there is no second address
+    # to bounce to), leaving a hook whose only remaining act was to read the Approximated
+    # vendor header and log it. The edge folds that header into Host and drops it, so the
+    # read answers None too. A hook that computes a request classification in order to log
+    # a value nothing acts on is not a seam, it is a cost on every request.
 
     # Debug: Log Set-Cookie headers on auth-related responses
     @app.after_request

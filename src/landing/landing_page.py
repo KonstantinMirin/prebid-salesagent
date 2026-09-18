@@ -29,7 +29,7 @@ def _determine_base_url(virtual_host: str | None = None) -> str:
     """Determine the base URL for the current environment.
 
     Args:
-        virtual_host: Virtual host if provided (e.g., from request.host or Apx-Incoming-Host header)
+        virtual_host: Virtual host if provided (the request's ``Host``, or a tenant's stored one)
 
     Returns:
         Base URL for generating endpoint URLs
@@ -197,7 +197,7 @@ def generate_tenant_landing_page(tenant_row: dict, virtual_host: str | None = No
 
     Args:
         tenant_row: Tenant data from database (``serialize_tenant_to_dict``): name, subdomain, etc.
-        virtual_host: Virtual host domain if applicable (e.g., from Apx-Incoming-Host)
+        virtual_host: Virtual host domain if applicable (the request's ``Host``)
 
     Returns:
         Complete HTML page as string

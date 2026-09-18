@@ -1,14 +1,26 @@
 """The host and header facts of an HTTP request, read in one place.
 
-Which host a request names was read by a ladder — ``Apx-Incoming-Host`` or its lowercase
-spelling, falling back to ``Host`` — copied into eleven modules, each spelling the header
-name itself and each handling case its own way. A caller that reads a header name nobody
-else reads is a second answer to "which host is this", and the two disagree: the ladder in
-``_detect_tenant`` read ``Host`` where ``admin/app.py`` read only the proxy header, and a
-request arriving on one but not the other resolved differently depending on which module
-saw it first.
+ONE HOST INPUT. ``requested_host`` is the ``Host``, and there is no second spelling of
+it. There was: ``Apx-Incoming-Host``, read by a ladder copied into eleven modules, each
+spelling the header name itself and each handling case its own way. Those copies did not
+agree — ``domain_routing`` let the vendor header win over ``Host`` while
+``_detect_tenant`` let ``Host`` win over the vendor header — so one request could resolve
+to two different tenants depending on which resolver asked.
 
-So the header NAMES live here and nowhere else, and a caller asks for the fact it wants.
+The header is now EDGE CONFIG, not application logic. The Approximated proxy serves a
+publisher's own domain and forwards to this backend, so the ``Host`` it sends names the
+backend identically for every publisher and the publisher's domain arrives in the vendor
+header; ``config/nginx/nginx-multi-tenant.conf`` folds it back into ``Host`` and drops it
+before anything here runs. Deleting the app-side reader is what makes that fold the only
+mechanism rather than one of two, and a deployment serving custom domains needs an edge
+that performs it.
+
+**Do not add a reader back.** A helper whose job is to know the vendor header exists
+reintroduces the third input the edge just removed. The absence is graded on all four
+transports by ``@T-TENANTID-vendor-header-ignored``
+(``tests/bdd/features/local-tenant-identification-routes.feature``), which presents the
+header over an unserved ``Host`` and requires the refusal.
+
 This module holds no state, imports nothing from the application, and is therefore
 importable from the boundary resolver, the admin blueprints, the routes and the routing
 module alike.
@@ -17,10 +29,6 @@ module alike.
 from collections.abc import Iterable
 from typing import Any, Protocol
 from urllib.parse import urlsplit
-
-#: The Approximated proxy forwards the host the CLIENT asked for under this name; the
-#: ``Host`` it sends is the backend's own. Spelled once, here.
-APPROXIMATED_HOST_HEADER = "Apx-Incoming-Host"
 
 
 class HeaderSource(Protocol):
@@ -58,22 +66,15 @@ def get_header_case_insensitive(headers: HeaderSource, header_name: str) -> str 
     return None
 
 
-def proxied_host(headers: HeaderSource) -> str | None:
-    """The host the client asked for, as the Approximated proxy forwards it.
-
-    ``None`` when the request did not come through that proxy, which is what a caller
-    distinguishing "proxied" from "direct" branches on.
-    """
-    return get_header_case_insensitive(headers, APPROXIMATED_HOST_HEADER)
-
-
 def requested_host(headers: HeaderSource) -> str | None:
-    """The host this request was addressed to: the proxy's spelling, else ``Host``.
+    """The host this request is for: the ``Host``, and nothing else.
 
-    The proxy header wins because when it is present the ``Host`` is the backend's
-    internal name, which names no tenant and belongs to no deployment's routing.
+    Callers ask for the FACT, not for a header name, which is why this exists at all as a
+    one-line function — every reader phrasing it as its own header read is how eleven
+    copies came to disagree. What a proxy in front of this app did to produce that ``Host``
+    is the edge's business and has no spelling here.
     """
-    return proxied_host(headers) or get_header_case_insensitive(headers, "Host")
+    return get_header_case_insensitive(headers, "Host")
 
 
 def hostname_of(host: str) -> str:

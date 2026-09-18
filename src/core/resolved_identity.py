@@ -150,7 +150,6 @@ class AccountIdentity(ResolvedIdentity):
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
-from src.core.http_utils import proxied_host
 
 
 def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
@@ -186,7 +185,15 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
        explicitly rather than by the host it is served at: the test suites, the CLI, a
        support tool. Unverified, as before — an id naming no tenant fails at the principal
        lookup that is scoped by it.
-    3. ``Apx-Incoming-Host`` -> ``virtual_host``: the Approximated proxy's spelling of (1).
+
+    TWO means two. ``Apx-Incoming-Host`` was a third, a second spelling of (1) for the
+    Approximated proxy — which serves a publisher's own domain and forwards here, so the
+    ``Host`` it sends names this backend and the publisher's domain arrives in that header.
+    That is edge config, and the edge now folds it into ``Host`` and drops it
+    (``config/nginx/nginx-multi-tenant.conf``). Reading it here as well made the app's two
+    host ladders disagree — this one tried ``Host`` first, ``domain_routing`` let the vendor
+    header win — so one request could resolve to two different tenants depending on which
+    resolver asked. ``@T-TENANTID-vendor-header-ignored`` grades that it buys nothing now.
 
     ``None`` is a real answer, not a gap to fill. A protected tool then answers AUTH_MISSING
     (no tenant means no principal lookup) and a public tool proceeds with no tenant, which
@@ -216,11 +223,6 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
 
     if not tenant_id:
         tenant_id = _get_header_case_insensitive(headers, "x-adcp-tenant")
-
-    if not tenant_id:
-        apx_host = proxied_host(headers)
-        if apx_host:
-            tenant_id = tenant_id_for(virtual_host=apx_host)
 
     return tenant_id
 
@@ -495,8 +497,9 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
     is this request for" that every tool gets -- so it asks here rather than deriving one
     of its own.
 
-    That derivation used to be ``route_landing_page``, which reads ``Host`` and
-    ``Apx-Incoming-Host`` and NOT ``x-adcp-tenant``. The consequence was measurable: a
+    That derivation used to be ``route_landing_page``, which reads the ``Host`` and NOT
+    ``x-adcp-tenant`` (it read a vendor proxy header too, since deleted). The consequence
+    was measurable: a
     storyboard run sends ``x-adcp-tenant`` (a token only verifies inside a tenant), so
     every tool call resolved the CI tenant while the card, on the same request, resolved
     none and fell back to echoing the caller's Host. The agent disagreed with itself about

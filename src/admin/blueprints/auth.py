@@ -30,7 +30,6 @@ from src.core.domain_config import (
     get_sales_agent_url,
     get_super_admin_domain,
 )
-from src.core.http_utils import proxied_host
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
 
@@ -435,13 +434,10 @@ def tenant_google_auth(tenant_id):
     # Store originating host and tenant context in session for OAuth callback
     session["oauth_originating_host"] = host
 
-    # Store external domain and tenant context in session for OAuth callback
-    # Note: This works for same-domain OAuth but has limitations for cross-domain scenarios
-    approximated_host = proxied_host(request.headers)
-
-    if approximated_host:
-        session["oauth_external_domain"] = approximated_host
-        logger.info(f"Stored external domain for OAuth redirect: {approximated_host}")
+    # NO oauth_external_domain. It was written here from the Approximated vendor header and
+    # read NOWHERE — grep the tree: nothing pops it, and the Google callback below redirects
+    # off `oauth_originating_host`. So it was a session key that only ever cost a cookie.
+    # Its GAM sibling IS read, and the note there says why the Host now carries the value.
 
     session["oauth_tenant_context"] = tenant_id
 
@@ -765,15 +761,18 @@ def gam_authorize(tenant_id):
             flash(f"GAM OAuth not properly configured: {str(config_error)}", "error")
             return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
-        # Store tenant context for callback
+        # Store tenant context for callback. The Host is the operator's own domain, so it
+        # is what the callback sends them back to.
+        #
+        # NO gam_oauth_external_domain alongside it. That key held the Approximated vendor
+        # header because, behind that proxy, the Host named this BACKEND (adcp-sales-agent
+        # .fly.dev, the same for every publisher) and redirecting an operator there would
+        # have bounced them off their own domain mid-OAuth. The edge now folds the vendor
+        # header into Host and drops it (config/nginx/nginx-multi-tenant.conf), so this
+        # single value carries the operator's domain on both the proxied and the direct
+        # path, and the callback's two-branch redirect collapses to one.
         session["gam_oauth_tenant_id"] = tenant_id
         session["gam_oauth_originating_host"] = request.headers.get("Host", "")
-
-        # Store external domain context if available
-        approximated_host = proxied_host(request.headers)
-        if approximated_host:
-            session["gam_oauth_external_domain"] = approximated_host
-            logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")
 
         # Determine callback URI
         if get_settings().runtime.is_production:
@@ -831,7 +830,6 @@ def gam_callback():
         # Get tenant context from session
         tenant_id = session.pop("gam_oauth_tenant_id", state)
         originating_host = session.pop("gam_oauth_originating_host", None)
-        external_domain = session.pop("gam_oauth_external_domain", None)
 
         if not tenant_id:
             flash("Invalid OAuth state - no tenant context", "error")
@@ -926,13 +924,13 @@ def gam_callback():
             logger.warning(f"Could not suggest auto-detect: {detect_error}")
 
         # Redirect back to tenant settings
+        # Back to the domain the operator started on. This was two branches — the vendor
+        # header's value, then the Host — which since the edge normalization carried the
+        # same string on the proxied path and only the Host on the direct one.
         is_production = get_settings().runtime.is_production
-        if external_domain and is_production:
-            return redirect(f"https://{external_domain}/admin/tenant/{tenant_id}/settings")
-        elif originating_host and is_production:
+        if originating_host and is_production:
             return redirect(f"https://{originating_host}/admin/tenant/{tenant_id}/settings")
-        else:
-            return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
+        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id))
 
     except Exception as e:
         logger.error(f"Error in GAM OAuth callback: {e}", exc_info=True)

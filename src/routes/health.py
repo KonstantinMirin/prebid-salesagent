@@ -16,7 +16,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.http_utils import get_header_case_insensitive, proxied_host, requested_host
+from src.core.http_utils import requested_host
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -127,26 +127,19 @@ async def debug_tenant(request: Request):
     """Debug endpoint to check tenant detection from headers."""
     headers = dict(request.headers)
 
-    apx_host = proxied_host(headers)
-    host_header = get_header_case_insensitive(headers, "Host")
+    host_header = requested_host(headers)
 
     tenant_id = None
     tenant_name = None
     detection_method = None
 
-    if apx_host:
-        tenant_row = get_tenant_by_virtual_host(apx_host)
-        if tenant_row:
-            tenant_id = tenant_row.get("tenant_id")
-            tenant_name = tenant_row.get("name")
-            detection_method = "apx-incoming-host"
-
-    if not tenant_id and host_header:
-        # The Host, against virtual_host — the same lookup the resolver does. It used to
-        # report a "host-subdomain" method that guessed the tenant_id from the first label
-        # without consulting any row; that strategy is gone, and a
-        # debug endpoint claiming a detection method production does not have is worse than
-        # no endpoint.
+    if host_header:
+        # The Host, against virtual_host — the same lookup the resolver does, and now the
+        # only one. Two detection methods have been reported here and then deleted for the
+        # same reason: "host-subdomain" guessed the tenant_id from the host's first label
+        # without consulting any row, and "apx-incoming-host" read a vendor header the edge
+        # now folds into Host before this route sees it. A debug endpoint claiming a
+        # detection method production does not have is worse than no endpoint.
         tenant_row = get_tenant_by_virtual_host(host_header)
         if tenant_row:
             tenant_id = tenant_row.get("tenant_id")
@@ -157,7 +150,6 @@ async def debug_tenant(request: Request):
         "tenant_id": tenant_id,
         "tenant_name": tenant_name,
         "detection_method": detection_method,
-        "apx_incoming_host": apx_host,
         "host": host_header,
     }
 
@@ -173,17 +165,15 @@ async def debug_root(request: Request):
     """Debug endpoint to test root route logic without redirects."""
     headers = dict(request.headers)
 
-    apx_host = proxied_host(headers)
-    host_header = get_header_case_insensitive(headers, "Host")
-
     virtual_host = requested_host(headers)
 
     tenant_row = get_tenant_by_virtual_host(virtual_host) if virtual_host else None
 
+    # ``all_headers`` still carries whatever arrived, so an operator debugging a proxy can
+    # see every header verbatim; what is gone is this route naming one of them as a tenant
+    # input of its own.
     debug_info = {
         "all_headers": headers,
-        "apx_host": apx_host,
-        "host_header": host_header,
         "virtual_host": virtual_host,
         "tenant_found": tenant_row is not None,
         "tenant_id": tenant_row.get("tenant_id") if tenant_row else None,
@@ -226,15 +216,11 @@ async def debug_root_logic(request: Request):
     """Debug endpoint that exactly mimics the root route logic for testing."""
     headers = dict(request.headers)
 
-    apx_host = proxied_host(headers)
-    host_header = get_header_case_insensitive(headers, "Host")
     virtual_host = requested_host(headers)
 
     debug_info: dict[str, Any] = {
         "step": "initial",
         "virtual_host": virtual_host,
-        "apx_host": apx_host,
-        "host_header": host_header,
     }
 
     if virtual_host:

@@ -25,7 +25,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant
 from src.core.database.repositories import TenantLookupRepository
-from src.core.http_utils import proxied_host, requested_host
+from src.core.http_utils import requested_host
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +346,6 @@ def debug_headers():
         ),
         "routing_analysis": {
             "host_header": request.headers.get("Host"),
-            "apx_incoming_host": proxied_host(request.headers),
             "x_forwarded_host": request.headers.get("X-Forwarded-Host"),
             "x_original_host": request.headers.get("X-Original-Host"),
             "x_forwarded_for": request.headers.get("X-Forwarded-For"),

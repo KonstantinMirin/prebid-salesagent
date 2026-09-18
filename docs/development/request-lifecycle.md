@@ -333,10 +333,15 @@ row once:
    the CLI, a support tool). Unverified: an id naming no tenant fails at the
    principal lookup that is scoped by it. No proxy sets this header — the
    multi-tenant nginx used to inject it from the subdomain and no longer does.
-3. `Apx-Incoming-Host` header: the Approximated proxy's spelling of (1). That
-   service forwards to `APPROXIMATED_BACKEND_URL`, so the `Host` it sends names
-   your backend rather than the publisher's domain, and the original arrives
-   here instead.
+
+There is no third input. `Apx-Incoming-Host` was one: the Approximated proxy
+forwards to `APPROXIMATED_BACKEND_URL`, so the `Host` it sends names your backend
+rather than the publisher's domain, and the original arrived in that header. The
+edge now folds it into `Host` and drops it
+(`config/nginx/nginx-multi-tenant.conf`), which makes it deployment config. Reading
+it here as well was an active hazard, not just a duplicate: `_detect_tenant` tried
+`Host` first while `domain_routing` let the vendor header win, so one request could
+resolve to two different tenants depending on which resolver asked.
 
 Subdomain extraction is GONE, and so is the localhost fallback to the `default`
 tenant. A request that names no tenant this deployment serves is refused as a
@@ -393,7 +398,7 @@ flowchart TD
     hdrs["Request headers"] --> token["1. Authorization: Bearer"]
     token --> missing{"credential present?"}
     missing -->|"no, row requires one"| am["AdCPAuthRequiredError (AUTH_MISSING)"]
-    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant → Apx-Incoming-Host\nnone of them → CONFIGURATION_ERROR\nTenantContext.load"]
+    missing -->|"otherwise"| tenant["3. Tenant: Host → x-adcp-tenant\nneither → CONFIGURATION_ERROR\nTenantContext.load"]
     tenant --> policy{"3b. seller's brand policy\nrequires a caller?"}
     policy -->|"yes, and nothing presented"| am
     policy -->|"no"| principal["4. Principal inside that tenant\n(get_principal_from_token)"]

@@ -21,18 +21,28 @@ class TestRouteLandingPage:
             assert result.effective_host == "admin.sales-agent.example.com"
             mock_is_admin.assert_called_once_with("admin.sales-agent.example.com")
 
-    def test_admin_domain_with_approximated_header(self):
-        """Admin domains via Approximated should route to type=admin."""
+    def test_the_proxy_vendor_header_is_not_a_host_input(self):
+        """A proxied request is routed by its ``Host``, which the EDGE has already set.
+
+        This used to assert the opposite — that ``Apx-Incoming-Host`` took precedence over
+        ``Host`` — while ``_detect_tenant`` read them the other way round, so one request
+        could resolve to two different tenants depending on which resolver asked. nginx
+        folds the vendor header into ``Host`` and drops it
+        (``config/nginx/nginx-multi-tenant.conf``), so the app has one host input.
+        """
         from unittest.mock import patch
 
         with patch("src.core.domain_routing.is_admin_domain") as mock_is_admin:
-            mock_is_admin.return_value = True
-            headers = {"Host": "backend.internal.com", "Apx-Incoming-Host": "admin.sales-agent.example.com"}
-            result = route_landing_page(headers)
+            with patch("src.core.domain_routing.get_tenant_by_virtual_host") as mock_get_tenant:
+                mock_is_admin.return_value = False
+                mock_get_tenant.return_value = None
 
-            assert result.type == "admin"
-            assert result.tenant is None
-            assert result.effective_host == "admin.sales-agent.example.com"
+                headers = {"Host": "backend.internal.com", "Apx-Incoming-Host": "admin.sales-agent.example.com"}
+                result = route_landing_page(headers)
+
+                assert result.effective_host == "backend.internal.com"
+                mock_is_admin.assert_called_once_with("backend.internal.com")
+                mock_get_tenant.assert_called_once_with("backend.internal.com")
 
     def test_admin_domain_spoofing_prevented(self):
         """Malicious domains starting with 'admin.' should NOT route to admin."""
@@ -98,28 +108,23 @@ class TestRouteLandingPage:
 
     @patch("src.core.domain_routing.get_tenant_by_virtual_host")
     @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    def test_approximated_header_takes_precedence(self, mock_is_admin, mock_get_tenant):
-        """Apx-Incoming-Host should take precedence over Host header."""
+    def test_the_host_is_what_the_tenant_is_looked_up_by(self, mock_is_admin, mock_get_tenant):
+        """The ``Host`` the edge produced is the one and only lookup key."""
         mock_get_tenant.return_value = {"tenant_id": "publisher", "name": "Publisher Inc"}
 
-        headers = {"Host": "backend.internal.com", "Apx-Incoming-Host": "sales-agent.publisher.com"}
+        headers = {"Host": "sales-agent.publisher.com"}
         result = route_landing_page(headers)
 
         assert result.effective_host == "sales-agent.publisher.com"
+        assert result.tenant == {"tenant_id": "publisher", "name": "Publisher Inc"}
         mock_get_tenant.assert_called_once_with("sales-agent.publisher.com")
 
     @patch("src.core.domain_routing.is_admin_domain", return_value=True)
     def test_case_insensitive_headers(self, mock_is_admin):
-        """Headers should work with different cases."""
-        # Test lowercase apx-incoming-host
-        headers = {"host": "backend.internal.com", "apx-incoming-host": "admin.sales-agent.example.com"}
-        result = route_landing_page(headers)
-        assert result.type == "admin"
-
-        # Test uppercase Apx-Incoming-Host
-        headers = {"Host": "backend.internal.com", "Apx-Incoming-Host": "admin.sales-agent.example.com"}
-        result = route_landing_page(headers)
-        assert result.type == "admin"
+        """The Host is read case-insensitively, per RFC 7230."""
+        assert route_landing_page({"host": "admin.sales-agent.example.com"}).type == "admin"
+        assert route_landing_page({"Host": "admin.sales-agent.example.com"}).type == "admin"
+        assert route_landing_page({"HOST": "admin.sales-agent.example.com"}).type == "admin"
 
 
 class TestRoutingResultDataclass:

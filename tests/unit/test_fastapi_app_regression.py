@@ -5,7 +5,6 @@ Each test targets a specific beads issue to prevent regression.
 
 : Non-async receive lambda (ASGI protocol)
 : CORS origins configuration
-: Apx-Incoming-Host hostname validation
 : Debug endpoints gated behind ADCP_TESTING
 : format_resolver async event loop fix
 """
@@ -130,11 +129,6 @@ class TestCORSConfiguration:
         assert acao == allowed_origin, (
             f"Allowed origin '{allowed_origin}' should get matching CORS header, got '{acao}'"
         )
-
-
-# ---------------------------------------------------------------------------
-# [P0]: Apx-Incoming-Host hostname validation
-# ---------------------------------------------------------------------------
 
 
 # ---------------------------------------------------------------------------

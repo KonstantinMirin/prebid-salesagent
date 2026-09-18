@@ -1,48 +1,43 @@
-"""The host a request names, read in one place.
+"""The host a request is for, read in one place.
 
-``Apx-Incoming-Host`` (the Approximated proxy's spelling of the host the client asked
-for) and ``Host`` were read by a ladder copied into eleven modules, each with its own
-case handling. These are the pure functions that ladder collapsed to; they take a header
-mapping and return a string, so they are graded here.
+``requested_host`` is a pure function over a header mapping, which is why it is graded
+here. What it does NOT read is the point of several of these: the ``Apx-Incoming-Host``
+ladder it replaced lived in eleven modules whose copies disagreed about which header
+wins, and the edge now folds that header into ``Host`` before the app sees anything.
+
+The buyer-visible half of that deletion is graded on all four transports by
+``@T-TENANTID-vendor-header-ignored``; what is graded here is only the pure function.
 """
 
-from src.core.http_utils import hostname_of, proxied_host, requested_host
-
-
-class TestProxiedHost:
-    """``proxied_host`` is the only reader of the Approximated header's name."""
-
-    def test_reads_the_canonical_spelling(self):
-        assert proxied_host({"Apx-Incoming-Host": "acme.example.com"}) == "acme.example.com"
-
-    def test_reads_a_lowercase_spelling(self):
-        assert proxied_host({"apx-incoming-host": "acme.example.com"}) == "acme.example.com"
-
-    def test_reads_a_shouted_spelling(self):
-        assert proxied_host({"APX-INCOMING-HOST": "acme.example.com"}) == "acme.example.com"
-
-    def test_absent_header_is_none(self):
-        assert proxied_host({"Host": "acme.example.com"}) is None
-
-    def test_no_headers_at_all_is_none(self):
-        assert proxied_host({}) is None
+from src.core.http_utils import hostname_of, requested_host
 
 
 class TestRequestedHost:
-    """``requested_host`` is the proxy's spelling, else ``Host``."""
+    """``requested_host`` is the ``Host``, and nothing else is a host input."""
 
-    def test_proxy_header_wins_over_host(self):
-        headers = {"Host": "backend.internal", "Apx-Incoming-Host": "acme.example.com"}
-        assert requested_host(headers) == "acme.example.com"
-
-    def test_falls_back_to_host(self):
+    def test_reads_the_host(self):
         assert requested_host({"Host": "acme.example.com"}) == "acme.example.com"
 
-    def test_falls_back_to_a_lowercase_host(self):
+    def test_reads_a_lowercase_host(self):
         assert requested_host({"host": "acme.example.com"}) == "acme.example.com"
 
-    def test_neither_header_is_none(self):
+    def test_no_host_is_none(self):
         assert requested_host({"User-Agent": "curl/8"}) is None
+
+    def test_no_headers_at_all_is_none(self):
+        assert requested_host({}) is None
+
+    def test_the_vendor_header_is_not_a_host_input(self):
+        """A request carrying only the proxy's header names no host.
+
+        The edge folds it into ``Host``; an app-side reader would be a second spelling of
+        the same fact, and the two ladders that existed disagreed about which one wins.
+        """
+        assert requested_host({"Apx-Incoming-Host": "acme.example.com"}) is None
+
+    def test_the_vendor_header_does_not_override_the_host(self):
+        headers = {"Host": "backend.internal", "Apx-Incoming-Host": "acme.example.com"}
+        assert requested_host(headers) == "backend.internal"
 
 
 class TestHostnameOf:
