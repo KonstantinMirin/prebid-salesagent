@@ -23,26 +23,38 @@ import sys
 from pathlib import Path
 
 RETIRED = (
-    "ERROR_CODE_MAPPING", "translate_error_code", "WIRE_STANDARD_CODES", "RECOVERY_BY_WIRE_CODE",
-    "_default_status_code", "_default_recovery", "_default_suggestion",
-    "synthesized_error_envelope", "ImplDispatcher", "Transport.IMPL",
+    "ERROR_CODE_MAPPING",
+    "translate_error_code",
+    "WIRE_STANDARD_CODES",
+    "RECOVERY_BY_WIRE_CODE",
+    "_default_status_code",
+    "_default_recovery",
+    "_default_suggestion",
+    "synthesized_error_envelope",
+    "ImplDispatcher",
+    "Transport.IMPL",
     "build_two_layer_error_envelope",
 )
 DELETED_MODULES = (
-    "src.core.tool_context", "src.core.transport_helpers", "src.core.testing_hooks",
-    "src.core.testing_api", "src.core.request_compat", "src.core.protocol_envelope",
-    "src.core.version_compat", "src.routes.rest_compat_middleware", "src.core.signing_contract",
-    "src.core.validation", "src.core.security.url_validator", "request_verifier_middleware",
+    "src.core.tool_context",
+    "src.core.transport_helpers",
+    "src.core.testing_hooks",
+    "src.core.testing_api",
+    "src.core.request_compat",
+    "src.core.protocol_envelope",
+    "src.core.version_compat",
+    "src.routes.rest_compat_middleware",
+    "src.core.signing_contract",
+    "src.core.validation",
+    "src.core.security.url_validator",
+    "request_verifier_middleware",
 )
 # Module names get a RIGHT boundary: `src.core.validation` must not match
 # `src.core.validation_helpers`, which #1721 KEPT. That prefix collision already produced a
 # 22-importer overcount once during this merge; it is the same class of error as an
 # unanchored grep, pointed the other way.
 _NEEDLE = re.compile(
-    "|".join(
-        [re.escape(s) for s in RETIRED]
-        + [re.escape(m) + r"(?![A-Za-z0-9_])" for m in DELETED_MODULES]
-    )
+    "|".join([re.escape(s) for s in RETIRED] + [re.escape(m) + r"(?![A-Za-z0-9_])" for m in DELETED_MODULES])
 )
 _AUTHORED = re.compile(r"AdCP[A-Za-z]*Error\(.*message\s*=")
 
