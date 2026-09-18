@@ -260,7 +260,7 @@ class Tenant(Base, JSONValidatorMixin):
         mandatory instead is a design change this does not make, because a publisher without
         a domain is a real seller (a print title) rather than a misconfiguration.
         """
-        from src.core.config_loader import hostname_of
+        from src.core.http_utils import hostname_of
 
         return hostname_of(self.virtual_host) if self.virtual_host else None
 

@@ -18,6 +18,7 @@ from typing import Literal
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
 from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.domain_config import is_admin_domain
+from src.core.http_utils import requested_host
 
 
 @dataclass
@@ -76,12 +77,10 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
         ... })
         RoutingResult(type="admin", tenant=None, effective_host="admin.sales-agent.example.com")
     """
-    # Get host from headers (Approximated proxy or direct)
-    apx_host = request_headers.get("apx-incoming-host") or request_headers.get("Apx-Incoming-Host")
-    host_header = request_headers.get("host") or request_headers.get("Host")
-
-    # Use whichever host is available (proxy header takes precedence)
-    effective_host = apx_host or host_header
+    # The host this request was addressed to — proxy header, else Host. One owner
+    # (src/core/http_utils.py), so this module cannot disagree with the ten other
+    # readers about which header wins or how its case is spelled.
+    effective_host = requested_host(request_headers)
 
     if not effective_host:
         return RoutingResult("unknown", None, "")

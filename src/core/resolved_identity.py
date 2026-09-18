@@ -150,6 +150,7 @@ class AccountIdentity(ResolvedIdentity):
 
 
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
+from src.core.http_utils import proxied_host
 
 
 def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
@@ -217,7 +218,7 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
         tenant_id = _get_header_case_insensitive(headers, "x-adcp-tenant")
 
     if not tenant_id:
-        apx_host = _get_header_case_insensitive(headers, "apx-incoming-host")
+        apx_host = proxied_host(headers)
         if apx_host:
             tenant_id = tenant_id_for(virtual_host=apx_host)
 

@@ -41,6 +41,7 @@ from src.core.config_loader import is_single_tenant_mode
 from src.core.domain_config import (
     get_session_cookie_domain,
 )
+from src.core.http_utils import proxied_host
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -236,7 +237,7 @@ def create_app(config=None, settings=None):
             return None
 
         # Check for Apx-Incoming-Host header (indicates request from Approximated)
-        apx_host = request.headers.get("Apx-Incoming-Host") or request.headers.get("apx-incoming-host")
+        apx_host = proxied_host(request.headers)
         if not apx_host:
             logger.debug(f"No Apx-Incoming-Host header for /admin request: {request.path}")
             return None  # Not from Approximated, allow normal routing

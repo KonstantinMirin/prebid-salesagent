@@ -16,6 +16,7 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant as ModelTenant
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.http_utils import get_header_case_insensitive, proxied_host, requested_host
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -126,8 +127,8 @@ async def debug_tenant(request: Request):
     """Debug endpoint to check tenant detection from headers."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
+    apx_host = proxied_host(headers)
+    host_header = get_header_case_insensitive(headers, "Host")
 
     tenant_id = None
     tenant_name = None
@@ -172,10 +173,10 @@ async def debug_root(request: Request):
     """Debug endpoint to test root route logic without redirects."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
+    apx_host = proxied_host(headers)
+    host_header = get_header_case_insensitive(headers, "Host")
 
-    virtual_host = apx_host or host_header
+    virtual_host = requested_host(headers)
 
     tenant_row = get_tenant_by_virtual_host(virtual_host) if virtual_host else None
 
@@ -206,9 +207,7 @@ async def debug_landing(request: Request):
     """Debug endpoint to test landing page generation directly."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
-    virtual_host = apx_host or host_header
+    virtual_host = requested_host(headers)
 
     if virtual_host:
         tenant_row = get_tenant_by_virtual_host(virtual_host)
@@ -227,9 +226,9 @@ async def debug_root_logic(request: Request):
     """Debug endpoint that exactly mimics the root route logic for testing."""
     headers = dict(request.headers)
 
-    apx_host = headers.get("apx-incoming-host") or headers.get("Apx-Incoming-Host")
-    host_header = headers.get("host") or headers.get("Host")
-    virtual_host = apx_host or host_header
+    apx_host = proxied_host(headers)
+    host_header = get_header_case_insensitive(headers, "Host")
+    virtual_host = requested_host(headers)
 
     debug_info: dict[str, Any] = {
         "step": "initial",
