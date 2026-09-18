@@ -47,7 +47,8 @@ from typing import Any
 from sqlalchemy import select
 
 from src.core.database.models import PushNotificationConfig
-from src.services.webhook_delivery_service import DELIVERY_REPORT_TASK_TYPE, WebhookDeliveryService
+from src.core.webhooks.delivery import DELIVERY_LOG_TASK_TYPES
+from src.services.webhook_delivery_service import WebhookDeliveryService
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import CircuitBreakerMixin, WebhookOutcomeRowsMixin
 from tests.helpers.log_capture import LogCaptureHandler
@@ -127,12 +128,24 @@ class CircuitBreakerEnv(WebhookOutcomeRowsMixin, CircuitBreakerMixin, Integratio
         ``media_buy_id`` is a foreign key into ``media_buys``, the writers swallow the
         integrity error, and without the parent row there is nothing to read.
         """
-        rows = self.recorded_outcomes(media_buy_id, task_type=DELIVERY_REPORT_TASK_TYPE, status="failed")
+        # WHICH SENDER DELIVERED IS NOT THIS ASSERTION'S SUBJECT, and reading one
+        # ``task_type`` made it the subject: ``delivery_report`` is what the in-process
+        # ``WebhookDeliveryService`` stamps, while on e2e_rest the live server's
+        # ``DeliveryWebhookScheduler`` stamps ``media_buy_delivery``, so this could only ever
+        # find zero rows there however well production behaved. The set is imported from
+        # ``records_delivery_log``'s own authority rather than restated, so the reader of the
+        # log admits exactly what its writer does.
+        rows = [
+            row
+            for task_type in DELIVERY_LOG_TASK_TYPES
+            for row in self.recorded_outcomes(media_buy_id, task_type=task_type, status="failed")
+        ]
         assert rows, (
-            f"the sender recorded no failed {DELIVERY_REPORT_TASK_TYPE} row for {media_buy_id!r}. "
-            "A non-retryable rejection must leave an operator-visible trace; if the row is "
-            "missing because media_buys has no such id, the harness owes a make_media_buy() call "
-            "(the writers swallow the foreign-key error and leave zero rows)."
+            f"the sender recorded no failed row for {media_buy_id!r} under any of "
+            f"{list(DELIVERY_LOG_TASK_TYPES)}. A non-retryable rejection must leave an "
+            "operator-visible trace; if the row is missing because media_buys has no such id, the "
+            "harness owes a make_media_buy() call (the writers swallow the foreign-key error and "
+            "leave zero rows)."
         )
         statuses = [getattr(r, "http_status_code", None) for r in rows]
         assert http_status in statuses, (

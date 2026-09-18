@@ -70,6 +70,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections.abc import Iterator
 from urllib.parse import parse_qs
 
@@ -202,17 +203,30 @@ class _CaptureRequestHandler(JsonRequestHandler):
         return self.server.store  # type: ignore[attr-defined]
 
     def _wire_entry(self, raw: bytes) -> dict:
-        """The exact request as it arrived: path, headers verbatim, body base64.
+        """The exact request as it arrived: path, headers verbatim, body base64, receipt time.
 
         Header names are kept as sent rather than lower-cased — readers do a
         case-insensitive lookup, and normalizing here would destroy evidence
         about what the sender actually emitted. The body is base64 so bytes that
         are not valid UTF-8 survive the JSON readback hop intact.
+
+        ``received_at`` is a monotonic receipt stamp, and it is the only way a retry
+        SCHEDULE is observable across the Docker boundary. The runner's ``env.mock["sleep"]``
+        records what THIS process waited; under e2e_rest the sender is the live server, so
+        its waits happen in another process entirely and that mock stays empty. What the
+        receiver can still see is WHEN each attempt landed, and the gaps between consecutive
+        receipts of the same key ARE the waits — measured on the wire rather than
+        reconstructed from a patched clock.
+
+        ``time.monotonic`` rather than wall clock deliberately: the gaps are the whole
+        content, and a wall clock can step backwards under NTP mid-scenario, which would
+        read as a negative wait.
         """
         return {
             "path": self.path,
             "headers": dict(self.headers.items()),
             "body_b64": base64.b64encode(raw).decode("ascii"),
+            "received_at": time.monotonic(),
         }
 
     def _read_json_body(self) -> dict:

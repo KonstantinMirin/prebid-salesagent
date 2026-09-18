@@ -666,15 +666,17 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         # schedule becomes gap arithmetic, graded by the same shared
         # assert_backoff_schedule with jitter=None) and when a server-side log
         # read-back surface exists.
-        (
-            "tests/harness/_mixins.py",
-            "assert_retry_backoff_schedule",
-            "the BR-RULE-029 backoff DURATIONS are read off the runner's patched clock "
-            "(env.mock['sleep'] / ['random']); under e2e_rest the sender is the live server — "
-            "deliver_webhook's e2e realization drives the deployment's own delivery — so the "
-            "waits happen in another process, and the capture service records no receipt "
-            "times to reconstruct them from",
-        ),
+        #
+        # GRADUATED: assert_retry_backoff_schedule. Its declaration named the missing
+        # capability -- "the capture service records no receipt times to reconstruct them
+        # from" -- and that capability was BUILT rather than the declaration re-justified:
+        # every capture now carries a monotonic ``received_at``
+        # (tests/e2e/webhook_capture_service.py::_wire_entry), so the gaps between
+        # consecutive receipts ARE the waits, measured on the wire. The e2e realization
+        # (_mixins.py::_e2e_assert_retry_backoff_schedule) grades the wait COUNT exactly and
+        # each gap against its own rung of the 1s/2s/4s schedule with the jitter range as the
+        # upper bound. Only the white-box DRAW COUNT has no wire projection, and the
+        # realization says so in place rather than leaving a silent difference.
         # #1802: get_service() under e2e_rest is a fresh, in-process
         # WebhookDeliveryService never touched by the live server's actual
         # delivery — service._circuit_breakers has no wire surface at all.

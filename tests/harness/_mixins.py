@@ -10,6 +10,7 @@ Mixins may call ``self._commit_factory_data()`` which is a no-op in unit mode.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from collections.abc import Callable
@@ -193,16 +194,152 @@ def _e2e_last_delivery(env: Any) -> _CapturedDelivery:
     return delivered[-1]
 
 
+def _e2e_raw_captures(env: Any) -> list[dict]:
+    """Every wire entry the capture service holds for this env's key, in arrival order.
+
+    The SERVICE DICTS, deliberately, not ``ReceivedView.raw()``: that returns
+    ``CapturedWebhook`` values, which model the request a receiving socket saw (url,
+    headers, content) and drop the service's own bookkeeping — including the
+    ``received_at`` stamp the retry schedule is reconstructed from.
+    """
+    from tests.e2e._webhook_capture import captures
+
+    return captures(env._capture_key).get("received_raw") or []
+
+
+def _e2e_captures_since_trigger(env: Any) -> list[dict]:
+    """The wire entries that arrived AFTER the scenario's delivery trigger.
+
+    The server's own background sweep (DELIVERY_WEBHOOK_INTERVAL=5) keeps delivering the
+    same row for as long as the scenario runs, so an absolute capture count conflates the
+    sender's retry behaviour with the scenario's wall-clock duration. The watermark is set
+    by :func:`_e2e_deliver_webhook` immediately before it asks the server to deliver; with
+    no watermark (a scenario that never triggered) this is the whole list, which is the
+    right reading for the legs that assert nothing was ever sent.
+    """
+    captures = _e2e_raw_captures(env)
+    return captures[getattr(env, "_delivery_trigger_watermark", 0) :]
+
+
+def _e2e_attempts_at_one_delivery(env: Any) -> list[dict]:
+    """The capture entries that are ATTEMPTS AT THE SAME DELIVERY, in arrival order.
+
+    The watermark in :func:`_e2e_deliver_webhook` excludes everything the background sweep
+    delivered BEFORE the trigger, but the sweep keeps running during the window too:
+    DELIVERY_WEBHOOK_INTERVAL=5 against a retry ladder that is ~4s wide means a second,
+    independent delivery of the same row can land in the middle of the first one's retries.
+    Counting the window naively conflates the two, which is how a correct 3-attempt ladder
+    (``max_attempts=3`` at webhook_delivery_service.py:753, and the seam counts TOTAL
+    attempts, not retries after the first) reads as four.
+
+    THE BYTES ARE THE DISCRIMINATOR, and they are exact rather than heuristic. A retry
+    re-sends the SAME body -- it must, because the RFC 9421 signature covers
+    ``content-digest`` over those bytes, so a body that changed between attempts would not
+    verify. A separate delivery builds a fresh envelope with its own timestamp. So attempts
+    at one delivery are byte-identical and two deliveries never are.
+
+    Returns the run belonging to the delivery the trigger caused: the first body seen in
+    the window. An empty window yields an empty list, which is the right reading for the
+    legs asserting nothing was ever sent.
+    """
+    window = _e2e_captures_since_trigger(env)
+    if not window:
+        return []
+    first_body = window[0].get("body_b64")
+    return [entry for entry in window if entry.get("body_b64") == first_body]
+
+
 def _e2e_delivery_attempts(env: Any) -> int:
     """E2E realization of :attr:`LocalOriginMixin.delivery_attempts`.
 
-    Counts what the capture service actually received. A rejected delivery is
-    still recorded, so this counts ATTEMPTS the server made — which is what
-    "and no further attempt arrives" needs in order to mean anything.
+    Counts the attempts at ONE delivery since the trigger. A rejected delivery is still
+    recorded, so this counts ATTEMPTS the server made -- which is what "and no further
+    attempt arrives" needs in order to mean anything -- while the per-delivery grouping
+    keeps a concurrent background sweep from inflating the number.
     """
-    from tests.e2e._webhook_capture import ReceivedView
+    return len(_e2e_attempts_at_one_delivery(env))
 
-    return len(ReceivedView(env._capture_key))
+
+#: How much wall-clock slop a receipt gap is allowed on top of the scheduled wait, to
+#: absorb TLS, the proxy hop and the sender's own serialization. Deliberately smaller than
+#: the 1s doubling step, so it can never let one rung of the schedule pass for the next.
+_RECEIPT_GAP_SLOP_SECONDS = 0.75
+
+
+def _e2e_assert_retry_backoff_schedule(env: Any, *, expected_sleeps: int = 2, grade_jitter_draws: bool = False) -> None:
+    """E2E realization of :meth:`assert_retry_backoff_schedule`, read off the WIRE.
+
+    This was declared ``e2e_unsupported`` on the ground that the waits happen in another
+    process "and the capture service records no receipt times to reconstruct them from".
+    The first half is true and unfixable; the second half was a missing capability, and it
+    is now present: every capture carries a monotonic ``received_at``, so the GAPS between
+    consecutive receipts of the same key are the waits, measured on the wire instead of
+    reconstructed from a patched clock.
+
+    What the wire can carry, and therefore what this grades: the DOUBLING. Each gap is held
+    against its own rung of ``BR_RULE_029_BASE_DELAYS`` — the same schedule constant the
+    in-process leg and the webhook integration tests grade, imported rather than restated —
+    with the live jitter range as the upper bound. A delay that stopped doubling, or one
+    that jittered outside ``uniform(0, 1)``, lands outside its window.
+
+    THE GAPS ARE TAKEN WITHIN ONE DELIVERY, not across the window. The background sweep
+    runs every 5s against a ~4s ladder, so a second delivery of the same row lands among the
+    first one's retries; :func:`_e2e_attempts_at_one_delivery` separates them by body bytes,
+    which retries share by signature necessity. Without that, a correct 3-attempt ladder
+    (``max_attempts=3``, TOTAL attempts) presents as four receipts and the count is wrong
+    for a reason that has nothing to do with backoff.
+
+    WHY THE SHARED ``assert_backoff_schedule`` IS NOT CALLED ON THESE NUMBERS. It grades
+    SLEEP DURATIONS, and its ``jitter=None`` window is the half-open ``[base, base + 1)``.
+    These are RECEIPT DELTAS: each carries the sleep plus TLS, the proxy hop and the
+    sender's own serialization, so a correct wait can legitimately exceed ``base + 1``.
+    Feeding wire timings to an assertion written for clock readings would trade a real
+    regression signal for flakiness. The schedule itself is still shared; only the window
+    differs, and it differs because the measurement does.
+
+    What it cannot grade: the DRAW COUNT. ``grade_jitter_draws`` asks that production called
+    ``random.uniform(0, 1)`` once per wait, which is white-box on the sender's process and
+    has no wire projection. The jitter is still BOUNDED here — a gap outside
+    ``[rung, rung + 1 + slop)`` fails — so the parameter narrows nothing further on this
+    transport. It is accepted rather than refused so the in-process leg keeps grading the
+    draws it can see. Stated here rather than left as a silent difference.
+    """
+    from tests.helpers.backoff_assertions import BR_RULE_029_BASE_DELAYS
+
+    receipts = [entry.get("received_at") for entry in _e2e_attempts_at_one_delivery(env)]
+    missing = [index for index, value in enumerate(receipts) if not isinstance(value, int | float)]
+    assert not missing, (
+        "the capture service must stamp every entry with a monotonic received_at for the "
+        f"retry schedule to be observable at all; entries {missing} carry none. The service "
+        "bind-mounts the repo (docker-compose.e2e.yml: `.:/app`), so a container started "
+        "before this field existed is still running the old module -- restart "
+        "webhook-capture rather than relaxing the assertion."
+    )
+    assert len(receipts) == expected_sleeps + 1, (
+        f"expected {expected_sleeps + 1} attempts at this delivery ({expected_sleeps} waits "
+        f"between them), got {len(receipts)}. Fewer means the retry schedule was never "
+        "entered or was cut short; more means it did not stop where max_attempts says."
+    )
+
+    # ``pairwise``, not ``zip(receipts, receipts[1:])``: the pairing is deliberately offset
+    # by one, so ``strict=True`` on that zip raises on every well-formed input.
+    gaps = [later - earlier for earlier, later in itertools.pairwise(receipts)]
+    assert len(gaps) <= len(BR_RULE_029_BASE_DELAYS), (
+        f"observed {len(gaps)} waits but BR-RULE-029 defines only "
+        f"{len(BR_RULE_029_BASE_DELAYS)} ({list(BR_RULE_029_BASE_DELAYS)}): "
+        f"{[round(gap, 3) for gap in gaps]}. More attempts than the ladder allows is a "
+        "retry loop that does not terminate where the rule says it does."
+    )
+    for index, gap in enumerate(gaps):
+        rung = BR_RULE_029_BASE_DELAYS[index]
+        ceiling = rung + 1.0 + _RECEIPT_GAP_SLOP_SECONDS  # + jitter uniform(0, 1), + wire slop
+        assert rung <= gap < ceiling, (
+            f"retry {index + 1} landed {gap:.3f}s after the previous attempt; BR-RULE-029 puts "
+            f"it on the {rung:.0f}s rung of the exponential schedule plus jitter in [0, 1), so "
+            f"the wire window is [{rung:.0f}, {ceiling:.2f}). A gap below the rung means the "
+            "wait was skipped or shortened; above it means the schedule stopped doubling, the "
+            "jitter range grew, or a background sweep delivery landed inside the ladder."
+        )
 
 
 # Patch target for the send-time gate as the DELIVERY paths reach it. One constant
@@ -215,6 +352,13 @@ def _e2e_delivery_attempts(env: Any) -> int:
 # (salesagent-og9k.5 / og9k.8).
 WEBHOOK_VALIDATE_TARGET = "src.core.webhook_validator.WebhookURLValidator.validate_outbound_webhook_url"
 WEBHOOK_VALIDATE_EXTERNAL_PATCH: dict[str, str] = {"validate": WEBHOOK_VALIDATE_TARGET}
+
+
+#: The statuses ``get_media_buy_delivery`` will report on, read off production's own
+#: ``status_filter`` (``src/core/tools/media_buy_delivery.py:158``) rather than restated as a
+#: harness opinion: a row outside this set is declined with an advisory
+#: ``MEDIA_BUY_NOT_FOUND`` and no webhook is ever sent.
+_DELIVERABLE_STATUSES = frozenset({"active", "completed"})
 
 
 def _seed_media_buy_for_delivery(env: Any, media_buy_id: str) -> Any:
@@ -231,6 +375,20 @@ def _seed_media_buy_for_delivery(env: Any, media_buy_id: str) -> Any:
     comes with it because the report the server builds is a REAL delivery poll: without
     a mock adapter row the poll returns errors and the server declines to send, which
     would read as a signing failure 45 seconds later.
+
+    UNCONDITIONAL MEANS THE STATUS TOO, and that is what this function stopped doing.
+    ``get_media_buy_delivery`` selects on ``status_filter=[active, completed]``
+    (``src/core/tools/media_buy_delivery.py:158``), so a row outside that set is one the
+    live server declines with an advisory ``MEDIA_BUY_NOT_FOUND`` and zero POSTs. The
+    existence guard below used to return early on any row it found, and UC-004's Given
+    ``_ensure_delivery_log_parent`` creates ``mb_001`` through ``make_media_buy`` with
+    ``MediaBuyFactory``'s default ``pending_approval`` -- so on e2e_rest the two seeders
+    silently disagreed about the same row and this one deferred. The scenario then graded
+    an absence of deliveries that had nothing to do with retry behaviour.
+
+    Two seeders for one row is the defect; one owner of its DELIVERABILITY is the fix. A
+    row that already exists is upgraded rather than left, because every caller of this
+    function is asking the live server to report on it.
     """
     from sqlalchemy import select
 
@@ -251,6 +409,8 @@ def _seed_media_buy_for_delivery(env: Any, media_buy_id: str) -> Any:
     media_buy = session.scalars(select(MediaBuy).filter_by(tenant_id=env._tenant_id, media_buy_id=media_buy_id)).first()
     if media_buy is None:
         media_buy = MediaBuyFactory(tenant=tenant, principal=principal, media_buy_id=media_buy_id, status="active")
+    elif media_buy.status not in _DELIVERABLE_STATUSES:
+        media_buy.status = "active"
     set_adapter_test_behavior(env, env._tenant_id, manual_approval_required=False)
     env._commit_factory_data()
     return media_buy
@@ -367,6 +527,15 @@ def _deliver_via_live_server(
     media_buy = _seed_media_buy_for_delivery(env, media_buy_id)
     if env.webhook_capture_key_was_handed_out:
         _attach_reporting_webhook(env, media_buy)
+    # The TRIGGER WINDOW opens here, and everything the scenario counts is read relative
+    # to it. ``run_all_tests.sh`` exports DELIVERY_WEBHOOK_INTERVAL=5, so the server's own
+    # background sweep is delivering the same row every five seconds; a raw capture count
+    # therefore measures "how long the scenario took" as much as "how many attempts the
+    # sender made", and the retry gaps read off those captures would include a sweep
+    # interval sitting between two real retries. Watermarking is the smaller of the two
+    # available fixes (the other being a drain) and it is the one that keeps the captures
+    # the OTHER Thens read intact.
+    env._delivery_trigger_watermark = len(_e2e_raw_captures(env))
     triggered = trigger_delivery_webhook_via_admin(
         env.e2e_config.base_url, tenant_id=env._tenant_id, media_buy_id=media_buy_id
     )
@@ -1609,15 +1778,7 @@ class CircuitBreakerMixin(LocalOriginMixin):
             f"schedule was entered {backoff_waits} time(s) — the destination was dialled, not refused"
         )
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the BR-RULE-029 backoff DURATIONS are read off the runner's patched clock "
-            "(env.mock['sleep'] / ['random']); under e2e_rest the sender is the live server — "
-            "deliver_webhook's e2e realization drives the deployment's own delivery — so the "
-            "waits happen in another process, and the capture service records no receipt "
-            "times to reconstruct them from"
-        )
-    )
+    @realize_e2e(_e2e_assert_retry_backoff_schedule)
     def assert_retry_backoff_schedule(self, *, expected_sleeps: int = 2, grade_jitter_draws: bool = False) -> None:
         """Grade the retry schedule production actually waited: 1s/2s/4s + jitter.
 
