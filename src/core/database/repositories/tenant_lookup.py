@@ -25,7 +25,14 @@ TWO QUESTIONS, AND THE DIFFERENCE BETWEEN THEM IS LOAD-BEARING:
 
 ``config_loader``'s four routing functions are thin wrappers over the second
 group — they hold the session and the dict serialization, and issue no query of
-their own. Nothing else in ``src/`` queries ``tenants`` across tenants.
+their own, and so is the admin plane's ``core.get_tenant_from_hostname``.
+
+The scope of that claim, exactly: nothing under ``src/`` answers WHICH TENANT a
+request names outside this class. Cross-tenant LISTINGS are a third question and
+five of them are still written as raw selects (``admin/sync_api.py``,
+``admin/domain_access.py``, ``admin/blueprints/core.py``); they want a listing
+method here or on a sibling. GH #2263 tracks the rest, and the import ban that
+would make a second lookup unrepresentable.
 """
 
 from __future__ import annotations
