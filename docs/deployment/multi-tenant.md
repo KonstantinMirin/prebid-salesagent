@@ -107,7 +107,39 @@ APPROXIMATED_BACKEND_URL=sales-agent.yourdomain.com
 2. The system registers the domain with the Approximated proxy.
 3. The tenant adds a CNAME record: `sales.publisher.com → proxy.approximated.app`.
 4. Requests to `sales.publisher.com` are proxied to your deployment.
-5. The `Apx-Incoming-Host` header identifies which tenant.
+5. **nginx normalizes the vendor header away, and the app never sees it.**
+
+### Why step 5 exists
+
+Approximated forwards to `APPROXIMATED_BACKEND_URL`, so the `Host` it sends names *your
+backend* — the same value for every publisher — and the publisher's own domain arrives in
+`Apx-Incoming-Host`. That is the only reason the header exists: behind that proxy, `Host`
+identifies nobody.
+
+`config/nginx/nginx-multi-tenant.conf` folds it back into `Host` and drops the header on the
+way through, so a request arriving via Approximated is indistinguishable from one that named
+the tenant's host directly:
+
+| request nginx receives | what the app receives |
+|---|---|
+| `Host: adcp-sales-agent.fly.dev` + `Apx-Incoming-Host: sales.publisher.com` | `Host: sales.publisher.com` |
+| `Host: acme.example.com` | `Host: acme.example.com` |
+
+So the app has exactly two ways to name a tenant — `Host` → `tenants.virtual_host`, and an
+`x-adcp-tenant` the client sent — and no third spelling of the first one. That matters because
+a second spelling is not a harmless synonym: the app once carried two host ladders that
+disagreed about which header wins, so one request could resolve to two different tenants
+depending on which code asked.
+
+This is determinism, not a security control. A caller can set `Apx-Incoming-Host` on its own
+request, but nobody can set a header on somebody else's, and the most it yields is a tenant's
+public landing page — reachable by naming that tenant's real host anyway. Credentials are
+verified inside the tenant they were issued for, so claiming another tenant's host grants
+nothing.
+
+A deployment that reaches the app **without** this nginx in front (`SKIP_NGINX=true`) does not
+get the normalization, and the app's own resolver still reads `Apx-Incoming-Host` as a third
+input for that case.
 
 ### Admin UI configuration
 
