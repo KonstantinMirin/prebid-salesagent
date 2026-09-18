@@ -20,6 +20,7 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
+from src.admin.blueprints.core import get_tenant_from_hostname
 from src.admin.utils import is_super_admin
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
@@ -29,6 +30,7 @@ from src.core.domain_config import (
     get_sales_agent_url,
     get_super_admin_domain,
 )
+from src.core.http_utils import proxied_host
 from src.core.security.outbound_http import OutboundError
 from src.services.google_oauth_client import exchange_authorization_code
 
@@ -213,31 +215,15 @@ def login():
     tenant_name = None
 
     # Extract tenant from headers FIRST (before any redirects)
-    # This is needed for multi-tenant subdomain routing
-    host = request.headers.get("Host", "")
-
-    # Check for Approximated routing headers first
-    approximated_host = request.headers.get("Apx-Incoming-Host")
-    if approximated_host:
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=approximated_host)).first()
-            if tenant:
-                tenant_context = tenant.tenant_id
-                tenant_name = tenant.name
-                logger.info(
-                    f"Detected tenant context from Approximated headers: {approximated_host} -> {tenant_context}"
-                )
-
-    # The Host, against virtual_host — one lookup. It used to resolve the tenant from the
-    # host's first label when the rest of it matched SALES_AGENT_DOMAIN, a second derivation
-    # of the same fact that is deleted with the subdomain strategy.
-    if not tenant_context and host and not host.startswith("admin."):
-        with get_db_session() as db_session:
-            tenant = db_session.scalars(select(Tenant).filter_by(virtual_host=host)).first()
-            if tenant:
-                tenant_context = tenant.tenant_id
-                tenant_name = tenant.name
-                logger.info(f"Detected tenant context from Host header: {host} -> {tenant_context}")
+    # The admin plane's one host -> tenant lookup. The two copies that stood here read the
+    # proxy header and the Host through their own ladder and queried ``tenants`` directly,
+    # which is the duplication being removed; the log line below no longer names which
+    # header carried the host because ``requested_host`` is the one place that decides.
+    detected_tenant = get_tenant_from_hostname()
+    if detected_tenant:
+        tenant_context = detected_tenant.tenant_id
+        tenant_name = detected_tenant.name
+        logger.info(f"Detected tenant context from request host: {tenant_context}")
 
     # Check for tenant-specific OIDC configuration (multi-tenant or single-tenant)
     if tenant_context:
@@ -451,7 +437,7 @@ def tenant_google_auth(tenant_id):
 
     # Store external domain and tenant context in session for OAuth callback
     # Note: This works for same-domain OAuth but has limitations for cross-domain scenarios
-    approximated_host = request.headers.get("Apx-Incoming-Host")
+    approximated_host = proxied_host(request.headers)
 
     if approximated_host:
         session["oauth_external_domain"] = approximated_host
@@ -784,7 +770,7 @@ def gam_authorize(tenant_id):
         session["gam_oauth_originating_host"] = request.headers.get("Host", "")
 
         # Store external domain context if available
-        approximated_host = request.headers.get("Apx-Incoming-Host")
+        approximated_host = proxied_host(request.headers)
         if approximated_host:
             session["gam_oauth_external_domain"] = approximated_host
             logger.info(f"Stored external domain for GAM OAuth redirect: {approximated_host}")

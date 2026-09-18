@@ -9,16 +9,43 @@ Environment variables:
 
 import json
 import logging
-from typing import Any
-from urllib.parse import urlsplit
-
-from sqlalchemy import func, select
+from typing import TYPE_CHECKING, Any
 
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+
 logger = logging.getLogger(__name__)
+
+
+def _lookup(session: "Session") -> "TenantLookupRepository":
+    """The one repository every function here queries through.
+
+    The import is local, and so are the two in ``_as_dict`` and below: the repository
+    package reaches ``resolved_identity`` -> ``tenant_context`` -> this module, so a
+    module-level import is a genuine cycle rather than a style choice.
+    """
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
+
+    return TenantLookupRepository(session)
+
+
+def _as_dict(tenant: Tenant | None) -> dict[str, Any] | None:
+    """A looked-up tenant as the dict the callers here hand back, or ``None``.
+
+    The import is local because ``tenant_utils`` imports ``safe_json_loads`` from this
+    module; module-level would be a cycle.
+    """
+    if tenant is None:
+        return None
+    from src.core.utils.tenant_utils import serialize_tenant_to_dict
+
+    return serialize_tenant_to_dict(tenant)
 
 
 def validate_multi_tenant_config() -> list[str]:
@@ -61,89 +88,19 @@ def get_default_tenant() -> dict[str, Any] | None:
     different facts and only the caller's own refusal should decide what a buyer is told.
     """
     with get_db_session() as db_session:
-        # Get first active tenant or specific default
-        # Try to get 'default' tenant first, fall back to first active tenant
-        stmt = select(Tenant).filter_by(tenant_id="default", is_active=True)
-        tenant = db_session.scalars(stmt).first()
-
-        if not tenant:
-            # Fall back to first active tenant by creation date
-            stmt = select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)
-            tenant = db_session.scalars(stmt).first()
-
-        if tenant:
-            from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-            return serialize_tenant_to_dict(tenant)
-        return None
+        return _as_dict(_lookup(db_session).find_default_active())
 
 
 def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
-    """Get tenant by tenant_id.
-
-    Args:
-        tenant_id: The tenant_id to look up (e.g., 'tenant_wonderstruck')
-
-    Returns:
-        Tenant dict if found, None otherwise
-    """
+    """The active tenant with this id, as a dict, or ``None``."""
     with get_db_session() as db_session:
-        stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-        tenant = db_session.scalars(stmt).first()
-
-        if tenant:
-            from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-            return serialize_tenant_to_dict(tenant)
-        return None
-
-
-def _same_host(requested: str):
-    """Match a tenant whose stored origin names the same host as *requested*.
-
-    Host to host, so a request resolves whether or not either side spells the port:
-    ``storyboard.adcp.test`` and ``storyboard.adcp.test:8443`` are the same tenant, and
-    the deployment does not have to guess which form a proxy will forward.
-    """
-    return func.split_part(Tenant.virtual_host, ":", 1) == hostname_of(requested)
-
-
-def hostname_of(host: str) -> str:
-    """*host* without its port.
-
-    A ``Host`` header carries a port whenever the origin is not on the scheme's default
-    (``storyboard.adcp.test:8443``), and both proxies forward it intact. ``virtual_host``
-    stores the ORIGIN a tenant is served at, port included, because that is the string the
-    agent card has to publish -- a card advertising ``https://storyboard.adcp.test/a2a``
-    for an agent listening on 8443 sends every A2A client to a closed port, which is
-    exactly what took the A2A conformance axis from 27 passing checks to zero.
-
-    So the port is dropped where a HOSTNAME is what the reader needs, and nowhere else.
-    Two readers need one: this module's tenant lookups, which compare host to host so a
-    request naming either form resolves; and ``Tenant.primary_domain``, which feeds
-    ``publisher_properties[].publisher_domain`` -- a field AdCP constrains to
-    ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no colon. Feeding the port
-    into that pattern failed every product of such a tenant and answered INTERNAL_ERROR
-    for the whole catalogue, which is the defect that first named these two jobs.
-
-    Projecting a stored origin onto a hostname is not the defensive re-validation the
-    architecture forbids: the column's contents are trusted exactly as stored, and what
-    happens here is that one reader wants a different part of the same fact.
-    """
-    return urlsplit(f"//{host}").hostname or host
+        return _as_dict(_lookup(db_session).find_active_by_id(tenant_id))
 
 
 def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
     """Get tenant by virtual host. A port on the incoming host is ignored."""
     with get_db_session() as db_session:
-        stmt = select(Tenant).where(_same_host(virtual_host), Tenant.is_active.is_(True))
-        tenant = db_session.scalars(stmt).first()
-
-        if tenant:
-            from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-            return serialize_tenant_to_dict(tenant)
-        return None
+        return _as_dict(_lookup(db_session).find_active_by_virtual_host(virtual_host))
 
 
 def tenant_id_for(*, virtual_host: str) -> str | None:
@@ -154,16 +111,15 @@ def tenant_id_for(*, virtual_host: str) -> str | None:
     deferred; the row itself is loaded once by ``TenantContext.load`` after the tenant is
     known.
 
-    Its siblings ``get_tenant_by_virtual_host`` / ``get_tenant_by_subdomain`` end in
-    ``serialize_tenant_to_dict`` and hand back the whole row, so identification paid for
-    hydration on every request and the identity then DISCARDED that row and re-queried it on
-    first field access. This selects one indexed column instead.
+    Its sibling ``get_tenant_by_virtual_host`` ends in ``serialize_tenant_to_dict`` and hands
+    back the whole row, so identification paid for hydration on every request and the identity
+    then DISCARDED that row and re-queried it on first field access. This selects one indexed
+    column instead.
     """
     if not virtual_host:
         return None
     with get_db_session() as db_session:
-        stmt = select(Tenant.tenant_id).where(_same_host(virtual_host), Tenant.is_active.is_(True))
-        return db_session.scalars(stmt).first()
+        return _lookup(db_session).active_tenant_id_for_virtual_host(virtual_host)
 
 
 def is_single_tenant_mode() -> bool:
@@ -187,14 +143,11 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
     try:
         with get_db_session() as db_session:
             # Check if any tenant exists
-            stmt = select(Tenant).filter_by(is_active=True)
-            existing = db_session.scalars(stmt).first()
+            existing = _lookup(db_session).find_default_active()
 
             if existing:
                 logger.debug(f"Tenant already exists: {existing.name}")
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(existing)
+                return _as_dict(existing)
 
             # Create default tenant for single-tenant deployments
             logger.info("Single-tenant mode: Creating default tenant...")
@@ -224,9 +177,7 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
 
             logger.info(f"Created default tenant: {default_tenant.name} (id: {default_tenant.tenant_id})")
 
-            from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-            return serialize_tenant_to_dict(default_tenant)
+            return _as_dict(default_tenant)
 
     except Exception as e:
         # Don't fail startup if tenant creation fails - log and continue
