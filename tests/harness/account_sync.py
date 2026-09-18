@@ -28,7 +28,6 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
-from src.core.errors.codes import AppErrorCode
 from src.core.schemas.account import ListAccountsResponse, SyncAccountsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import AccountListDispatchMixin
@@ -176,11 +175,11 @@ class AccountSyncEnv(AccountListDispatchMixin, IntegrationEnv):
         """
         from unittest.mock import patch
 
-        from src.core.exceptions import AdCPSalesAgentError
+        from src.core.exceptions import AdCPInternalError
 
         patcher = patch(
             "src.core.tools.accounts.AccountRepository.mint_account_id",
-            side_effect=AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR),
+            side_effect=AdCPInternalError(),
         )
         patcher.start()
         self._guard("patch:sync_internal_failure", patcher.stop)

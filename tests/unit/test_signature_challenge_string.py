@@ -34,8 +34,7 @@ from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE, SignatureVerificationEr
 from adcp.signing.middleware import unauthorized_response_headers
 
 from src.core.auth_middleware import AuthChallengeResponder
-from src.core.errors.codes import CODE_BY_VALUE
-from src.core.exceptions import AdCPRequestSignatureError
+from src.core.exceptions import adcp_error_for
 from src.core.resolved_identity import TransportProtocol
 from src.core.tools._boundary import failure_response
 from src.core.tools._wire import to_wire
@@ -86,10 +85,7 @@ async def test_the_specific_code_survives_into_the_challenge(code: str) -> None:
     because the failure mode being guarded is a COLLAPSE, and a collapse is invisible when only
     one code is exercised.
     """
-    error = AdCPRequestSignatureError(
-        error_code=CODE_BY_VALUE[code],
-        internal_detail=SignatureVerificationError(code, step=1, message="graded here"),
-    )
+    error = adcp_error_for(SignatureVerificationError(code, step=1, message="graded here"))
     response = failure_response(TransportProtocol.REST, "get_products", error)
     body = json.dumps(to_wire(response)).encode()
 
@@ -126,10 +122,7 @@ def test_the_body_carries_no_internal_detail() -> None:
     CODE plus the table's text for it.
     """
     secret = "keyid 'abc' resolved against tenant xyz's internal keystore"
-    error = AdCPRequestSignatureError(
-        error_code=CODE_BY_VALUE["request_signature_key_unknown"],
-        internal_detail=SignatureVerificationError("request_signature_key_unknown", step=7, message=secret),
-    )
+    error = adcp_error_for(SignatureVerificationError("request_signature_key_unknown", step=7, message=secret))
     body = json.dumps(to_wire(failure_response(TransportProtocol.REST, "get_products", error)))
 
     assert "request_signature_key_unknown" in body, "the code is the buyer's actionable signal"

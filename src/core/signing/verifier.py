@@ -103,8 +103,7 @@ from adcp.signing.verifier import (
 from src.core.config import CounterpartyRegistryEntry, SigningSettings, get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
-from src.core.errors.codes import CODE_BY_VALUE
-from src.core.exceptions import AdCPRequestSignatureError
+from src.core.exceptions import adcp_error_for
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 from src.core.schemas import Principal
 from src.core.signing.canonical import malformed_authority_reason, reject_malformed_target
@@ -441,11 +440,19 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
     """Turn the SDK's typed rejection into the AdCP failure the boundary renders.
 
     THE translation, and the one place the graded code crosses from the SDK's taxonomy into
-    this seller's error vocabulary. ``CODE_BY_VALUE`` resolves the wire string to the
-    ``SignatureErrorCode`` member ``CODE_TABLE`` classifies; a code the SDK raises that the
-    table does not know would be a KeyError HERE, at the translation, rather than a 500 three
-    frames later — and cannot happen, because both sides are generated from the same SDK
-    table.
+    this seller's error vocabulary. ``adcp_error_for``'s written-out table resolves the wire
+    string to the CLASS that raises it; a code the SDK raises that this seller does not
+    classify is a KeyError at that table rather than a 500 three frames later.
+
+    ``adcp_error_for`` does the translating, and that is not a detour: it is the ONE
+    normalizer from an untyped exception to a typed one (docs/design/error-architecture.md
+    § "An error names its code by its class"), and the SDK's refusal is an untyped exception
+    like any other. Its branch reads the written-out ``_SIGNATURE_ERROR_BY_CODE`` table and
+    carries the SDK exception on ``internal_detail``.
+
+    This used to read ``CODE_BY_VALUE[exc.code]`` and pass the result as ``error_code=`` —
+    the one raise site in the tree that named its own code, and the reason the invariant on
+    ``AdCPSalesAgentError.__new__`` had an exception in it. Nothing names a code now.
 
     The SDK's exception goes to ``internal_detail``: it carries the checklist step and a
     diagnostic sentence, which are server-log facts. AdCP 3.1.1 ``transport-errors.mdx``
@@ -454,7 +461,7 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
     """
     if not recorded:
         record_signature_failed(operation, exc.code)
-    raise AdCPRequestSignatureError(error_code=CODE_BY_VALUE[exc.code], internal_detail=exc) from exc
+    raise adcp_error_for(exc) from exc
 
 
 # ---------------------------------------------------------------------------

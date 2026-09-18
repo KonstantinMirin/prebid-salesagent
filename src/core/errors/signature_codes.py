@@ -65,12 +65,44 @@ if TYPE_CHECKING:
     # a variable is not valid as a type; suppressing that would be a silencing comment the
     # repo's ratchet counts, rightly, as a claim nobody checks.
     #
-    # So: a member-less declaration for the checker, the generated one at runtime. Nothing in
-    # the tree names a member by attribute, which is what makes the erasure free -- production
-    # resolves a code through ``CODE_BY_VALUE[wire_string]``, because what it holds IS a wire
-    # string (off a ``SignatureVerificationError``, or off a finished response body), and the
-    # 28 attribute names would only ever be a second spelling of those strings.
-    class SignatureErrorCode(StrEnum): ...
+    # So: a spelled-out declaration for the checker, the generated one at runtime. The two
+    # agree or the build breaks LOUDLY at a source line: ``src/core/exceptions.py`` names
+    # every member below on a class of its own, so a member the runtime enum stops carrying
+    # is an ``AttributeError`` at import, and a member the runtime enum gains that is absent
+    # here is a mypy error where it is used.
+    #
+    # That noise is the POINT. The 28 error classes are this seller's public API, and an SDK
+    # upgrade that respells a code must not silently respell a class nobody can see change.
+    # The roster is written out so an upstream change arrives as a conflict a human reads.
+    class SignatureErrorCode(StrEnum):
+        REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON = 'request_signature_agent_not_in_brand_json'
+        REQUEST_SIGNATURE_ALG_NOT_ALLOWED = 'request_signature_alg_not_allowed'
+        REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS = 'request_signature_brand_json_ambiguous'
+        REQUEST_SIGNATURE_BRAND_JSON_MALFORMED = 'request_signature_brand_json_malformed'
+        REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE = 'request_signature_brand_json_unreachable'
+        REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING = 'request_signature_brand_json_url_missing'
+        REQUEST_SIGNATURE_BRAND_ORIGIN_MISMATCH = 'request_signature_brand_origin_mismatch'
+        REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE = 'request_signature_capabilities_unreachable'
+        REQUEST_SIGNATURE_COMPONENTS_INCOMPLETE = 'request_signature_components_incomplete'
+        REQUEST_SIGNATURE_COMPONENTS_UNEXPECTED = 'request_signature_components_unexpected'
+        REQUEST_SIGNATURE_DIGEST_MISMATCH = 'request_signature_digest_mismatch'
+        REQUEST_SIGNATURE_HEADER_MALFORMED = 'request_signature_header_malformed'
+        REQUEST_SIGNATURE_INVALID = 'request_signature_invalid'
+        REQUEST_SIGNATURE_JWKS_UNAVAILABLE = 'request_signature_jwks_unavailable'
+        REQUEST_SIGNATURE_JWKS_UNTRUSTED = 'request_signature_jwks_untrusted'
+        REQUEST_SIGNATURE_KEY_ORIGIN_MISMATCH = 'request_signature_key_origin_mismatch'
+        REQUEST_SIGNATURE_KEY_ORIGIN_MISSING = 'request_signature_key_origin_missing'
+        REQUEST_SIGNATURE_KEY_PURPOSE_INVALID = 'request_signature_key_purpose_invalid'
+        REQUEST_SIGNATURE_KEY_REVOKED = 'request_signature_key_revoked'
+        REQUEST_SIGNATURE_KEY_UNKNOWN = 'request_signature_key_unknown'
+        REQUEST_SIGNATURE_PARAMS_INCOMPLETE = 'request_signature_params_incomplete'
+        REQUEST_SIGNATURE_RATE_ABUSE = 'request_signature_rate_abuse'
+        REQUEST_SIGNATURE_REPLAYED = 'request_signature_replayed'
+        REQUEST_SIGNATURE_REQUIRED = 'request_signature_required'
+        REQUEST_SIGNATURE_REVOCATION_STALE = 'request_signature_revocation_stale'
+        REQUEST_SIGNATURE_TAG_INVALID = 'request_signature_tag_invalid'
+        REQUEST_SIGNATURE_WINDOW_INVALID = 'request_signature_window_invalid'
+        REQUEST_TARGET_URI_MALFORMED = 'request_target_uri_malformed'
 
 else:
     #: Every request-family signature code. The member NAME is the upper-cased code and the

@@ -188,10 +188,16 @@ select = ["TID251"]
 "src.core.exceptions.AdCPAuthenticationError".msg = "AUTH_INVALID is raised by the resolver (src/core/resolved_identity.py) alone. A credential that was presented and rejected is decided where the credential is read; nothing downstream re-decides it."
 # The third refusal of a buyer's credential, and the same rule. A signature is a credential
 # the resolver reads (src/core/signing/verifier.py, called from _resolve_identity), so the
-# 27-code request-signature taxonomy is minted there and nowhere else. It is a direct
-# AdCPSalesAgentError subclass rather than an AdCPAuthenticationError one for a mechanical
-# reason (naming a code requires declaring none), which is exactly why the ban has to list
-# it explicitly: the subsumption that would otherwise have carried it does not exist.
+# 28-code request-signature taxonomy is minted there and nowhere else. It is a direct
+# AdCPSalesAgentError subclass rather than an AdCPAuthenticationError one because the code
+# differs per refusal and an AUTH_INVALID parent would hand every class that one code
+# through the MRO -- which is exactly why the ban has to list it explicitly: the subsumption
+# that would otherwise have carried it does not exist.
+#
+# THE ABSTRACT PARENT is what the ban names, and it reaches all 28 children: TID251 matches
+# the imported NAME, and no module outside the resolver has business importing any of them by
+# name either. The string-to-class table is module-private (_SIGNATURE_ERROR_BY_CODE) and
+# reached only through adcp_error_for, which is generic and correctly unbanned.
 "src.core.exceptions.AdCPRequestSignatureError".msg = "The request-signature taxonomy is raised by the resolver's verifier (src/core/signing/verifier.py, reached from src/core/resolved_identity.py) alone. A signature is a credential; nothing downstream re-decides it."
 
 # The buyer's context object. Two modules have business with its TYPE: the schemas, which

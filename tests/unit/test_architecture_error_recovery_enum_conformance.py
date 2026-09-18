@@ -71,7 +71,12 @@ from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 
 from src.core import exceptions
 from src.core.errors.codes import CODE_TABLE, AppErrorCode, SignatureErrorCode
-from src.core.exceptions import AdCPAdapterError, AdCPRequestSignatureError, AdCPSalesAgentError, AdCPValidationError
+from src.core.exceptions import (
+    AdCPAdapterError,
+    AdCPRequestSignatureAlgNotAllowedError,
+    AdCPSalesAgentError,
+    AdCPValidationError,
+)
 from src.core.schemas._base import AdcpErrorResponse
 from src.core.tools._wire import to_wire
 from tests.helpers import assert_envelope_shape, pinned_schema
@@ -126,16 +131,20 @@ _KNOWN_PLATFORM_CODES = frozenset(
 
 
 def _code_of(cls: type[AdCPSalesAgentError]) -> str:
-    """The code a class IS, or ``""`` for the one class that names its code per raise.
+    """The code a class IS, or ``""`` for an ABSTRACT one that declares none.
 
-    ``AdCPRequestSignatureError`` declares no ``_code`` on purpose: the RFC 9421 transport
-    taxonomy is 27 codes generated from the SDK's own table, so a class per code would be 27
-    declarations that can drift from it. It is not ungraded — every one of its codes goes
-    through ``CodeEntry``, whose constructor refuses an empty message or suggestion and whose
-    ``recovery`` is a :class:`Recovery` member, and the challenge string those codes produce
-    is pinned against the SDK in ``tests/unit/test_signature_challenge_string.py``. What it
-    is outside of is THIS oracle, which grades a class against the PUBLISHED enum, and the
-    published enum does not define them (the wire vocabulary is open).
+    Two classes declare no ``_code`` and neither can be constructed:
+    :class:`AdCPSalesAgentError` and :class:`AdCPRequestSignatureError`. The second used to
+    be constructible and to name its code per raise site; it is now the abstract parent of
+    the 28 hand-written classes below it, one per member of the RFC 9421 transport
+    taxonomy, each declaring its own code like every other error class here.
+
+    Those 28 are outside THIS oracle, which grades a class against the PUBLISHED enum, and
+    the published enum does not define them (the wire vocabulary is open). They are not
+    ungraded: every one goes through ``CodeEntry``, whose constructor refuses an empty
+    message or suggestion and whose ``recovery`` is a :class:`Recovery` member, and the
+    challenge string they produce is pinned against the SDK in
+    ``tests/unit/test_signature_challenge_string.py``.
     """
     return str(getattr(cls, "_code", ""))
 
@@ -421,7 +430,7 @@ def test_assert_envelope_shape_keeps_the_caller_literal_for_unclassified_codes()
         f"the pin now classifies {str(code)!r} — this test needs a code the pin is still silent on"
     )
 
-    exc = AdCPRequestSignatureError(error_code=code)
+    exc = AdCPRequestSignatureAlgNotAllowedError()
     assert_envelope_shape(_envelope_for(exc), str(code), recovery=str(CODE_TABLE[code].recovery))
 
 

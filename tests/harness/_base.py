@@ -1874,8 +1874,7 @@ class BaseTestEnv:
         # production's constructor (see :func:`_wire_envelope`), and the envelope is
         # what the buyer actually received.
         if state == "failed":
-            from src.core.errors.codes import AppErrorCode
-            from src.core.exceptions import AdCPSalesAgentError
+            from src.core.exceptions import AdCPInternalError
 
             if artifact_data:
                 envelope = _wire_envelope(artifact_data)
@@ -1883,7 +1882,7 @@ class BaseTestEnv:
                     raise WireError(envelope)
             # A failed task with no envelope artifact: nothing was caught, so there is
             # no exception to hand to ``internal_detail``; the code is the diagnosis.
-            raise AdCPSalesAgentError(error_code=AppErrorCode.INTERNAL_ERROR)
+            raise AdCPInternalError()
 
         if state == "submitted":
             # Async manual-approval path: the server returns a submitted Task with NO
