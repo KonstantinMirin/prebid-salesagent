@@ -90,6 +90,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import logging
 import re
 import tempfile
@@ -451,10 +452,31 @@ class TestNoKeyMaterialTouchesAFilesystem:
         anything derived from either. A snapshot equality is the only assertion
         that survives an implementation that writes somewhere nobody thought of --
         "we deleted the writer" is not a behavior.
+
+        THE ADMIN AUDIT SINK IS CONFIGURED OUT, AND THEN READ BACK. #1721 fixed
+        ``log_admin_action`` to resolve ``tenant_id`` from ``request.view_args``, so
+        this route audits where it previously (and silently) did not -- correctly,
+        because it is the endpoint that mints a credential. Its secondary file sink
+        resolves ``audit_logger.LOG_DIR`` at WRITE time and that default is
+        ``Path("logs")``, RELATIVE, so under the chdir above it lands inside the
+        sandbox and is indistinguishable from a key write.
+
+        Giving it a configured home outside the sandbox is the only move that keeps
+        the assertion at full strength: what the sandbox captures is still exactly
+        the set of destinations reachable by code with NO configured directory,
+        which is the class of write this test exists to forbid. The tempting
+        alternative -- absolutising ``adcp_log_dir`` -- is rejected: it turns this
+        green while hiding every audit write from the test forever. The relocated
+        file is graded below instead, on both halves: the record must BE there, and
+        it must not be where the key leaks.
         """
         env, tenant, client = signing_tenant
         sandbox = tmp_path / "fs"
         sandbox.mkdir()
+
+        audit_dir = tmp_path / "audit"
+        monkeypatch.setattr("src.core.audit_logger.LOG_DIR", audit_dir)
+
         monkeypatch.chdir(sandbox)
         monkeypatch.setattr(tempfile, "tempdir", str(sandbox))
 
@@ -473,6 +495,55 @@ class TestNoKeyMaterialTouchesAFilesystem:
         assert all(row.private_key_ref == f"db:{row.kid}" for row in rows), (
             "every minted row references its own encrypted material in the database; got "
             f"{[row.private_key_ref for row in rows]}"
+        )
+
+        self._assert_the_route_audited_without_leaking_the_key(audit_dir, tenant.tenant_id, rows)
+
+    @staticmethod
+    def _assert_the_route_audited_without_leaking_the_key(audit_dir: Path, tenant_id: str, rows: list) -> None:
+        """The relocated audit sink is graded, not merely moved out of the way.
+
+        Two obligations, and the second is why this belongs in THIS class rather
+        than in an auditing test: a route that mints a credential must leave an
+        audit record, and that record must not become the filesystem the key
+        material reaches. Moving the sink without reading it would spend the
+        obligation the snapshot assertion used to carry.
+        """
+        structured = audit_dir / "structured.jsonl"
+        assert structured.exists(), (
+            "provisioning through the admin route must leave an audit record: this is the "
+            "endpoint that mints a signing credential, and log_admin_action resolves its "
+            f"tenant from request.view_args so the write happens whatever the decorator order. "
+            f"Nothing was written to {structured}"
+        )
+
+        entries = [json.loads(line) for line in structured.read_text().splitlines() if line.strip()]
+        provisioning = [
+            entry for entry in entries if entry.get("operation") == "provision_signing_key" and entry.get("success")
+        ]
+        assert len(provisioning) == 1, (
+            "exactly one successful provision_signing_key record, for the one admin-route mint "
+            f"(the ops script is not an admin route and audits nothing); got "
+            f"{[(entry.get('operation'), entry.get('success')) for entry in entries]}"
+        )
+        assert provisioning[0].get("tenant_id") == tenant_id, (
+            "the record must name the tenant whose credential was minted -- the field #1721 "
+            f"repaired; got {provisioning[0].get('tenant_id')!r}"
+        )
+
+        # The sink this test just sanctioned must not be the leak. Graded against the
+        # material that actually exists rather than against a guessed marker: the stored
+        # ciphertext and the PEM header are both disqualifying, and so is the plaintext
+        # PKCS#8 banner an unencrypted regression would write.
+        audited_bytes = structured.read_bytes()
+        forbidden = [_ENCRYPTED_PEM_HEADER, b"-----BEGIN PRIVATE KEY-----"] + [
+            bytes(row.private_key_pem_encrypted) for row in rows
+        ]
+        leaked = [needle for needle in forbidden if needle in audited_bytes]
+        assert not leaked, (
+            "the audit sink must never carry key material -- it is a FILE, and this class's "
+            "whole subject is that no key material reaches one. The audit record names the "
+            f"operation and the tenant, never the secret; leaked {[needle[:40] for needle in leaked]}"
         )
 
 
