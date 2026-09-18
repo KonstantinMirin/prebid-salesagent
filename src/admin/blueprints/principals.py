@@ -336,8 +336,15 @@ def get_principal(tenant_id, principal_id):
 
 
 @principals_bp.route("/principal/<principal_id>/rotate-token", methods=["POST"])
-@log_admin_action("rotate_principal_token")
+# Authorization OUTSIDE the audit decorator, per the convention in
+# src/admin/utils/audit_decorator.py's module docstring. require_tenant_access RETURNS a
+# redirect/401 rather than raising, and log_admin_action only records a failure when the
+# wrapped function RAISES — so with the audit decorator outermost an unauthenticated POST
+# wrote an audit row saying this rotation succeeded. Graded by
+# tests/integration/test_audit_decorator_auth_order.py. The other 54 sites carrying the
+# inverted order, and the ast-grep rule that would refuse it, are GH #2110.
 @require_tenant_access()
+@log_admin_action("rotate_principal_token")
 def rotate_token(tenant_id, principal_id):
     """Replace the principal's API token. The new token is in the response, once.
 
