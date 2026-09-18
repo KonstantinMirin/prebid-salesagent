@@ -42,7 +42,18 @@ LEDGER = Path(__file__).parent.parent / "integration" / "known_failures.txt"
 #: test_real_run_records_uc005_format_id_roundtrip_scenarios_as_live, which THIS branch
 #: renamed, so it is repointed at the successor rather than left dangling. None of our four
 #: graduations crept back -- verified by set difference, not by the count happening to agree.
-CEILING = 44
+#:
+#: 44 -> 42 when Cluster I (the two ``test_template_url_validation.py`` rows) graduated. They
+#: were never a testing-layer defect the ledger could wait out: the module built its admin app
+#: from the AMBIENT ENVIRONMENT, so whether the test-credential login blueprint was composed --
+#: and therefore whether ``url_for('test_auth.test_auth')`` resolved -- was an environment fact.
+#: A strict xfail on an environment fact is red exactly where it is enforced and green
+#: everywhere else. The module now composes that blueprint unconditionally, which is the
+#: STRICTER reading: every template branch is scanned, including the ones that render only
+#: under test mode. salesagent-091d8, which asks how a first admin reaches a fresh deployment
+#: before SSO exists, is a production composition question this scanner never graded and is
+#: NOT discharged by the graduation.
+CEILING = 42
 
 EXPECTED_LEDGER: frozenset[str] = frozenset(
     {
@@ -88,8 +99,6 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         "tests/integration/test_list_accounts_auth_missing_wire.py::TestListAccountsNoTokenEmitsAuthMissing::test_no_token_rest_wire_emits_auth_missing",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[connection-level]",
         "tests/integration/test_mcp_client_util.py::TestExhaustedFailureReachesTheRegistryClassified::test_seam_failure_surfaces_as_the_mapped_envelope[tool-level]",
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_all_template_url_for_calls_resolve",
-        "tests/integration/test_template_url_validation.py::TestTemplateUrlValidation::test_form_actions_point_to_valid_endpoints",
     }
 )
 

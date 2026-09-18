@@ -13,8 +13,34 @@ from werkzeug.routing.converters import NumberConverter
 from werkzeug.routing.exceptions import BuildError
 
 from src.admin.app import create_app
+from src.admin.blueprints.test_auth import test_auth_bp
+from src.admin.utils.helpers import TEST_LOGIN_BLUEPRINT
 
-admin_app = create_app()
+
+def _app_composed_with_every_nameable_blueprint():
+    """An app whose blueprint set does not depend on the ambient environment.
+
+    The scanners below are Jinja-blind by construction: they regex templates for
+    ``url_for('...')`` and cannot see the ``{% if test_mode %}`` guard that
+    ``login.html:77,87`` puts around ``test_auth.test_auth``. ``test_mode`` is exactly
+    ``test_login_composed()`` -- ``TEST_LOGIN_BLUEPRINT in current_app.blueprints`` -- and
+    ``create_app`` registers that blueprint only when ``adcp_auth_test_mode and not
+    is_production`` (src/admin/app.py:351). So a plain ``create_app()`` makes the verdict an
+    ENVIRONMENT fact rather than a property of the templates: red wherever the flag is off,
+    green wherever it is on, and the two ledger rows that recorded this were red only on the
+    boxes that enforce them.
+
+    Composing the conditional blueprint unconditionally here removes the fork. It is also
+    the STRICTER of the two readings -- every template branch is scanned, including the ones
+    that only render under test mode -- so nothing is excused by it.
+    """
+    app = create_app()
+    if TEST_LOGIN_BLUEPRINT not in app.blueprints:
+        app.register_blueprint(test_auth_bp)
+    return app
+
+
+admin_app = _app_composed_with_every_nameable_blueprint()
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db, pytest.mark.admin]
 
