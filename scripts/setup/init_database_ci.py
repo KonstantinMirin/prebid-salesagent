@@ -57,8 +57,9 @@ def ci_tenant_virtual_host() -> str | None:
     base = os.getenv("E2E_TLS_BASE_URL")
     if not base:
         return None
-    parsed = urlparse(base.rstrip("/"))
-    return parsed.netloc or None
+    # .hostname, not .netloc: the column holds a hostname. config_loader.hostname_of drops
+    # the port from an incoming Host, so the front's port never needs to be stored.
+    return urlparse(base.rstrip("/")).hostname or None
 
 
 #: The credential presented to that tenant: the plaintext token this script hashes into

@@ -10,6 +10,7 @@ Environment variables:
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy import select
 
@@ -130,11 +131,37 @@ def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
         raise
 
 
+def hostname_of(host: str) -> str:
+    """*host* without its port — the form ``tenants.virtual_host`` stores.
+
+    A ``Host`` header carries a port whenever the origin is not on the scheme's default
+    (``storyboard.adcp.test:8443``), and both proxies forward it intact because tenant
+    routing is an exact match. The PORT is a fact about where a server listens; the
+    virtual host is the tenant's identity. Storing them together conflated the two, and
+    the conflation escaped the routing code: ``Tenant.primary_domain`` fed the same value
+    to ``publisher_properties[].publisher_domain``, which AdCP constrains to
+    ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$`` — no colon. Every product of such a
+    tenant failed validation and ``get_products`` answered INTERNAL_ERROR for the whole
+    catalogue.
+
+    So the port is dropped HERE, on receipt, and the column holds a hostname. Readers of
+    the stored value then need no defensive stripping of their own — which is the point,
+    per the architecture's "trust the database, never validate on read".
+
+    ``urlsplit`` does the parsing. A bare ``Host`` value is a netloc rather than a URL, so
+    it is prefixed with ``//`` to be read as one — the standard idiom. That hands back
+    ``.hostname``, which already strips the port, unwraps a bracketed IPv6 literal and
+    lowercases, none of which is worth hand-rolling: a manual ``split(":")`` truncates
+    ``[::1]:8443`` to ``[`` and gets the case rule wrong.
+    """
+    return urlsplit(f"//{host}").hostname or host
+
+
 def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
-    """Get tenant by virtual host."""
+    """Get tenant by virtual host. A port on the incoming host is ignored."""
     try:
         with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(virtual_host=virtual_host, is_active=True)
+            stmt = select(Tenant).filter_by(virtual_host=hostname_of(virtual_host), is_active=True)
             tenant = db_session.scalars(stmt).first()
 
             if tenant:
@@ -166,7 +193,11 @@ def tenant_id_for(*, virtual_host: str | None = None, subdomain: str | None = No
         return None
     try:
         with get_db_session() as db_session:
-            filters: dict[str, str] = {"virtual_host": virtual_host} if virtual_host else {"subdomain": subdomain or ""}
+            # hostname_of: a port on the incoming Host is ignored, because the column
+            # holds the tenant's hostname and not the port a server happens to listen on.
+            filters: dict[str, str] = (
+                {"virtual_host": hostname_of(virtual_host)} if virtual_host else {"subdomain": subdomain or ""}
+            )
             stmt = select(Tenant.tenant_id).filter_by(is_active=True, **filters)
             return db_session.scalars(stmt).first()
     except Exception as e:

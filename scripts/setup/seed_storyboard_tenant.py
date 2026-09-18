@@ -49,11 +49,14 @@ STORYBOARD_SUBDOMAIN = "storyboard"
 
 #: The host the storyboard agent is ACTUALLY served on: ``adcp-server-storyboard``, behind
 #: the shared tls-proxy whose ``map $ssl_server_name`` routes this SNI name to it
-#: (config/nginx/nginx-tls-test.conf.template, docker-compose.e2e.yml). The port is part of
-#: the value because tenant routing is an exact ``Host`` match and the proxy forwards
-#: ``Host`` with its port intact — ``tenant_id_for(virtual_host=...)`` does not strip it.
-#: Covered by the generated ``*.adcp.test`` wildcard certificate.
-STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
+#: (config/nginx/nginx-tls-test.conf.template, docker-compose.e2e.yml). Covered by the
+#: generated ``*.adcp.test`` wildcard certificate.
+#: A HOSTNAME, with no port: ``config_loader.hostname_of`` drops the port from an incoming
+#: ``Host`` on receipt, so the column holds the tenant's identity and the port stays a fact
+#: about where the front listens. Storing them together fed a colon into
+#: ``publisher_properties[].publisher_domain``, which AdCP's pattern admits no colon in,
+#: and get_products answered INTERNAL_ERROR for the whole catalogue.
+STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test"
 
 #: The credential the runner presents. Distinct from the CI token because a principal
 #: belongs to exactly one tenant: the resolver looks a token up INSIDE the detected tenant,

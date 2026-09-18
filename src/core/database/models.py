@@ -241,7 +241,19 @@ class Tenant(Base, JSONValidatorMixin):
 
     @property
     def primary_domain(self) -> str | None:
-        """Get primary domain for this tenant (virtual_host or subdomain-based)."""
+        """The publisher domain this tenant is known by.
+
+        A plain read, deliberately: ``virtual_host`` holds a HOSTNAME because
+        ``config_loader.hostname_of`` drops the port on receipt, so there is nothing to
+        strip here. Re-stripping would be the defensive re-validation the architecture
+        forbids — it duplicates the write path's guarantee and hides a defect there.
+
+        It is the ONE derivation of this value. Four sites used to repeat the expression,
+        and when ``virtual_host`` still carried a port every one of them fed a colon into
+        ``publisher_properties[].publisher_domain``, which AdCP constrains to a pattern
+        admitting none — so ``get_products`` answered INTERNAL_ERROR for the tenant's whole
+        catalogue.
+        """
         return self.virtual_host or (f"{self.subdomain}.example.com" if self.subdomain else None)
 
     @property
@@ -433,30 +445,26 @@ class Product(Base, JSONValidatorMixin):
         elif self.property_ids:
             # AdCP 2.0.0 by_id variant
             # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
+            # primary_domain, not virtual_host: the latter is a routing host and may
+            # carry a port, which the spec's publisher_domain pattern forbids.
+            publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
             return [
                 {"publisher_domain": publisher_domain, "property_ids": self.property_ids, "selection_type": "by_id"}
             ]
         elif self.property_tags:
             # AdCP 2.0.0 by_tag variant
             # Get publisher_domain from tenant (use subdomain or virtual_host)
-            if hasattr(self, "tenant") and self.tenant:
-                publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-            else:
-                publisher_domain = "unknown"
+            # primary_domain, not virtual_host: the latter is a routing host and may
+            # carry a port, which the spec's publisher_domain pattern forbids.
+            publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
             return [
                 {"publisher_domain": publisher_domain, "property_tags": self.property_tags, "selection_type": "by_tag"}
             ]
 
         # Default: Use "all" variant (all properties from this publisher)
         # This ensures products always have publisher_properties as required by AdCP spec
-        if hasattr(self, "tenant") and self.tenant:
-            publisher_domain = self.tenant.virtual_host or f"{self.tenant.subdomain}.example.com"
-        else:
-            publisher_domain = "unknown"
+        # primary_domain, not virtual_host: see the note above.
+        publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
         return [{"publisher_domain": publisher_domain, "selection_type": "all"}]
 
     @property
