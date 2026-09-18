@@ -134,12 +134,11 @@ async def debug_tenant(request: Request):
     detection_method = None
 
     if host_header:
-        # The Host, against virtual_host — the same lookup the resolver does, and now the
-        # only one. Two detection methods have been reported here and then deleted for the
-        # same reason: "host-subdomain" guessed the tenant_id from the host's first label
-        # without consulting any row, and "apx-incoming-host" read a vendor header the edge
-        # now folds into Host before this route sees it. A debug endpoint claiming a
-        # detection method production does not have is worse than no endpoint.
+        # The Host, against virtual_host — the same lookup the resolver does, and the only
+        # one. Other detection methods have been reported here and then deleted, most
+        # recently "host-subdomain", which guessed the tenant_id from the host's first
+        # label without consulting any row. A debug endpoint claiming a detection method
+        # production does not have is worse than no endpoint.
         tenant_row = get_tenant_by_virtual_host(host_header)
         if tenant_row:
             tenant_id = tenant_row.get("tenant_id")

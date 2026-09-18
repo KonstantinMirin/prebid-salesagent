@@ -186,14 +186,10 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
        support tool. Unverified, as before — an id naming no tenant fails at the principal
        lookup that is scoped by it.
 
-    TWO means two. ``Apx-Incoming-Host`` was a third, a second spelling of (1) for the
-    Approximated proxy — which serves a publisher's own domain and forwards here, so the
-    ``Host`` it sends names this backend and the publisher's domain arrives in that header.
-    That is edge config, and the edge now folds it into ``Host`` and drops it
-    (``config/nginx/nginx-multi-tenant.conf``). Reading it here as well made the app's two
-    host ladders disagree — this one tried ``Host`` first, ``domain_routing`` let the vendor
-    header win — so one request could resolve to two different tenants depending on which
-    resolver asked. ``@T-TENANTID-vendor-header-ignored`` grades that it buys nothing now.
+    TWO means two, and a second spelling of either is not a redundancy: two readers of one
+    fact disagree, and then one request resolves to two different tenants depending on which
+    one asked. A proxy that has to rewrite the host does it BEFORE the app, so that what
+    arrives here is the ``Host``.
 
     ``None`` is a real answer, not a gap to fill. A protected tool then answers AUTH_MISSING
     (no tenant means no principal lookup) and a public tool proceeds with no tenant, which

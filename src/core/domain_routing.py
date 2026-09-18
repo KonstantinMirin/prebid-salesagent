@@ -70,11 +70,9 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
         >>> route_landing_page({"Host": "nobody.example.com"})
         RoutingResult(type="custom_domain", tenant=None, effective_host="nobody.example.com")
 
-        A proxied request names its host the same way, because the edge folds the
-        vendor's ``Apx-Incoming-Host`` into ``Host`` and drops it before this runs
-        (``config/nginx/nginx-multi-tenant.conf``). This module used to read that header
-        itself and let it WIN over ``Host``, while ``_detect_tenant`` let ``Host`` win —
-        two ladders, one request, potentially two tenants.
+        A request that reached here through a proxy names its host the same way. Whatever
+        that proxy had to rewrite, it rewrote before the app, so this function reads one
+        thing.
     """
     # The host this request is for. One owner (src/core/http_utils.py), so this module
     # has no header name of its own to disagree with anyone about.

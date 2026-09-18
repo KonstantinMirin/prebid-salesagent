@@ -404,8 +404,8 @@ def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
     be stated is a card that cannot be published. Both are CONFIGURATION_ERROR, and both
     are seller-side.
 
-    What used to happen instead was a ladder over ``Apx-Incoming-Host`` / ``Host`` /
-    ``X-Forwarded-Proto``, which published whatever host the caller asked for:
+    What used to happen instead was a ladder over request headers, which published
+    whatever host the caller asked for:
     ``Host: evil.example.com`` came back as
     ``supportedInterfaces[0].url == "https://evil.example.com/a2a"``, behind nothing but a
     syntax check. Every value in that ladder was attacker-supplied on a direct connection,
