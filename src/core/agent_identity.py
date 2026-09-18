@@ -6,10 +6,10 @@ hosts, or whose scheme was taken from a request header, would publish several
 identities, and a counterparty comparing the URL it invoked against the one we
 published would fail with no diagnostic.
 
-So the scheme and host come from the tenant row, never from ``Host``,
-``Apx-Incoming-Host`` or ``X-Forwarded-Proto``. The ladder over those headers that
-used to sit in ``src/app.py`` is gone: it published whatever host the caller asked
-for, behind nothing but a syntax check.
+So the scheme and host come from the tenant row, never from a request header —
+not ``Host``, not ``X-Forwarded-Proto``. The ladder over those that used to sit in
+``src/app.py`` is gone: it published whatever host the caller asked for, behind
+nothing but a syntax check.
 
 Scope. This module is the DERIVATION and nothing else. The agent card reads it
 through :mod:`src.services.seller_capabilities`, which is also what

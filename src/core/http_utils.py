@@ -1,29 +1,15 @@
 """The host and header facts of an HTTP request, read in one place.
 
-ONE HOST INPUT. ``requested_host`` is the ``Host``, and there is no second spelling of
-it. There was: ``Apx-Incoming-Host``, read by a ladder copied into eleven modules, each
-spelling the header name itself and each handling case its own way. Those copies did not
-agree — ``domain_routing`` let the vendor header win over ``Host`` while
-``_detect_tenant`` let ``Host`` win over the vendor header — so one request could resolve
-to two different tenants depending on which resolver asked.
+The host a request names is its ``Host``. ``requested_host`` is that, and it is the only
+host input this application has — a caller asks for the FACT rather than naming a header,
+which is what keeps one answer to "which host is this request for" across the boundary
+resolver, the admin blueprints, the routes and the routing module.
 
-The header is now EDGE CONFIG, not application logic. The Approximated proxy serves a
-publisher's own domain and forwards to this backend, so the ``Host`` it sends names the
-backend identically for every publisher and the publisher's domain arrives in the vendor
-header; ``config/nginx/nginx-multi-tenant.conf`` folds it back into ``Host`` and drops it
-before anything here runs. Deleting the app-side reader is what makes that fold the only
-mechanism rather than one of two, and a deployment serving custom domains needs an edge
-that performs it.
+Whatever a proxy in front of this app does to produce that ``Host`` is the edge's business
+and has no spelling here.
 
-**Do not add a reader back.** A helper whose job is to know the vendor header exists
-reintroduces the third input the edge just removed. The absence is graded on all four
-transports by ``@T-TENANTID-vendor-header-ignored``
-(``tests/bdd/features/local-tenant-identification-routes.feature``), which presents the
-header over an unserved ``Host`` and requires the refusal.
-
-This module holds no state, imports nothing from the application, and is therefore
-importable from the boundary resolver, the admin blueprints, the routes and the routing
-module alike.
+This module holds no state and imports nothing from the application, so every one of those
+callers can import it.
 """
 
 from collections.abc import Iterable
