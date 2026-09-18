@@ -54,6 +54,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -83,17 +84,15 @@ _FLIGHT_END = "2027-02-01T00:00:00Z"
 
 #: The advertiser every corrected body names.
 #:
-#: RESERVED, never registrable. ``CreateMediaBuyRequestFactory`` defaults to
-#: ``testbrand.com``, which is a real domain somebody can register and point anywhere; in a
-#: SPEC's conformance corpus that would mean every agent that ever runs these vectors sends
-#: a payload naming a host under a stranger's control. ``.example`` is reserved by RFC 2606
-#: §2 and is therefore guaranteed unreachable — the same rule
-#: ``tests/unit/test_guards_no_fabricated_example_domain.py`` enforces from the other
-#: direction, and the style the rest of the payload already uses
-#: (``acmeoutdoor.example``, ``pinnacle-agency.example``).
+#: RESERVED, never registrable. ``.example`` is reserved by RFC 2606 §2 and is therefore
+#: guaranteed unreachable, so no agent running these vectors can send a payload naming a
+#: host under a stranger's control. It matches the style the rest of the payload already
+#: uses (``acmeoutdoor.example``, ``pinnacle-agency.example``).
 #:
-#: Overridden HERE rather than in the factory: the factory's default is a repo-wide
-#: question, and this corpus leaves the repo.
+#: Still named HERE rather than inherited from ``SAMPLE_BRAND``, even though that constant
+#: is now reserved too: this value is published in a corpus proposed to the spec, where
+#: ``brand.example`` says what the field IS to a reader with no knowledge of this repo's
+#: fixtures. The repo-side default is free to change without moving what upstream reviews.
 _BRAND = {"domain": "brand.example"}
 
 #: ``request.url``'s final segment names the AdCP operation the runner dispatches: in MCP
@@ -229,6 +228,48 @@ def correct_vector_text(vector_id: str, source: str) -> str:
     return replaced
 
 
+def _discard(tree: Path) -> None:
+    """Get *tree* out of the way, WITHOUT needing permission to delete its contents.
+
+    The in-network runner builds this tree from inside the container, where the process is
+    root; a later host-side rebuild then runs as an ordinary user and ``shutil.rmtree``
+    dies on the first root-owned file. Invisible in CI, where the uid matches both times,
+    and reliably confusing locally — a raw ``PermissionError`` several frames inside
+    ``shutil`` says nothing about containers.
+
+    RENAMING is the fix, because it needs write permission on the PARENT directory rather
+    than on the files: the parent is created by whoever ran first, but the rebuild only
+    ever has to move a name within it. The renamed-aside copy is then deleted
+    best-effort — it is garbage at that point, and failing to remove garbage must not fail
+    a rebuild that has already succeeded.
+
+    If even the rename is refused the parent itself is unwritable, which no amount of
+    cleverness here fixes, so it is reported with the remedy instead of a stack trace.
+    """
+    # Sweep what earlier calls could not delete. A discard whose contents are root-owned
+    # survives its own run's best-effort removal, so it is retried here — the first run
+    # that HAS permission clears it, and the directory cannot grow without bound.
+    for leftover in tree.parent.glob(f"{tree.name}.discarded-*"):
+        shutil.rmtree(leftover, ignore_errors=True)
+    if not tree.exists():
+        return
+    # A FRESH empty directory per call, not a name derived from the pid: two calls in one
+    # process share a pid, so a pid-suffixed name collides with the caller's OWN
+    # undeletable leftover and the rename fails ENOTEMPTY — which the handler below would
+    # then report as an unwritable parent, blaming the wrong thing. Renaming ONTO an empty
+    # directory is permitted, so mkdtemp gives a target that cannot collide.
+    discarded = Path(tempfile.mkdtemp(prefix=f"{tree.name}.discarded-", dir=tree.parent))
+    try:
+        tree.rename(discarded)
+    except OSError as exc:
+        raise RuntimeError(
+            f"cannot rebuild {tree}: its parent is not writable by this user ({exc}). "
+            f"It was most likely written from inside a container as root — remove it with "
+            f"`sudo rm -rf {tree}` and re-run."
+        ) from exc
+    shutil.rmtree(discarded, ignore_errors=True)
+
+
 def corrected_compliance_tree(source: Path, dest: Path) -> Path:
     """Write *source* to *dest* with the request-signing bodies corrected.
 
@@ -241,8 +282,7 @@ def corrected_compliance_tree(source: Path, dest: Path) -> Path:
     module would be graded as if it were current, which is exactly the
     measured-not-inferred rule the storyboard suite exists to hold.
     """
-    if dest.exists():
-        shutil.rmtree(dest)
+    _discard(dest)
     shutil.copytree(source, dest)
 
     vectors = dest / "test-vectors" / "request-signing"
