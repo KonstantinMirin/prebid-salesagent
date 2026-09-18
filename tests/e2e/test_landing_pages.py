@@ -68,7 +68,15 @@ class TestLandingPages:
         if response.status_code >= 500:
             pytest.skip(f"Server error {response.status_code} - environment may not be fully configured")
 
-        assert response.status_code == 200, f"Login page should return 200 OK, got {response.status_code}"
+        # The failure message names WHERE the chain landed, not just the status. This assertion
+        # read "got 404" on CI while the same tree served the whole chain (302 -> /admin/login
+        # -> 200) on a locally rebuilt stack and on the CI box, and a bare status cannot say
+        # whether the 404 came from /admin/login or from somewhere the redirects went instead.
+        hops = " -> ".join(r.url for r in response.history) or "(no redirect)"
+        assert response.status_code == 200, (
+            f"Login page should return 200 OK, got {response.status_code}. "
+            f"Chain: {hops} -> {response.url}. Body starts: {response.text[:200]!r}"
+        )
         content = response.content.decode("utf-8").lower()
         assert "login" in content, "Admin login page should contain login form"
 
