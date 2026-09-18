@@ -144,6 +144,7 @@ from adcp.types.generated_poc.core.webhook_challenge import WebhookChallenge
 
 from tests.e2e._signing_e2e import (
     a2a_data_part,
+    assert_a2a_task_did_not_fail,
     buyer_headers,
     ca_verified_ssl_context,
     declaring_tenant_provisioner,
@@ -156,6 +157,7 @@ from tests.e2e._signing_e2e import (
 )
 from tests.e2e.conftest import e2e_in_network
 from tests.e2e.webhook_capture_service import decode_body, header_value, webhook_path
+from tests.factories.request import fresh_idempotency_key
 
 # The ONE home for a live A2A JSON-RPC body on this architecture. ``/a2a`` speaks native
 # A2A 1.0 only — ``SendMessage`` with an ``A2A-Version`` header — so the 0.3 envelope
@@ -274,8 +276,16 @@ def _sync_accounts_parameters(brand_domain: str, url: str) -> dict[str, Any]:
     is the mode where the account id does not exist until the write transaction, so it is
     the mode that grades whether the ``account_id`` in the challenge is the id the account
     is actually created with.
+
+    ``idempotency_key`` is REQUIRED by the pinned SDK
+    (``adcp.types.SyncAccountsRequest.idempotency_key.is_required()`` is True), so a body
+    without it is refused before any account is written. FRESH per call rather than per
+    module: the two doors below send this body at different brand domains as two real
+    operations, and a shared key would make the second one REPLAY the first's response
+    instead of performing it.
     """
     return {
+        "idempotency_key": fresh_idempotency_key(),
         "accounts": [
             {
                 "brand": {"domain": brand_domain},
@@ -290,7 +300,7 @@ def _sync_accounts_parameters(brand_domain: str, url: str) -> dict[str, Any]:
                     }
                 ],
             }
-        ]
+        ],
     }
 
 
@@ -302,7 +312,12 @@ async def _sync_over_a2a(client: httpx.AsyncClient, *, brand_domain: str, url: s
     """
     message = _build_a2a_jsonrpc_body("sync_accounts", _sync_accounts_parameters(brand_domain, url))
     result = await post_a2a(client, message, leg=f"sync_accounts[{brand_domain}]", token=_BUYER_TOKEN)
-    assert "error" not in result, f"the A2A sync_accounts returned an error: {result['error']!r}"
+    # BEFORE the payload read, not instead of it: a tool that RAISED comes back as a FAILED
+    # Task inside an ordinary 200 result, and ``"error" not in result`` does not see it.
+    # Without this, a refused sync arrives at ``_one_account`` as zero accounts and reports
+    # itself as a response-shape problem -- which is exactly how a missing required request
+    # field stayed hidden here.
+    assert_a2a_task_did_not_fail(result, leg=f"sync_accounts[{brand_domain}]")
     return _one_account(a2a_data_part(result), leg=brand_domain)
 
 

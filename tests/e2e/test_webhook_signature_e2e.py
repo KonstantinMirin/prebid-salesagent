@@ -71,6 +71,8 @@ import httpx
 import pytest
 
 from tests.e2e._signing_e2e import (
+    a2a_data_part,
+    assert_a2a_task_did_not_fail,
     ca_verified_ssl_context,
     declaring_tenant_provisioner,
     fetch_capabilities,
@@ -180,36 +182,15 @@ def _a2a_send_message(skill: str, parameters: dict[str, Any]) -> dict[str, Any]:
 
 
 def _adcp_payload(a2a_response: dict[str, Any]) -> dict[str, Any]:
-    """The AdCP payload out of an A2A 1.0 JSON-RPC result's first artifact.
+    """The AdCP payload out of an A2A 1.0 result, or ``{}`` when there is none.
 
-    Deliberately NOT ``_signing_e2e.a2a_data_part``, which walks ``result.artifacts``
-    and matches ``part["kind"] == "data"`` — the A2A 0.3 shape. On 1.0 the Task is
-    wrapped (``result.task.artifacts``) and ``json_format.MessageToDict`` emits the
-    part's payload under a bare ``data`` key with no ``kind``. The part read is
-    delegated to ``tests.harness.client._artifact_data_from_json``, the one producer
-    that already owns that decoding, so only the Task unwrap lives here.
+    A thin adaptation of ``_signing_e2e.a2a_data_part`` — the one home for that read —
+    to the ``{}``-not-``None`` contract this module's call sites want. The private copy
+    that used to live here existed only because the shared helper still spoke A2A 0.3;
+    it now speaks 1.0, so a second implementation would be the duplication the DRY
+    invariant blocks PRs for.
     """
-    from tests.harness.client import _artifact_data_from_json
-
-    artifacts = ((a2a_response.get("result") or {}).get("task") or {}).get("artifacts") or []
-    return _artifact_data_from_json(artifacts[0]) if artifacts else {}
-
-
-def _assert_task_did_not_fail(result: dict[str, Any], *, leg: str) -> None:
-    """A 200 is not a success on A2A 1.0 — a refused call comes back as a FAILED Task.
-
-    Two reads, not one: a malformed envelope or an unknown skill is a JSON-RPC
-    ``error``, while a tool that raised is a Task whose ``status.state`` is
-    ``TASK_STATE_FAILED`` inside an otherwise ordinary ``result``. Collapsing them is
-    how a create that never happened reads as "no signature was emitted".
-    """
-    assert "error" not in result, f"the A2A {leg} returned a JSON-RPC error: {result['error']!r}"
-    task = (result.get("result") or {}).get("task") or {}
-    state = (task.get("status") or {}).get("state")
-    assert state != "TASK_STATE_FAILED", (
-        f"the A2A {leg} came back as a FAILED Task, so nothing was created and no delivery was ever "
-        f"scheduled. Artifacts: {task.get('artifacts')!r}"
-    )
+    return a2a_data_part(a2a_response) or {}
 
 
 async def _fire_one_delivery(client: httpx.AsyncClient, callback_url: str) -> None:
@@ -243,7 +224,7 @@ async def _fire_one_delivery(client: httpx.AsyncClient, callback_url: str) -> No
     result = await post_a2a(
         client, _a2a_send_message("create_media_buy", parameters), leg="create_media_buy", token=_BUYER_TOKEN
     )
-    _assert_task_did_not_fail(result, leg="create_media_buy")
+    assert_a2a_task_did_not_fail(result, leg="create_media_buy")
 
 
 async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str, str]:
@@ -255,7 +236,7 @@ async def _discover_product_and_pricing(client: httpx.AsyncClient) -> tuple[str,
     """
     message = _a2a_send_message("get_products", {"brand": {"domain": "testbrand.com"}})
     result = await post_a2a(client, message, leg="get_products", token=_BUYER_TOKEN)
-    _assert_task_did_not_fail(result, leg="get_products")
+    assert_a2a_task_did_not_fail(result, leg="get_products")
     products = _adcp_payload(result).get("products") or []
     assert products, (
         "the seeded tenant must expose at least one product with a pricing option, or there is nothing "

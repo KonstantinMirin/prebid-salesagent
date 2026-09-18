@@ -365,9 +365,22 @@ def _seed_buying_surface(env: Any, tenant: Any, *, access_token: str) -> None:
     2-tuple, so the three call sites that pass nothing are untouched by this seed.
     """
     from tests.factories import PricingOptionFactory, PrincipalFactory, ProductFactory, PropertyTagFactory
+    from tests.factories.account import seed_default_account
     from tests.factories.core import set_adapter_test_behavior
 
-    PrincipalFactory(tenant=tenant, **_token_columns(access_token))
+    from tests.e2e.adcp_request_builder import CI_TEST_ACCOUNT  # isort: skip  (local, avoids a cycle)
+
+    principal = PrincipalFactory(tenant=tenant, **_token_columns(access_token))
+    # THE ACCOUNT THE PAYLOAD NAMES, plus the AgentAccountAccess grant resolution is gated
+    # on (#1417). Without it this surface is buyable in every respect except the one that
+    # matters: get_products answers, and create_media_buy refuses ACCOUNT_NOT_FOUND for
+    # ``ci-test-account`` -- the id init_db() seeds for the DEMO tenant, which a per-module
+    # TLS tenant does not have. That refusal came back as a FAILED A2A Task inside an
+    # ordinary 200 and was invisible until the shared failed-Task guard started reading it.
+    #
+    # The id is read off the builder rather than restated, so a builder that changes which
+    # account it names cannot leave this seeding the old one.
+    seed_default_account(tenant.tenant_id, principal.principal_id, account_id=CI_TEST_ACCOUNT["account_id"])
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
     # ``publisher_properties`` is spelled out rather than left to the model's fallback.
     # The fallback derives ``publisher_domain`` from ``tenant.virtual_host``, which on
@@ -574,12 +587,44 @@ async def post_a2a(client: httpx.AsyncClient, message: dict[str, Any], *, leg: s
 
 
 def a2a_data_part(a2a_response: dict[str, Any]) -> dict[str, Any] | None:
-    """The AdCP payload out of an A2A JSON-RPC result's first data part."""
-    for artifact in (a2a_response.get("result") or {}).get("artifacts") or []:
-        for part in artifact.get("parts") or []:
-            if part.get("kind") == "data" and "data" in part:
-                return part["data"]
-    return None
+    """The AdCP payload out of an A2A 1.0 JSON-RPC result's first artifact.
+
+    This walked ``result.artifacts`` matching ``part["kind"] == "data"`` — the A2A 0.3
+    shape — and so returned ``None`` against every 1.0 response: on 1.0 the Task is
+    WRAPPED (``result.task.artifacts``) and ``json_format.MessageToDict`` emits the part's
+    payload under a bare ``data`` key carrying no ``kind`` at all. A ``None`` here reads
+    downstream as an empty payload, which is how a refused call arrives at a caller as
+    "zero results" rather than as a failure.
+
+    The part read is delegated to ``tests.harness.client._artifact_data_from_json``, the one
+    producer that already owns that decoding, so only the Task unwrap lives here. This is
+    the single home for the read: ``test_webhook_signature_e2e`` carried a private
+    ``_adcp_payload`` copy precisely because this one was stale, and that copy is gone.
+    """
+    from tests.harness.client import _artifact_data_from_json
+
+    artifacts = ((a2a_response.get("result") or {}).get("task") or {}).get("artifacts") or []
+    return _artifact_data_from_json(artifacts[0]) if artifacts else None
+
+
+def assert_a2a_task_did_not_fail(result: dict[str, Any], *, leg: str) -> None:
+    """A 200 is not a success on A2A 1.0 — a refused call comes back as a FAILED Task.
+
+    Two reads, not one: a malformed envelope or an unknown skill is a JSON-RPC ``error``,
+    while a tool that RAISED is a Task whose ``status.state`` is ``TASK_STATE_FAILED``
+    inside an otherwise ordinary ``result``. Collapsing them is how an operation that never
+    happened reads as an empty result set — the exact failure mode that let a missing
+    required request field sit undetected behind a "zero accounts" assertion message.
+
+    Every A2A leg in the signing e2e suite calls this BEFORE reading a payload.
+    """
+    assert "error" not in result, f"the A2A {leg} returned a JSON-RPC error: {result['error']!r}"
+    task = (result.get("result") or {}).get("task") or {}
+    state = (task.get("status") or {}).get("state")
+    assert state != "TASK_STATE_FAILED", (
+        f"the A2A {leg} came back as a FAILED Task, so the operation never happened and any "
+        f"empty result below would be reporting that failure as absence. Artifacts: {task.get('artifacts')!r}"
+    )
 
 
 async def published_jwks_for_agent(
