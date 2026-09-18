@@ -74,15 +74,23 @@ def admin_session_cookie(tenant_id: str, *, auth_method: str | None = None, secr
 
 
 def authenticate_http_session(session: Any, base_url: str, tenant_id: str, *, auth_method: str | None = None) -> Any:
-    """Give a ``requests.Session`` an authenticated admin cookie for *base_url*.
+    """Give a ``requests.Session`` an authenticated admin cookie, for any host.
 
     The HTTP-side twin of :func:`admin_auth_session`. Returns the session, so a caller can
     build and authenticate in one expression.
-    """
-    from urllib.parse import urlsplit
 
-    host = urlsplit(base_url).hostname or "localhost"
-    session.cookies.set("session", admin_session_cookie(tenant_id, auth_method=auth_method), domain=host, path="/")
+    NO DOMAIN IS SET, deliberately. ``http.cookiejar`` refuses to return a cookie whose
+    domain was SPECIFIED and contains no dot, so pinning it to ``localhost`` -- or to a
+    compose service name like ``proxy`` -- produces a cookie that is stored and then never
+    sent, and the request arrives anonymous. Measured: with an explicit domain the admin
+    page answered 302 and ``Cookie`` was absent from the request; without one it answered
+    200. Leaving the domain unset lets the jar attach it to whatever host is asked, which
+    is what every caller wants and the only form that works for a dotless host.
+
+    *base_url* is still taken, because a caller naming the session's target reads better
+    than one that does not, and because a future scheme- or host-specific rule belongs here.
+    """
+    session.cookies.set("session", admin_session_cookie(tenant_id, auth_method=auth_method), path="/")
     return session
 
 

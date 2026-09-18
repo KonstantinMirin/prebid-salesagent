@@ -258,12 +258,6 @@ def require_auth(admin_only=False):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # A setup-mode session. Which tenant it may reach is require_tenant_access's
-            # question; this decorator only asks whether anyone is here.
-            if "test_user" in session:
-                g.user = session["test_user"]
-                return f(*args, **kwargs)
-
             if "user" not in session:
                 logger.info(f"require_auth: No 'user' in session. Session keys: {list(session.keys())}")
                 # Store the original URL to redirect back after login
@@ -307,31 +301,19 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # PER-TENANT SETUP MODE, and nothing else. This used to start from
-            # `test_login_composed()` -- whether create_app had composed the test-credential
-            # login blueprint, which it did under the global ADCP_AUTH_TEST_MODE. That flag
-            # made the app under test a different app from the deployed one and is gone; the
-            # tenant's own auth_setup_mode column, which an operator turns off from the UI,
-            # is the gate the deployment docs already call the successor.
-            test_mode = False
-            if "test_user" in session:
-                try:
-                    with get_db_session() as db_session:
-                        tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
-                        if tenant and getattr(tenant, "auth_setup_mode", False):
-                            test_mode = True
-                            logger.debug(f"Auth setup mode enabled for tenant {tenant_id}")
-                except Exception as e:
-                    logger.warning(f"Error checking tenant auth_setup_mode: {e}")
-
-            if test_mode and "test_user" in session:
-                g.user = session["test_user"]
-                # Test users can access their assigned tenant
-                if "test_tenant_id" in session and session["test_tenant_id"] == tenant_id:
-                    return f(tenant_id, *args, **kwargs)
-                # Super admins can access all tenants
-                if session.get("test_user_role") == "super_admin":
-                    return f(tenant_id, *args, **kwargs)
+            # NO DATABASE SESSION IS OPENED HERE, and that is the point. The branch that
+            # stood here read the tenant's auth_setup_mode to decide whether a ``test_user``
+            # session counted as authenticated — a DB read inside the auth decorator, on
+            # every request. ``get_db_session()`` is scoped, so opening one here nests
+            # inside whatever session the caller already holds, and the inner exit REMOVES
+            # the scoped session and detaches the outer one. That is the same defect as the
+            # one fixed in ``enable_oidc``, and here it discarded rows a caller had flushed
+            # but not yet committed: 14 inventory-tree tests asked for data they had just
+            # seeded and the handler reported "total active: 0".
+            #
+            # Nothing needs the branch. A ``test_user`` session was minted by the
+            # test-credential login route, which is deleted; every session that exists now
+            # carries ``user``, and the path below decides access from it.
 
             if "user" not in session:
                 if api_mode:
