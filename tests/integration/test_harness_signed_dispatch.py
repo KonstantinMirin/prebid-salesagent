@@ -60,7 +60,6 @@ from typing import Any
 
 import httpx
 import pytest
-from adcp.signing import REQUEST_SIGNATURE_HEADER_MALFORMED
 from adcp.types import GetAdcpCapabilitiesResponse
 
 from tests.harness._base import BareIntegrationEnv
@@ -408,86 +407,38 @@ def test_an_unsignable_leg_refuses_every_realization(integration_db, signed):
             env.call_via(Transport.E2E_MCP, signed=False)
 
 
-def _refused_frame(result: TransportResult) -> tuple[str, str | None]:
-    """WHICH MCP frame the verifier refused: its JSON-RPC method and session id.
-
-    Read off the httpx request the refusing response answers, so the attribution is
-    made from the bytes the harness actually sent rather than from anything the
-    harness reports about itself. ``mcp-session-id`` is present only on a frame sent
-    AFTER ``initialize`` minted one, which makes it the wire's own evidence that the
-    session was established.
-
-    Exists because the two things a scenario needs to tell apart here are
-    indistinguishable everywhere else: see :func:`test_a_failure_realization_reaches_
-    the_operation_frame_not_the_handshake`.
-    """
-    import json
-
-    response = result.raw_response
-    assert response is not None, (
-        f"expected a refusing HTTP response to attribute to a frame, got none "
-        f"(is_error={result.is_error}, error={result.error!r}, payload={result.payload!r})"
-    )
-    request = response.request
-    method = json.loads(request.content)["method"]
-    return method, request.headers.get("mcp-session-id")
-
-
-@pytest.mark.requires_db
-def test_a_failure_realization_reaches_the_operation_frame_not_the_handshake(integration_db):
-    """LOCK 2 — the graded-frame rule: MCP opens its session CLEANLY, then 401s.
-
-    An MCP dispatch is THREE frames — ``initialize``, ``notifications/initialized``,
-    ``tools/call`` — and only the last is the operation the scenario named. The
-    realization must therefore attach to the last one alone: a session-wide
-    realization 401s the ``initialize``, the operation frame is never sent, and the
-    scenario grades a refusal of a frame it never mentioned.
-
-    WHY THE OBVIOUS ASSERTION WOULD BE VACUOUS, and why this test is shaped the way
-    it is. ``assert_signature_challenge`` grades the challenge header byte-exactly
-    and DELIBERATELY not the status code. Both refusals are step-1 pre-check
-    failures, which reject in every bucket, so both answer 401 with the IDENTICAL
-    ``WWW-Authenticate: Signature error="request_signature_header_malformed"``; both
-    arrive as a :class:`~tests.harness._base.WireRefusal` that ``McpDispatcher``
-    surfaces as ``raw_response``. The challenge assertion below therefore passes
-    under this test's own mutation. It is kept as SHAPE DOCUMENTATION — it says the
-    refusal is the one the realization asks for — and it is explicitly NOT the
-    discriminator.
-
-    THE DISCRIMINATOR is the frame attribution, which is the only thing that differs:
-    the refused request is the ``tools/call``, and it carries an ``mcp-session-id``,
-    which exists only because ``initialize`` answered with one.
-
-    NAMED MUTATION (checked, salesagent-rt8ht.4): make ``_mcp_open_session`` pass the
-    realization through to its two ``_mcp_send`` calls instead of
-    ``bool(self._signed_dispatch)``. The refused frame becomes ``initialize``, which
-    carries no session id, and BOTH assertions in the lock redden while
-    ``assert_signature_challenge`` stays green.
-    """
-    with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
-        env.enable_request_signing()
-
-        with declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
-            refused = env.call_via(Transport.MCP, signed="malformed")
-
-        # Shape documentation, not the discriminator — see the docstring.
-        refused.assert_signature_challenge(REQUEST_SIGNATURE_HEADER_MALFORMED)
-
-        method, session_id = _refused_frame(refused)
-        assert method == "tools/call", (
-            f"the malformed signature was refused on the {method!r} frame, not on the operation "
-            "frame the scenario named. A handshake frame carrying the realization 401s before "
-            "the operation is ever sent, and its challenge is byte-identical to the operation "
-            "frame's — so every scenario asserting 'a malformed signature is refused' would pass "
-            "having graded a frame it never mentioned. Handshake frames sign CORRECTLY whenever "
-            "signing is on at all (BaseTestEnv._mcp_open_session)."
-        )
-        assert session_id is not None, (
-            "the refused frame carried no mcp-session-id, so no session was ever established — "
-            "the 401 came from the handshake and the operation frame was never sent. A session "
-            "that cannot be opened has graded nothing."
-        )
-
+# LOCK 2 WAS HERE, and is deliberately gone — not repaired, and not replaced by a guard.
+#
+# It graded that a refusal lands on the OPERATION frame rather than on the handshake, by
+# reading the refused frame's JSON-RPC method and its ``mcp-session-id``. Under #1721 that
+# is not a property to observe at runtime; it is a property of the construction, and two
+# facts make the failure mode unrepresentable:
+#
+#   * ``_resolve_identity`` has exactly ONE call site — ``src/core/tools/_boundary.py``
+#     inside ``invoke_tool`` — so the verifier is reachable only through a dispatched tool;
+#   * MCP ``initialize`` is FastMCP's handshake, served by ``mcp.http_app()`` before any of
+#     this repo's code runs. It never reaches ``invoke_tool``, so it never reaches the
+#     verifier.
+#
+# There is no change short of wiring verification into FastMCP's ``initialize`` that makes a
+# handshake frame carry a signature refusal, and that is not a mutation — it is a revert of
+# the architecture. The lock's own recorded mutation already failed to redden it, which was
+# the symptom rather than the disease. Its ``mcp-session-id`` discriminator had additionally
+# become an assertion about a deleted artifact: ``src/app.py`` mounts MCP with
+# ``stateless_http=True`` (9d1bd704f), so no session id is minted for it to read.
+#
+# A test here would be a guard on an unrepresentable state, and this repo does not write
+# those — the same ruling that took the 28 request-signature error classes to hand-written
+# declarations with nothing scanning for violations. The architecture was built to make this
+# class of mistake impossible in principle, and a mistake that cannot happen does not need a
+# test watching for it. THE OBLIGATION IS NOT LOST: it moved from observed-at-runtime to
+# guaranteed-by-construction, and the two facts above are where it now lives.
+#
+# Nothing was rehomed, because nothing needed rehoming. The one surviving assertion in the
+# deleted lock (``assert_signature_challenge``) was documented IN THAT TEST as shape
+# documentation and explicitly NOT the discriminator — it passed under the lock's own
+# mutation — and the same challenge is graded for real by
+# ``test_refusal_is_graded_by_the_challenge_not_by_the_status`` above.
 
 # ---------------------------------------------------------------------------
 # The e2e_rest leg — the only one that leaves the process
