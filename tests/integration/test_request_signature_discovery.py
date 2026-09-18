@@ -179,7 +179,13 @@ class TestDiscoveryFailureDefersToTheChecklist:
 
             with declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)):
                 with _cold_discovery_state():
-                    malformed = client.get(
+                    # POST, like its well-formed twin below: this test's own docstring says
+                    # the two requests differ in exactly one thing, and while this leg was a
+                    # GET they differed in two. #1721 deleted the GET route, so the malformed
+                    # probe was answered 405 by the router and never reached the verifier at
+                    # all -- ``rejection_code`` read None, which is not a wrong code but no
+                    # verdict, and the step-1-outranks-step-7 claim was graded vacuously.
+                    malformed = client.post(
                         BODYLESS_ADCP_PATH, headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS)
                     )
                 with _cold_discovery_state():

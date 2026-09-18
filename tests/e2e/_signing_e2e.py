@@ -528,8 +528,16 @@ async def fetch_capabilities(client: httpx.AsyncClient, path: str = "/api/v1/cap
     Anonymous on purpose: discovery responses describe the SELLER, not the caller
     (AdCP INV-4), and the tenant is resolved from the Host header — which is what lets a
     counterparty holding no credential reach this document at all.
+
+    POST, because ``get_adcp_capabilities`` is a TOOL and the REST shape of a tool is a
+    POST. #1721 deleted the ``GET /api/v1/capabilities`` route (6b51acca8, "delete GET
+    /capabilities, leaving the tool one REST shape") and ``RestBinding.verb`` is now
+    ``Literal["POST", "PUT"]`` (src/core/tools/registry.py:80) — a GET is not expressible,
+    so this was addressing a route that cannot exist rather than observing a regression.
+    The empty body is the whole request: every field of ``get_adcp_capabilities`` is
+    optional, and sending one keeps the call anonymous.
     """
-    response = await client.get(path)
+    response = await client.post(path, json={})
     assert response.status_code == 200, (
         f"the capabilities document must be served anonymously over TLS at {path!r}; "
         f"got HTTP {response.status_code}. Body: {response.text[:300]!r}"
