@@ -55,12 +55,6 @@ def _auth_session(client, tenant_id: str) -> None:
         sess["test_tenant_id"] = tenant_id
 
 
-@pytest.fixture(autouse=True)
-def _enable_test_mode(monkeypatch):
-    """Enable global test auth so require_tenant_access accepts the test session."""
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")
-
-
 class TestAuthorizedDomainsAdd:
     """POST /tenant/<id>/settings/domains/add — appends to authorized_domains."""
 

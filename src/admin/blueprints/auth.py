@@ -20,7 +20,7 @@ from flask import Blueprint, abort, current_app, flash, redirect, render_templat
 from sqlalchemy import select
 
 from src.admin.auth_utils import extract_user_info
-from src.admin.utils import is_super_admin, test_login_composed
+from src.admin.utils import is_super_admin
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Tenant
@@ -200,10 +200,10 @@ def login():
     client_id, client_secret, discovery_url, _ = get_oauth_config()
     oauth_configured = bool(client_id and client_secret and discovery_url)
 
-    # The test-credential form is offered only where create_app composed the path that
-    # serves it. A tenant's auth_setup_mode alone never shows it: /test/auth refuses a
-    # tenant in setup mode without the global flag, so the form it used to show was dead.
-    test_mode = test_login_composed()
+    # No test-credential form: the route that served it is gone, and with it the global
+    # flag that composed it. A deployment logs in through its identity provider; a tenant
+    # still setting one up uses Setup Mode, which lets OIDC run before it is enabled.
+    test_mode = False
 
     from src.core.config_loader import is_single_tenant_mode
 
@@ -312,9 +312,8 @@ def tenant_login(tenant_id):
             abort(404)
         tenant_name = tenant.name
 
-        # The test-credential form is offered only where create_app composed the path that
-        # serves it; /test/auth then also requires this tenant to be in setup mode.
-        test_mode = test_login_composed()
+        # No test-credential form — see the note in ``login``.
+        test_mode = False
 
         # Check if tenant-specific OIDC is configured and enabled
         from src.services.auth_config_service import get_oidc_config_for_auth

@@ -34,7 +34,6 @@ from src.admin.blueprints.signals_agents import signals_agents_bp
 
 # from src.admin.blueprints.tasks import tasks_bp  # Disabled - tasks eliminated in favor of workflow system
 from src.admin.blueprints.tenants import tenants_bp
-from src.admin.blueprints.test_auth import test_auth_bp
 from src.admin.blueprints.users import users_bp
 from src.admin.blueprints.workflows import workflows_bp
 from src.core.config import load_settings
@@ -320,11 +319,6 @@ def create_app(config=None, settings=None):
     app.register_blueprint(public_bp)  # Public routes (no auth required) - MUST BE FIRST
     app.register_blueprint(core_bp)  # Core routes (/, /health, /static)
     app.register_blueprint(auth_bp)  # No url_prefix - auth routes are at root
-    # The test-credential login path EXISTS only where the deployment allows it: selected
-    # here, once, rather than answering 404 per request from inside the route. Never in
-    # production, whatever the flag says.
-    if settings.testing.adcp_auth_test_mode and not is_production:
-        app.register_blueprint(test_auth_bp)
     app.register_blueprint(oidc_bp)  # OIDC/OAuth routes at /auth/oidc
     app.register_blueprint(tenant_management_settings_bp)  # Tenant management settings at /settings
     app.register_blueprint(tenants_bp, url_prefix="/tenant")

@@ -386,7 +386,6 @@ def test_environment(monkeypatch, request):
     """Configure test environment variables without global pollution."""
     # Set testing flags
     monkeypatch.setenv("ADCP_TESTING", "true")
-    monkeypatch.setenv("ADCP_AUTH_TEST_MODE", "true")  # Enable test mode for auth
 
     # The settings are read once and cached (src/core/config.py). Drop the cached object
     # so this test's first read sees the environment above, and let monkeypatch restore

@@ -7,7 +7,7 @@ import logging
 from functools import wraps
 from typing import TYPE_CHECKING, NamedTuple, TypeVar
 
-from flask import abort, current_app, g, jsonify, redirect, session, url_for
+from flask import abort, g, jsonify, redirect, session, url_for
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
@@ -35,16 +35,6 @@ def is_admin_production() -> bool:
 
 
 #: The blueprint name of the test-credential login path (src/admin/blueprints/test_auth.py).
-TEST_LOGIN_BLUEPRINT = "test_auth"
-
-
-def test_login_composed() -> bool:
-    """Whether create_app registered the test-credential login path.
-
-    The path exists only where the deployment allows it, selected once in create_app. A
-    request-time reader asks the app what was composed; it never asks the environment.
-    """
-    return TEST_LOGIN_BLUEPRINT in current_app.blueprints
 
 
 def parse_json_config(config_str):
@@ -268,8 +258,9 @@ def require_auth(admin_only=False):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
-            # A test-user session is honoured only where the path that mints one was composed
-            if test_login_composed() and "test_user" in session:
+            # A setup-mode session. Which tenant it may reach is require_tenant_access's
+            # question; this decorator only asks whether anyone is here.
+            if "test_user" in session:
                 g.user = session["test_user"]
                 return f(*args, **kwargs)
 
@@ -316,11 +307,14 @@ def require_tenant_access(api_mode=False):
                 f"Auth check - tenant: {tenant_id}, method: {request.method}, has_session: {has_session}, has_cookies: {has_cookies}, session_keys: {list(session.keys())}"
             )
 
-            # Test mode: the composed test-login path OR per-tenant auth_setup_mode
-            test_mode = test_login_composed()
-
-            # Also check per-tenant auth_setup_mode if test_user is in session
-            if not test_mode and "test_user" in session:
+            # PER-TENANT SETUP MODE, and nothing else. This used to start from
+            # `test_login_composed()` -- whether create_app had composed the test-credential
+            # login blueprint, which it did under the global ADCP_AUTH_TEST_MODE. That flag
+            # made the app under test a different app from the deployed one and is gone; the
+            # tenant's own auth_setup_mode column, which an operator turns off from the UI,
+            # is the gate the deployment docs already call the successor.
+            test_mode = False
+            if "test_user" in session:
                 try:
                     with get_db_session() as db_session:
                         tenant = db_session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()

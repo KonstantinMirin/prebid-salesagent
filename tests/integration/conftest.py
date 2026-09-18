@@ -173,9 +173,6 @@ def authenticated_admin_session(admin_client, integration_db):
         db_session.add(email_config)
         db_session.commit()
 
-    # Enable test mode for authentication
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
-
     with admin_client.session_transaction() as sess:
         sess["authenticated"] = True
         sess["role"] = "super_admin"
@@ -190,8 +187,6 @@ def authenticated_admin_session(admin_client, integration_db):
     yield admin_client
 
     # Clean up test mode
-    if "ADCP_AUTH_TEST_MODE" in os.environ:
-        del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 @pytest.fixture
@@ -794,9 +789,6 @@ def test_admin_app(integration_db):
 @pytest.fixture
 def authenticated_admin_client(test_admin_app):
     """Provide authenticated admin client with database."""
-    # Enable test mode for authentication
-    os.environ["ADCP_AUTH_TEST_MODE"] = "true"
-
     client = test_admin_app.test_client()
 
     with client.session_transaction() as sess:
@@ -812,8 +804,6 @@ def authenticated_admin_client(test_admin_app):
     yield client
 
     # Clean up test mode
-    if "ADCP_AUTH_TEST_MODE" in os.environ:
-        del os.environ["ADCP_AUTH_TEST_MODE"]
 
 
 # ``test_media_buy_workflow`` was here and is DELETED along with the dict
