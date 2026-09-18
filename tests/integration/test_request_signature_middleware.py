@@ -162,7 +162,7 @@ from tests.helpers.asgi_wire import send_wire_messages, truncated_body
 # exists to stop. The seams are aliased to the private names this module already
 # reads; everything promoted since is read under its own public name.
 from tests.helpers.signing import (
-    BODYLESS_ADCP_PATH,
+    CAPABILITIES_ADCP_PATH,
     COUNTERPARTY_KID,
     FAILED_METRIC,
     LADDER_OPERATIONS,
@@ -381,7 +381,7 @@ class TestCompositionWithFallbackAuthenticators:
 
             with _declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "unsigned-bearer-authed"}},
                     headers=request_headers(token),
                 )
@@ -418,7 +418,7 @@ class TestCompositionWithFallbackAuthenticators:
 
             with _declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "unsigned-unauthenticated"}},
                     headers=request_headers(None),
                 )
@@ -451,7 +451,7 @@ class TestCompositionWithFallbackAuthenticators:
 
             with _declared_posture(**declaration):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "malformed-blocks-bearer"}},
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
@@ -526,7 +526,7 @@ class TestWarnStillSuppressesANonStepOneMalformation:
                 counterparty_key(jwks),
                 _verifier_spy() as calls,
             ):
-                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+                response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
             assert len(calls) == 1, (
                 "the warn bucket must still run the SDK checklist exactly once — warn is "
@@ -591,7 +591,7 @@ class TestHeaderPresencePrecheck:
 
             with _declared_posture(**declaration):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "half-present-signature"}},
                     headers=request_headers(token, {present: MALFORMED_SIGNATURE_HEADERS[present]}),
                 )
@@ -614,7 +614,7 @@ class TestHeaderPresencePrecheck:
 
             with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)), _verifier_spy() as calls:
                 client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "both-headers-present"}},
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
@@ -673,7 +673,7 @@ class TestNoneBucketCostsNothing:
 
             with _declared_posture(**unsupported()), _verifier_spy() as calls:
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json=body,
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
@@ -729,7 +729,7 @@ class TestNoneBucketCostsNothing:
 
             with _declared_posture(**narrowed_none()), _verifier_spy() as calls:
                 client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json=body,
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
@@ -774,7 +774,7 @@ class TestNoneBucketCostsNothing:
 
             with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)), _verifier_spy() as calls:
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "supported-bucket"}},
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
@@ -800,7 +800,7 @@ class TestNoneBucketCostsNothing:
 #: ``operation`` LABEL, which is the thing being asserted rather than a fixture knob.
 #: It is the registry key the boundary dispatched on, so it is the operation the
 #: posture bucketed — no name is re-derived from the body anywhere on this path.
-_BODYLESS_OPERATION = "get_adcp_capabilities"
+_CAPABILITIES_OPERATION = "get_adcp_capabilities"
 
 
 @contextmanager
@@ -883,12 +883,12 @@ class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
                     "key_unknown would make self-inflicted failures indistinguishable from real "
                     "key-resolution failures in the same series",
                 ),
-                _assert_ignored_recorded(_BODYLESS_OPERATION),
+                _assert_ignored_recorded(_CAPABILITIES_OPERATION),
                 _declared_posture(**narrowed_none()),
                 counterparty_key(jwks),
                 _verifier_spy() as calls,
             ):
-                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+                response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
             assert len(calls) == 1, (
                 f"the narrowed none bucket must enter the checklist exactly once; it ran {len(calls)} time(s)"
@@ -928,7 +928,7 @@ class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
             # managers unwind last-entered-first, and this row's primary obligation is the
             # one that should name itself first when it fails.
             with (
-                _assert_ignored_recorded(_BODYLESS_OPERATION, expected=0),
+                _assert_ignored_recorded(_CAPABILITIES_OPERATION, expected=0),
                 assert_counter_delta(
                     FAILED_METRIC,
                     1,
@@ -938,7 +938,7 @@ class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
                 _declared_posture(**narrowed_none()),
             ):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json={"context": {"request_id": "narrowed-none-step-1"}},
                     headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                 )
@@ -948,7 +948,7 @@ class TestTheNarrowedNoneBucketRecordsTheRightOutcome:
                 f"{response.status_code} with WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
             )
             assert _samples_with(
-                FAILED_METRIC, code=REQUEST_SIGNATURE_HEADER_MALFORMED, operation=_BODYLESS_OPERATION
+                FAILED_METRIC, code=REQUEST_SIGNATURE_HEADER_MALFORMED, operation=_CAPABILITIES_OPERATION
             ), (
                 "the counted failure must carry this request's own code and operation, not a "
                 f"neighbouring one; samples were {sorted(_counter_samples(FAILED_METRIC))}"
@@ -1012,7 +1012,7 @@ class TestANarrowedNoneRequestThatNeverFinishesArriving:
             )
 
             with (
-                _assert_ignored_recorded(_BODYLESS_OPERATION, expected=0),
+                _assert_ignored_recorded(_CAPABILITIES_OPERATION, expected=0),
                 assert_counter_delta(
                     FAILED_METRIC,
                     0,
@@ -1027,7 +1027,7 @@ class TestANarrowedNoneRequestThatNeverFinishesArriving:
                     app,
                     portal,
                     method="POST",
-                    url=f"{WIRE_ORIGIN}{BODYLESS_ADCP_PATH}",
+                    url=f"{WIRE_ORIGIN}{CAPABILITIES_ADCP_PATH}",
                     headers=headers,
                     messages=truncated_body(b'{"context": {"request_id": "narrowed-none-disc'),
                 )
@@ -1091,7 +1091,7 @@ class TestShadowModeLadder:
             private_key,
             token,
             method="POST",
-            path=BODYLESS_ADCP_PATH,
+            path=CAPABILITIES_ADCP_PATH,
             body=tampered_signing_body(sent_body),
             extra={"Content-Type": "application/json"},
         )
@@ -1124,7 +1124,7 @@ class TestShadowModeLadder:
                 _declared_posture(**bucketed_declaration(bucket, *LADDER_OPERATIONS)),
                 counterparty_key(jwks),
             ):
-                response = client.post(BODYLESS_ADCP_PATH, content=sent_body, headers=headers)
+                response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
 
             assert response.status_code == expected_status, (
                 f"bucket {bucket!r} must answer {expected_status} on the wire for a "
@@ -1149,9 +1149,9 @@ class TestShadowModeLadder:
 
             with counterparty_key(jwks):
                 with _declared_posture(**bucketed_declaration("warn", *LADDER_OPERATIONS)):
-                    warn_response = client.post(BODYLESS_ADCP_PATH, content=sent_body, headers=headers)
+                    warn_response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
                 with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)):
-                    supported_response = client.post(BODYLESS_ADCP_PATH, content=sent_body, headers=headers)
+                    supported_response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
 
             assert (warn_response.status_code, supported_response.status_code) == (200, 401), (
                 "warn_for and supported_for must differ on the WIRE for the same "
@@ -1382,7 +1382,7 @@ class TestRegistryResolvesACounterpartyWithNoAgentUrl:
                 _signing_config(counterparty_registry={COUNTERPARTY_KID: registry_entry(jwks)}),
                 _verifier_spy() as calls,
             ):
-                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+                response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
             assert _rejection_code(response) is None, (
                 "a signed request from a REGISTERED keyid must verify even though its "
@@ -1455,7 +1455,7 @@ class TestRegistryIsAFallbackNeverAnOverride:
                 _signing_config(counterparty_registry={COUNTERPARTY_KID: registry_entry(jwks)}),
                 _verifier_spy() as calls,
             ):
-                response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+                response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
             assert len(calls) == 1, f"the signed POST must reach the SDK verifier exactly once; it ran {len(calls)}x"
             assert calls[0]["options"].agent_url != REGISTRY_AGENT_URL, (

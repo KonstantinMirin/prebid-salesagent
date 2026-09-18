@@ -65,7 +65,7 @@ from adcp.types import GetAdcpCapabilitiesResponse
 from tests.harness._base import BareIntegrationEnv
 from tests.harness.transport import E2EConfig, Transport, TransportResult
 from tests.helpers.signing import (
-    BODYLESS_ADCP_PATH,
+    CAPABILITIES_ADCP_PATH,
     LADDER_OPERATIONS,
     SIGNATURE_REALIZATIONS,
     SIGNING_AGENT_HOST,
@@ -147,7 +147,7 @@ class _SignedDispatchEnv(BareIntegrationEnv):
     A2A_SKILL = SIGNED_OPERATION
     RESPONSE_MODEL = GetAdcpCapabilitiesResponse
 
-    REST_ENDPOINT = BODYLESS_ADCP_PATH
+    REST_ENDPOINT = CAPABILITIES_ADCP_PATH
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:  # type: ignore[override]
         return dict(kwargs)

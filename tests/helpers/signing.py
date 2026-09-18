@@ -151,15 +151,29 @@ SIGNING_PRINCIPAL_ID = "sig_principal"
 #: (:func:`request_headers`), so the host is identity, not routing.
 SIGNING_AGENT_HOST = "seller-signing.example.com"
 
-#: An AdCP surface path with no request body — the cheapest place to grade the
-#: header-presence branches. Auth-optional, so any 401 seen on it came from the
-#: verifier and not from the route's own auth dependency.
-BODYLESS_ADCP_PATH = "/api/v1/capabilities"
+#: The ``get_adcp_capabilities`` AdCP surface. Auth-optional, so any 401 seen on it came
+#: from the verifier and not from the route's own auth dependency — which is why the
+#: header-presence and header-shape cases are graded here.
+#:
+#: IT TAKES A BODY, like every AdCP surface does. This was ``CAPABILITIES_ADCP_PATH`` and its
+#: docstring called it "an AdCP surface path with no request body", which was true only
+#: while ``GET /api/v1/capabilities`` existed; #1721 deleted that route (6b51acca8) and
+#: every surface is now a POST tool whose DTO requires a body. The name outlived the thing
+#: it named, and it cost something real: it told an author there was a cheap bodiless way
+#: to probe the header branches, and the probe that followed carried TWO independent faults
+#: — a malformed signature AND a missing body — so it could grade neither. A request with
+#: no body is refused at ``validated_request`` before any credential is read, which is the
+#: correct and deliberate ordering (``src/core/tools/_boundary.py``): structural validation
+#: is the cheapest check and a structurally invalid request should not buy crypto or a
+#: three-hop discovery walk. That is the same defect class this project filed upstream as
+#: adcontextprotocol/adcp#7567 — a probe carrying two faults grades neither — written into
+#: our own suite.
+CAPABILITIES_ADCP_PATH = "/api/v1/capabilities"
 
-#: A body-CARRYING AdCP surface path, and the counterpart to
-#: :data:`BODYLESS_ADCP_PATH`. Needed by any case whose realization is a
-#: ``content-digest`` mismatch: :func:`tampered_signing_body` refuses a bodyless
-#: request, because signing and sending identical zero bytes is ACCEPTED.
+#: A SECOND body-carrying AdCP surface, distinct from :data:`CAPABILITIES_ADCP_PATH` only
+#: in being a different operation. Needed by any case whose realization is a
+#: ``content-digest`` mismatch: :func:`tampered_signing_body` refuses an empty body,
+#: because signing and sending identical zero bytes is ACCEPTED.
 #:
 #: This was named for a collision that no longer exists. On the old architecture it
 #: was "the body-rewriter collision site (R-H2)": ``normalize_request_params``
@@ -1447,7 +1461,7 @@ def signed_probe(
         private_key,
         token,
         method="POST",
-        path=BODYLESS_ADCP_PATH,
+        path=CAPABILITIES_ADCP_PATH,
         body=body,
         extra={"Content-Type": "application/json"},
         key_id=key_id,

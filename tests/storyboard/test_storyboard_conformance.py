@@ -642,11 +642,11 @@ def _drain_grading_replay_rows() -> None:
     clamp is the kind of thing that is right once and silently wrong after any of the three
     moves.
     """
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import ReplayNonce
     from sqlalchemy import delete
 
     from scripts.setup.storyboard_signing import counterparty_registry
+    from src.core.database.database_session import get_db_session
+    from src.core.database.models import ReplayNonce
 
     with get_db_session() as session:
         session.execute(delete(ReplayNonce).where(ReplayNonce.keyid.in_(sorted(counterparty_registry()))))

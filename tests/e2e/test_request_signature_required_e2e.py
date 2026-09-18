@@ -109,7 +109,7 @@ from tests.e2e._signing_e2e import (
     signing_declarations,
     tls_base_url,
 )
-from tests.helpers.signing import BODYLESS_ADCP_PATH, rejection_code
+from tests.helpers.signing import CAPABILITIES_ADCP_PATH, rejection_code
 
 #: Distinct from every other signing e2e module's tenant/slug (see the
 #: host-routing-collision note in the module docstring).
@@ -140,7 +140,7 @@ _CREATIVE_FORMATS_PATH = "/api/v1/creative-formats"
 #: Deliberately NOT an unnamed/mistyped path: dispatch is by registry key, so an
 #: unnamed path is a 404 from the router that never reaches the boundary at all
 #: — a control that could not distinguish "the bucket is none" from "nothing ran".
-_CAPABILITIES_PATH = BODYLESS_ADCP_PATH
+_CAPABILITIES_PATH = CAPABILITIES_ADCP_PATH
 
 #: The MCP JSON-RPC envelope naming the required operation. ``tools/call`` itself
 #: is NOT the name the verifier grades: ``invoke_tool`` builds the

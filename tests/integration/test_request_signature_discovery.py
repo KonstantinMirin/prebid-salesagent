@@ -77,7 +77,7 @@ from adcp.signing.errors import (
 
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.signing import (
-    BODYLESS_ADCP_PATH,
+    CAPABILITIES_ADCP_PATH,
     COUNTERPARTY_AGENT_URL,
     COUNTERPARTY_KID,
     LADDER_OPERATIONS,
@@ -186,10 +186,12 @@ class TestDiscoveryFailureDefersToTheChecklist:
                     # all -- ``rejection_code`` read None, which is not a wrong code but no
                     # verdict, and the step-1-outranks-step-7 claim was graded vacuously.
                     malformed = client.post(
-                        BODYLESS_ADCP_PATH, headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS)
+                        CAPABILITIES_ADCP_PATH,
+                        content=body,
+                        headers=request_headers(token, MALFORMED_SIGNATURE_HEADERS),
                     )
                 with _cold_discovery_state():
-                    well_formed = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+                    well_formed = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
         malformed_code = rejection_code(malformed)
         well_formed_code = rejection_code(well_formed)
@@ -267,7 +269,7 @@ class TestKeyOriginMissingIsGraded:
                     declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
                     verifier_spy() as calls,
                 ):
-                    response = client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+                    response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
         assert rejection_code(response) == REQUEST_SIGNATURE_KEY_ORIGIN_MISSING, (
             "a counterparty whose capabilities document declares no identity.key_origins map "

@@ -211,7 +211,7 @@ from tests.e2e._signing_e2e import (
     tls_base_url,
 )
 from tests.helpers.signing import (
-    BODYLESS_ADCP_PATH,
+    CAPABILITIES_ADCP_PATH,
     LADDER_OPERATIONS,
     VERIFIED_METRIC,
     keypair_for,
@@ -230,7 +230,7 @@ _TENANT_ID = "acptsig_e2e"
 #: registry-derived REST table, which registers ONE verb per row — POST for this one —
 #: so the surface is no longer reachable without a body. The path is what this module
 #: needs from it; the verb and the bytes are declared here (see "Why POST, not GET").
-_ADCP_PATH: Final[str] = BODYLESS_ADCP_PATH
+_ADCP_PATH: Final[str] = CAPABILITIES_ADCP_PATH
 
 #: The wire bytes every leg sends and every signature covers through ``content-digest``.
 #: Every ``GetAdcpCapabilitiesRequest`` field is optional, so this validates — which is

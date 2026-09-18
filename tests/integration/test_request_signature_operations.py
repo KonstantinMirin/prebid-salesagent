@@ -105,7 +105,7 @@ from tests.harness._base import BareIntegrationEnv
 # from their single home (salesagent-z6nr.14 step 2). What stays below is only what this
 # suite alone uses — the per-surface paths and payload overrides.
 from tests.helpers.signing import (
-    BODYLESS_ADCP_PATH,
+    CAPABILITIES_ADCP_PATH,
     COUNTERPARTY_KID,
     FAILED_METRIC,
     SIGNING_PRINCIPAL_ID,
@@ -358,7 +358,7 @@ class TestTheOperationIsTheRegistryKey:
             "the verb is part of the operation's identity: one path shape, two rows"
         )
         assert bound[("POST", _SYNC_ACCOUNTS_PATH)] == _SYNC_ACCOUNTS_OPERATION
-        assert bound[("POST", BODYLESS_ADCP_PATH)] == _CAPABILITIES_OPERATION
+        assert bound[("POST", CAPABILITIES_ADCP_PATH)] == _CAPABILITIES_OPERATION
         assert bound[("POST", _UNREQUIRED_PUBLIC_PATH)] == _UNREQUIRED_PUBLIC_OPERATION
 
     def test_an_unsigned_call_to_a_required_operation_is_refused(self, integration_db):
@@ -375,14 +375,14 @@ class TestTheOperationIsTheRegistryKey:
 
             with _declared_posture(**bucketed_declaration("required", _CAPABILITIES_OPERATION)):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json=GetAdcpCapabilitiesRequestFactory.payload(),
                     headers=_json_headers(None),
                 )
 
             _assert_rejected(
                 response,
-                f"POST {BODYLESS_ADCP_PATH} is {_CAPABILITIES_OPERATION}, which this posture puts in "
+                f"POST {CAPABILITIES_ADCP_PATH} is {_CAPABILITIES_OPERATION}, which this posture puts in "
                 "required_for; the caller presented no credential this agent accepts",
             )
 
@@ -756,7 +756,7 @@ class TestASignedOverCapBodyIsGradedByTheDeclaration:
 
             with _declared_posture(**declaration), _body_cap(_TEST_BODY_CAP):
                 response = client.post(
-                    BODYLESS_ADCP_PATH,
+                    CAPABILITIES_ADCP_PATH,
                     json=body,
                     headers=request_headers(token, {"Content-Type": "application/json", **_PRESENT_SIGNATURE_HEADERS}),
                 )

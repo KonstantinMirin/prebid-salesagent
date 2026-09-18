@@ -190,7 +190,7 @@ from tests.helpers.log_capture import LogCaptureHandler
 # drift the moment the wire changed. What stays below is only this suite's own —
 # the operator origins, the ageing checkers, the revocation JWS.
 from tests.helpers.signing import (
-    BODYLESS_ADCP_PATH,
+    CAPABILITIES_ADCP_PATH,
     COUNTERPARTY_AGENT_URL,
     COUNTERPARTY_KID,
     LADDER_OPERATIONS,
@@ -357,13 +357,13 @@ class _SignedCaller:
             self.private_key,
             self._token,
             method="POST",
-            path=BODYLESS_ADCP_PATH,
+            path=CAPABILITIES_ADCP_PATH,
             body=body,
             extra={"Content-Type": "application/json"},
         )
         if corrupt_signature:
             headers = _with_corrupt_signature(headers)
-        return self._client.post(BODYLESS_ADCP_PATH, content=body, headers=headers)
+        return self._client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
 
 @contextmanager
