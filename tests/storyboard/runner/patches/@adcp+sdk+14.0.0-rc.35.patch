@@ -71,28 +71,39 @@ index 156d094..5d15e2b 100644
      httpResult.status = res.status;
      httpResult.headers = res.headers;
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js
-index 25bc151..49e2d8a 100644
+index 25bc151..5b27c40 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js
 +++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.js
-@@ -257,8 +257,54 @@ function retargetUrl(vectorUrl, baseUrl) {
+@@ -257,8 +257,65 @@ function retargetUrl(vectorUrl, baseUrl) {
    }
    return v.toString();
  }
 +function a2aEndpoint(baseUrl) {
-+  const u = new URL(baseUrl);
-+  // A2A is CARD-FIRST, so the RPC endpoint is normally read off
-+  // /.well-known/agent-card.json. The signing probe is bearer-less and deliberately does
-+  // not fetch the card, so it appends the conventional mount when the base carries no
-+  // path. KNOWN CEILING: an agent serving A2A somewhere other than /a2a must pass the
-+  // endpoint as the storyboard's a2a agent url.
-+  if (u.pathname === "" || u.pathname === "/") u.pathname = "/a2a";
-+  return u.toString();
++  // The RPC endpoint is whatever the AGENT CARD names. The grader's `a2a` precondition
++  // resolves it and hands it down already resolved, so nothing is appended here and no
++  // mount is assumed: A2A is card-first, and scheme, host, port AND path all belong to
++  // the card. Deriving any of them here would be correct only against agents that happen
++  // to match the guess -- the same defect as hardcoding a version-selected payload key,
++  // one level up.
++  if (!baseUrl) {
++    throw new Error("transport: 'a2a' requires the card-resolved RPC endpoint as baseUrl");
++  }
++  return new URL(baseUrl).toString();
 +}
 +function wrapA2aEnvelope(operation, rawBody, idOverride) {
 +  // The NATIVE 1.0 SendMessage frame, not the 0.3 `message/send` family: an agent that
 +  // builds its JSON-RPC routes without the 0.3 compat adapter does not serve that family
 +  // at all. Field names are proto JSON (`messageId`, `ROLE_USER`), because the dispatcher
 +  // ParseDicts `params` back into its generated model.
++  //
++  // `input`, NOT `parameters`: the payload key is SELECTED BY THE DECLARED VERSION, which
++  // is why no call site may hardcode it. The SDK's own client does exactly this in
++  // protocols/a2a.ts -- `legacyWire ? { skill, parameters } : { skill, input }`, keyed on
++  // `client.protocolVersion`, which it read off the agent card. This frame declares
++  // `A2A-Version: 1.0`, so `input` is the only correct spelling for it. Written
++  // `parameters` first, and it graded green only because our own dispatcher accepts both
++  // (`data.get("input") or data.get("parameters", {})`) -- against a strict 1.0 agent
++  // every vector would have been rejected before its verifier saw a signature.
 +  const args = rawBody && rawBody.length > 0 ? JSON.parse(rawBody) : {};
 +  return JSON.stringify({
 +    jsonrpc: "2.0",
@@ -102,7 +113,7 @@ index 25bc151..49e2d8a 100644
 +      message: {
 +        messageId: (0, import_crypto.randomUUID)(),
 +        role: "ROLE_USER",
-+        parts: [{ data: { skill: operation, parameters: args } }]
++        parts: [{ data: { skill: operation, input: args } }]
 +      }
 +    }
 +  });
@@ -130,28 +141,39 @@ index 25bc151..49e2d8a 100644
      if (!options.baseUrl) {
        throw new Error(`transport: 'mcp' requires a baseUrl (the MCP endpoint, e.g. http://agent/mcp)`);
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs
-index 5a98e85..c46b634 100644
+index 5a98e85..979e373 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs
 +++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/builder.mjs
-@@ -239,8 +239,54 @@ function retargetUrl(vectorUrl, baseUrl) {
+@@ -239,8 +239,65 @@ function retargetUrl(vectorUrl, baseUrl) {
    }
    return v.toString();
  }
 +function a2aEndpoint(baseUrl) {
-+  const u = new URL(baseUrl);
-+  // A2A is CARD-FIRST, so the RPC endpoint is normally read off
-+  // /.well-known/agent-card.json. The signing probe is bearer-less and deliberately does
-+  // not fetch the card, so it appends the conventional mount when the base carries no
-+  // path. KNOWN CEILING: an agent serving A2A somewhere other than /a2a must pass the
-+  // endpoint as the storyboard's a2a agent url.
-+  if (u.pathname === "" || u.pathname === "/") u.pathname = "/a2a";
-+  return u.toString();
++  // The RPC endpoint is whatever the AGENT CARD names. The grader's `a2a` precondition
++  // resolves it and hands it down already resolved, so nothing is appended here and no
++  // mount is assumed: A2A is card-first, and scheme, host, port AND path all belong to
++  // the card. Deriving any of them here would be correct only against agents that happen
++  // to match the guess -- the same defect as hardcoding a version-selected payload key,
++  // one level up.
++  if (!baseUrl) {
++    throw new Error("transport: 'a2a' requires the card-resolved RPC endpoint as baseUrl");
++  }
++  return new URL(baseUrl).toString();
 +}
 +function wrapA2aEnvelope(operation, rawBody, idOverride) {
 +  // The NATIVE 1.0 SendMessage frame, not the 0.3 `message/send` family: an agent that
 +  // builds its JSON-RPC routes without the 0.3 compat adapter does not serve that family
 +  // at all. Field names are proto JSON (`messageId`, `ROLE_USER`), because the dispatcher
 +  // ParseDicts `params` back into its generated model.
++  //
++  // `input`, NOT `parameters`: the payload key is SELECTED BY THE DECLARED VERSION, which
++  // is why no call site may hardcode it. The SDK's own client does exactly this in
++  // protocols/a2a.ts -- `legacyWire ? { skill, parameters } : { skill, input }`, keyed on
++  // `client.protocolVersion`, which it read off the agent card. This frame declares
++  // `A2A-Version: 1.0`, so `input` is the only correct spelling for it. Written
++  // `parameters` first, and it graded green only because our own dispatcher accepts both
++  // (`data.get("input") or data.get("parameters", {})`) -- against a strict 1.0 agent
++  // every vector would have been rejected before its verifier saw a signature.
 +  const args = rawBody && rawBody.length > 0 ? JSON.parse(rawBody) : {};
 +  return JSON.stringify({
 +    jsonrpc: "2.0",
@@ -161,7 +183,7 @@ index 5a98e85..c46b634 100644
 +      message: {
 +        messageId: randomUUID(),
 +        role: "ROLE_USER",
-+        parts: [{ data: { skill: operation, parameters: args } }]
++        parts: [{ data: { skill: operation, input: args } }]
 +      }
 +    }
 +  });
@@ -189,10 +211,67 @@ index 5a98e85..c46b634 100644
      if (!options.baseUrl) {
        throw new Error(`transport: 'mcp' requires a baseUrl (the MCP endpoint, e.g. http://agent/mcp)`);
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js
-index c23ec39..5f628fa 100644
+index c23ec39..b6d0a4a 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js
 +++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.js
-@@ -162,7 +162,11 @@ function preflightSkip(vector, kind, contract, options) {
+@@ -29,6 +29,44 @@ var import_vector_loader = require('./vector-loader.js');
+ var import_test_kit = require('./test-kit.js');
+ var import_signing = require('../../../signing/index.js');
+ var import_parser = require('../../../signing/parser.js');
++
++// ── A2A card-first endpoint resolution ──────────────────────────────────────
++// The A2A analogue of the MCP `initialize` precondition below: before any vector can be
++// framed, the run has to learn WHERE to send it, and for A2A that is the agent card's
++// business, not the grader's. `/.well-known/agent-card.json` names the interface --
++// url, protocolBinding, protocolVersion -- and `rawA2aAuthProbe` in the runner already
++// reads `supportedInterfaces[0].url` for the auth probes. Same read, same source.
++//
++// Memoized per agent url because the storyboard dispatch calls `gradeOneVector` once per
++// VECTOR; without this the run refetches the card ~40 times.
++const _a2aRpcEndpointCache = /* @__PURE__ */ new Map();
++async function resolveA2aRpcEndpoint(agentUrl, options) {
++  const cached = _a2aRpcEndpointCache.get(agentUrl);
++  if (cached) return cached;
++  const cardUrl = new URL("/.well-known/agent-card.json", agentUrl).toString();
++  const probes = require('../probes.js');
++  const card = await probes.fetchProbe(cardUrl, {
++    allowPrivateIp: options.allowPrivateIp === true,
++    timeoutMs: options.timeoutMs
++  });
++  if (card.error) {
++    throw new Error(`A2A card precondition failed: ${cardUrl}: ${card.error}`);
++  }
++  const iface = card.body?.supportedInterfaces?.find(
++    (i) => typeof i?.url === "string" && String(i.protocolBinding ?? "").toUpperCase() === "JSONRPC"
++  );
++  if (!iface) {
++    // NOT a fallback to a conventional mount. An agent whose card names no JSONRPC
++    // interface is an agent this transport cannot reach, and saying so is the honest
++    // outcome -- guessing produces a grade about a URL the agent never published.
++    throw new Error(
++      `A2A card precondition failed: ${cardUrl} names no supportedInterfaces entry with protocolBinding JSONRPC`
++    );
++  }
++  _a2aRpcEndpointCache.set(agentUrl, iface.url);
++  return iface.url;
++}
++
+ async function gradeRequestSigning(agentUrl, options = {}) {
+   const start = Date.now();
+   const loaded = (0, import_vector_loader.loadRequestSigningVectors)(options);
+@@ -58,7 +96,10 @@ async function gradeRequestSigning(agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   const positive = [];
+   for (const vector of loaded.positive) {
+     const skip = preflightSkip(vector, "positive", contract, options);
+@@ -162,7 +203,11 @@ function preflightSkip(vector, kind, contract, options) {
    if (transportReason) {
      return { ...base, skipped: true, skip_reason: "transport_ungradable", diagnostic: transportReason };
    }
@@ -205,7 +284,19 @@ index c23ec39..5f628fa 100644
      return {
        ...base,
        skipped: true,
-@@ -460,12 +464,35 @@ function contentDigestPolicyMismatch(vector, kind, agentPolicy) {
+@@ -226,7 +271,10 @@ async function gradeOneVector(vectorId, kind, agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   if (kind === "positive") {
+     const signed = (0, import_builder.buildPositiveRequest)(vector, loaded.keys, buildOpts);
+     const probe = await (0, import_probe.probeSignedRequest)(signed, probeOpts);
+@@ -460,12 +508,35 @@ function contentDigestPolicyMismatch(vector, kind, agentPolicy) {
    }
    return contentDigestStructuralMismatch(vector, agentPolicy);
  }
@@ -243,10 +334,67 @@ index c23ec39..5f628fa 100644
    }
    const structural = contentDigestStructuralMismatch(vector, agentCap.covers_content_digest);
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs
-index 0563d6d..2da38ec 100644
+index 0563d6d..5970531 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs
 +++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/grader.mjs
-@@ -144,7 +144,11 @@ function preflightSkip(vector, kind, contract, options) {
+@@ -11,6 +11,44 @@ import {
+   verifyRequestSignature
+ } from "../../../signing/index.mjs";
+ import { parseSignatureInput } from "../../../signing/parser.mjs";
++
++// ── A2A card-first endpoint resolution ──────────────────────────────────────
++// The A2A analogue of the MCP `initialize` precondition below: before any vector can be
++// framed, the run has to learn WHERE to send it, and for A2A that is the agent card's
++// business, not the grader's. `/.well-known/agent-card.json` names the interface --
++// url, protocolBinding, protocolVersion -- and `rawA2aAuthProbe` in the runner already
++// reads `supportedInterfaces[0].url` for the auth probes. Same read, same source.
++//
++// Memoized per agent url because the storyboard dispatch calls `gradeOneVector` once per
++// VECTOR; without this the run refetches the card ~40 times.
++const _a2aRpcEndpointCache = /* @__PURE__ */ new Map();
++async function resolveA2aRpcEndpoint(agentUrl, options) {
++  const cached = _a2aRpcEndpointCache.get(agentUrl);
++  if (cached) return cached;
++  const cardUrl = new URL("/.well-known/agent-card.json", agentUrl).toString();
++  const probes = await import("../probes.mjs");
++  const card = await probes.fetchProbe(cardUrl, {
++    allowPrivateIp: options.allowPrivateIp === true,
++    timeoutMs: options.timeoutMs
++  });
++  if (card.error) {
++    throw new Error(`A2A card precondition failed: ${cardUrl}: ${card.error}`);
++  }
++  const iface = card.body?.supportedInterfaces?.find(
++    (i) => typeof i?.url === "string" && String(i.protocolBinding ?? "").toUpperCase() === "JSONRPC"
++  );
++  if (!iface) {
++    // NOT a fallback to a conventional mount. An agent whose card names no JSONRPC
++    // interface is an agent this transport cannot reach, and saying so is the honest
++    // outcome -- guessing produces a grade about a URL the agent never published.
++    throw new Error(
++      `A2A card precondition failed: ${cardUrl} names no supportedInterfaces entry with protocolBinding JSONRPC`
++    );
++  }
++  _a2aRpcEndpointCache.set(agentUrl, iface.url);
++  return iface.url;
++}
++
+ async function gradeRequestSigning(agentUrl, options = {}) {
+   const start = Date.now();
+   const loaded = loadRequestSigningVectors(options);
+@@ -40,7 +78,10 @@ async function gradeRequestSigning(agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   const positive = [];
+   for (const vector of loaded.positive) {
+     const skip = preflightSkip(vector, "positive", contract, options);
+@@ -144,7 +185,11 @@ function preflightSkip(vector, kind, contract, options) {
    if (transportReason) {
      return { ...base, skipped: true, skip_reason: "transport_ungradable", diagnostic: transportReason };
    }
@@ -259,7 +407,19 @@ index 0563d6d..2da38ec 100644
      return {
        ...base,
        skipped: true,
-@@ -442,12 +446,35 @@ function contentDigestPolicyMismatch(vector, kind, agentPolicy) {
+@@ -208,7 +253,10 @@ async function gradeOneVector(vectorId, kind, agentUrl, options = {}) {
+     mcpSessionId,
+     mcpProtocolVersion: transport === "mcp" ? mcpProtocolVersion : void 0
+   };
+-  const buildOpts = { baseUrl: agentUrl, transport };
++  const buildOpts = {
++    baseUrl: transport === "a2a" ? await resolveA2aRpcEndpoint(agentUrl, options) : agentUrl,
++    transport
++  };
+   if (kind === "positive") {
+     const signed = buildPositiveRequest(vector, loaded.keys, buildOpts);
+     const probe = await probeSignedRequest(signed, probeOpts);
+@@ -442,12 +490,35 @@ function contentDigestPolicyMismatch(vector, kind, agentPolicy) {
    }
    return contentDigestStructuralMismatch(vector, agentPolicy);
  }
