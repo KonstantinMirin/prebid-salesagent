@@ -80,17 +80,6 @@ def safe_json_loads(value, default=None):
     return default
 
 
-def get_default_tenant() -> dict[str, Any] | None:
-    """Get the default tenant for CLI/testing.
-
-    ``None`` means one thing: no active tenant row. A database that cannot answer the
-    question raises, because "the lookup failed" and "there is no such tenant" are
-    different facts and only the caller's own refusal should decide what a buyer is told.
-    """
-    with get_db_session() as db_session:
-        return _as_dict(_lookup(db_session).find_default_active())
-
-
 def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
     """The active tenant with this id, as a dict, or ``None``."""
     with get_db_session() as db_session:
@@ -183,18 +172,3 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
         # Don't fail startup if tenant creation fails - log and continue
         logger.warning(f"Could not ensure default tenant exists: {e}")
         return None
-
-
-def get_single_tenant() -> dict[str, Any] | None:
-    """Get the single tenant for single-tenant deployments.
-
-    In single-tenant mode, returns the only active tenant.
-    In multi-tenant mode, returns None.
-
-    Returns:
-        The single tenant dict, or None if multi-tenant mode or no tenant exists
-    """
-    if not is_single_tenant_mode():
-        return None
-
-    return get_default_tenant()
