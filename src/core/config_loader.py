@@ -54,29 +54,28 @@ def safe_json_loads(value, default=None):
 
 
 def get_default_tenant() -> dict[str, Any] | None:
-    """Get the default tenant for CLI/testing."""
-    try:
-        with get_db_session() as db_session:
-            # Get first active tenant or specific default
-            # Try to get 'default' tenant first, fall back to first active tenant
-            stmt = select(Tenant).filter_by(tenant_id="default", is_active=True)
+    """Get the default tenant for CLI/testing.
+
+    ``None`` means one thing: no active tenant row. A database that cannot answer the
+    question raises, because "the lookup failed" and "there is no such tenant" are
+    different facts and only the caller's own refusal should decide what a buyer is told.
+    """
+    with get_db_session() as db_session:
+        # Get first active tenant or specific default
+        # Try to get 'default' tenant first, fall back to first active tenant
+        stmt = select(Tenant).filter_by(tenant_id="default", is_active=True)
+        tenant = db_session.scalars(stmt).first()
+
+        if not tenant:
+            # Fall back to first active tenant by creation date
+            stmt = select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)
             tenant = db_session.scalars(stmt).first()
 
-            if not tenant:
-                # Fall back to first active tenant by creation date
-                stmt = select(Tenant).filter_by(is_active=True).order_by(Tenant.created_at)
-                tenant = db_session.scalars(stmt).first()
+        if tenant:
+            from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
-
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+            return serialize_tenant_to_dict(tenant)
+        return None
 
 
 def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
@@ -88,21 +87,15 @@ def get_tenant_by_id(tenant_id: str) -> dict[str, Any] | None:
     Returns:
         Tenant dict if found, None otherwise
     """
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
-            tenant = db_session.scalars(stmt).first()
+    with get_db_session() as db_session:
+        stmt = select(Tenant).filter_by(tenant_id=tenant_id, is_active=True)
+        tenant = db_session.scalars(stmt).first()
 
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
+        if tenant:
+            from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+            return serialize_tenant_to_dict(tenant)
+        return None
 
 
 def _same_host(requested: str):
@@ -142,21 +135,15 @@ def hostname_of(host: str) -> str:
 
 def get_tenant_by_virtual_host(virtual_host: str) -> dict[str, Any] | None:
     """Get tenant by virtual host. A port on the incoming host is ignored."""
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).where(_same_host(virtual_host), Tenant.is_active.is_(True))
-            tenant = db_session.scalars(stmt).first()
+    with get_db_session() as db_session:
+        stmt = select(Tenant).where(_same_host(virtual_host), Tenant.is_active.is_(True))
+        tenant = db_session.scalars(stmt).first()
 
-            if tenant:
-                from src.core.utils.tenant_utils import serialize_tenant_to_dict
+        if tenant:
+            from src.core.utils.tenant_utils import serialize_tenant_to_dict
 
-                return serialize_tenant_to_dict(tenant)
-            return None
-    except Exception as e:
-        # If table doesn't exist or other DB errors, return None
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+            return serialize_tenant_to_dict(tenant)
+        return None
 
 
 def tenant_id_for(*, virtual_host: str) -> str | None:
@@ -174,14 +161,9 @@ def tenant_id_for(*, virtual_host: str) -> str | None:
     """
     if not virtual_host:
         return None
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant.tenant_id).where(_same_host(virtual_host), Tenant.is_active.is_(True))
-            return db_session.scalars(stmt).first()
-    except Exception as e:
-        if "no such table" in str(e) or "does not exist" in str(e):
-            return None
-        raise
+    with get_db_session() as db_session:
+        stmt = select(Tenant.tenant_id).where(_same_host(virtual_host), Tenant.is_active.is_(True))
+        return db_session.scalars(stmt).first()
 
 
 def is_single_tenant_mode() -> bool:
