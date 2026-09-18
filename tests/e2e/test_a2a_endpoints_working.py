@@ -20,9 +20,9 @@ from adcp import get_adcp_spec_version
 # Add parent directories to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN  # noqa: E402  (after the sys.path bootstrap)
 from src.app import _AGENT_CARD_PATHS  # noqa: E402  (after the sys.path bootstrap above)
 from src.core.tools.registry import TOOLS  # noqa: E402  (after the sys.path bootstrap above)
+from tests.e2e.conftest import e2e_ca_bundle  # noqa: E402  (after the sys.path bootstrap)
 from tests.helpers.credentials import credential_headers
 
 # Read the declared set from production: a path added to (or dropped from)
@@ -33,11 +33,21 @@ AGENT_CARD_PATHS = sorted(_AGENT_CARD_PATHS)
 # The one path the a2a-sdk factory mounts today — the regression guard.
 CANONICAL_AGENT_CARD_PATH = "/.well-known/agent-card.json"
 
-# WHICH SELLER's card to fetch. Imported from the seeding script that makes the value true
-# in the database rather than spelled again here: the tenant_id is a fresh uuid4 per seed,
-# so the subdomain is the only stable spelling. See TestAgentCardDiscoveryPathsLive for why
-# a card request has to name a tenant at all.
-_CARD_TENANT_HEADERS = {"x-adcp-tenant": CI_TEST_SUBDOMAIN}
+
+def card_origin(live_server) -> str:
+    """The origin to fetch an agent card from, and NO tenant header goes with it.
+
+    A card is discovery: a buyer has a hostname and nothing else, so the tenant has to be
+    resolvable from the HOST. Prefer the stack's named TLS front, which the CI tenant
+    declares as its ``virtual_host`` (scripts/setup/init_database_ci.ci_tenant_virtual_host),
+    so the request resolves the way a deployment resolves one — nginx derives
+    ``x-adcp-tenant`` from the host in production and no caller sends it.
+
+    Falls back to the plaintext origin on the host path, where the published TLS port is
+    per-session and so cannot be a stored identity; there the request reaches ``localhost``
+    and resolves the demo tenant through the loopback fallback.
+    """
+    return live_server.get("tls") or live_server["a2a"]
 
 
 class TestA2AEndpointsActual:
@@ -165,7 +175,7 @@ class TestA2AEndpointsActual:
         """
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         response = requests.options(
-            f"{live_server['a2a']}/.well-known/agent-card.json", headers=_CARD_TENANT_HEADERS, timeout=2
+            f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
         )
 
         # Should handle OPTIONS requests
@@ -197,7 +207,7 @@ class TestAgentCardDiscoveryPathsLive:
     @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
     def test_declared_card_path_is_served_live(self, live_server, path):
         """GET on every path in _AGENT_CARD_PATHS returns 200 from the live server."""
-        response = requests.get(f"{live_server['a2a']}{path}", headers=_CARD_TENANT_HEADERS, timeout=2)
+        response = requests.get(f"{card_origin(live_server)}{path}", verify=e2e_ca_bundle(), timeout=5)
 
         assert response.status_code == 200, (
             f"{path} is declared in _AGENT_CARD_PATHS but the live server returned "
@@ -215,7 +225,12 @@ class TestAgentCardDiscoveryPathsLive:
         Host, which is what it did before #1440 and what let an attacker-supplied
         `Host: evil.example.com` come back as the agent's own advertised URL.
         """
-        response = requests.get(f"{live_server['a2a']}/agent.json", headers={"Host": "unclaimed.example"}, timeout=2)
+        response = requests.get(
+            f"{card_origin(live_server)}/agent.json",
+            headers={"Host": "unclaimed.example"},
+            verify=e2e_ca_bundle(),
+            timeout=5,
+        )
 
         assert response.status_code == 404, (
             f"a Host no tenant claims returned {response.status_code}; a card naming some "
@@ -233,7 +248,7 @@ class TestAgentCardDiscoveryPathsLive:
         treats a re-serialization difference as a different document.
         """
         bodies = {
-            path: requests.get(f"{live_server['a2a']}{path}", headers=_CARD_TENANT_HEADERS, timeout=2)
+            path: requests.get(f"{card_origin(live_server)}{path}", verify=e2e_ca_bundle(), timeout=5)
             for path in AGENT_CARD_PATHS
         }
 

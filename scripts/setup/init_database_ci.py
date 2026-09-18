@@ -23,6 +23,44 @@ CI_TEST_ACCOUNT_ID = "ci-test-account"
 #: import from tests/ (see scripts/ci/migration_helpers.py).
 CI_TEST_SUBDOMAIN = "ci-test"
 
+
+def ci_tenant_virtual_host() -> str | None:
+    """The host this tenant answers on, or ``None`` when the stack names no front.
+
+    DERIVED from ``E2E_TLS_BASE_URL``, the same variable the test fixtures read, so the
+    tenant's stored identity is the front this particular stack actually serves rather
+    than a literal guessed here. In-network compose sets it to
+    ``https://proxy.adcp.test:8443`` — a name the tls-proxy already routes to
+    ``adcp-server`` and the generated ``*.adcp.test`` wildcard already covers, so nothing
+    new has to be added for this to work.
+
+    WHY DECLARE ONE AT ALL. A deployment resolves a tenant from the HOST: nginx derives
+    ``x-adcp-tenant`` from it (``nginx-multi-tenant.conf``: ``map $host $tenant``) and no
+    caller sends it. The test stack has no such layer, so every caller asserted its own
+    tenant — which works for a tool call and cannot work for DISCOVERY, because a buyer
+    fetching an agent card has a hostname and nothing else. With this set, an agent-card
+    request over the TLS front resolves a tenant with no header at all, which is the path
+    deployments actually run.
+
+    The port is part of the value: tenant routing is an exact ``Host`` match, and both
+    proxies forward ``Host`` with its port intact — the tls template says so at its
+    ``location /`` block, and ``tenant_id_for(virtual_host=...)`` does not strip it.
+
+    ``None`` on the host path, where the published TLS port is allocated per session and
+    so cannot be a stable stored identity. There a card request reaches ``localhost`` and
+    resolves the demo tenant through the loopback fallback — the very fallback #2259
+    proposes deleting, at which point the host path needs a named front of its own.
+    """
+    import os
+    from urllib.parse import urlparse
+
+    base = os.getenv("E2E_TLS_BASE_URL")
+    if not base:
+        return None
+    parsed = urlparse(base.rstrip("/"))
+    return parsed.netloc or None
+
+
 #: The credential presented to that tenant: the plaintext token this script hashes into
 #: the CI principal's row. Owned here for the same reason as the subdomain above -- this
 #: script is what makes it resolvable -- and read by tests/integration/conftest_ci_seed.py
@@ -86,6 +124,15 @@ def init_db_ci():
                     existing_tenant.authorized_emails = ["ci-test@example.com"]
                     session.flush()
                     print("   ✓ Access control configured")
+
+                # Re-assert the host identity, so a tenant seeded before it was declared
+                # converges instead of silently keeping none — which is what made its agent
+                # card unresolvable and every card fetch a 404.
+                ci_vhost = ci_tenant_virtual_host()
+                if ci_vhost and existing_tenant.virtual_host != ci_vhost:
+                    existing_tenant.virtual_host = ci_vhost
+                    session.flush()
+                    print(f"   ✓ Host identity: {ci_vhost}")
 
                 # Check if principal exists GLOBALLY by token hash (it's unique across all tenants)
                 existing_principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
@@ -158,6 +205,11 @@ def init_db_ci():
                     tenant_id=tenant_id,
                     name="CI Test Tenant",
                     subdomain=CI_TEST_SUBDOMAIN,
+                    # Host-based resolution, the way a deployment does it — see
+                    # ci_tenant_virtual_host(). Without this the tenant is reachable only
+                    # by a header, and an agent-card fetch (which carries none) resolves
+                    # nothing.
+                    virtual_host=ci_tenant_virtual_host(),
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=True,
