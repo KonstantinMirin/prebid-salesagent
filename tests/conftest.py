@@ -395,6 +395,14 @@ def test_environment(monkeypatch, request):
 
     monkeypatch.setattr(config_module, "_settings", None)
 
+    # The settings are read once and cached (src/core/config.py). Drop the cached object
+    # so this test's first read sees the environment above, and let monkeypatch restore
+    # the previous object afterwards so no stale settings leak between tests. A test that
+    # changes the environment mid-test calls load_settings() (or resets this again).
+    import src.core.config as config_module
+
+    monkeypatch.setattr(config_module, "_settings", None)
+
     # Check if this is a test that needs the database
     is_integration_test = "integration" in str(request.fspath) or "bdd" in str(request.fspath)
     has_requires_db_marker = request.node.get_closest_marker("requires_db") is not None
