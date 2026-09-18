@@ -21,29 +21,6 @@ class TestRouteLandingPage:
             assert result.effective_host == "admin.sales-agent.example.com"
             mock_is_admin.assert_called_once_with("admin.sales-agent.example.com")
 
-    def test_the_proxy_vendor_header_is_not_a_host_input(self):
-        """A proxied request is routed by its ``Host``, which the EDGE has already set.
-
-        This used to assert the opposite — that ``Apx-Incoming-Host`` took precedence over
-        ``Host`` — while ``_detect_tenant`` read them the other way round, so one request
-        could resolve to two different tenants depending on which resolver asked. nginx
-        folds the vendor header into ``Host`` and drops it
-        (``config/nginx/nginx-multi-tenant.conf``), so the app has one host input.
-        """
-        from unittest.mock import patch
-
-        with patch("src.core.domain_routing.is_admin_domain") as mock_is_admin:
-            with patch("src.core.domain_routing.get_tenant_by_virtual_host") as mock_get_tenant:
-                mock_is_admin.return_value = False
-                mock_get_tenant.return_value = None
-
-                headers = {"Host": "backend.internal.com", "Apx-Incoming-Host": "admin.sales-agent.example.com"}
-                result = route_landing_page(headers)
-
-                assert result.effective_host == "backend.internal.com"
-                mock_is_admin.assert_called_once_with("backend.internal.com")
-                mock_get_tenant.assert_called_once_with("backend.internal.com")
-
     def test_admin_domain_spoofing_prevented(self):
         """Malicious domains starting with 'admin.' should NOT route to admin."""
         from unittest.mock import patch

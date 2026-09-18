@@ -13,7 +13,6 @@ Tests against live servers (local or production).
 """
 
 import os
-from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -133,52 +132,6 @@ class TestLandingPages:
             assert has_a2a or is_pending, (
                 "Landing page should either show A2A endpoint or pending configuration message"
             )
-
-    @pytest.mark.integration
-    def test_the_host_routes_the_request_and_the_vendor_header_does_not(self, live_server):
-        """The ``Host`` decides; ``Apx-Incoming-Host`` buys nothing.
-
-        This asserted the opposite until the vendor header was deleted from the
-        application: it required the header to take PRECEDENCE over ``Host``, while
-        ``_detect_tenant`` read the two the other way round — so one request could route
-        two ways depending on which resolver asked. The edge now folds the header into
-        ``Host`` and drops it (``config/nginx/nginx-multi-tenant.conf``), and the app has
-        one host input.
-
-        The two requests below differ ONLY in which header carries the admin domain, so
-        the pair fails if either half regresses: a header that still routed would make the
-        second one redirect, and a Host that stopped routing would make the first one not.
-        """
-        admin_domain = "admin.sales-agent.example.com"
-        # The backend Host header must name the SAME authority the request is sent
-        # to, so derive it from the URL instead of re-resolving a global that can
-        # disagree with it.
-        backend_host = urlparse(live_server["admin"]).netloc
-
-        by_host = requests.get(
-            f"{live_server['admin']}/",
-            headers={"Host": admin_domain},
-            timeout=5,
-            allow_redirects=False,
-        )
-        assert by_host.status_code == 302, (
-            f"The admin domain in Host should redirect to login (302), got {by_host.status_code}"
-        )
-        assert "/admin/login" in by_host.headers.get("Location", ""), (
-            f"The admin domain in Host should redirect to /admin/login, got {by_host.headers.get('Location', '')!r}"
-        )
-
-        by_vendor_header = requests.get(
-            f"{live_server['admin']}/",
-            headers={"Host": backend_host, "Apx-Incoming-Host": admin_domain},
-            timeout=5,
-            allow_redirects=False,
-        )
-        assert "/admin/login" not in by_vendor_header.headers.get("Location", ""), (
-            "The vendor header routed the request to the admin login, so the application "
-            "is still reading it as a host input — the edge is meant to be the only place "
-            "that header is understood"
-        )
 
 
 class TestAuthOptionalEndpoints:

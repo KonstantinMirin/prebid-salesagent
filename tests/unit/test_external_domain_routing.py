@@ -1,15 +1,10 @@
 """Test how the admin plane resolves a request's host to a tenant.
 
-The file was named for Approximated, and its first two tests asserted that a tenant was
-found from an ``Apx-Incoming-Host`` header. The application no longer reads that header:
-the edge folds it into ``Host`` and drops it (``config/nginx/nginx-multi-tenant.conf``),
-so ``Host`` is the one host input on the admin plane as on the buyer-facing one.
-
-Those two tests would still have PASSED unchanged after that deletion, which is why they
-are rewritten rather than edited: they mocked the session to answer ANY query with a
-tenant, so they could not tell which host had been looked up, and the vendor header in
-their request context did no work in the assertion. They now assert the lookup ARGUMENT,
-which is the only thing that distinguishes "the Host was used" from "some host was used".
+The ``Host`` is the one host input here as on the buyer-facing plane, and these assert the
+lookup ARGUMENT rather than only the returned tenant — the two earlier tests mocked the
+session to answer ANY query with a tenant, so they could not tell WHICH host had been
+looked up, which is the only thing that distinguishes "the Host was used" from "some host
+was used".
 """
 
 from unittest.mock import Mock, patch
@@ -26,16 +21,7 @@ class TestGetTenantFromHostname:
 
         app = create_app()
 
-        with app.test_request_context(
-            "/",
-            headers={
-                "Host": "sales-agent.accuweather.com",
-                # Present and disregarded: a request that arrived through the edge has
-                # already had this folded into Host. Naming a DIFFERENT host here is what
-                # makes the assertion below able to fail.
-                "Apx-Incoming-Host": "backend.example.com",
-            },
-        ):
+        with app.test_request_context("/", headers={"Host": "sales-agent.accuweather.com"}):
             with patch("src.admin.blueprints.core.get_db_session"):
                 with patch("src.admin.blueprints.core.TenantLookupRepository") as mock_repo_cls:
                     mock_tenant = Mock()

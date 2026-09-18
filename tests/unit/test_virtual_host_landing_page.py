@@ -3,13 +3,12 @@
 FOUR TESTS WERE DELETED HERE, and the reason is worth keeping. They were named for
 tenant resolution (``..._with_virtual_host``, ``..._without_virtual_host``,
 ``..._with_nonexistent_tenant``, ``..._header_case_insensitive``) but each one mocked
-``get_tenant_by_virtual_host``, reimplemented the root handler's header ladder in the
+``get_tenant_by_virtual_host``, reimplemented the root handler's header reading in the
 test body under a comment reading "simulate the root route handler logic", called the
 mock itself, and asserted that the mock returned what the test had just set on it. They
 graded a copy of production that lived in this file — hard rule 5 in tests/CLAUDE.md, and
 the "recomputing the expected value from setup" pitfall — so they could not fail when
-production changed, which is exactly what happened: the ladder they simulated was
-deleted from the app (``Apx-Incoming-Host`` is edge config now) and they stayed green.
+production changed, and they stayed green when the code they simulated was deleted.
 
 Which tenant a host resolves is graded where it is observable: on all four transports by
 ``tests/bdd/features/local-tenant-identification-routes.feature``, and for the routing
