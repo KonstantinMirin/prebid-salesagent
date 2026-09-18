@@ -94,7 +94,6 @@ map $ssl_server_name $tls_upstream_named {
     # runs for them and this alias stays valid. Costs nothing if compose stops
     # advertising it — an unrouted map key is inert.
     webhooks.adcp.test         webhook-capture:8080;
-    storyboard.adcp.test       adcp-server-storyboard:8080;
 }
 
 server {
