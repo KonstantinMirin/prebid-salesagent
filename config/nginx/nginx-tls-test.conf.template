@@ -85,6 +85,14 @@ map $ssl_server_name $tls_upstream_named {
     #     (salesagent-mp53.8) — that reserved-TLD rule does not reach the
     #     inbound walk, but Tier 3 brand authorization matches agent url to
     #     brand domain by eTLD+1, and `.test` is not in the public suffix list.
+    # The storyboard runner's OWN ephemeral webhook receiver, published behind this
+    # same front so the server dials https and never a plaintext destination. One
+    # row per protocol: the two runs bind different ports (_webhook_port) and SNI
+    # selects the upstream by name, so a single name cannot reach both. `tests` is
+    # the run container's network alias (run_all_tests.sh --use-aliases).
+    storyboard-webhooks-mcp.adcp-e2e.dev  tests:9998;
+    storyboard-webhooks-a2a.adcp-e2e.dev  tests:9999;
+
     webhooks.adcp-e2e.dev      webhook-capture:8080;
     counterparty.adcp-e2e.dev  counterparty-origin:8080;
 

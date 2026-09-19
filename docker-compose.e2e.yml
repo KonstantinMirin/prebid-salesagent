@@ -443,6 +443,12 @@ services:
           # (adcp-server) and delivery lands on the wrong service.
           - webhooks.adcp.test
           - webhooks.adcp-e2e.dev
+          # Atomic with the $ssl_server_name rows in
+          # config/nginx/nginx-tls-test.conf.template: an alias WITHOUT its map row
+          # silently falls back to ${TLS_UPSTREAM} (adcp-server) and the delivery
+          # lands on the wrong service.
+          - storyboard-webhooks-mcp.adcp-e2e.dev
+          - storyboard-webhooks-a2a.adcp-e2e.dev
           # The counterparty identity origin (salesagent-mp53.8). Another SNI
           # alias on the SAME front — see the $ssl_server_name map. It sits under
           # .adcp-e2e.dev because the inbound walk matches the signer's eTLD+1,
@@ -551,6 +557,11 @@ services:
       context: .
       dockerfile: Dockerfile.test
     environment:
+      # Publishes the runner's own webhook receiver behind the shared TLS front.
+      # NOT ADCP_WEBHOOK_HOST: that variable is retired and guarded
+      # (tests/unit/test_architecture_e2e_compose_tls_origins.py) precisely because
+      # it advertised a plaintext http:// callback. This one is TLS by construction.
+      STORYBOARD_WEBHOOK_TLS_FRONT: "adcp-e2e.dev:8443"
       # Unbuffered stdout/stderr for the tox process that actually runs the
       # suite. cassini sets PYTHONUNBUFFERED on its supervisor's own subprocess
       # env, but the work runs HERE -- a separate container started by

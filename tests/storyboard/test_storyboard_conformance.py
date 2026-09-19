@@ -204,6 +204,21 @@ def _node_ca_env(agent_url: str) -> dict[str, str]:
     return {"NODE_EXTRA_CA_CERTS": bundle}
 
 
+#: Set on the in-network runner. Names the shared TLS front the receiver is
+#: published behind (host suffix + port), e.g. ``adcp-e2e.dev:8443``. Absent
+#: host-side, where the SDK's loopback receiver already works.
+_WEBHOOK_TLS_FRONT_ENV = "STORYBOARD_WEBHOOK_TLS_FRONT"
+
+
+def _webhook_tls_origin(protocol: str, tls_front: str) -> str:
+    """``storyboard-webhooks-<protocol>.<suffix>:<port>`` -- the advertised origin.
+
+    Per-protocol because :func:`_webhook_port` gives each run its own bind port and
+    nginx selects the upstream by SNI NAME: one hostname cannot route to two ports,
+    so each protocol needs its own row in the ``$ssl_server_name`` map.
+    """
+    return f"storyboard-webhooks-{protocol}.{tls_front}"
+
 def _webhook_port(protocol: str) -> str:
     """Per-protocol receiver port, offset from the base by protocol index.
 
@@ -460,8 +475,8 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
     adcontextprotocol/adcp-client#2448); the flag ships in the pinned SDK, so the patch
     and the ADCP_WEBHOOK_RECEIVER_HOST env var it added are both gone.
     """
-    callback_host = os.environ.get(_WEBHOOK_CALLBACK_HOST_ENV)
-    if not callback_host:
+    tls_front = os.environ.get(_WEBHOOK_TLS_FRONT_ENV)
+    if not tls_front:
         return [], {}
 
     port = _webhook_port(protocol)
@@ -471,7 +486,14 @@ def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:
         "--webhook-receiver-port",
         port,
         "--webhook-receiver-public-url",
-        f"http://{callback_host}:{port}/",
+        # HTTPS at the shared TLS front, never http:// at a bare service name.
+        # The advertised URL is what the SERVER dials, so it is the one place a
+        # plaintext webhook destination could enter the stack -- which is exactly
+        # why ADCP_WEBHOOK_HOST was retired and is guarded against
+        # (tests/unit/test_architecture_e2e_compose_tls_origins.py). Per-protocol
+        # hostname because the two runs bind different ports and SNI selects the
+        # upstream by NAME, so one name cannot reach two ports.
+        f"https://{_webhook_tls_origin(protocol, tls_front)}/",
         # Not loopback: the server is a DIFFERENT container and calls back to this
         # runner's compose alias, so a receiver bound to 127.0.0.1 puts the delivery on
         # the container's eth0 with nothing listening.
