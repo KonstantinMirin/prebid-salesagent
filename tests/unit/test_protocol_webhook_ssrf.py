@@ -24,7 +24,6 @@ surfaces that still accept one.
 from __future__ import annotations
 
 import contextlib
-import os
 from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
@@ -47,8 +46,8 @@ from tests.factories import WebhookTaskContextFactory
 from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.helpers.adcp_factories import create_test_media_buy_request_dict, valid_reporting_webhook
 from tests.helpers.creative_test_helpers import sync_creatives_request
-from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import LocalOrigin, run_local_origin
+from tests.helpers.settings_injection import inject_limits
 from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 from tests.helpers.unit_identity import fabricated_account_identity
 
@@ -100,11 +99,24 @@ def _egress_hatches(*, private: bool) -> Iterator[None]:
 
     A refusal case that leaves it ambient is graded by whichever gate the
     surrounding shell happened to branch, so a test meaning "production posture"
-    would silently grade nothing. Same spelling as ``LocalOriginMixin`` and the
-    seam's own suite. There is no ``insecure`` hatch anymore (salesagent-e6h0):
-    the scheme gate is unconditional in production.
+    would silently grade nothing. There is no ``insecure`` hatch anymore
+    (salesagent-e6h0): the scheme gate is unconditional in production.
+
+    ON THE SETTINGS, NOT ON ``os.environ``. ``outbound_http._allow_private()`` reads
+    ``get_settings().limits.adcp_outbound_allow_private``, and that object is built once
+    and cached process-wide — so patching the environment reaches the seam only while
+    nothing has read the settings yet. ``tests/helpers/egress_hatches.py`` says so in its
+    own first paragraph ("A test running in this process should not use it"), and this
+    file was one of the two surfaces it named as still doing it.
+
+    The cost was not theoretical: with the cache already warm the hatch silently did
+    nothing, the gate refused the loopback origin, and the delivery cases failed with
+    zero hits on an origin that was listening. Whether the cache was warm depended on
+    what else the xdist worker had run, so it passed locally and failed on the box
+    (run innet_200926_1357: five of this file's cases plus two neighbours).
     """
-    with patch.dict(os.environ, egress_hatch_env(private=private)):
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        inject_limits(monkeypatch, adcp_outbound_allow_private=private)
         yield
 
 
