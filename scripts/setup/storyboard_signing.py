@@ -53,13 +53,18 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+    from src.core.database.models import Account
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN  # noqa: E402
+from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN  # noqa: E402
 
 #: The Host the conformance runner dials, and therefore the ``virtual_host`` the storyboard
 #: tenant must answer to.
@@ -242,6 +247,51 @@ def declarations(brand_json_url: str) -> dict[str, Any]:
     }
 
 
+#: The account the universal ``webhook_emission`` storyboard transacts against, by
+#: NATURAL KEY. Its ``sample_request`` sends ``account: {brand: {domain}, operator}``
+#: and no ``account_id`` — the reference the pinned schema calls a natural key — and
+#: ``account_lookup._by_natural_key`` RESOLVES that against existing rows rather than
+#: provisioning one. So the row has to exist before the storyboard runs, or every
+#: ``trigger_*`` step fails ACCOUNT_NOT_FOUND before a single webhook is emitted.
+#:
+#: Derived by scanning the pinned compliance bundle for every such pair, not hand-written.
+#: Two are deliberately ABSENT and must stay absent: ``nonexistent-brand-xyz.example`` (the
+#: fixture that grades not-found) and the ``<runner-supplied ...>`` placeholder in the
+#: single-side-trust runner contract.
+STORYBOARD_ACCOUNT_KEYS: tuple[tuple[str, str], ...] = (
+    ("acmeoutdoor.example", "pinnacle-agency.example"),
+    ("amsterdam-steakhouse.example", "pinnacle-agency.example"),
+    ("novamotors.example", "pinnacle-agency.example"),
+    ("otherbrand.example", "other-operator.example"),
+    ("pagination-acme-1.example", "pagination-pinnacle.example"),
+    ("pagination-acme-2.example", "pagination-pinnacle.example"),
+    ("pagination-acme-3.example", "pagination-pinnacle.example"),
+    ("test.example", "test.example"),
+)
+
+#: BOTH sandbox values. The reference carries the flag and the resolver filters on it
+#: exactly -- ``_scope_natural_key`` applies ``Account.sandbox == sandbox`` whenever the
+#: reference names one -- so a row seeded ``False`` is INVISIBLE to a request asking for
+#: ``True``. Measured on the wire: "natural-key miss ... sandbox=True" against a
+#: ``sandbox=False`` row. The two never collide: an omitted flag matches ``NULL OR False``
+#: only, so it can never see the sandbox row.
+STORYBOARD_SANDBOX_MODES: tuple[bool, ...] = (False, True)
+
+
+def _brand_domain_of(account: Account) -> str | None:
+    """The brand domain on a row, whether the column deserialized to a model or a dict."""
+    brand = account.brand
+    if brand is None:
+        return None
+    return brand.get("domain") if isinstance(brand, dict) else getattr(brand, "domain", None)
+
+
+def _storyboard_account_id(brand_domain: str, sandbox: bool) -> str:
+    """Stable, readable account id per (brand, sandbox). Unique by construction."""
+    slug = brand_domain.replace(".", "-")
+    return f"sb-{slug}-sandbox" if sandbox else f"sb-{slug}"
+
+
 def seed() -> None:
     """Make the storyboard tenant answer to the runner's Host, posture and counterparty.
 
@@ -285,7 +335,128 @@ def seed() -> None:
             print(f"   counterparty principal created at {COUNTERPARTY_AGENT_URL}")
         else:
             print(f"   counterparty principal already at {COUNTERPARTY_AGENT_URL}")
+
+        _seed_webhook_storyboard_account(session, tenant.tenant_id)
         session.commit()
+
+
+def _seed_webhook_storyboard_account(session: Session, tenant_id: str) -> None:
+    """The account ``webhook_emission`` transacts against, plus the grant that exposes it.
+
+    BOTH halves, and the grant is the half that is easy to miss: account resolution is
+    scoped to the calling agent's accessible set (#1417), so a row without an
+    ``AgentAccountAccess`` join fails ACCOUNT_NOT_FOUND *identically* to no row at all.
+    Seeding one without the other looks like it worked and changes nothing.
+
+    Idempotent on both halves — this script is re-run against a live stack.
+    """
+    from sqlalchemy import select
+
+    from src.core.credentials import hash_token
+    from src.core.database.models import Account, AgentAccountAccess
+    from src.core.database.repositories.principal_lookup import find_principal_by_token_hash
+
+    # The principal the RUNNER authenticates as. The grant has to name that principal,
+    # not the counterparty one above: the counterparty is who the runner's SIGNATURE
+    # establishes, while the account is read on the bearer's behalf.
+    principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
+    if principal is None:
+        raise SystemExit(
+            f"No principal for the runner's bearer in tenant {tenant_id!r}. Run scripts.setup.init_database_ci first."
+        )
+
+    seeded: list[str] = []
+    for brand_domain, operator in STORYBOARD_ACCOUNT_KEYS:
+        for sandbox in STORYBOARD_SANDBOX_MODES:
+            # Idempotent on the NATURAL KEY, not the id. The key is what the resolver
+            # matches and what the database constrains as unique, so a row already holding
+            # it satisfies the precondition whatever it is called -- and inserting a
+            # second row under our own id would violate that constraint rather than being
+            # a harmless no-op.
+            existing = session.scalars(
+                select(Account).filter_by(tenant_id=tenant_id, operator=operator, sandbox=sandbox)
+            ).all()
+            match = next((a for a in existing if (a.brand or {}) and _brand_domain_of(a) == brand_domain), None)
+            if match is not None:
+                seeded.append(match.account_id)
+                continue
+            account_id = _storyboard_account_id(brand_domain, sandbox)
+            seeded.append(account_id)
+            session.add(
+                Account(
+                    tenant_id=tenant_id,
+                    account_id=account_id,
+                    name=f"Storyboard conformance account ({brand_domain}, sandbox={sandbox})",
+                    status="active",
+                    operator=operator,
+                    brand={"domain": brand_domain},
+                    sandbox=sandbox,
+                )
+            )
+            session.flush()
+    print(f"   storyboard accounts present: {len(seeded)}")
+
+    # BOTH principals the runner can resolve as, because which one carries the request
+    # depends on how it was authenticated. This tenant declares ``required_for`` signing,
+    # so a SIGNED call resolves to the principal the signature establishes
+    # (``COUNTERPARTY_PRINCIPAL_ID`` — the ``agent_url`` the verifier walks to), while an
+    # unsigned call resolves to the one the BEARER names. Account resolution is scoped to
+    # the RESOLVED principal's grants (#1417), so granting only the bearer leaves every
+    # signed request answering ACCOUNT_NOT_FOUND — indistinguishably from no account row
+    # at all, which is exactly how this went undiagnosed through one full run.
+    for principal_id in sorted({principal.principal_id, COUNTERPARTY_PRINCIPAL_ID}):
+        for account_id in seeded:
+            grant = session.scalars(
+                select(AgentAccountAccess).filter_by(
+                    tenant_id=tenant_id, principal_id=principal_id, account_id=account_id
+                )
+            ).first()
+            if grant is None:
+                session.add(AgentAccountAccess(tenant_id=tenant_id, principal_id=principal_id, account_id=account_id))
+                session.flush()
+                print(f"   account access granted to {principal_id} on {account_id}")
+
+    _assert_account_resolves(session, tenant_id, grantees=sorted({principal.principal_id, COUNTERPARTY_PRINCIPAL_ID}))
+
+
+def _assert_account_resolves(session: Session, tenant_id: str, *, grantees: list[str]) -> None:
+    """Read the seeded account back THROUGH THE RESOLVER, and fail loudly if it does not.
+
+    Seeding that writes rows nobody can resolve is indistinguishable from not seeding: the
+    server answers ACCOUNT_NOT_FOUND either way, and the storyboard reports it as a
+    conformance failure rather than a fixture failure. This turns "seeded" from an
+    assumption into a measurement, taken against the same repository method the request
+    path uses and in the same database this script just wrote to.
+
+    Stated as a precondition rather than a test because it guards a fixture: if it trips,
+    every account-bearing storyboard is about to fail for a reason that has nothing to do
+    with the agent's conformance, and the run is worthless. Better to stop here, where the
+    message can name the cause.
+    """
+    from src.core.database.repositories.account import AccountRepository
+
+    repo = AccountRepository(session, tenant_id)
+    for principal_id in grantees:
+        for brand_domain, operator in STORYBOARD_ACCOUNT_KEYS:
+            for sandbox in STORYBOARD_SANDBOX_MODES:
+                if repo.list_by_natural_key(
+                    operator=operator,
+                    brand_domain=brand_domain,
+                    sandbox=sandbox,
+                    principal_id=principal_id,
+                ):
+                    continue
+                raise SystemExit(
+                    f"Seeded the storyboard accounts, but {brand_domain}/{operator} "
+                    f"sandbox={sandbox} does NOT resolve for principal {principal_id!r} in "
+                    f"tenant {tenant_id!r}. Every storyboard naming it would fail "
+                    f"ACCOUNT_NOT_FOUND as a fixture defect wearing the costume of a "
+                    f"conformance failure."
+                )
+    print(
+        f"   all {len(STORYBOARD_ACCOUNT_KEYS)} account keys x {len(STORYBOARD_SANDBOX_MODES)} "
+        f"sandbox modes resolve for {len(grantees)} principal(s)"
+    )
 
 
 def main() -> None:
