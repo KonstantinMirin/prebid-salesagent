@@ -120,13 +120,13 @@ def _prepare(engine, db_url) -> dict[str, str | None]:
     other — measured at ``--randomly-seed=3``: all seven readers failed. Random ordering is
     the default here and each test is expected to stand alone.
 
-    FROM A TEST BODY, NOT A FIXTURE, and that is not a style choice. ``alembic/env.py``
-    resolves its URL at IMPORT time from ``DatabaseConfig.get_connection_string()``, which
-    reads ``get_settings()`` — a process-wide cache that a FUNCTION-scoped fixture in
-    ``tests/integration/conftest.py`` refreshes. A module-scoped fixture runs before that
-    refresh, so it still sees the ambient database: measured, the same override resolves to
-    ``.../adcp_test`` inside a module fixture and to ``.../test_migration_<hex>`` inside a
-    test, and the upgrade silently no-ops until ``_seed`` fails on a missing ``tenants``.
+    A plain function rather than a fixture, because the precondition is the same for all
+    eight and the first caller pays for it once. (It HAD to be a function while
+    ``_run_alembic_command`` only set ``DATABASE_URL``: ``alembic/env.py`` resolves its URL
+    at import time through the process-wide ``get_settings()`` cache, so the override was
+    honoured from a test body and silently ignored from a module-scoped fixture. That is
+    fixed at the helper now — it drops and restores the cache — so either shape would work
+    and this one is simply the smaller.)
 
     Returns the pre-migration scheme per row. That is the control every expectation in this
     module rests on: without it they would all hold equally against a database where the
