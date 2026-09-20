@@ -416,8 +416,75 @@ def _seed_webhook_storyboard_account(session: Session, tenant_id: str) -> None:
                 session.flush()
                 print(f"   account access granted to {principal_id} on {account_id}")
 
+    _seed_vector_product(session, tenant_id)
     _mint_tenant_signing_key(session, tenant_id)
     _assert_account_resolves(session, tenant_id, grantees=sorted({principal.principal_id, COUNTERPARTY_PRINCIPAL_ID}))
+
+
+def _seed_vector_product(session: Session, tenant_id: str) -> None:
+    """The product our CORRECTED request-signing bodies name, so their creates resolve.
+
+    adcp#7567/#7583: the pinned vectors ship `create_media_buy` bodies no seller can parse,
+    so `corrected_vectors.py` rewrites them from this repo's own conformant payload —
+    which is built by `tests/factories/request.py`'s `PackageRequestFactory`, whose
+    defaults are `product_id="prod-1"` and `pricing_option_id="cpm_usd_fixed"`.
+
+    Nothing seeded those. Measured on the box: `[GET_PRODUCTS] Got 2 products` (the real
+    catalog answers), then thirteen creates requesting `prod-1`, and thirteen
+    `product miss: requested=['prod-1'] missing=['prod-1']`. The vectors were correct and
+    the catalog was correct; they simply named different products.
+
+    Read off the factory rather than restated, so a factory default that moves cannot
+    leave this seeding the old id — the same rule the account seeding follows for the
+    natural key it reads off the request builder.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import PricingOption, Product
+    from tests.factories.product import DEFAULT_PRICING_OPTION_ID, ProductFactory
+    from tests.factories.request import PackageRequestFactory
+
+    product_id = PackageRequestFactory.product_id
+    # `format_ids` is object-shaped ({agent_url, id}) and a DB trigger enforces it. Read
+    # the factory's own default rather than restating an id: #1418 already moved this one
+    # once, from "display_300x250" to the catalog's "display_300x250_image".
+    format_ids = ProductFactory.format_ids.function()
+    if session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first():
+        print(f"   vector product already present: {product_id}")
+        return
+    session.add(
+        Product(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            name="Storyboard signed-vector product",
+            description="Named by the corrected request-signing create_media_buy bodies.",
+            format_ids=format_ids,
+            targeting_template={},
+            delivery_type="non_guaranteed",
+            property_tags=["all_inventory"],
+            measurement=None,
+            creative_policy=None,
+            price_guidance=None,
+            countries=None,
+            implementation_config=None,
+            properties=None,
+        )
+    )
+    session.flush()
+    session.add(
+        PricingOption.create(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            pricing_model="cpm",
+            rate=10.0,
+            currency="USD",
+            is_fixed=True,
+            price_guidance=None,
+            pricing_option_id=DEFAULT_PRICING_OPTION_ID,
+        )
+    )
+    session.flush()
+    print(f"   vector product seeded: {product_id} ({DEFAULT_PRICING_OPTION_ID})")
 
 
 def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
