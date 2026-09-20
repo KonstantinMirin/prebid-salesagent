@@ -441,13 +441,26 @@ def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
     from datetime import UTC, datetime
 
     from src.core.database.repositories.signing_key import SigningKeyRepository
+    from src.core.exceptions import AdCPSalesAgentError
     from src.core.signing.keys import provision_signing_key
 
     repo = SigningKeyRepository(session, tenant_id)
     if repo.active_at(now=datetime.now(UTC)) is not None:
         print("   tenant signing key already present")
         return
-    provisioned = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
+    try:
+        provisioned = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
+    except AdCPSalesAgentError as exc:
+        # NON-FATAL, deliberately, and this is the difference between an enhancement and a
+        # regression. `db:` minting refuses without a deployment KEK — correctly, since
+        # there is no plaintext fallback — and a deployment that configures none is a
+        # legitimate one to grade. Failing the seeder there takes the ENTIRE storyboard
+        # suite down (tox aborts commands_pre, no reports are written, and the run is
+        # ungraded) to fix ONE check. Skipping costs only
+        # `assert_webhook_signing_key_present`, which is exactly the check the key exists
+        # to satisfy, and leaves every other storyboard measured.
+        print(f"   tenant signing key NOT minted ({type(exc).__name__}); JWKS stays empty")
+        return
     session.flush()
     print(f"   tenant signing key minted: {provisioned.row.kid}")
 
