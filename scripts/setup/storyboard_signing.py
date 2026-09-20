@@ -449,8 +449,14 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
     # the factory's own default rather than restating an id: #1418 already moved this one
     # once, from "display_300x250" to the catalog's "display_300x250_image".
     format_ids = ProductFactory.format_ids.function()
-    if session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first():
-        print(f"   vector product already present: {product_id}")
+    existing = session.scalars(select(Product).filter_by(tenant_id=tenant_id, product_id=product_id)).first()
+    if existing is not None:
+        # Re-apply the capabilities rather than returning: a row left by an earlier
+        # revision of this function would otherwise keep that revision's capabilities
+        # forever, and the run would grade a product nobody in this tree described.
+        existing.property_targeting_allowed = True
+        session.flush()
+        print(f"   vector product refreshed: {product_id}")
         return
     session.add(
         Product(
@@ -462,6 +468,11 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
             targeting_template={},
             delivery_type="non_guaranteed",
             property_tags=["all_inventory"],
+            # `media_buy_seller/inventory_list_targeting` buys this product with a
+            # property_list overlay, and a product that forbids it is refused before the
+            # storyboard's own subject is reached. Nothing about this product is a
+            # restriction under test -- it exists so the signed vectors name something.
+            property_targeting_allowed=True,
         )
     )
     session.flush()
@@ -469,8 +480,14 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
         PricingOption.create(
             tenant_id=tenant_id,
             product_id=product_id,
+            # The mock adapter simulates an ad server's capacity and refuses a CPM package
+            # over 1,000,000 impressions (src/adapters/mock_ad_server.py). Impressions are
+            # budget/rate*1000, so the RATE is what decides whether a storyboard-sized
+            # budget fits: at 10.0 the corpus's 25,000 budget asked for 2,500,000 and was
+            # refused on `packages[0].impressions` -- a fixture ceiling, not a contract.
+            # 50.0 carries a budget up to 50,000 inside the same cap.
+            rate=50.0,
             pricing_model="cpm",
-            rate=10.0,
             currency="USD",
             is_fixed=True,
             price_guidance=None,
