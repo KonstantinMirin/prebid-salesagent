@@ -3251,20 +3251,25 @@ async def _create_media_buy_impl(
                 ]
 
                 if unsupported_formats:
-                    if not product_format_keys:
-                        # Product has no format_ids configured - this is a configuration error
-                        error_msg = (
-                            f"Product '{pkg_product.name}' ({pkg_product.product_id}) has no format_ids configured. "
-                            f"This product is not properly set up for media buys. "
-                            f"Please configure format_ids on the product or contact the publisher."
-                        )
-                    else:
-                        supported_formats_str = ", ".join(format_display(key) for key in sorted(product_format_keys))
-                        error_msg = (
-                            f"Product '{pkg_product.name}' ({pkg_product.product_id}) does not support requested format(s): "
-                            f"{', '.join(unsupported_formats)}. Supported formats: {supported_formats_str}"
-                        )
-                    raise AdCPValidationError()
+                    # The two branches this replaces built a diagnostic sentence into a
+                    # local and then raised bare, so the string was DEAD -- neither the
+                    # buyer nor the log ever saw it, and the refusal named nothing at all
+                    # (measured: 25 of 27 create refusals on the storyboard tenant logged
+                    # `field=None details=None`, salesagent-basxl). No raise site authors
+                    # text (ADR-010); the facts those sentences carried are `rejected_value`
+                    # and `accepted_values`, which are declared keys.
+                    #
+                    # ONE raise, not two: "the product has no format_ids configured" is
+                    # `accepted_values=[]`, which says it without a second branch saying it
+                    # in words.
+                    raise AdCPValidationError(
+                        field=package_field_path("format_ids", pkg_index),
+                        details=ValidationDetails(
+                            product_id=pkg_product.product_id,
+                            rejected_value=unsupported_formats,
+                            accepted_values=[format_display(key) for key in sorted(product_format_keys)],
+                        ),
+                    )
 
                 # Merge dimensions from product's format_ids if request format_ids don't have them.
                 # This handles the case where buyer specifies a format but not dimensions.
@@ -3421,7 +3426,10 @@ async def _create_media_buy_impl(
         # Create the media buy using the adapter (SYNCHRONOUS operation)
         # Defensive null check: ensure start_time and end_time are set
         if not req.start_time or not req.end_time:
-            raise AdCPValidationError()
+            # Name WHICH one is missing. A bare raise here is indistinguishable in the log
+            # from every other AdCPValidationError the create path can raise, because the
+            # message is a property of the CODE (salesagent-basxl).
+            raise AdCPValidationError(field="start_time" if not req.start_time else "end_time")
 
         # PRE-VALIDATE: Check all creatives have required fields BEFORE calling adapter
         # This prevents GAM order creation when creatives are invalid (all-or-nothing approach)
