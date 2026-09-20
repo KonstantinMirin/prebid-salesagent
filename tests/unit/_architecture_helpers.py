@@ -87,7 +87,26 @@ def iter_module_trees(scan_dirs: list[Path]) -> Iterator[tuple[ast.Module, str]]
         for py_file in sorted(scan_dir.rglob("*.py")):
             if "__pycache__" in str(py_file):
                 continue
-            yield parse_module(py_file), rel(py_file)
+            try:
+                tree = parse_module(py_file)
+            except FileNotFoundError:
+                # VANISHED, which is not the same as unparseable and must not be
+                # conflated with it. The listing above and the parse below are two
+                # separate filesystem passes, and some guards write a real file into
+                # the scanned tree for the duration of one case -- ast-grep scan has
+                # no `--stdin-filename`, so a rule's `files:` glob can only be graded
+                # by a real path (see `_PROBE_STEM` in
+                # test_ast_grep_credential_header_ban.py). Under xdist another worker
+                # deletes its probe between our two passes and the parse raises:
+                # measured as `FileNotFoundError:
+                # tests/unit/_synthetic_credential_probe_<hex>.py` failing
+                # test_no_duplicate_module_defs on an unrelated run.
+                #
+                # Skipping is sound HERE and nowhere near the SyntaxError contract the
+                # docstring defends: a file that no longer exists cannot hold a
+                # violation, whereas one that cannot be parsed might hold any number.
+                continue
+            yield tree, rel(py_file)
 
 
 def walk_with_enclosing_function(tree: ast.AST) -> Iterator[tuple[ast.AST, str]]:

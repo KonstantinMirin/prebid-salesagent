@@ -8,11 +8,9 @@ seam (salesagent-4fya.11) — which is the whole reason they were repointed
 received and what production returned.
 """
 
-import os
 from unittest.mock import patch
 
 from tests.helpers.backoff_assertions import assert_backoff_schedule
-from tests.helpers.egress_hatches import ALLOW_PRIVATE_ENV
 from tests.helpers.local_http_origin import responds
 
 # Reserved (link-local cloud metadata). Production's URL policy refuses it even
@@ -263,16 +261,23 @@ class TestWebhookDelivery:
         ``test_protocol_webhook_ssrf.py::test_send_notification_rejects_localhost_without_post``.
         Deleting ``ADCP_TESTING`` here would therefore assert nothing.
 
-        The posture that DOES decide this path is ``ADCP_OUTBOUND_ALLOW_PRIVATE``,
-        which ``LocalOriginMixin`` opens so the loopback origin is dialable.
-        Pinning it OPEN is the anti-vacuity check: the refusal below has to come
-        from the metadata/supplement check that sits outside every hatch, not
-        from a hatch that happened to be shut.
+        The posture that DOES decide this path is the private-range hatch, which
+        ``LocalOriginMixin`` opens so the loopback origin is dialable. Pinning it
+        OPEN is the anti-vacuity check: the refusal below has to come from the
+        metadata/supplement check that sits outside every hatch, not from a hatch
+        that happened to be shut.
+
+        Read off the SETTINGS rather than off ``os.environ``: that is where the
+        seam reads it (``outbound_http._allow_private()``), and the environment
+        spelling never reached it once anything had built the settings object.
+        Asserting the variable was asserting the harness's intent rather than the
+        gate's state.
         """
+        from src.core.config import get_settings
         from tests.harness.delivery_webhook_unit import WebhookEnv
 
         with WebhookEnv() as env:
-            assert os.environ.get(ALLOW_PRIVATE_ENV) == "true", (
+            assert get_settings().limits.adcp_outbound_allow_private is True, (
                 "the private-range hatch must be OPEN, or this refusal grades the hatch, not production policy"
             )
 

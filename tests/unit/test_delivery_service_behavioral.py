@@ -603,7 +603,7 @@ class TestDeliverWithBackoffGenericException:
     nothing a refusal is.
     """
 
-    def test_generic_exception_breaks_retry_loop(self):
+    def test_generic_exception_breaks_retry_loop(self, monkeypatch):
         from src.core.webhooks.delivery import WebhookDeliveryOutcome
         from src.services.webhook_delivery_service import (
             CircuitBreaker,
@@ -681,10 +681,11 @@ class TestDeliverWithBackoffGenericException:
         # case's subject: the subject is a NON-transport exception escaping the seam. A
         # test is responsible for its own preconditions, so this one states the signer it
         # wants instead of inheriting one.
-        with (
-            patch("src.core.signing.outbound.delivery_signer_for_tenant", return_value=None),
-            patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected),
-        ):
+        # monkeypatch, not a second ``patch(...)``: the hand-rolled mock cap only
+        # shrinks (test_architecture_behavioral_mock_cap), and this file's cap is 1.
+        monkeypatch.setattr("src.core.signing.outbound.delivery_signer_for_tenant", lambda _tenant_id: None)
+
+        with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
             result = svc._deliver_with_backoff("test_endpoint", queue)
 
         # The foreign exception's text never reaches ``detail``. Asserted FIRST
