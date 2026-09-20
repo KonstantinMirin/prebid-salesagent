@@ -15,6 +15,15 @@ import pytest
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 from sqlalchemy import create_engine, delete, select
 
+#: How long the fixture waits for the server to bind its port. Startup is dominated by
+#: imports (fastmcp + the adcp SDK + this project) plus lifespan and DB pool warm-up.
+_STARTUP_DEADLINE = 60
+
+#: When the child dumps every thread's stack to stderr, just INSIDE the deadline above, so
+#: a hang is described while it is still hung rather than killed unexplained.
+_STARTUP_DUMP_AFTER = _STARTUP_DEADLINE - 5
+
+
 from src.admin.app import create_app
 
 # Registers the ci-test tenant/principal fixture for this package. Imported by
@@ -666,10 +675,26 @@ def mcp_server(integration_db):
     env["PYTHONUNBUFFERED"] = "1"  # Force unbuffered output for better debugging
 
     # Start the server process using mcp.run() instead of uvicorn directly
+    # ``faulthandler`` first, and armed BEFORE the imports: a server that never binds
+    # the port writes nothing at all, and the fixture then reports "STDOUT: N/A
+    # STDERR: N/A" and kills it -- which is what a silent hang looked like every time it
+    # happened (measured: six of these in run innet_200926_1357, two in innet_200926_1638,
+    # every one of them with both streams empty and the process still alive, so the
+    # evidence was destroyed by the very handler that noticed).
+    #
+    # The dump fires just INSIDE the fixture's own deadline, so the stack of every thread
+    # lands in stderr while the process is still hung and the tail below can read it. It
+    # names the frame -- an import, a DB pool warm-up, a lock -- instead of leaving the
+    # reader to guess between SSRF, contention and everything else.
+    #
+    # ``exit=False``: the point is a readable stack, not a second way to die. The fixture
+    # still owns the verdict and still kills on timeout.
     server_script = f"""
-import sys
+import faulthandler, sys
+faulthandler.dump_traceback_later({_STARTUP_DUMP_AFTER}, exit=False)
 sys.path.insert(0, '.')
 from src.core.main import mcp
+faulthandler.cancel_dump_traceback_later()
 mcp.run(transport='http', host='0.0.0.0', port={port})
 """
 
@@ -722,7 +747,7 @@ mcp.run(transport='http', host='0.0.0.0', port={port})
     # though Uvicorn's own log showed it had started just past the threshold. Same
     # rationale as bf5fe3a66 (test-stack readiness deadline 120s -> 360s for
     # cold-boot).
-    max_wait = 60  # seconds
+    max_wait = _STARTUP_DEADLINE
     start_time = time.time()
     server_ready = False
 
