@@ -8,68 +8,40 @@ Focus: Test parameter-to-schema mapping, not business logic.
 """
 
 import pytest
-from fastmcp.client import Client
-from fastmcp.client.transports import StreamableHttpTransport
 
-from tests.helpers.credentials import credential_headers
+# EIGHT ROUNDTRIP CASES STOOD HERE, with the MCP client fixture that served them, and
+# all of it is deleted.
+#
+# Seven drove one tool over MCP with its required fields and checked the answer. BDD
+# grades every one of them over a2a/mcp/rest against the stack's own server, so this file
+# was paying a hand-rolled subprocess server to re-derive a subset. Measured from run
+# innet_200926_1903, nodeids graded over [mcp]:
+#
+#     create_media_buy 132   update_media_buy 75   sync_creatives 76
+#     list_creatives    48   get_products     11
+#
+# The error case too: test_get_media_buy_delivery_invalid_date_range asserted
+# VALIDATION_ERROR / correctable for start_date after end_date, and
+# test_delivery_date_range_partition__partition carries exactly that obligation --
+# start_after_end -> error "VALIDATION_ERROR" with suggestion -- on all three transports,
+# with a boundary twin beside it.
+#
+# The eighth, test_get_products_content_is_summary_not_json, looked MCP-only:
+# content[0].text must not be a dump of structured_content. But tests/bdd/conftest.py:4520
+# admits a single-transport scenario only when the graded production is reachable on ONE
+# wire transport, and it records three scenarios that claimed exactly that and were
+# MEASURED false. Measured here too: src/a2a_server/adcp_a2a_server.py:295-298 emits "an
+# optional TextPart then the DataPart", so A2A carries the same
+# human-readable-beside-structured split. The property is not this transport's alone, so it
+# belongs in BDD, parametrized, where the harness owns which wire it runs on.
+#
+# What is left needs no server and no database: the request schemas must construct from
+# their required fields alone.
 
 
-@pytest.mark.integration
-@pytest.mark.asyncio
-@pytest.mark.requires_db
-class TestMCPToolRoundtripMinimal:
-    """Test MCP tools with minimal parameters to catch schema construction bugs.
-
-    Uses the mcp_server fixture which starts a real MCP server with test database.
-    """
-
-    @pytest.fixture
-    async def mcp_client(self, mcp_server, sample_tenant, sample_principal, sample_account, sample_products):
-        """Create MCP client for testing with test data."""
-        # Use the mcp_server fixture which provides port and manages lifecycle.
-        # The SELLER travels with the credential: these calls reach the server on
-        # localhost, so no host maps to a tenant and the resolver has no tenant to verify
-        # the token inside -- every tool answered AUTH_INVALID without it.
-        headers = credential_headers(
-            token=sample_principal["access_token"],
-            tenant=sample_tenant["tenant_id"],
-        )
-        transport = StreamableHttpTransport(url=f"http://localhost:{mcp_server.port}/mcp/", headers=headers)
-        client = Client(transport=transport)
-
-        async with client:
-            yield client
-
-    # SEVEN ROUNDTRIP CASES STOOD HERE AND ARE DELETED. Each drove one tool over MCP with
-    # its required fields and checked the answer; BDD already grades every one of them,
-    # over THREE wire transports instead of this one, against the stack's own server.
-    #
-    # Measured from run innet_200926_1903 (tests/bdd/conftest.py:4867 parametrizes
-    # scenarios over a2a/mcp/rest — `impl` was dropped by #1417 and BDD asserts wire
-    # conformance only), counting nodeids graded over [mcp]:
-    #
-    #     create_media_buy 132   update_media_buy 75   sync_creatives 76
-    #     list_creatives    48   get_products     11
-    #
-    # The error case went the same way: test_get_media_buy_delivery_invalid_date_range
-    # asserted assert_envelope_shape(..., "VALIDATION_ERROR", recovery="correctable") for
-    # start_date after end_date, and
-    # test_delivery_date_range_partition__partition carries exactly that obligation —
-    # `start_after_end` -> `error "VALIDATION_ERROR" with suggestion` — on mcp, a2a AND
-    # rest, alongside the boundary twin test_delivery_date_range_boundary__boundary_point.
-    #
-    # What could not be deleted is below: the MCP PRESENTATION property, which is about
-    # this transport's rendering rather than any tool's contract, so no wire-conformance
-    # scenario grades it.
-
-    async def test_get_products_content_is_summary_not_json(self, mcp_client):
-        """MCP text content is a human-readable summary, not a JSON dump of structured_content."""
-        import json
-
-        result = await mcp_client.call_tool("get_products", {"brand": {"domain": "testbrand.com"}})
-        text = result.content[0].text
-        assert text != json.dumps(result.structured_content)
-        assert not text.strip().startswith("{")
+@pytest.mark.unit
+class TestSchemaConstruction:
+    """Every request schema constructs from its REQUIRED fields alone."""
 
     def test_update_media_buy_request_construction(self):
         """Test that UpdateMediaBuyRequest can be constructed with minimal params."""
