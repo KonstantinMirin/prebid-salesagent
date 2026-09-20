@@ -669,7 +669,22 @@ class TestDeliverWithBackoffGenericException:
         # decision and returns an outcome. The subject is unchanged: a NON-transport
         # exception escaping the delivery call, which no origin can serve, so it is
         # still injected here rather than at a transport this module never touches.
-        with patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected):
+        # ``_deliver_with_backoff`` resolves the tenant's delivery signer before it calls
+        # the seam, and that resolution reads the database. A unit test has none, so what
+        # it actually reads is whatever ``get_db_session`` happens to be in this process —
+        # and when a neighbour in the same xdist worker has left a MagicMock there, the
+        # provider's ``row.tenant_id`` is a MagicMock and pydantic refuses it while
+        # building ``ConfigurationDetails``. Measured on the box, twice, on whichever
+        # worker drew that order (runs innet_200926_1357 and innet_200926_1638).
+        #
+        # Pinned to ``None`` here — unsigned delivery — because the signer is not this
+        # case's subject: the subject is a NON-transport exception escaping the seam. A
+        # test is responsible for its own preconditions, so this one states the signer it
+        # wants instead of inheriting one.
+        with (
+            patch("src.core.signing.outbound.delivery_signer_for_tenant", return_value=None),
+            patch("src.services.webhook_delivery_service.deliver_webhook", _unexpected),
+        ):
             result = svc._deliver_with_backoff("test_endpoint", queue)
 
         # The foreign exception's text never reaches ``detail``. Asserted FIRST

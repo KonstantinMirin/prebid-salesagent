@@ -20,6 +20,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import httpx
+import pytest
 
 from src.adapters.mock_ad_server import simulate_breakdowns
 from src.core.schemas import (
@@ -41,7 +42,6 @@ from src.services.webhook_delivery_service import (
     WebhookDeliveryService,
 )
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.helpers.egress_hatches import egress_hatch_env
 from tests.helpers.local_http_origin import (
     LocalOrigin,
     OriginRequest,
@@ -49,6 +49,7 @@ from tests.helpers.local_http_origin import (
     responds,
     run_local_origin,
 )
+from tests.helpers.settings_injection import inject_limits
 from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
 
 
@@ -1034,9 +1035,23 @@ class LocalOriginMixin:
         self._origin = self._origin_ctx.__enter__()
         self._guard("local_origin", self._exit_origin)
 
-        self._egress_hatches = patch.dict(os.environ, egress_hatch_env(private=True))
-        self._egress_hatches.start()
-        self._guard("egress_hatches", self._egress_hatches.stop)
+        # THE HATCH GOES ON THE SETTINGS, NOT ON ``os.environ``.
+        # ``outbound_http._allow_private()`` reads
+        # ``get_settings().limits.adcp_outbound_allow_private`` off an object built once
+        # and cached process-wide, so an environment patch reaches the seam only while
+        # nothing has read the settings yet — it is decided by the ambient value, which is
+        # exactly what ``tox.ini`` warns about where it forwards this variable ("Refusal
+        # grading stays in-process ... and is therefore immune to the ambient value").
+        # ``tests/helpers/egress_hatches.py`` opens with the same sentence: "A test running
+        # in this process should not use it."
+        #
+        # The cost was measured, not theorised: on the box the delivery cases failed with
+        # zero hits on an origin that was listening, while the same tests passed locally and
+        # passed in a unit-only slice — the ambient value differed between the harnesses
+        # (runs innet_200926_1357 and innet_200926_1638).
+        self._settings_patch = pytest.MonkeyPatch()
+        inject_limits(self._settings_patch, adcp_outbound_allow_private=True)
+        self._guard("egress_hatches", self._settings_patch.undo)
 
     def _exit_origin(self) -> None:
         """Close the origin context, discarding ``__exit__``'s suppression verdict.
