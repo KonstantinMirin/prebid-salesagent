@@ -44,6 +44,12 @@ _RUNNER = _REPO_ROOT / "run_all_tests.sh"
 #: to stay in step with compose.
 _UP_LINE_RE = re.compile(r"^dc up -d (?P<services>.+)$", re.MULTILINE)
 
+#: A ``dc run --use-aliases ... <service> <cmd>`` invocation. A run container started
+#: WITH ``--use-aliases`` joins the network under its compose service's aliases, so nginx
+#: resolves an SNI route to it exactly as it does to an ``up -d`` service. Without the flag
+#: it would not, which is why the flag is what this matches on rather than ``dc run`` alone.
+_RUN_ALIASED_RE = re.compile(r"^dc run\b(?P<args>[^\n]*--use-aliases[^\n]*)$", re.MULTILINE)
+
 #: An SNI map row's upstream, e.g. ``webhook-capture:8080`` -> ``webhook-capture``.
 _SNI_UPSTREAM_RE = re.compile(r"^\s*(?P<host>[\w.-]+)\s+(?P<service>[\w-]+):(?P<port>\d+)\s*;", re.MULTILINE)
 
@@ -58,9 +64,34 @@ def sni_routed_services(template: str) -> dict[str, str]:
 
 
 def runner_started_services(source: str) -> list[str]:
-    """The services ``run_all_tests.sh`` brings up, in declaration order."""
+    """Every service ``run_all_tests.sh`` makes reachable on the network.
+
+    TWO START FORMS, because the runner uses two. ``dc up -d`` names long-lived
+    services. ``dc run --use-aliases`` starts the suite container, and the flag is
+    what puts it on the network under its compose aliases — so nginx resolves an SNI
+    route to it identically. Reading only the ``up`` line reported the suite container
+    as never started, which is a false 502 warning for a service the server really can
+    dial (the storyboard runner's own webhook receiver is routed to it).
+    """
     match = _UP_LINE_RE.search(source)
-    return match.group("services").split() if match else []
+    started = match.group("services").split() if match else []
+    for run in _RUN_ALIASED_RE.finditer(source):
+        # The service name is the first bare word after the flags and any `-e K=V`
+        # pairs; everything after it is the command to run inside the container.
+        tokens = run.group("args").split()
+        skip_next = False
+        for token in tokens:
+            if skip_next:
+                skip_next = False
+                continue
+            if token in {"-e", "--env", "-v", "--volume", "-w", "--workdir"}:
+                skip_next = True
+                continue
+            if token.startswith("-") or token.startswith("$"):
+                continue
+            started.append(token)
+            break
+    return started
 
 
 @pytest.mark.arch_guard
@@ -125,6 +156,12 @@ def test_sni_upstream_detector_reads_a_synthetic_map() -> None:
         "proxy.adcp.test": "adcp-server",
         "webhooks.adcp-e2e.dev": "webhook-capture",
     }
+
+
+def test_runner_service_detector_reads_an_aliased_run() -> None:
+    """A ``dc run --use-aliases`` container counts as started; a bare ``dc run`` does not."""
+    assert "tests" in runner_started_services("dc run --rm --use-aliases $E2E_ENV_ARGS tests tox -p\n")
+    assert "tests" not in runner_started_services("dc run --rm --no-deps -T tests python x.py\n")
 
 
 def test_runner_service_detector_reads_the_up_line() -> None:

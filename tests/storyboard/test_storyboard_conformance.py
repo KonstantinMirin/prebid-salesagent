@@ -219,6 +219,7 @@ def _webhook_tls_origin(protocol: str, tls_front: str) -> str:
     """
     return f"storyboard-webhooks-{protocol}.{tls_front}"
 
+
 def _webhook_port(protocol: str) -> str:
     """Per-protocol receiver port, offset from the base by protocol index.
 
