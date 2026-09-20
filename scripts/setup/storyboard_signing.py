@@ -416,7 +416,40 @@ def _seed_webhook_storyboard_account(session: Session, tenant_id: str) -> None:
                 session.flush()
                 print(f"   account access granted to {principal_id} on {account_id}")
 
+    _mint_tenant_signing_key(session, tenant_id)
     _assert_account_resolves(session, tenant_id, grantees=sorted({principal.principal_id, COUNTERPARTY_PRINCIPAL_ID}))
+
+
+def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
+    """Give the storyboard tenant a published signing key, through PRODUCTION's minter.
+
+    ``webhook_emission`` requires the agent to publish "a JWKS at the ``jwks_uri`` on its
+    ``brand.json`` ``agents[]`` entry containing a webhook-valid signing key"
+    (webhook-emission.yaml). A tenant with no key publishes an EMPTY key set and the check
+    fails for a fixture reason rather than a conformance one.
+
+    ``request-signing`` is the only purpose this agent mints, deliberately:
+    ``webhook-signing`` is deprecated pending removal (security.mdx "adcp_use", adcp#5555)
+    and webhooks are signed with a request-signing key. The storyboard accepts either —
+    it asks for ``adcp_use in {request-signing, webhook-signing}`` — so the narrower,
+    spec-current choice satisfies it.
+
+    Through ``provision_signing_key`` rather than a factory: minting is the behaviour under
+    test elsewhere in this suite, and a fixture that mints differently from production would
+    publish material production cannot sign with.
+    """
+    from datetime import UTC, datetime
+
+    from src.core.database.repositories.signing_key import SigningKeyRepository
+    from src.core.signing.keys import provision_signing_key
+
+    repo = SigningKeyRepository(session, tenant_id)
+    if repo.active_at(now=datetime.now(UTC)) is not None:
+        print("   tenant signing key already present")
+        return
+    provisioned = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
+    session.flush()
+    print(f"   tenant signing key minted: {provisioned.row.kid}")
 
 
 def _assert_account_resolves(session: Session, tenant_id: str, *, grantees: list[str]) -> None:

@@ -562,6 +562,13 @@ services:
       # (tests/unit/test_architecture_e2e_compose_tls_origins.py) precisely because
       # it advertised a plaintext http:// callback. This one is TLS by construction.
       STORYBOARD_WEBHOOK_TLS_FRONT: "adcp-e2e.dev:8443"
+      # The same dev KEK both servers carry. The storyboard seeder MINTS the tenant's
+      # signing key through production's own provisioning function, and `db:` minting
+      # refuses without a key-encryption key — correctly, since there is no plaintext
+      # fallback. Without this the tenant publishes an EMPTY JWKS and
+      # `assert_webhook_signing_key_present` fails for a fixture reason.
+      ADCP_SIGNING_KEY_PASSPHRASE_ENV: "ADCP_SIGNING_DEV_KEK"
+      ADCP_SIGNING_DEV_KEK: "dev-only-signing-kek-not-a-secret"
       # Unbuffered stdout/stderr for the tox process that actually runs the
       # suite. cassini sets PYTHONUNBUFFERED on its supervisor's own subprocess
       # env, but the work runs HERE -- a separate container started by
