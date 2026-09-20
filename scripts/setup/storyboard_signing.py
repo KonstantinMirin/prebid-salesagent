@@ -462,12 +462,6 @@ def _seed_vector_product(session: Session, tenant_id: str) -> None:
             targeting_template={},
             delivery_type="non_guaranteed",
             property_tags=["all_inventory"],
-            measurement=None,
-            creative_policy=None,
-            price_guidance=None,
-            countries=None,
-            implementation_config=None,
-            properties=None,
         )
     )
     session.flush()
