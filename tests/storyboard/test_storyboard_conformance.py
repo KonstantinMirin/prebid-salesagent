@@ -43,7 +43,7 @@ import pytest
 from scripts.audit import ledger, storyboard_spec
 from scripts.setup.init_database_ci import CI_TEST_SUBDOMAIN, CI_TEST_TOKEN
 from scripts.setup.storyboard_signing import STORYBOARD_VIRTUAL_HOST
-from tests.storyboard import collected, corrected_vectors
+from tests.storyboard import collected, corrected_storyboards, corrected_vectors
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _RUNNER_DIR = Path(__file__).parent / "runner"
@@ -436,25 +436,31 @@ def _bundle_path(env_name: str) -> str:
 
 
 def _graded_compliance_dir() -> str:
-    """The compliance tree the runner is pointed at: the pinned one, bodies corrected.
+    """The compliance tree the runner is pointed at: the pinned one, fixtures corrected.
 
     THE PINNED TREE IS NOT EDITED. This writes a sibling (``adcp-<version>-corrected/``,
-    covered by the runner directory's existing ``adcp-*/`` ignore) whose request-signing
-    vectors carry bodies an AdCP seller can parse, and hands the runner that. Every other
-    storyboard in the tree is copied through byte-for-byte, so pointing ``--compliance-dir``
-    here changes which BODIES the signed-requests vectors send and nothing else about the
-    run.
+    covered by the runner directory's existing ``adcp-*/`` ignore) and hands the runner
+    that. Two corrections, both to fixtures rather than to anything a check grades:
 
-    Why it is needed: a seller validates the payload before it authenticates the caller, so
-    the corpus's stub bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST``
-    and the RFC 9421 checklist never runs — measured here as all 27 graded signed-requests
-    checks failing with ``got 200 (error="(none)")``. See
-    ``tests/storyboard/corrected_vectors.py`` and adcontextprotocol/adcp#7567; this is a
-    local stand-in until the corrected corpus lands upstream.
+    * request-signing vector BODIES (``corrected_vectors``, adcp#7567). A seller
+      validates the payload before it authenticates the caller, so the corpus's stub
+      bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST`` and the RFC
+      9421 checklist never runs — measured here as all 27 graded signed-requests checks
+      failing with ``got 200 (error="(none)")``.
+    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7601).
+      That storyboard discovers no product, so its four ``create_media_buy`` triggers
+      ship the SDK's ``"test-product"`` placeholder and are answered
+      ``PRODUCT_NOT_FOUND`` — measured as 4 of the 7 webhook_emission failures in run
+      innet_200926_0635.
+
+    Everything else is copied through byte-for-byte. Both are local stand-ins until the
+    fixes land upstream.
     """
     source = Path(_bundle_path(_COMPLIANCE_DIR_ENV))
     dest = source.parent.parent / f"{source.parent.name}-corrected" / source.name
-    return str(corrected_vectors.corrected_compliance_tree(source, dest))
+    tree = corrected_vectors.corrected_compliance_tree(source, dest)
+    corrected_storyboards.correct_webhook_emission(tree)
+    return str(tree)
 
 
 def _webhook_receiver_args(protocol: str) -> tuple[list[str], dict[str, str]]:

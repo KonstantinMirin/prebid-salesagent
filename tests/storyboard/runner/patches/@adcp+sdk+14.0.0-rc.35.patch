@@ -573,7 +573,7 @@ index 1e13c0a..c9f9330 100644
          check: "http_status",
          value: 401,
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js
-index e9b14ed..91f477c 100644
+index e9b14ed..54dbc71 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js
 +++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.js
 @@ -3086,7 +3086,34 @@ async function executeStep(client, step, storyboardId, phaseId, context, allStep
@@ -630,8 +630,74 @@ index e9b14ed..91f477c 100644
      operation: effectiveStep.task,
      payload: (0, import_redact_secrets.redactSecrets)(request),
      ...runState.agentUrl ? { url: (0, import_oauth_metadata_graph.redactOAuthUrlForOutput)(runState.agentUrl) } : {}
+@@ -4591,6 +4618,36 @@ function rateLimitTripObservationToProbeResult(agentUrl, observation) {
+     body: observation.body
+   };
+ }
++// PATCHED (salesagent): security.mdx @ 3.1.1 :1142 step 1 — "The agent URL is the
++// protocol endpoint, not a JSON capabilities document" — and :1104 step 5 byte-equals
++// that endpoint against brand.json `agents[].url`. For A2A the runner is handed the
++// CARD BASE, because card discovery appends `/.well-known/...` verbatim and a `/a2a`
++// suffix 404s. So the string matched here is the runner's own discovery input, never
++// what a conformant seller published, and every A2A agent fails the match. Read the
++// endpoint off the card, the same source the runner already dials. Same defect class as
++// adcp-client#2967, second call site.
++async function __salesagentProtocolEndpoints(agentUrl, options, probe) {
++  const base = String(agentUrl).replace(/\/+$/, "");
++  const urls = [];
++  for (const path of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
++    let card;
++    try {
++      card = await probe(base + path, options);
++    } catch {
++      continue;
++    }
++    if (!card || card.error || card.status < 200 || card.status >= 300) continue;
++    const body = card.body;
++    if (!body || typeof body !== "object") continue;
++    const interfaces = Array.isArray(body.supportedInterfaces) ? body.supportedInterfaces : [];
++    for (const entry of interfaces) {
++      if (entry && typeof entry.url === "string" && entry.url.length > 0) urls.push(entry.url);
++    }
++    if (typeof body.url === "string" && body.url.length > 0) urls.push(body.url);
++    if (urls.length > 0) return urls;
++  }
++  return urls;
++}
+ async function probeBrandJwks(rawCapabilities, agentUrl, options) {
+   const brandJsonUrl = (0, import_capabilities_types.readBrandJsonUrl)(rawCapabilities);
+   if (!brandJsonUrl) {
+@@ -4610,10 +4667,16 @@ async function probeBrandJwks(rawCapabilities, agentUrl, options) {
+     };
+   }
+   let jwksUri;
+-  try {
+-    const agent = (0, import_select_agent.selectAgentByUrl)(brand.body, agentUrl);
+-    jwksUri = typeof agent.jwks_uri === "string" && agent.jwks_uri.length > 0 ? agent.jwks_uri : void 0;
+-  } catch {
++  let matched;
++  for (const candidate of [agentUrl, ...await __salesagentProtocolEndpoints(agentUrl, options, (0, import_probes.fetchProbe))]) {
++    try {
++      matched = (0, import_select_agent.selectAgentByUrl)(brand.body, candidate);
++      break;
++    } catch {
++      matched = void 0;
++    }
++  }
++  if (matched === void 0) {
+     return {
+       url: brandJsonUrl,
+       status: 0,
+@@ -4622,6 +4685,7 @@ async function probeBrandJwks(rawCapabilities, agentUrl, options) {
+       error: "brand.json agent portfolio did not uniquely match the agent under test"
+     };
+   }
++  jwksUri = typeof matched.jwks_uri === "string" && matched.jwks_uri.length > 0 ? matched.jwks_uri : void 0;
+   if (!jwksUri) {
+     return {
+       url: brandJsonUrl,
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.mjs b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.mjs
-index 7b795b1..cb7d722 100644
+index 7b795b1..edd11a6 100644
 --- a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.mjs
 +++ b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/runner.mjs
 @@ -62,6 +62,7 @@ import {
@@ -696,3 +762,69 @@ index 7b795b1..cb7d722 100644
      operation: effectiveStep.task,
      payload: redactSecrets(request),
      ...runState.agentUrl ? { url: redactOAuthUrlForOutput(runState.agentUrl) } : {}
+@@ -4608,6 +4636,36 @@ function rateLimitTripObservationToProbeResult(agentUrl, observation) {
+     body: observation.body
+   };
+ }
++// PATCHED (salesagent): security.mdx @ 3.1.1 :1142 step 1 — "The agent URL is the
++// protocol endpoint, not a JSON capabilities document" — and :1104 step 5 byte-equals
++// that endpoint against brand.json `agents[].url`. For A2A the runner is handed the
++// CARD BASE, because card discovery appends `/.well-known/...` verbatim and a `/a2a`
++// suffix 404s. So the string matched here is the runner's own discovery input, never
++// what a conformant seller published, and every A2A agent fails the match. Read the
++// endpoint off the card, the same source the runner already dials. Same defect class as
++// adcp-client#2967, second call site.
++async function __salesagentProtocolEndpoints(agentUrl, options, probe) {
++  const base = String(agentUrl).replace(/\/+$/, "");
++  const urls = [];
++  for (const path of ["/.well-known/agent-card.json", "/.well-known/agent.json"]) {
++    let card;
++    try {
++      card = await probe(base + path, options);
++    } catch {
++      continue;
++    }
++    if (!card || card.error || card.status < 200 || card.status >= 300) continue;
++    const body = card.body;
++    if (!body || typeof body !== "object") continue;
++    const interfaces = Array.isArray(body.supportedInterfaces) ? body.supportedInterfaces : [];
++    for (const entry of interfaces) {
++      if (entry && typeof entry.url === "string" && entry.url.length > 0) urls.push(entry.url);
++    }
++    if (typeof body.url === "string" && body.url.length > 0) urls.push(body.url);
++    if (urls.length > 0) return urls;
++  }
++  return urls;
++}
+ async function probeBrandJwks(rawCapabilities, agentUrl, options) {
+   const brandJsonUrl = readBrandJsonUrl(rawCapabilities);
+   if (!brandJsonUrl) {
+@@ -4627,10 +4685,16 @@ async function probeBrandJwks(rawCapabilities, agentUrl, options) {
+     };
+   }
+   let jwksUri;
+-  try {
+-    const agent = selectAgentByUrl(brand.body, agentUrl);
+-    jwksUri = typeof agent.jwks_uri === "string" && agent.jwks_uri.length > 0 ? agent.jwks_uri : void 0;
+-  } catch {
++  let matched;
++  for (const candidate of [agentUrl, ...await __salesagentProtocolEndpoints(agentUrl, options, fetchProbe)]) {
++    try {
++      matched = selectAgentByUrl(brand.body, candidate);
++      break;
++    } catch {
++      matched = void 0;
++    }
++  }
++  if (matched === void 0) {
+     return {
+       url: brandJsonUrl,
+       status: 0,
+@@ -4639,6 +4703,7 @@ async function probeBrandJwks(rawCapabilities, agentUrl, options) {
+       error: "brand.json agent portfolio did not uniquely match the agent under test"
+     };
+   }
++  jwksUri = typeof matched.jwks_uri === "string" && matched.jwks_uri.length > 0 ? matched.jwks_uri : void 0;
+   if (!jwksUri) {
+     return {
+       url: brandJsonUrl,
