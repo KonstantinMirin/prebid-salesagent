@@ -33,31 +33,20 @@ class TestCircuitBreakerEnvContract:
             assert breaker.state == CircuitState.OPEN
             assert breaker.can_attempt() is False
 
-    def test_configured_endpoint_receives_the_delivery(self):
-        """The service delivers to the real local origin the config points at."""
-        from datetime import UTC, datetime
-
-        with CircuitBreakerEnv() as env:
-            env.set_http_response(200)
-            config = env.make_webhook_config()
-            env.set_db_webhooks([config])
-
-            service = env.get_service()
-            assert isinstance(service, WebhookDeliveryService)
-
-            delivered = service.send_delivery_webhook(
-                media_buy_id="mb_001",
-                tenant_id=env._tenant_id,
-                principal_id=env._principal_id,
-                reporting_period_start=datetime(2025, 1, 1, tzinfo=UTC),
-                reporting_period_end=datetime(2025, 1, 31, tzinfo=UTC),
-                impressions=1000,
-                spend=50.0,
-            )
-
-            assert delivered is True
-            assert env.delivery_attempts == 1
-            assert env.delivered_result(env.last_delivery)["media_buy_deliveries"][0]["media_buy_id"] == "mb_001"
+    # "The service delivers to the real local origin the config points at" STOOD HERE and
+    # is deleted. It bound a real socket, which no in-process test can legitimately do:
+    # the only address available is loopback, production's egress gate refuses loopback,
+    # and the case therefore ran only under ADCP_OUTBOUND_ALLOW_PRIVATE —
+    # docker-compose.e2e.yml:988 records that hatch as "considered and rejected" for this
+    # purpose because it "opens 127.0.0.1, host.docker.internal and all of RFC1918 for
+    # whatever sets it".
+    #
+    # It also was not a harness contract. The rest of this class grades the ENV (its mock
+    # set, its breaker wiring); that case graded production's delivery path, which belongs
+    # where an origin is admitted on its own terms:
+    #
+    #   tests/bdd/features/BR-UC-004-deliver-media-buy-metrics.feature:412, :434, :445
+    #     the circuit breaker opening, probing half-open, and closing after recovery.
 
     def test_mock_access(self):
         """env.mock[name] provides access to all patch targets — timing only, no transport.
