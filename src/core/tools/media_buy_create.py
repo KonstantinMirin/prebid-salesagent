@@ -2300,6 +2300,18 @@ async def _create_media_buy_impl(
                 # Gathered ACROSS every package (a set difference over all
                 # product_ids), so the pointer names the array and details enumerate
                 # which ids were missing (salesagent-rfxfu).
+                #
+                # OPERATOR-FACING, never on the wire. The typed details name what the
+                # buyer asked for; only the log can say what the tenant actually holds,
+                # which is the difference between "the buyer sent a bad id" and "this
+                # deployment's catalog was never seeded".
+                logger.warning(
+                    "product miss: tenant=%s requested=%s missing=%s available=%s",
+                    tenant.tenant_id,
+                    sorted(product_ids),
+                    sorted(missing_product_ids),
+                    sorted(product_map),
+                )
                 raise AdCPProductNotFoundError(
                     details=ProductRefDetails(missing_product_ids=sorted(missing_product_ids)),
                     field=PACKAGES_FIELD,
