@@ -7,15 +7,10 @@ and caused errors.
 Focus: Test parameter-to-schema mapping, not business logic.
 """
 
-import uuid
-from datetime import UTC, datetime, timedelta
-
 import pytest
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
 
-from tests.factories.creative_asset import build_assets, image_spec
-from tests.helpers import assert_envelope_shape
 from tests.helpers.credentials import credential_headers
 
 
@@ -45,14 +40,27 @@ class TestMCPToolRoundtripMinimal:
         async with client:
             yield client
 
-    async def test_get_products_minimal(self, mcp_client):
-        """Test get_products with only required parameter (promoted_offering)."""
-        result = await mcp_client.call_tool("get_products", {"brand": {"domain": "testbrand.com"}})
-
-        assert result is not None
-        # FastMCP call_tool returns structured_content
-        content = result.structured_content if hasattr(result, "structured_content") else result
-        assert "products" in content
+    # SEVEN ROUNDTRIP CASES STOOD HERE AND ARE DELETED. Each drove one tool over MCP with
+    # its required fields and checked the answer; BDD already grades every one of them,
+    # over THREE wire transports instead of this one, against the stack's own server.
+    #
+    # Measured from run innet_200926_1903 (tests/bdd/conftest.py:4867 parametrizes
+    # scenarios over a2a/mcp/rest — `impl` was dropped by #1417 and BDD asserts wire
+    # conformance only), counting nodeids graded over [mcp]:
+    #
+    #     create_media_buy 132   update_media_buy 75   sync_creatives 76
+    #     list_creatives    48   get_products     11
+    #
+    # The error case went the same way: test_get_media_buy_delivery_invalid_date_range
+    # asserted assert_envelope_shape(..., "VALIDATION_ERROR", recovery="correctable") for
+    # start_date after end_date, and
+    # test_delivery_date_range_partition__partition carries exactly that obligation —
+    # `start_after_end` -> `error "VALIDATION_ERROR" with suggestion` — on mcp, a2a AND
+    # rest, alongside the boundary twin test_delivery_date_range_boundary__boundary_point.
+    #
+    # What could not be deleted is below: the MCP PRESENTATION property, which is about
+    # this transport's rendering rather than any tool's contract, so no wire-conformance
+    # scenario grades it.
 
     async def test_get_products_content_is_summary_not_json(self, mcp_client):
         """MCP text content is a human-readable summary, not a JSON dump of structured_content."""
@@ -62,180 +70,6 @@ class TestMCPToolRoundtripMinimal:
         text = result.content[0].text
         assert text != json.dumps(result.structured_content)
         assert not text.strip().startswith("{")
-
-    async def test_create_media_buy_minimal(self, sample_account, mcp_client):
-        """Test create_media_buy with minimal required parameters."""
-        # Get a product first
-        products_result = await mcp_client.call_tool(
-            "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "test"}
-        )
-
-        products = (
-            products_result.structured_content if hasattr(products_result, "structured_content") else products_result
-        )
-        if products and len(products.get("products", [])) > 0:
-            product_id = products["products"][0]["product_id"]
-
-            # Create media buy with minimal required AdCP params
-            result = await mcp_client.call_tool(
-                "create_media_buy",
-                {
-                    "account": sample_account,
-                    "brand": {"domain": "testbrand.com"},
-                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
-                    "packages": [
-                        {
-                            "product_id": product_id,
-                            "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                            "budget": 5000.0,
-                        }
-                    ],
-                    "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                    "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-                },
-            )
-
-            assert result is not None
-            content = result.structured_content if hasattr(result, "structured_content") else result
-            assert "media_buy_id" in content or "status" in content
-
-    async def test_update_media_buy_minimal(self, sample_account, mcp_client):
-        """Test update_media_buy with minimal parameters.
-
-        This started as the regression for a datetime.combine() bug where ``req.today``
-        was accessed and did not exist on the schema. The field was later declared, and is
-        now deleted again -- nothing ever set it, so the read always fell through to
-        ``date.today()``, which is what the impl says (docs/development/building-tools.md).
-        The roundtrip is still worth grading: a minimal update must survive the wire.
-        """
-        # Create a media buy first
-        products_result = await mcp_client.call_tool(
-            "get_products", {"brand": {"domain": "testbrand.com"}, "brief": "test"}
-        )
-
-        products = (
-            products_result.structured_content if hasattr(products_result, "structured_content") else products_result
-        )
-        if products and len(products.get("products", [])) > 0:
-            product_id = products["products"][0]["product_id"]
-
-            create_result = await mcp_client.call_tool(
-                "create_media_buy",
-                {
-                    "account": sample_account,
-                    "brand": {"domain": "testbrand.com"},
-                    "idempotency_key": f"int-key-{uuid.uuid4().hex}",
-                    "packages": [
-                        {
-                            "product_id": product_id,
-                            "pricing_option_id": "cpm_usd_fixed",  # Format: {model}_{currency}_{fixed|auction}
-                            "budget": 5000.0,
-                        }
-                    ],
-                    "start_time": (datetime.now(UTC) + timedelta(days=1)).isoformat(),
-                    "end_time": (datetime.now(UTC) + timedelta(days=30)).isoformat(),
-                },
-            )
-
-            create_content = (
-                create_result.structured_content if hasattr(create_result, "structured_content") else create_result
-            )
-            if "media_buy_id" in create_content:
-                # Now update it - this tests the datetime.combine code path
-                update_result = await mcp_client.call_tool(
-                    "update_media_buy",
-                    {
-                        "idempotency_key": "test-idem-key-0001",
-                        "account": sample_account,
-                        "media_buy_id": create_content["media_buy_id"],
-                        "end_time": "2026-12-01T00:00:00Z",  # update_budget is valid from pending_creatives
-                    },
-                )
-
-                assert update_result is not None
-                update_content = (
-                    update_result.structured_content if hasattr(update_result, "structured_content") else update_result
-                )
-                assert "media_buy_id" in update_content
-                # Should not get TypeError: combine() argument 1 must be datetime.date, not None
-
-    async def test_get_media_buy_delivery_minimal(self, mcp_client):
-        """Test get_media_buy_delivery with minimal parameters."""
-        result = await mcp_client.call_tool("get_media_buy_delivery", {})  # All parameters are optional
-
-        assert result is not None
-        content = result.structured_content if hasattr(result, "structured_content") else result
-        assert "deliveries" in content or "aggregated_totals" in content
-
-    async def test_get_media_buy_delivery_invalid_date_range(self, mcp_client):
-        """Test get_media_buy_delivery raises ToolError with spec-compliant envelope for invalid date ranges.
-
-        After the error-emission architecture migration, _impl raises AdCPValidationError; the MCP boundary
-        translator emits a ToolError whose message is the JSON envelope
-        ``{adcp_error: {...}, errors: [...]}`` per the AdCP 3.0.6 spec.
-        """
-        import json
-
-        from fastmcp.exceptions import ToolError
-
-        # Use a start_date that is after end_date to trigger the validation error
-        params = {
-            "start_date": "2025-01-31",
-            "end_date": "2025-01-01",
-        }
-
-        with pytest.raises(ToolError) as exc_info:
-            await mcp_client.call_tool("get_media_buy_delivery", params)
-
-        envelope = json.loads(str(exc_info.value))
-        assert_envelope_shape(envelope, "VALIDATION_ERROR", recovery="correctable")
-
-    async def test_sync_creatives_minimal(self, sample_account, mcp_client):
-        """Test sync_creatives with minimal required parameters.
-
-        Uses AdCP-compliant CreativeAsset schema which requires:
-        - creative_id: Unique identifier
-        - name: Human-readable name
-        - format_id: FormatId object (not just a string)
-        - assets: CreativeAssets object with the actual asset data
-        """
-        result = await mcp_client.call_tool(
-            "sync_creatives",
-            {
-                "idempotency_key": "test-idem-key-0001",
-                "account": sample_account,
-                "creatives": [
-                    {
-                        "creative_id": "test_creative_001",
-                        "name": "Test Display Creative",
-                        "format_id": {
-                            "agent_url": "https://creatives.adcontextprotocol.org",
-                            "id": "display_static",
-                            "width": 300,
-                            "height": 250,
-                        },
-                        "assets": build_assets(image_spec("image", url="https://example.com/preview.jpg")),
-                    }
-                ],
-            },
-        )
-
-        assert result is not None
-        content = result.structured_content if hasattr(result, "structured_content") else result
-        assert "creatives" in content or "status" in content
-
-    async def test_list_creatives_minimal(self, mcp_client):
-        """Test list_creatives with no parameters (all optional)."""
-        result = await mcp_client.call_tool("list_creatives", {})  # All parameters are optional
-
-        assert result is not None
-        content = result.structured_content if hasattr(result, "structured_content") else result
-        assert "creatives" in content
-
-
-@pytest.mark.unit  # Changed from integration - these don't require server
-class TestSchemaConstructionValidation:
-    """Test that schemas are constructed correctly from tool parameters."""
 
     def test_update_media_buy_request_construction(self):
         """Test that UpdateMediaBuyRequest can be constructed with minimal params."""
