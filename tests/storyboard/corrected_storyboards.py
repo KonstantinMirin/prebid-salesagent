@@ -1,6 +1,6 @@
 """Storyboard corrections: give ``webhook_emission`` a product to buy.
 
-Filed upstream as adcontextprotocol/adcp#7601.
+Filed upstream as adcontextprotocol/adcp#7609.
 
 ``compliance/universal/webhook-emission.yaml`` drives four ``create_media_buy`` steps
 and never discovers a product first. Its only preceding step is

@@ -447,7 +447,7 @@ def _graded_compliance_dir() -> str:
       bodies (``{"plan_id":"plan_001"}``) are answered ``INVALID_REQUEST`` and the RFC
       9421 checklist never runs — measured here as all 27 graded signed-requests checks
       failing with ``got 200 (error="(none)")``.
-    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7601).
+    * a product for ``webhook_emission`` to buy (``corrected_storyboards``, adcp#7609).
       That storyboard discovers no product, so its four ``create_media_buy`` triggers
       ship the SDK's ``"test-product"`` placeholder and are answered
       ``PRODUCT_NOT_FOUND`` — measured as 4 of the 7 webhook_emission failures in run
