@@ -266,6 +266,49 @@ class TestUpdateMediaBuyRegistrationDeliversSigned:
             assert_delivered_unsigned(env)
 
 
+class TestOneEventIsOneDelivery:
+    """One logical event is delivered ONCE, whatever the principal has stored.
+
+    AdCP 3.1.1 ``compliance/universal/webhook-emission.yaml``,
+    ``expect_no_duplicate_webhook_on_replay``: "At most one logical webhook event is
+    delivered for the operation."
+
+    This is the case the suite could not have: ``_send_push_notifications`` looped over
+    every active ``PushNotificationConfig`` the principal had and sent the step's OWN
+    stashed registration once per row -- the loop variable was never read. Configs
+    accumulate one per operation, so the duplication grew with the principal's history:
+    on the storyboard tenant the run's third create received three copies of one event,
+    the same payload to the same URL inside 17ms.
+
+    Every test in this file stayed green through it, because the harness seeded exactly
+    one row and had no way to seed two. At one row the buggy model and the correct one
+    are indistinguishable. ``register_delivery_target(count=...)`` exists so this case
+    can tell them apart, and ``delivery_attempts`` is read off the REAL origin.
+
+    Integration and not BDD for this file's stated reason: the delivery is fired by a
+    workflow-step status change after the buyer's call returned, so there is no wire
+    envelope for a ``Then`` step to assert on.
+    """
+
+    def test_three_stored_configs_still_produce_one_delivery(self, integration_db):
+        with MediaBuyPushRegistrationEnv() as env:
+            created = _register_via_create(env, with_push_config=False)
+            # Three, where every other case in this file seeds one. Under the removed
+            # loop this delivered three times; the count is the whole assertion.
+            env.register_delivery_target(count=3)
+            env.set_http_status(200)
+
+            _register_via_update(env, created.media_buy_id)
+
+            env.complete_step(env.push_step("update_media_buy"))
+
+            assert env.delivery_attempts == 1, (
+                f"one status change on one mapped object delivered {env.delivery_attempts} "
+                f"times -- the count followed the principal's stored config rows, which is "
+                f"the fan-out AdCP caps at one delivery per logical event"
+            )
+
+
 class TestRefusedStashCostsTheWebhookNotTheTransition:
     """A stash the gate REFUSES must cost that webhook only.
 
