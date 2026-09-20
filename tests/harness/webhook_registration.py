@@ -87,14 +87,27 @@ class MediaBuyPushRegistrationEnv(LocalOriginMixin, MediaBuyDualEnv):
     def register_delivery_target(self) -> Any:
         """Store ONE active ``PushNotificationConfig`` row pointing at the origin.
 
-        ``_send_push_notifications`` sends once per active row per mapping, so
-        the row count is the delivery count — one row keeps
+        The row stands in for the earlier ``create_media_buy`` that registered
+        it, which is the only way a real buyer's ``update_media_buy`` webhook is
+        ever delivered — update never upserts one itself. What the row HOLDS is
+        not what gets delivered to: the config the sender receives is rebuilt
+        from the workflow step's stash.
+
+        THE ROW COUNT IS NOT THE DELIVERY COUNT, and this docstring used to say
+        it was: "``_send_push_notifications`` sends once per active row per
+        mapping, so the row count is the delivery count — one row keeps
         ``delivery_attempts == 1`` a statement about signing rather than about
-        fan-out. What the row HOLDS is not what gets delivered to: the config
-        the sender receives is rebuilt from the workflow step's stash. The row
-        stands in for the earlier ``create_media_buy`` that registered it, which
-        is the only way a real buyer's ``update_media_buy`` webhook is ever
-        delivered — update never upserts one itself.
+        fan-out." That described a BUG and then arranged for it not to show. The
+        production loop it described read no part of the row it iterated; it sent
+        the step's own stashed registration once per row, so a principal with
+        three configs got three copies of one event (measured on the storyboard
+        tenant: the same payload to the same URL three times inside 17ms, failing
+        AdCP 3.1.1 ``webhook_emission::expect_no_duplicate_webhook_on_replay``).
+        Seeding exactly one row is what kept every test here green through it.
+
+        The loop is gone. Delivery is once per MAPPED OBJECT, and the stored rows
+        are not consulted on this path at all — so ``delivery_attempts == 1`` is
+        now a property of the step rather than of how many rows this seeded.
         """
         from tests.factories import PushNotificationConfigFactory
 
