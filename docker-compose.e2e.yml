@@ -558,23 +558,24 @@ services:
       dockerfile: Dockerfile.test
     environment:
       # Publishes the runner's own webhook receiver behind the shared TLS front, which
-      # is what lets `webhook_emission` grade our OUTBOUND deliveries at all. Forwarded
-      # from the host rather than pinned, so it is OPT-IN:
+      # is what lets `webhook_emission` grade our OUTBOUND deliveries at all. This is
+      # the in-network runner, so the receiver must be published for the server (a
+      # different container) to reach it; unset, `_webhook_receiver_args` returns no
+      # flags and every expect_webhook step reports `requirement_unmet` — coverage that
+      # reads green because it never ran.
       #
-      #     STORYBOARD_WEBHOOK_TLS_FRONT=adcp-e2e.dev:8443 ./run_all_tests.sh storyboard
-      #
-      # Unset, `_webhook_receiver_args` returns no flags and webhook_emission skips as
-      # `requirement_unmet` exactly as it always has. That default is deliberate: those
-      # checks FAIL today for two causes neither of which is an agent defect (one fixed
-      # in adcp-client#2967, one undetermined — salesagent-fjsqe), and turning a skip
-      # into a red check would grow the storyboard ledger. Allowlists only shrink
-      # (CLAUDE.md), so the coverage ships switched off until the checks can pass rather
-      # than ledgered to make them quiet.
+      # It shipped opt-in for one release while the checks failed for two causes that
+      # were not agent defects: the runner matched brand.json on the card base rather
+      # than the protocol endpoint (adcp-client#2967, carried here as a patch), and the
+      # corrected vectors named a product nothing seeded (salesagent-fjsqe, fixed by
+      # `_seed_vector_product`). Both are closed, so the coverage is on by default; the
+      # host override stays for a host-side topology, where the SDK's loopback receiver
+      # works without any of this.
       #
       # NOT ADCP_WEBHOOK_HOST: that variable is retired and guarded
       # (tests/unit/test_architecture_e2e_compose_tls_origins.py) precisely because it
       # advertised a plaintext http:// callback. This one is TLS by construction.
-      STORYBOARD_WEBHOOK_TLS_FRONT: "${STORYBOARD_WEBHOOK_TLS_FRONT:-}"
+      STORYBOARD_WEBHOOK_TLS_FRONT: "${STORYBOARD_WEBHOOK_TLS_FRONT:-adcp-e2e.dev:8443}"
       # The same dev KEK both servers carry. The storyboard seeder MINTS the tenant's
       # signing key through production's own provisioning function, and `db:` minting
       # refuses without a key-encryption key — correctly, since there is no plaintext
