@@ -2795,6 +2795,23 @@ async def _create_media_buy_impl(
                         targeting_overlay=pkg.targeting_overlay,
                         pacing=pkg.pacing,
                         impressions=getattr(pkg, "impressions", None),
+                        # ELEMENT-LEVEL context, echoed from the request package.
+                        #
+                        # Not the envelope's: `_boundary._served` stamps THAT one onto the
+                        # response root and nothing else may write it. This is the same
+                        # opaque `ContextObject` re-declared on the package itself, which
+                        # the boundary never sees -- it reads the request's root context and
+                        # attaches the response's root context, and has no notion of
+                        # collections at all (`_boundary.py` mentions `packages` zero times).
+                        #
+                        # So the echo has to happen where the packages are built. AdCP 3.1.1
+                        # `media_buy_seller/inline_creatives_without_sync` sends
+                        # `packages[0].context.buyer_ref` and asserts it back at
+                        # `/packages/0/context/buyer_ref`; `buyer_ref` is not a declared field
+                        # anywhere -- it is an extra inside an `extra="allow"` object -- so
+                        # there is nothing to derive and nothing to validate. It is carried,
+                        # or it is lost.
+                        context=pkg.context,
                         ext=pkg.ext,
                         creative_assignments=pkg.creative_assignments,
                         format_ids_to_provide=pkg.format_ids,
@@ -3947,6 +3964,9 @@ async def _create_media_buy_impl(
                     pricing_option_id=package.pricing_option_id,
                     pacing=package.pacing,
                     targeting_overlay=package.targeting_overlay,
+                    # Echoed for the same reason as the pending-packages arm above: the
+                    # boundary owns the ROOT context and cannot reach an array element.
+                    context=package.context,
                     impressions=getattr(package, "impressions", None),
                     creative_assignments=package.creative_assignments,
                     format_ids_to_provide=getattr(package, "format_ids", None),
