@@ -38,13 +38,14 @@ taxonomy grew — silently, as an unclassified code reaching ``CodeEntry`` const
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 
-from src.core.errors._entry import CodeEntry, Recovery
+from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
 from src.core.signing.canonical import REQUEST_TARGET_URI_MALFORMED, WEBHOOK_TARGET_URI_MALFORMED
 
 #: The SDK's retag table plus the ONE row it omits at ``adcp==6.6.0``.
@@ -111,38 +112,84 @@ else:
     SignatureErrorCode = StrEnum("SignatureErrorCode", {code.upper(): code for code in sorted(_TAXONOMY)})
 
 
-#: Codes the BUYER can act on by changing the request and sending it again. Read as
-#: suffixes off the taxonomy rather than listed as whole codes, so a new sibling the SDK
-#: adds (``request_signature_components_incomplete`` joining
-#: ``request_signature_covered_components_invalid``) lands in the right class on arrival.
-_CORRECTABLE_MARKERS: Final = ("_required", "_malformed", "_incomplete", "_invalid_components", "_not_allowed")
-
-#: Codes whose cause is somebody else's availability, so the SAME request may succeed
-#: later. Everything the discovery walk could not reach, plus a revocation list that has
-#: aged out.
-_TRANSIENT_MARKERS: Final = ("_unreachable", "_unavailable", "_stale")
+#: How a buyer reacts to each code, ONE ROW PER CODE, transcribed from the spec.
+#:
+#: The SDK publishes the VOCABULARY (``_TAXONOMY``, above) and not the classification:
+#: ``enums/error-code.json``'s ``enumMetadata`` carries ``{recovery, suggestion}`` for the
+#: 92 codes ``_load_published_codes`` reads, and for NONE of these 28 — measured, not
+#: assumed. So the classification has to be stated here, and this is the whole of it.
+#:
+#: WHY A TABLE AND NOT A RULE. This was a pair of suffix-marker tuples and a
+#: ``_recovery_for`` that matched them, so a code's class followed from how it was SPELLED.
+#: That put ``request_signature_brand_json_malformed`` in ``correctable`` on the
+#: ``_malformed`` suffix, while L1122 says "Verifier: do not retry; surface to operations"
+#: — it is the COUNTERPARTY's document and the buyer cannot edit it. Because the message
+#: and the suggestion are selected by class, the buyer was also told to re-sign a request
+#: that was fine. A rule cannot see whose document is malformed; the spec states it per row,
+#: so this does too. ``AppErrorCode`` declares its eight the same way, and for the same
+#: reason: declaring a code and declaring what it means is one act.
+#:
+#: SOURCES, both at v3.1.1. The ``Failure | Retry? | Code`` table (L1373) classifies 20;
+#: the discovery table (L1119-1127) classifies the other 9 in its remediation column. Note
+#: that ``Retry? No`` does NOT mean terminal — it spans "the caller can fix this and send
+#: it again" and "no autonomous recovery", which is exactly the distinction a spelling rule
+#: erased. Each row below takes the reading its remediation text states.
+_RECOVERY: Final[Mapping[str, Recovery]] = MappingProxyType(
+    {
+        # The buyer signs, or re-signs, and sends it again. Every one of these is a fault
+        # in what the CALLER put on the wire.
+        "request_signature_required": Recovery.CORRECTABLE,
+        "request_signature_header_malformed": Recovery.CORRECTABLE,
+        "request_signature_params_incomplete": Recovery.CORRECTABLE,
+        "request_signature_tag_invalid": Recovery.CORRECTABLE,
+        "request_signature_alg_not_allowed": Recovery.CORRECTABLE,
+        "request_signature_window_invalid": Recovery.CORRECTABLE,
+        "request_signature_components_incomplete": Recovery.CORRECTABLE,
+        "request_signature_components_unexpected": Recovery.CORRECTABLE,
+        "request_target_uri_malformed": Recovery.CORRECTABLE,
+        # Somebody else's availability, so the SAME request may succeed later.
+        # L1120 "Surface as transient"; L1121 "Same retry/cache discipline";
+        # L1373 "Yes (with backoff)".
+        "request_signature_capabilities_unreachable": Recovery.TRANSIENT,
+        "request_signature_brand_json_unreachable": Recovery.TRANSIENT,
+        "request_signature_jwks_unavailable": Recovery.TRANSIENT,
+        # Refused on the signature's own merits: the bytes arrive identically on every
+        # retry, so every retry fails identically (L1373 "No" throughout).
+        "request_signature_invalid": Recovery.TERMINAL,
+        "request_signature_digest_mismatch": Recovery.TERMINAL,
+        "request_signature_replayed": Recovery.TERMINAL,
+        "request_signature_rate_abuse": Recovery.TERMINAL,
+        "request_signature_revocation_stale": Recovery.TERMINAL,
+        # The signer's KEY material or its declaration. An operator fixes these; a buyer
+        # cannot, and retrying changes nothing.
+        "request_signature_key_unknown": Recovery.TERMINAL,
+        "request_signature_key_purpose_invalid": Recovery.TERMINAL,
+        "request_signature_key_revoked": Recovery.TERMINAL,
+        "request_signature_jwks_untrusted": Recovery.TERMINAL,
+        "request_signature_key_origin_mismatch": Recovery.TERMINAL,
+        "request_signature_key_origin_missing": Recovery.TERMINAL,
+        # The counterparty's TRUST ROOT. The buyer does not own these documents, which is
+        # why the spelling rule got this group wrong. L1119/L1122 "surface to operations;
+        # do not retry"; L1123-L1125 "Not retryable".
+        "request_signature_brand_json_url_missing": Recovery.TERMINAL,
+        "request_signature_brand_json_malformed": Recovery.TERMINAL,
+        "request_signature_brand_origin_mismatch": Recovery.TERMINAL,
+        "request_signature_agent_not_in_brand_json": Recovery.TERMINAL,
+        "request_signature_brand_json_ambiguous": Recovery.TERMINAL,
+    }
+)
 
 
 def _recovery_for(code: str) -> Recovery:
-    """How a buyer should react to *code*.
+    """How a buyer should react to *code*, read off :data:`_RECOVERY`.
 
-    Three classes, and the default is the strict one. A signature that was PRESENTED and
-    refused on its cryptographic merits — invalid, replayed, expired, key unknown, key
-    origin mismatched — arrives identically on every retry, so it is terminal: security.mdx
-    § Retry semantics states exactly this ("the signature bytes and request context arrive
-    identically on every retry, so every retry fails identically"), and a buyer that
-    auto-retried a terminal refusal would turn one misconfiguration into a loop.
-
-    ``request_signature_required`` is the one that is genuinely correctable, and it is the
-    reason the classes are read off markers rather than defaulted wholesale: it is what a
-    buyer gets for not signing at all, and "sign the request and send it again" is a
-    complete instruction.
+    A lookup, deliberately with no default. A code in the SDK's taxonomy with no row here
+    raises at import rather than being classified by a fallback — the classification is the
+    only machine-readable signal a buyer gets for this family (``core/error.json`` types
+    ``error.code`` as an open string, so a receiver decodes an unknown code by reading
+    ``error.recovery``), and guessing it silently is what this table replaced.
     """
-    if any(marker in code for marker in _TRANSIENT_MARKERS):
-        return Recovery.TRANSIENT
-    if any(code.endswith(marker) for marker in _CORRECTABLE_MARKERS):
-        return Recovery.CORRECTABLE
-    return Recovery.TERMINAL
+    return _RECOVERY[code]
 
 
 #: What a buyer is TOLD, per recovery class. One sentence each rather than 28, because the
@@ -178,6 +225,10 @@ SIGNATURE_CODE_TABLE: Final = MappingProxyType(
             suggestion=_TEXT[_recovery_for(member.value)][1],
             message=_TEXT[_recovery_for(member.value)][0],
             status=401,
+            # What makes these 28 different from every other code, declared once, here.
+            # ``AuthChallengeResponder`` asks the table rather than holding its own list:
+            # see CodeGroup for why the fact lives on the code and not on the renderer.
+            group=CodeGroup.SIGNATURE,
         )
         for member in SignatureErrorCode
     }
