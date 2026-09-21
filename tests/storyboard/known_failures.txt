@@ -45,7 +45,7 @@
 #
 # THE SDK PIN CHECK IS LEDGERED, and it is the one entry here that is not a conformance
 # gap. ``test_runner_sdk_pin.py`` compares the npm runner's declared ``adcp_version`` against
-# the version this repo pins, and fails: @adcp/sdk@14.0.0-rc.35 declares 3.2.0-rc.1 while the
+# the version this repo pins, and fails: @adcp/sdk@14.0.0-rc.42 declares 3.2.0-rc.4 while the
 # repo pins 3.1.1. It was already failing in the runs that scored 30/21, so it predates this
 # ledger.
 #
@@ -56,9 +56,11 @@
 # be". There is no runner flag that separates the client's contract from the vectors it grades
 # against, which is a defect in the grader rather than in this repo, raised upstream.
 #
-# 14.0.0-rc.35 is not a free choice either. The last runner line that declares 3.1 is 11.x, and
-# its A2A path carries an unfixed 0.x dependency; the A2A fixes are not backported. So grading
-# both protocol surfaces at all requires the 14 line, and the 14 line declares 3.2.0-rc.1.
+# 14.0.0-rc.42 is not a free choice either. The 14 line is the only one carrying the A2A
+# request-signing dispatch (adcp-client#2967), without which every signed_requests vector on the
+# A2A card is ungradable. So grading both protocol surfaces at all requires the 14 line, and the
+# 14 line declares 3.2.0-rc.4 -- a WIDER divergence than the 3.2.0-rc.1 this entry was written
+# against, recorded here because the runner moved, not because this repo did.
 #
 # It is marked at its own source rather than listed below: this ledger's grammar keys on
 # (protocol, track, storyboard_id, step_id) and refuses an entry without a protocol prefix,
