@@ -224,9 +224,18 @@ def given_request_registers_authenticated_webhook(ctx: dict) -> None:
     ctx[GRADE_EVERY_CREDENTIAL_LOCATION] = True
 
 
-@then(parsers.parse('the seller answers with the request-signature challenge "{code}"'))
-def then_signature_challenge(ctx: dict, code: str) -> None:
+@then(parsers.parse('the seller answers with the request-signature challenge "{code}" and recovery "{recovery}"'))
+def then_signature_challenge(ctx: dict, code: str, recovery: str) -> None:
     """Grade the ``WWW-Authenticate: Signature error="<code>"`` challenge, byte-exactly.
+
+    BOTH RENDERINGS of the refusal, and the recovery class is named HERE, in the
+    scenario, rather than looked up in this seller's own code table. A classification
+    checked against the thing that declares it grades nothing: flipping
+    ``request_signature_required`` to ``terminal`` in
+    ``src/core/errors/signature_codes.py`` moved the wire and the expectation together
+    and the suite stayed green. Read from security.mdx @ v3.1.1 — the
+    ``Failure | Retry? | Code`` table at L1373 and the discovery table at L1119-1127 —
+    so a table row that drifts from the spec turns this red.
 
     Through the harness helper, which is the single way a request-signature refusal may
     be graded: it refuses a code outside the request-family vocabulary production reads
@@ -249,7 +258,7 @@ def then_signature_challenge(ctx: dict, code: str) -> None:
     accepted: list[tuple[str, AssertionError]] = []
     for location, result in ctx.get(CREDENTIAL_REGISTRATIONS) or ((_THE_REQUEST, ctx["result"]),):
         try:
-            result.assert_signature_challenge(code)
+            result.assert_signature_challenge(code, recovery=recovery)
         except AssertionError as exc:
             accepted.append((location, exc))
     if not accepted:

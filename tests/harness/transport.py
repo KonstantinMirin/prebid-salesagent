@@ -631,7 +631,7 @@ class TransportResult:
                     f"hint at the top level of the error object: {envelope}"
                 )
 
-    def assert_signature_challenge(self, code: str) -> None:
+    def assert_signature_challenge(self, code: str, *, recovery: str) -> None:
         """Assert the VERIFIER refused this dispatch with ``WWW-Authenticate: Signature error="<code>"``.
 
         The signing counterpart of :meth:`assert_wire_error`, and the single
@@ -639,8 +639,11 @@ class TransportResult:
         must not read the challenge header itself, for the same reason it must not
         hand-roll an error envelope.
 
-        WHAT IS GRADED, and what deliberately is NOT. The claim is the challenge
-        header BYTE-EXACTLY, read with :func:`tests.helpers.signing.rejection_code`
+        WHAT IS GRADED, and what deliberately is NOT. Two renderings of the one
+        refusal: the challenge header here, and the response BODY in
+        :meth:`_assert_challenge_envelope`, which this calls last and which is where
+        ``recovery`` is graded. The claim on the header is that it is BYTE-EXACT,
+        read with :func:`tests.helpers.signing.rejection_code`
         (reused, never re-parsed here: a reader that mishandles the label escaping
         reports "no rejection", which looks exactly like the mechanism not running).
         ``status_code == 401`` is NOT the assertion and never can be — a bare 401 is
@@ -715,4 +718,58 @@ class TransportResult:
             "request at all: a non-401, or a 401 from somewhere else in the stack (auth middleware, a 404 "
             "wearing a 401). A 2xx here usually means the operation never landed in a graded posture "
             "bucket, so the request was waved through unverified."
+        )
+
+        self._assert_challenge_envelope(code, recovery)
+
+    def _assert_challenge_envelope(self, code: str, recovery: str) -> None:
+        """The BODY of the refusal whose challenge :meth:`assert_signature_challenge` just graded.
+
+        REQUIRED, not best-effort, and that is the whole change (salesagent-hmq0l).
+        The 401 is not a bodyless refusal from above the application: it is DERIVED
+        from a finished JSON body by ``AuthChallengeResponder``, which reads the AdCP
+        code out of the envelope to decide the status and the challenge in the first
+        place. So an envelope always exists by the time a challenge exists, and a
+        missing one is a finding about the harness or the renderer rather than a case
+        to skip. It was skipped for a long time by accident — ``_jsonrpc_body``
+        discarded the body on every 4xx — and the whole 28-code request-signature
+        family went ungraded below its header on both JSON-RPC legs.
+
+        TWO RENDERINGS, ONE REFUSAL. The challenge and the envelope are separate
+        paths out of the same failure, so asserting either alone cannot catch them
+        disagreeing, and a buyer that reads the body while an operator reads the
+        header would see two different stories.
+
+        *recovery* IS THE CALLER'S, NEVER THIS SELLER'S. The first version of this
+        looked the expected class up in ``CODE_TABLE`` — production's own declaration
+        — and was measured VACUOUS on the field that matters: flipping
+        ``request_signature_required`` to ``terminal`` in
+        ``src/core/errors/signature_codes.py`` moved the wire and the expectation
+        together and every test stayed green. A classification can only be graded
+        against a source outside the thing being graded, so the value arrives from
+        the scenario that names it (``local-request-signing-enforcement.feature``),
+        authored from security.mdx @ v3.1.1 — L1373, and the discovery table at
+        L1119-1127. Same mutation against this version: red.
+        """
+        envelope = self.wire_error_envelope
+        assert envelope is not None, (
+            f"the {code!r} challenge arrived but the refusal's ENVELOPE did not "
+            f"(wire_error_envelope=None). The 401 carrying that challenge is derived from a JSON "
+            f"body, so the body existed on the wire and something between there and here dropped "
+            f"it. Every field in it — code, message, recovery — is ungraded until it stops."
+        )
+
+        error = envelope.get("adcp_error") or {}
+        assert error.get("code") == code, (
+            f"the challenge says Signature error={code!r} and the envelope says {error.get('code')!r}. "
+            f"One refusal reaching the buyer as two different codes is the defect that grading either "
+            f"rendering alone cannot see."
+        )
+
+        assert error.get("recovery") == recovery, (
+            f"expected recovery={recovery!r} for {code!r}, got {error.get('recovery')!r}. recovery is "
+            f"the one CLOSED field in the envelope — error.code is an open string per core/error.json, "
+            f"so it is what a receiver meeting an unknown code decodes the failure by. The expectation "
+            f"is the SCENARIO's, read from the spec; if this seller's table "
+            f"(src/core/errors/signature_codes.py) disagrees, the table is what moves."
         )

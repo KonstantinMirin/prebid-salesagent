@@ -38,7 +38,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller requires a request signature for "sync_creatives"
     And the Buyer has no authentication credentials
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_required"
+    Then the seller answers with the request-signature challenge "request_signature_required" and recovery "correctable"
     # The composition rule, security.mdx @ v3.1.1 :1268-1269: a seller MUST NOT refuse an
     # unsigned request for the missing signature when the caller "presents another
     # credential the agent accepts" (:1269) — so `required_for` alone does NOT make an
@@ -71,7 +71,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller supports request signatures but requires them for no operation
     And the request registers a webhook whose authentication carries credentials
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_required"
+    Then the seller answers with the request-signature challenge "request_signature_required" and recovery "correctable"
     # security.mdx @ v3.1.1 :1462-1465 — "sellers that support request signing MUST require
     # the inbound request to be 9421-signed ... when `authentication` is present", restated
     # at :1375 as a trigger that fires "regardless of `required_for` membership".
@@ -94,7 +94,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller places "sync_creatives" in the "<bucket>" request-signature bucket
     And the Buyer Agent sends a signature the seller cannot parse
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_header_malformed"
+    Then the seller answers with the request-signature challenge "request_signature_header_malformed" and recovery "correctable"
     # security.mdx @ v3.1.1 :1226 — a verifier MUST NOT fall back to bearer-only auth when a
     # malformed signature is present, "even for operations not in `required_for`". That "even
     # for" is a QUANTIFIER OVER BUCKETS, and a quantifier graded at one bucket is not graded:
@@ -142,7 +142,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the seller places "sync_creatives" in the "supported" request-signature bucket
     And the Buyer Agent signs a different rendering of the request
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
     # ONE variable apart from the scenario above: the same operation, the same key, the same
     # tampered bytes — the bucket. This is the control that makes the warn completion mean
     # something: without it, "the request completed" is equally explained by a verifier that
@@ -156,7 +156,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     And the Buyer Agent signs a different rendering of the request
     And the request registers a webhook whose authentication carries credentials
     When the Buyer Agent syncs the creative
-    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch"
+    Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
     # ONE variable apart from "a signed-but-invalid request completes under warn" above: the
     # same operation, the same key, the same tampered bytes, the same bucket — the request
     # now hands over webhook CREDENTIALS. That scenario COMPLETES and this one is REFUSED,
