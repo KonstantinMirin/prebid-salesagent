@@ -486,8 +486,10 @@ and the one unimplemented case (two concurrent requests with the same key) — i
 
 ### The context echo
 
-The buyer's `context` is opaque data this seller carries and returns. It is one
-field on one class, with one writer.
+The buyer's `context` is opaque data this seller carries and returns. At the
+ENVELOPE it is one field on one class, with one writer — that is the rest of this
+section. AdCP also declares the same object at ELEMENT level, and that half has a
+different writer; see [Element-level context](#element-level-context) below.
 
 `AdcpResponse` (`src/core/schemas/_base.py:754-795`) inherits the SDK's
 `AdcpVersionEnvelope` and `ProtocolEnvelope` — the pair every pinned response
@@ -522,6 +524,45 @@ Three tests grade each refusal by breaking it:
 `tests/unit/test_ast_grep_identity_rules.py`.
 `tests/bdd/test_local_context_echo.py` grades the behavior itself, and its
 scenarios run on every transport.
+
+### Element-level context
+
+`core/context.json` is also `$ref`'d from models that sit INSIDE a response, not
+at its root: `core/package.json` declares `context`, and so do `MediaBuy`,
+`PackageUpdate`, `Results` and `MediaBuyDeliveryWebhookResult`. Of the 225 models
+in the SDK that declare the field, those are the ones that are array elements
+rather than envelopes.
+
+The boundary cannot reach them, and this is not an oversight to be fixed there.
+`_served` reads the request ROOT and writes the response ROOT; `_boundary.py`
+mentions `packages` nowhere, and giving it a notion of collections would mean
+teaching the one transport-agnostic seam the shape of every tool's payload. So an
+element's context is echoed by whoever BUILDS the element — for packages, that is
+`_create_media_buy_impl` (`media_buy_create.py`), which copies `pkg.context` onto
+the `Package` it returns.
+
+Nothing refuses that write: the two refusals above are on `AdcpResponse`, and
+`Package` is not one. The `context=` keyword ban is scoped accordingly — it stays
+total for the envelope (a response, an error, or a `model_dump(context=...)`
+serializer call are all findings) and admits the constructors of models that
+declare the field. Without that exception the field would be permanently
+unwritable: buyer-supplied, spec-declared, and silently dropped.
+
+There is nothing to validate or derive. `context` is `additionalProperties: true`
+with zero declared properties, so its members — `buyer_ref` among them, which is
+not a declared field anywhere in AdCP — are carried or they are lost.
+
+AdCP 3.1.1 grades this at
+`media_buy_seller/inline_creatives_without_sync::create_buy_with_legacy_inline_creative`,
+which sends `packages[0].context.buyer_ref` and asserts it back at
+`/packages/0/context/buyer_ref`. Locally,
+`tests/bdd/test_local_context_echo.py`'s `@T-CTXECHO-package-elements` sends a
+distinct random bag per package and asserts each returns on its own package,
+positionally, on every transport.
+
+**Only `Package` is wired.** `MediaBuy`, `PackageUpdate`, `Results` and
+`MediaBuyDeliveryWebhookResult` declare the field with the same unreachability and
+have no echo and no coverage.
 
 ### Failure
 
