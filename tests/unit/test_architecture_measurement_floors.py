@@ -58,11 +58,19 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "codes-declared-code-reaches-buyer",
-        # The context echo, graded on every outcome across all four transports. Two routes
-        # because the scenarios need both a read tool and a write tool: a schema rejection and
-        # a seller's own refusal do not both reach the buyer from one tool.
+        # The context echo, graded on every outcome across all four transports. Three routes.
+        # Two because the scenarios need both a read tool and a write tool: a schema rejection
+        # and a seller's own refusal do not both reach the buyer from one tool.
         "ctxecho-media-buys",
         "ctxecho-products",
+        # The third is a different OBLIGATION, not a third tool for the same one. Those two
+        # grade the ENVELOPE's context, which one seam reads off the request root and writes
+        # onto the response root. AdCP declares the same opaque object on models nested INSIDE
+        # a response (Package, and likewise MediaBuy, PackageUpdate, Results,
+        # MediaBuyDeliveryWebhookResult), where no seam can reach it -- the boundary has no
+        # notion of a collection -- so an element echo is carried by whoever builds the
+        # element. create_media_buy is the cheapest request-element -> response-element pair.
+        "ctxecho-packages",
         "predispatch",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.

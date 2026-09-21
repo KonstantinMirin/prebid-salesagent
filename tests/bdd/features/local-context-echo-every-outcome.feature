@@ -124,6 +124,32 @@ Feature: The buyer's context object is echoed unchanged on every outcome (local)
     And the error recovery should be "correctable"
     And the error response echoes the buyer's context object unchanged
 
+  # ── create_media_buy: the ELEMENT-level echo ───────────────────────────
+  # Routed to a create-capable env by the @ctxecho-packages tag.
+  #
+  # Every scenario above grades the ENVELOPE's context, which one seam reads off
+  # the request root and writes onto the response root. AdCP declares the SAME
+  # opaque object on models nested INSIDE a response — `core/package.json`
+  # .properties.context -> $ref core/context.json, and likewise on MediaBuy,
+  # PackageUpdate, Results and MediaBuyDeliveryWebhookResult — and no seam can
+  # reach those: the boundary has no notion of a collection.
+  #
+  # So the element echo is carried by whoever builds the element, and it is a
+  # separate obligation from the envelope's. It was not graded here until now,
+  # and production dropped it: each response Package was built from a
+  # hand-written field map that did not include `context`, so a buyer's
+  # per-package bag was accepted and silently lost.
+
+  @T-CTXECHO-package-elements @context-echo @ctxecho-packages
+  Scenario: Each created package echoes its own context object unchanged
+    Given the request targets a production account
+    And the buyer's request carries an opaque context object
+    And each package in the request carries its own opaque context object
+    When the Buyer Agent sends the create_media_buy request
+    Then the response arrives
+    And the successful response echoes the buyer's context object unchanged
+    And every created package echoes its own context object unchanged
+
   @T-CTXECHO-malformed-before-auth @context-echo @error @auth @ctxecho-media-buys
   Scenario: A malformed request from an unauthenticated caller is answered as malformed, and still echoes the context
     # ORDERING. The document is refused for what it IS before the seller asks

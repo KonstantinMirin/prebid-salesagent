@@ -5949,6 +5949,20 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_build_media_buy_list_env,
         seed=_seed_tenant_and_principal,
     ),
+    # A third tool, for the ELEMENT-level echo. The two rows above grade the
+    # ENVELOPE's context, which one seam reads and writes; AdCP declares the same
+    # opaque object on models nested INSIDE a response (Package, and the same
+    # field on MediaBuy, PackageUpdate, Results, MediaBuyDeliveryWebhookResult),
+    # and no seam can reach those -- the boundary reads the request root and
+    # writes the response root. create_media_buy is the cheapest tool with a real
+    # request-element -> response-element pair: packages[] (PackageRequest) comes
+    # back as packages[] (Package), both declaring `context`.
+    EnvRoute(
+        tag="ctxecho-packages",
+        when=lambda m: "ctxecho-packages" in m,
+        env_builder=_build_media_buy_create_list_env,
+        seed=_seed_media_buy_chain,
+    ),
     # ── @predispatch (local pre-dispatch-refusals feature) ──────────────────
     # T-PREDISPATCH-* identity tags, so an UNSCOPED `when` row like the two above.
     # Every routable document addresses get_products, and a tenant plus its
