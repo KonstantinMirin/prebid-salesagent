@@ -500,16 +500,26 @@ def _mcp_error_to_exception(payload: dict[str, Any]) -> Exception:
 
 
 class WireRefusal(AssertionError):
-    """An HTTP refusal that arrived BEFORE any JSON-RPC envelope existed.
+    """An HTTP refusal that arrived with NO body to read an envelope out of.
 
-    Carries the response, because on the ``/a2a`` and ``/mcp`` legs the only
-    evidence of WHICH refusal happened can live outside the body: the ASGI
-    signature verifier answers a BODYLESS 401 whose sole signal is
+    Carries the response, because the evidence of WHICH refusal happened can live
+    outside the body: a signature refusal's sole extra signal is
     ``WWW-Authenticate: Signature error="<code>"``. Raising a bare
-    ``AssertionError`` here discarded that header, so an unsigned refusal on those
-    two legs could be observed only as "some 4xx" — the exact status-shaped
-    vacuity ``assert_signature_challenge`` exists to remove (salesagent-n78j0.1.2),
-    and the reason the REST leg already had ``_non_json_error_result``.
+    ``AssertionError`` here discarded that header, so an unsigned refusal on the
+    ``/a2a`` and ``/mcp`` legs could be observed only as "some 4xx" — the exact
+    status-shaped vacuity ``assert_signature_challenge`` exists to remove
+    (salesagent-n78j0.1.2), and the reason the REST leg already had
+    ``_non_json_error_result``.
+
+    A 4XX IS NOT ITSELF A REASON TO RAISE THIS, and used to be: ``_jsonrpc_body``
+    raised on ``status_code >= 400`` outright, on the rationale that a signature
+    refusal is bodyless. That was true of #1291's ASGI verifier, which sent its own
+    401 from above the application. It is false on #1721's design, where the refusal
+    is raised inside the resolver and rendered by ``AuthChallengeResponder``, which
+    DERIVES the 401 by reading an AdCP code out of a finished JSON body — so the
+    body always exists, and discarding it left the ``code``, the ``message`` and
+    above all the ``recovery`` of the whole 28-code request-signature family
+    ungraded on both JSON-RPC legs (salesagent-hmq0l).
     """
 
     def __init__(self, message: str, response: Any) -> None:
@@ -525,14 +535,36 @@ def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
     SSE ``data:`` line; ``/a2a`` answers with plain JSON. One reader for both,
     because the CALLER only ever wants the envelope and a per-leg copy of this
     framing would be two ways to mis-read the same wire.
+
+    THE STATUS IS NOT CONSULTED. A refused request answers with an envelope like any
+    other outcome — that is what ``AuthChallengeResponder`` reads to decide the 401 in
+    the first place — so reading the body is what the status says to do, not something
+    the status can forbid. Only an EMPTY body is a refusal this function cannot parse,
+    and that is the one case it raises on. The same order REST has had all along
+    (``unwrap_rest_response`` parses, then classifies) and the one the E2E A2A leg was
+    corrected to (``tests/harness/test_client.py`` §
+    ``test_http_error_status_still_surfaces_the_wire_error_envelope``): parse first,
+    classify second. Classifying first throws away the only evidence of what was
+    classified.
+
+    A body that is not JSON at all is still a ``WireRefusal`` — a Starlette 404 page
+    or a proxy's error HTML carries no envelope to read, and letting a decode error
+    escape would report a real refusal as a harness crash.
     """
     import json as _json
 
-    if response.status_code >= 400 or not response.content:
-        raise WireRefusal(f"{surface} returned HTTP {response.status_code}: {response.text[:800]!r}", response)
+    if not response.content:
+        raise WireRefusal(f"{surface} returned HTTP {response.status_code} with no body", response)
 
     if "text/event-stream" not in response.headers.get("content-type", ""):
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise WireRefusal(
+                f"{surface} returned HTTP {response.status_code} with a non-JSON body: "
+                f"{response.text[:800]!r}",
+                response,
+            ) from exc
 
     for line in response.text.splitlines():
         if not line.startswith("data:"):
@@ -1853,6 +1885,7 @@ class BaseTestEnv:
         task_id: str,
         artifact_data: dict[str, Any] | None,
         response_cls: type,
+        response: Any = None,
     ) -> Any:
         """Turn one A2A Task into a parsed response, a raise, or the submitted wire.
 
@@ -1866,6 +1899,14 @@ class BaseTestEnv:
         *state* is the normalized A2A task state — the v0.3 spelling
         (``"failed"`` / ``"submitted"``), which the protobuf leg maps onto with
         the ``protobuf_states`` table in :meth:`_run_a2a_handler`.
+
+        *response* is the raw HTTP response the Task arrived on, and is how the
+        failed branch's :class:`WireError` keeps the ``WWW-Authenticate`` challenge
+        reachable: a refusal renders as a FAILED Task like any other failure, so
+        this is the path a signature refusal takes on the HTTP leg. ``None`` from
+        the in-process leg, which reads a protobuf ``Task`` and has no response —
+        the asymmetry is the legs', not this contract's, which is why it is a
+        parameter here rather than a second raise site there.
         """
         # AdCP-domain errors surface as a FAILED Task with the two-layer envelope
         # in the artifact DataPart. The ENVELOPE is what is raised, not a
@@ -1879,7 +1920,7 @@ class BaseTestEnv:
             if artifact_data:
                 envelope = _wire_envelope(artifact_data)
                 if envelope is not None:
-                    raise WireError(envelope)
+                    raise WireError(envelope, response)
             # A failed task with no envelope artifact: nothing was caught, so there is
             # no exception to hand to ``internal_detail``; the code is the diagnosis.
             raise AdCPInternalError()
@@ -1986,6 +2027,7 @@ class BaseTestEnv:
             task_id=task.get("id", ""),
             artifact_data=artifact_data,
             response_cls=response_cls,
+            response=response,
         )
 
     def _run_mcp_client(

@@ -307,11 +307,14 @@ def test_refusal_is_graded_by_the_challenge_not_by_the_status(integration_db):
     vocabulary fails, and — the one that matters — an ACCEPTED dispatch fails
     instead of being read as a refusal.
 
-    ONLY THE REST LEG, deliberately and for now: ``_run_a2a_over_http`` /
-    ``_run_mcp_over_http`` always attach the capability's bearer and their
-    JSON-RPC readers discard the HTTP response on a 4xx, so neither can produce
-    an anonymous refusal to grade yet. The helper does not paper over that — on
-    such a result it FAILS, naming the cause.
+    ONLY THE REST LEG, and here that is not a limitation but a division of labour:
+    this test's subject is the helper's NON-VACUITY — the three negatives below —
+    which is a property of the helper and identical on every leg, so running it
+    three times would grade the same code three times. That the refusal itself is
+    reachable and correctly graded on ``a2a`` and ``mcp`` is the next test's claim,
+    across all three. It was not always so: both JSON-RPC readers discarded the HTTP
+    response on a 4xx, so neither could produce a refusal to grade at all
+    (salesagent-hmq0l).
     """
     with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
         env.enable_request_signing()
@@ -320,20 +323,82 @@ def test_refusal_is_graded_by_the_challenge_not_by_the_status(integration_db):
             refused = env.call_via(Transport.REST, signed=False, credential={})
             accepted = env.call_via(Transport.REST, signed=True)
 
-        refused.assert_signature_challenge("request_signature_required")
+        refused.assert_signature_challenge("request_signature_required", recovery="correctable")
 
         with pytest.raises(AssertionError, match="request_signature_invalid"):
-            refused.assert_signature_challenge("request_signature_invalid")
+            refused.assert_signature_challenge("request_signature_invalid", recovery="terminal")
 
         with pytest.raises(AssertionError, match="not a request-signature rejection code"):
-            refused.assert_signature_challenge("REQUEST_SIGNATURE_REQUIRED")
+            refused.assert_signature_challenge("REQUEST_SIGNATURE_REQUIRED", recovery="correctable")
 
         assert accepted.is_success, (
             f"the signed control must be accepted, or the refusal above is not attributable to the "
             f"missing signature: {accepted.envelope} error={accepted.error!r}"
         )
         with pytest.raises(AssertionError, match="request_signature_required"):
-            accepted.assert_signature_challenge("request_signature_required")
+            accepted.assert_signature_challenge("request_signature_required", recovery="correctable")
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize("transport", IN_PROCESS_LEGS, ids=[leg.value for leg in IN_PROCESS_LEGS])
+def test_a_refusal_carries_its_envelope_on_every_leg(integration_db, transport):
+    """A signature refusal is graded by its BODY too, not by the challenge alone.
+
+    salesagent-hmq0l. ``assert_signature_challenge`` reads ``WWW-Authenticate``, and
+    for the whole 28-code request-signature family that was the only thing any
+    scenario read. The envelope on the same 401 — its ``code``, and above all its
+    ``recovery`` — went ungraded on every transport.
+
+    WHY ``recovery`` IS THE POINT. ``core/error.json`` types ``error.code`` as an
+    OPEN string, so a receiver that meets a code it does not know decodes the failure
+    by reading ``recovery``; it is the one closed field in the envelope. This seller
+    classifies all 28 codes by hand in ``src/core/errors/signature_codes.py``
+    (``_RECOVERY``, transcribed from security.mdx @ v3.1.1 L1373 and L1119-1127),
+    and until this test nothing observed any of it on the wire.
+
+    WHY IT WAS UNGRADEABLE rather than merely ungraded. ``_jsonrpc_body``
+    (``tests/harness/_base.py``) raised ``WireRefusal`` on every ``status_code >=
+    400``, discarding the body before the ``WireError`` branch that carries an
+    envelope could run. That was right while #1291's ASGI verifier answered a
+    BODYLESS 401; it stopped being right when ``AuthChallengeResponder`` began
+    DERIVING the 401 from a finished JSON body. The REST leg never had the problem
+    (``unwrap_rest_response`` parses on >=400), which is why a single-leg test would
+    have stayed green through all of it — this one is parametrized over all three.
+
+    THE CHALLENGE AND THE BODY MUST AGREE. Two renderings of one refusal reaching a
+    buyer with different codes is its own defect, and asserting each alone cannot
+    see it.
+    """
+    from src.core.errors.codes import CODE_BY_VALUE, CODE_TABLE
+
+    with _SignedDispatchEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+        env.enable_request_signing()
+
+        with declared_posture(**bucketed_declaration("required", *LADDER_OPERATIONS)):
+            refused = env.call_via(transport, signed=False, credential={})
+
+    refused.assert_signature_challenge("request_signature_required", recovery="correctable")
+
+    envelope = refused.wire_error_envelope
+    assert envelope is not None, (
+        f"the {transport.value} leg refused with a challenge but handed over NO envelope. "
+        "The 401 that carries the challenge is derived from a JSON body "
+        "(src/core/auth_middleware.py), so the body exists; something between the wire and "
+        "here discarded it, and every field in it is ungraded until it stops."
+    )
+
+    error = envelope.get("adcp_error") or {}
+    assert error.get("code") == "request_signature_required", (
+        f"the envelope must name the SAME refusal the challenge named, got {error.get('code')!r} "
+        f"beside WWW-Authenticate: Signature error=\"request_signature_required\" — one refusal "
+        f"reaching the buyer as two different codes is the defect asserting either alone hides"
+    )
+    expected = CODE_TABLE[CODE_BY_VALUE["request_signature_required"]].recovery
+    assert error.get("recovery") == expected.value, (
+        f"recovery is the one CLOSED field in the envelope and the only thing a receiver can "
+        f"decode an unknown code by: expected {expected.value!r} from this seller's own table, "
+        f"got {error.get('recovery')!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -580,4 +645,4 @@ if LIVE_STACK is not None:
             # equal to None). A 2xx here still means what the prose said — the
             # posture never reached this request, and the accepted leg above proves
             # less than it appears to.
-            refused.assert_signature_challenge("request_signature_required")
+            refused.assert_signature_challenge("request_signature_required", recovery="correctable")
