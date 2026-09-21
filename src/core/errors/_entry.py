@@ -13,7 +13,38 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
-__all__ = ["CodeEntry", "Recovery"]
+__all__ = ["CodeEntry", "CodeGroup", "Recovery"]
+
+
+class CodeGroup(StrEnum):
+    """Which family a code belongs to, when the family decides how it is TRANSPORTED.
+
+    ONE MEMBER BESIDES THE DEFAULT, and that is the honest size of it. AdCP requires the
+    request-signing family to be echoed in ``WWW-Authenticate: Signature error="<code>"``
+    on top of the response envelope every code already travels in — and gives the wire no
+    way to mark which codes those are: ``core/error.json`` types ``error.code`` as an open
+    string, and ``enums/error-code.json`` does not publish the family at all
+    (adcontextprotocol/adcp#7642). So the fact has to be re-added on this side, and this is
+    where it goes.
+
+    ON THE CODE, NOT ON ITS CONSUMER. The renderer that needs it
+    (``AuthChallengeResponder``) reads a code off a FINISHED response body, by which point
+    the exception class that knew is gone. The alternative was a set of code strings held
+    by that renderer, which works and is one line — and makes the middleware a second
+    vocabulary that drifts from this table. A field named for what the code IS, rather
+    than for what one reader does with it, keeps the dependency pointing the right way.
+
+    Not named ``challenge_scheme``: there is exactly one scheme, so a field naming schemes
+    would imply a choice that does not exist. A GROUP can gain a member without renaming,
+    and grouping is the actual concept — these codes are processed differently because of
+    the family they belong to.
+
+    If #7642 lands and the family is published like any other, this stays as it is: the
+    challenge requirement is independent of where the codes are declared.
+    """
+
+    GENERAL = "general"
+    SIGNATURE = "signature"
 
 
 class Recovery(StrEnum):
@@ -51,6 +82,10 @@ class CodeEntry:
     suggestion: str
     message: str
     status: int
+    #: Defaults to the family that needs no special transport, so the 92 published codes
+    #: and the 8 platform codes declare nothing. Only a code whose family changes how it
+    #: reaches the buyer says so.
+    group: CodeGroup = CodeGroup.GENERAL
 
     def __post_init__(self) -> None:
         if not self.suggestion or not self.message:

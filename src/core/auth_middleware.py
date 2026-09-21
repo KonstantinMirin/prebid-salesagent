@@ -17,12 +17,28 @@ from typing import Final
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from src.core.errors.signature_codes import SignatureErrorCode, challenge_for
+from src.core.errors.codes import CODE_BY_VALUE, CODE_TABLE, CodeGroup
+from src.core.errors.signature_codes import challenge_for
 
 logger = logging.getLogger(__name__)
 
-#: The wire strings of the request-signature taxonomy, as a set for the membership test below.
-_SIGNATURE_CODE_VALUES: Final[frozenset[str]] = frozenset(code.value for code in SignatureErrorCode)
+
+def _is_signature_code(code: str | None) -> bool:
+    """Does *code* belong to the family AdCP requires echoed in ``WWW-Authenticate``?
+
+    ASKED OF THE CODE TABLE, which is where the answer is declared
+    (``CodeEntry.group``). This used to be a frozenset built here from the signature
+    enum — correct, one line, and a second vocabulary: a middleware holding its own
+    list of codes is a place that can disagree with the table about what a code is.
+    Now the table is the only place that knows, and this reads it.
+
+    An unknown code is not a signature code. ``error.code`` is an open string, so a
+    code outside the table can legitimately reach here; the challenge is only owed
+    for a family this seller declares.
+    """
+    member = CODE_BY_VALUE.get(code or "")
+    return member is not None and CODE_TABLE[member].group is CodeGroup.SIGNATURE
+
 
 #: The challenge a 401 carries, per code.
 #:
@@ -62,7 +78,7 @@ def _challenge_for_code(code: str | None) -> str | None:
     sending its own bodyless 401 from an ASGI middleware. That is what makes the SPECIFIC
     signature code — not a generic AUTH_INVALID — the thing this reads.
     """
-    if code in _SIGNATURE_CODE_VALUES:
+    if _is_signature_code(code):
         # ``code`` is the wire string off a finished body; the membership test against the
         # generated vocabulary is what keeps an arbitrary body from minting a challenge.
         return challenge_for(code or "")

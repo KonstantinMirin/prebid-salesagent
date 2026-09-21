@@ -60,7 +60,7 @@ from adcp import get_adcp_spec_version
 from adcp.types import ErrorCode
 from adcp.validation.version import resolve_bundle_key
 
-from src.core.errors._entry import CodeEntry, Recovery
+from src.core.errors._entry import CodeEntry, CodeGroup, Recovery
 from src.core.errors.signature_codes import SIGNATURE_CODE_TABLE, SignatureErrorCode
 
 __all__ = [
@@ -68,6 +68,7 @@ __all__ = [
     "CODE_TABLE",
     "AppErrorCode",
     "CodeEntry",
+    "CodeGroup",
     "ErrorCodeT",
     "Recovery",
     "SignatureErrorCode",
