@@ -87,6 +87,12 @@ class SigningKeyFactory(factory.alchemy.SQLAlchemyModelFactory):
     # material lives outside the database. Rows that need resolvable ciphertext
     # are minted by provision_signing_key, which is the only thing that may write
     # this column in production.
+    #
+    # Since salesagent-9misv this factory produces a shape production can no longer
+    # MINT: env: stays resolvable (_REF_RESOLVERS is untouched, so pre-existing rows
+    # keep signing) but nothing can create one. The value is deliberately left alone
+    # -- these rows are written directly, never minted, and an env: row is exactly
+    # the legacy shape the resolver must go on handling.
     private_key_pem_encrypted = None
     not_before = LazyFunction(lambda: datetime.now(UTC) - timedelta(days=1))
     not_after = None

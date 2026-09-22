@@ -81,9 +81,9 @@ def _build_tenant_and_mint_under_runner_kek(
         env._commit_factory_data()
 
         repo = SigningKeyRepository(env.get_session(), tenant_id)
-        provisioned = provision_signing_key(repo, tenant_id=tenant_id, alg=_ALG, kid=f"{_SLUG}-runner-kek-key")
+        minted_kid = provision_signing_key(repo, tenant_id=tenant_id, alg=_ALG, kid=f"{_SLUG}-runner-kek-key")
         env.get_session().commit()
-        return provisioned.row.kid
+        return minted_kid
 
 
 @pytest.mark.asyncio

@@ -59,9 +59,9 @@ E2E_ADMIN_PASSWORD = "test123"
 _ADMIN_PREFIX = "/admin"
 
 #: What the create route FLASHES on success (src/admin/blueprints/signing_keys.py).
-#: The flash carries ``provisioned.row.kid`` from the provisioning call itself, so
-#: it is what the ROUTE reported; the list table's ``kid`` is a subsequent DB
-#: re-read wearing the route's clothes.
+#: The flash carries the ``kid`` ``provision_signing_key`` RETURNED, so it is what
+#: the ROUTE reported; the list table's ``kid`` is a subsequent DB re-read wearing
+#: the route's clothes.
 _SUCCESS_FLASH = re.compile(r"Signing key ([A-Za-z0-9._:-]+) provisioned and published\.")
 
 #: What the revoke route FLASHES on success (src/admin/blueprints/signing_keys.py

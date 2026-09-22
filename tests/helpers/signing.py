@@ -229,19 +229,28 @@ def provision_key(
 ) -> Any:
     """Mint a keypair through production and return the persisted SigningKey row.
 
-    Returns the ROW, not the whole ``ProvisionedKey``: a ``db:`` mint hands back no
-    PEM (the ciphertext is on the row), which is the only shape this helper is used
-    for.
+    ``provision_signing_key`` returns only the ``kid`` since salesagent-9misv — a
+    ``str`` cannot carry private key material, and it hands out no ORM row whose
+    lifetime the caller then has to reason about. This helper re-reads the row
+    through the repository, which is a STRONGER read than the old pass-through:
+    what callers assert on is what the database holds, not the instance the mint
+    happened to construct.
     """
     from src.core.signing.keys import provision_signing_key
 
-    return provision_signing_key(
+    minted_kid = provision_signing_key(
         repo,
         tenant_id=tenant_id,
         alg=alg,
         kid=kid,
         purpose=purpose,
-    ).row
+    )
+    row = repo.get_by_kid(minted_kid)
+    assert row is not None, (
+        f"provision_signing_key reported kid {minted_kid!r} but the repository cannot read it back -- "
+        "a mint that reports a key the database does not hold is the failure this helper must not hide"
+    )
+    return row
 
 
 @contextmanager

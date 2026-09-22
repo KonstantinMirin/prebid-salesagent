@@ -589,6 +589,137 @@ class TestMintingRefusesWithoutAKek:
         )
 
 
+class TestProvisioningHandsBackNoKeyMaterial:
+    """salesagent-9misv -- the provisioning response must carry no private half.
+
+    THE DEFECT THIS GRADES. ``env:`` is the one mintable scheme that stores the
+    private half nowhere, so its mint is the one that hands a PEM back to its
+    caller. The admin route then ``flash()``es that PEM, and ``flash()`` writes to
+    Flask's DEFAULT session store -- ``SecureCookieSessionInterface``, a
+    CLIENT-SIDE cookie that is SIGNED BUT NOT ENCRYPTED, so its contents are
+    readable by anyone holding the cookie. ``src/admin/app.py:128`` additionally
+    sets ``SESSION_COOKIE_HTTPONLY=False`` in production so JavaScript can read
+    it. The path an operator picks to keep private keys OUT of any store is the
+    path that writes one into a browser cookie.
+
+    The fix is not to stop flashing it. It is that provisioning has no private
+    half to hand back: one mintable scheme, material encrypted on the row, and a
+    return type with nowhere to put a PEM.
+    """
+
+    def test_no_key_material_in_the_response_body_or_its_cookies(
+        self, signing_tenant, deployment_kek, authenticated_admin_client
+    ):
+        """POST the form TODAY'S page sends, and read every byte that comes back.
+
+        The form fields are spelled exactly as ``templates/signing_keys_list.html``
+        sends them, because the point is that the route stops honouring them while
+        an old page, a bookmarked form or a replayed request may still supply them.
+        After this change they are inert: the route mints a ``db:`` key whose
+        material stays on the row.
+
+        Three carriers are read, because the PEM reaches the browser by more than
+        one route and any one of them alone would let a fix that merely RELOCATES
+        the leak pass: the response body, the SESSION (where ``flash()`` puts it,
+        and which on Flask's default interface IS a client-side cookie), and the
+        rendered page ``get_flashed_messages`` writes it into.
+
+        The session is read THROUGH FLASK -- ``client.session_transaction()`` opens
+        the client's cookie jar with the app's own
+        ``SecureCookieSessionInterface`` and yields the dict. Nothing here parses a
+        cookie: an earlier revision hand-rolled the base64url + zlib decode and
+        silently skipped every compressed cookie, which is every cookie large
+        enough to hold a PEM, so the check could not fire. Flask's deserialiser
+        cannot disagree with Flask's serialiser; one I write can.
+
+        The session is read BEFORE the redirect is followed, because rendering the
+        flash consumes it. The redirect is followed by hand rather than through the
+        suite's ``_provision_via_admin_route`` helper, which returns only the final
+        page.
+        """
+        env, tenant, _client = signing_tenant
+        url = _PROVISION_URL.format(tenant_id=tenant.tenant_id)
+
+        posted = authenticated_admin_client.post(
+            url,
+            data={
+                "alg": "ed25519",
+                "ref_scheme": "env",
+                "env_var_name": "ADCP_SIGNING_SOMETHING",
+            },
+            follow_redirects=False,
+        )
+        # The WHOLE session, not session["_flashes"]: material parked under any
+        # other key is the same defect, and naming one key would grade one route to
+        # the cookie rather than the cookie.
+        with authenticated_admin_client.session_transaction() as session:
+            session_contents = repr(dict(session))
+        followed = authenticated_admin_client.get(
+            posted.headers.get("Location", _PROVISION_URL.format(tenant_id=tenant.tenant_id)),
+        )
+
+        carriers = {
+            "POST body": posted.get_data(as_text=True),
+            "session (read through Flask)": session_contents,
+            "redirected body": followed.get_data(as_text=True),
+        }
+        leaked = {
+            where: needle for where, text in carriers.items() for needle in ("BEGIN", "PRIVATE KEY") if needle in text
+        }
+
+        assert not leaked, (
+            "a provisioning response that carries private key material IS the defect "
+            "(salesagent-9misv), and it must be unreachable rather than merely unused: "
+            f"found {sorted(leaked.items())}. flash() writes to Flask's default client-side "
+            "SecureCookieSessionInterface -- signed, NOT encrypted -- and src/admin/app.py:128 "
+            "sets SESSION_COOKIE_HTTPONLY=False in production, so a PEM flashed here is a PEM "
+            "any script on the page can read. Provisioning must have no private half to return."
+        )
+        assert len(_rows(env, tenant.tenant_id)) == 1, (
+            "and the mint must still SUCCEED -- this grades that no material comes back, not "
+            f"that provisioning stopped working; rows: {[row.kid for row in _rows(env, tenant.tenant_id)]}"
+        )
+
+    def test_a_minted_key_always_carries_its_material_on_the_row(self, signing_tenant, deployment_kek):
+        """Whatever is minted is resolvable, because the ciphertext is on the row.
+
+        ``provision_signing_key`` returns a ``kid`` and nothing else, so the row is
+        READ BACK through the repository rather than handed over. That is the
+        stronger assertion of the two available: it grades what the database holds,
+        not the instance the mint happened to construct, and a mint that reported a
+        kid the database does not hold fails here rather than passing on an
+        in-memory object.
+
+        The parameters that could once send the private half somewhere the row does
+        not carry it (``ref_scheme``/``env_var_name``) are gone, which is what makes
+        this invariant expressible at all.
+        """
+        from src.core.database.repositories.uow import SigningKeyUoW
+        from src.core.signing.keys import provision_signing_key
+
+        _env, tenant, _client = signing_tenant
+
+        with SigningKeyUoW(tenant.tenant_id) as uow:
+            assert uow.signing_keys is not None
+            kid = provision_signing_key(uow.signing_keys, tenant_id=tenant.tenant_id, alg="ed25519")
+            assert isinstance(kid, str) and kid, (
+                f"provisioning must report the kid as a plain string -- a str cannot carry a PEM; got {kid!r}"
+            )
+            row = uow.signing_keys.get_by_kid(kid)
+            assert row is not None, f"the mint reported kid {kid!r} that the repository cannot read back"
+            ref = row.private_key_ref
+            material = row.private_key_pem_encrypted
+
+        assert ref == f"db:{kid}", f"the only mintable locator is the row's own ciphertext by kid; got {ref!r}"
+        assert material, (
+            "a minted key with no material on the row is a published key nothing can sign with: "
+            f"private_key_pem_encrypted was {material!r}"
+        )
+        assert bytes(material).startswith(_ENCRYPTED_PEM_HEADER), (
+            f"and it must be the ENCRYPTED PEM -- there is no plaintext fallback; got {bytes(material)[:40]!r}"
+        )
+
+
 class TestForbiddenRefSchemeRefusesBeforeAnyKeyMaterialExists:
     """The deployment's allowed-scheme gate must run at MINT time, not only at read."""
 

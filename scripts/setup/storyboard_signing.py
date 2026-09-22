@@ -527,7 +527,7 @@ def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
         print("   tenant signing key already present")
         return
     try:
-        provisioned = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
+        minted_kid = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
     except AdCPSalesAgentError as exc:
         # NON-FATAL, deliberately, and this is the difference between an enhancement and a
         # regression. `db:` minting refuses without a deployment KEK — correctly, since
@@ -540,7 +540,7 @@ def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
         print(f"   tenant signing key NOT minted ({type(exc).__name__}); JWKS stays empty")
         return
     session.flush()
-    print(f"   tenant signing key minted: {provisioned.row.kid}")
+    print(f"   tenant signing key minted: {minted_kid}")
 
 
 def _assert_account_resolves(session: Session, tenant_id: str, *, grantees: list[str]) -> None:

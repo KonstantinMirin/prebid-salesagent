@@ -14,8 +14,13 @@ make a host route.
 Usage::
 
     uv run python scripts/ops/provision_signing_key.py --tenant-id publisher_1
-    uv run python scripts/ops/provision_signing_key.py --tenant-id publisher_1 \\
-        --ref-scheme env --env-var-name ADCP_SIGNING_KEY_PEM
+    uv run python scripts/ops/provision_signing_key.py --tenant-id publisher_1 --alg es256
+
+There is no storage choice to make: a minted key's private half is an encrypted
+PEM on its own row, so this prints a kid and nothing else (salesagent-9misv). An
+operator who wants the private half outside Postgres provisions it out of band and
+points a ``file:`` row at it — which is why ``file:`` resolves but was never
+mintable.
 """
 
 from __future__ import annotations
@@ -29,7 +34,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from src.core.database.repositories.uow import SigningKeyUoW  # noqa: E402
 from src.core.exceptions import AdCPConfigurationError  # noqa: E402
 from src.core.signing.algorithms import SIGNING_ALG_VALUES  # noqa: E402
-from src.core.signing.keys import MINTABLE_REF_SCHEMES, provision_signing_key  # noqa: E402
+from src.core.signing.keys import provision_signing_key  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,20 +45,6 @@ def _parser() -> argparse.ArgumentParser:
         default="ed25519",
         choices=SIGNING_ALG_VALUES,
         help="RFC 9421 signature algorithm (default: ed25519)",
-    )
-    parser.add_argument(
-        "--ref-scheme",
-        default="db",
-        choices=MINTABLE_REF_SCHEMES,
-        help=(
-            "Where the private half lives. db (default): encrypted on the key's own row, under the "
-            "deployment KEK. env: handed back once for the operator to export"
-        ),
-    )
-    parser.add_argument(
-        "--env-var-name",
-        default=None,
-        help="Environment variable the operator will export the PEM as (required for --ref-scheme env)",
     )
     return parser
 
@@ -91,25 +82,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         with SigningKeyUoW(args.tenant_id) as uow:
-            provisioned = provision_signing_key(
-                uow.signing_keys,
-                tenant_id=args.tenant_id,
-                alg=args.alg,
-                ref_scheme=args.ref_scheme,
-                env_var_name=args.env_var_name,
-            )
-            kid = provisioned.row.kid
-            handoff = provisioned.private_key_pem
+            kid = provision_signing_key(uow.signing_keys, tenant_id=args.tenant_id, alg=args.alg)
     except AdCPConfigurationError as exc:
         print(f"Could not provision a signing key for {args.tenant_id}: {_operator_reason(exc)}", file=sys.stderr)
         return 1
 
-    print(f"Provisioned signing key {kid} for tenant {args.tenant_id} ({args.alg}, {args.ref_scheme} storage).")
-    if handoff is not None:
-        # Printed ONCE and stored nowhere. Until the process running the signer
-        # has this exported, the published JWK has no resolvable private half.
-        print(f"Export this PEM as {args.env_var_name} before the key signs anything:", file=sys.stderr)
-        print(handoff.decode(), file=sys.stderr)
+    # Nothing is printed to stderr, because there is nothing to hand over: the
+    # private half is an encrypted PEM on the row (salesagent-9misv).
+    print(f"Provisioned signing key {kid} for tenant {args.tenant_id} ({args.alg}, db storage).")
     return 0
 
 
