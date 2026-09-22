@@ -253,11 +253,19 @@ def provision_key(
     return row
 
 
+#: The test deployment's KEK, and the ONE spelling of it. ``SigningKeyFactory``
+#: encrypts the PEM it stores under this same value, so a factory-built row and a
+#: production-minted row open under the same configured passphrase — a second copy
+#: of this literal is how those two drift into "resolvable" and "not".
+TEST_KEK_VARIABLE = "SALESAGENT_TEST_SIGNING_KEK"
+TEST_KEK_PASSPHRASE = b"correct-horse-battery-staple"
+
+
 @contextmanager
-def deployment_kek(monkeypatch: Any, name: str = "SALESAGENT_TEST_SIGNING_KEK") -> Iterator[None]:
+def deployment_kek(monkeypatch: Any, name: str = TEST_KEK_VARIABLE) -> Iterator[None]:
     """Configure the one deployment-wide KEK for the duration of a test.
 
-    ``db:`` minting REFUSES without it — there is no plaintext fallback — so every
+    Minting REFUSES without it — there is no plaintext fallback — so every
     suite that provisions a key through production needs this. ``key_passphrase``
     is resolved from the environment on every use
     (``SigningSettings.secret_from_env``, deliberately uncached), but the
@@ -272,7 +280,7 @@ def deployment_kek(monkeypatch: Any, name: str = "SALESAGENT_TEST_SIGNING_KEK") 
     rename to ``_settings``.
     """
     monkeypatch.setenv("ADCP_SIGNING_KEY_PASSPHRASE_ENV", name)
-    monkeypatch.setenv(name, "correct-horse-battery-staple")
+    monkeypatch.setenv(name, TEST_KEK_PASSPHRASE.decode())
     monkeypatch.setattr("src.core.config._settings", None)
     yield
 

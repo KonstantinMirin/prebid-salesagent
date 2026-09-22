@@ -54,7 +54,6 @@
             <th>Key ID</th>
             <th>Algorithm</th>
             <th>Purpose</th>
-            <th>Storage</th>
             <th>Status</th>
             <th>Not before</th>
             <th></th>
@@ -66,7 +65,6 @@
             <td class="kid">{{ key.kid }}</td>
             <td>{{ key.alg }}</td>
             <td>{{ key.purpose }}</td>
-            <td>{{ key.private_key_ref.split(':')[0] }}</td>
             <td>
                 {% if key.revoked_at %}
                 <span class="status-badge status-revoked">revoked {{ key.revoked_at }}</span>

@@ -3,10 +3,10 @@
 Written TDD RED and now green: the first six groups grade the provisioning
 transports the ticket built -- the admin blueprint
 (``src/admin/blueprints/signing_keys.py``, design step 5), the scripted path
-(``scripts/ops/provision_signing_key.py``, step 6), the ``db:`` storage of
-``provision_signing_key`` plus the ``signing_keys.private_key_pem_encrypted``
-column (steps 1-3), and the KEK / ref-scheme gates (step 2). Each group names the
-production module it fails for, so a regression reports which one went away.
+(``scripts/ops/provision_signing_key.py``, step 6), the
+``signing_keys.private_key_pem_encrypted`` column that holds every minted private
+half (steps 1-3), and the KEK gate (step 2). Each group names the production
+module it fails for, so a regression reports which one went away.
 
 Core Invariant under test: every ``signing_keys`` row is born through exactly ONE
 function, which does not complete unless the private key behind the row resolves
@@ -48,12 +48,10 @@ What each group grades, and why it is written the way it is:
   writer" is not observable; a before/after snapshot of a sandboxed cwd + tempdir
   is.
 
-* **Both gates refuse BEFORE key material exists.** Minting with no KEK
+* **The KEK gate refuses BEFORE key material exists.** Minting with no KEK
   configured would silently degrade "encrypted PEM in Postgres" into "private
-  keys in the database"; minting a scheme this deployment forbids
-  (``SigningSettings.allowed_key_ref_schemes``, enforced at READ time only today)
-  persists and PUBLISHES a key the resolver will later refuse to load. Both must
-  leave no row -- and, through the admin surface, must be a flash error and never
+  keys in the database". It must leave no row -- and, through the admin surface,
+  must be a flash error and never
   a 5xx. A refusal carries no sentence of its own -- ``CODE_TABLE`` owns the
   buyer-facing text for ``CONFIGURATION_ERROR`` -- so the operator-actionable knob
   name travels in ``ConfigurationDetails.tracked_by`` and every assertion below
@@ -79,7 +77,7 @@ What each group grades, and why it is written the way it is:
   is the ROUTE causing it.
 
 * **The dev KEK ``docker compose`` supplies is all provisioning needs.**
-  ``db:`` minting refuses without a KEK, so a compose file that names no
+  Minting refuses without a KEK, so a compose file that names no
   passphrase variable gives an operator a signing-keys page that can only fail.
   The two settings are read OUT of ``docker-compose.yml`` and then used as the
   only signing configuration in the process, so removing or renaming them there
@@ -148,10 +146,6 @@ _COMPOSE_SERVICE = "adcp-server"
 #: deliberate consistent rename stays green while a broken pointer goes red.
 _KEK_POINTER_SETTING = "ADCP_SIGNING_KEY_PASSPHRASE_ENV"
 
-#: The scheme gate. ``db:`` is in the default, but several tests below narrow or
-#: widen it deliberately, so the ones that need the default spelled out say so.
-_SCHEMES_SETTING = "ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES"
-
 #: What ``generate_signing_keypair(passphrase=...)`` returns, verbatim. The
 #: ciphertext to store IS the PEM -- no envelope format, no encryption code.
 _ENCRYPTED_PEM_HEADER = b"-----BEGIN ENCRYPTED PRIVATE KEY-----"
@@ -216,20 +210,17 @@ def signing_tenant(integration_db, request) -> Any:
 
 @pytest.fixture
 def deployment_kek(monkeypatch) -> Iterator[None]:
-    """Configure the one deployment-wide KEK and allow the ``db:`` scheme.
+    """Configure the one deployment-wide KEK.
 
     The KEK half is DELEGATED to ``tests.helpers.signing.deployment_kek`` rather
     than re-spelled: every suite that provisions through production needs the same
     pointer-plus-variable pair, and a second copy is how one of them ends up
-    naming a passphrase variable nothing sets. Only the scheme gate is local,
-    because tests below narrow it on purpose.
 
     ``key_passphrase`` is resolved from the environment on EVERY use (deliberately
     uncached in production), but the ``Settings`` object that carries
     ``key_passphrase_env`` is a process global, so the cache is dropped here.
     """
     with _configure_deployment_kek(monkeypatch):
-        monkeypatch.setenv(_SCHEMES_SETTING, "db,env,file")
         _drop_cached_settings(monkeypatch)
         yield
 
@@ -410,11 +401,6 @@ class TestFullRoundTrip:
             "the stored bytes must be the ENCRYPTED PEM verbatim (no envelope format, no "
             f"hand-rolled encryption); got {bytes(ciphertext)[:40]!r}"
         )
-        assert row.private_key_ref == f"db:{kid}", (
-            "a db-scheme row is self-describing: the locator is the row's own kid, which is what "
-            f"makes a ref copied between rows detectable; got {row.private_key_ref!r}"
-        )
-
         served = _served_jwk(client, tenant, kid)
 
         provider = resolve_provider(
@@ -492,9 +478,9 @@ class TestNoKeyMaterialTouchesAFilesystem:
 
         rows = _rows(env, tenant.tenant_id)
         assert len(rows) == 2, f"both transports must have persisted a row; got {[row.kid for row in rows]}"
-        assert all(row.private_key_ref == f"db:{row.kid}" for row in rows), (
-            "every minted row references its own encrypted material in the database; got "
-            f"{[row.private_key_ref for row in rows]}"
+        assert all(row.private_key_pem_encrypted for row in rows), (
+            "every minted row carries its own encrypted material in the database; got "
+            f"{[(row.kid, bool(row.private_key_pem_encrypted)) for row in rows]}"
         )
 
         self._assert_the_route_audited_without_leaking_the_key(audit_dir, tenant.tenant_id, rows)
@@ -568,7 +554,6 @@ class TestMintingRefusesWithoutAKek:
         """
         env, tenant, client = signing_tenant
         monkeypatch.delenv(_KEK_POINTER_SETTING, raising=False)
-        monkeypatch.setenv(_SCHEMES_SETTING, "db,env,file")
         _drop_cached_settings(monkeypatch)
 
         response = _provision_via_admin_route(authenticated_admin_client, tenant.tenant_id)
@@ -707,46 +692,14 @@ class TestProvisioningHandsBackNoKeyMaterial:
             )
             row = uow.signing_keys.get_by_kid(kid)
             assert row is not None, f"the mint reported kid {kid!r} that the repository cannot read back"
-            ref = row.private_key_ref
             material = row.private_key_pem_encrypted
 
-        assert ref == f"db:{kid}", f"the only mintable locator is the row's own ciphertext by kid; got {ref!r}"
         assert material, (
             "a minted key with no material on the row is a published key nothing can sign with: "
             f"private_key_pem_encrypted was {material!r}"
         )
         assert bytes(material).startswith(_ENCRYPTED_PEM_HEADER), (
             f"and it must be the ENCRYPTED PEM -- there is no plaintext fallback; got {bytes(material)[:40]!r}"
-        )
-
-
-class TestForbiddenRefSchemeRefusesBeforeAnyKeyMaterialExists:
-    """The deployment's allowed-scheme gate must run at MINT time, not only at read."""
-
-    def test_no_row_when_the_deployment_forbids_the_requested_scheme(
-        self, signing_tenant, deployment_kek, authenticated_admin_client, monkeypatch
-    ):
-        """A scheme this deployment will not resolve must not reach the database.
-
-        ``_resolve_key_ref`` enforces ``allowed_key_ref_schemes`` at READ time
-        only, so today a row can be persisted AND PUBLISHED whose private half the
-        resolver will refuse to load -- a published key with no signable private
-        half, detected only when signatures start being rejected. The gate belongs
-        before ``generate_signing_keypair``, so the failure leaves no row and
-        nothing published.
-        """
-        env, tenant, client = signing_tenant
-        monkeypatch.setenv(_SCHEMES_SETTING, "env")
-        _drop_cached_settings(monkeypatch)
-
-        _provision_via_admin_route(authenticated_admin_client, tenant.tenant_id, ref_scheme="db")
-
-        assert _rows(env, tenant.tenant_id) == [], (
-            "minting a ref scheme the deployment forbids must refuse BEFORE any key material "
-            f"exists -- no row; got {[row.private_key_ref for row in _rows(env, tenant.tenant_id)]}"
-        )
-        assert _kids(_get_document(client, _JWKS_PATH, tenant)["keys"]) == set(), (
-            "and nothing may be published: publication must never outrun resolvability"
         )
 
 
@@ -1012,18 +965,10 @@ class TestComposeProvisionsWithNoOperatorAction:
         kek_variable = service_env[_KEK_POINTER_SETTING]
         assert service_env.get(kek_variable), (
             f"{_KEK_POINTER_SETTING} names {kek_variable!r}, but the compose file gives that variable "
-            f"no value -- key_passphrase resolves to None and db: minting refuses. Renaming the KEK "
+            f"no value -- key_passphrase resolves to None and minting refuses. Renaming the KEK "
             f"variable means renaming it in both places; got {sorted(service_env)}"
         )
-        assert _SCHEMES_SETTING not in service_env, (
-            "compose sets no scheme override, so the dev stack depends on the DEFAULT permitting "
-            "db: -- which since salesagent-9misv item 3 is the whole of it, "
-            "SigningSettings.allowed_key_ref_schemes == 'db'. If compose starts overriding it, "
-            "this test stops grading the default and must be rewritten rather than relaxed"
-        )
-
         # Exactly the compose pair, and nothing this suite would otherwise leave behind.
-        monkeypatch.delenv(_SCHEMES_SETTING, raising=False)
         monkeypatch.setenv(_KEK_POINTER_SETTING, kek_variable)
         monkeypatch.setenv(kek_variable, service_env[kek_variable])
         _drop_cached_settings(monkeypatch)

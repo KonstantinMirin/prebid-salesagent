@@ -411,11 +411,11 @@ class SigningSettings(BaseSettings):
     POSTURE is per-tenant in both directions and never here — inbound in the tenant's
     declaration (:class:`src.core.signing.posture.RequestSigningPosture`), outbound in
     :class:`src.core.signing.posture.WebhookSigningPosture` and the tenant's ``signing_keys``
-    rows. The split the key fields encode: the STORE KIND is agent-level (one process, one
-    key store), while each key's LOCATION is per-tenant and lives on the ``signing_keys``
-    row's ``private_key_ref``. Each tenant is a distinct seller identity with its own brand
-    domain and therefore its own key material, so a single agent-level key location is
-    unimplementable.
+    rows. Nothing here says WHERE a key is stored, because there is no choice to make:
+    the private half is the encrypted PEM on the ``signing_keys`` row. What is
+    agent-level is the KEK that opens every one of them (``key_passphrase_env``); the
+    keys themselves are per-tenant because each tenant is a distinct seller identity
+    with its own brand domain.
     """
 
     # ``env_ignore_empty`` matches ``_ENV``, which every other settings class here uses. It is
@@ -431,20 +431,6 @@ class SigningSettings(BaseSettings):
     provider: Literal["in_memory", "kms"] = Field(
         default="in_memory",
         description="SigningProvider implementation: in_memory (default) or kms",
-    )
-    allowed_key_ref_schemes: str = Field(
-        default="db",
-        description=(
-            "Comma-separated private_key_ref schemes this deployment will RESOLVE, enforced at "
-            "read time by assert_ref_scheme_allowed. Default: db — the encrypted PEM on the "
-            "signing_keys row, and the only scheme this agent mints. "
-            "env: and file: remain implemented and resolvable, but a deployment must OPT IN by "
-            "naming them, e.g. ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES=db,env,file. A deployment "
-            "holding env:/file: rows that does not set this will stop resolving them, and those "
-            "keys will stop signing (salesagent-9misv). "
-            "env: a PEM handed to the process by the orchestrator, for single-tenant deployments. "
-            "file: read-only, for material someone else provisioned onto a mounted secret"
-        ),
     )
     key_passphrase_env: str | None = Field(
         default=None,
@@ -562,16 +548,6 @@ class SigningSettings(BaseSettings):
         return [keyid.strip() for keyid in self.revoked_keyids.split(",") if keyid.strip()]
 
     @property
-    def key_ref_scheme_list(self) -> list[str]:
-        """Allowed ``private_key_ref`` schemes as a list.
-
-        A comma-joined ``str`` for the same reason as :attr:`revoked_keyid_list`. This is the
-        gate that lets a deployment forbid ``file:`` in production — the one field least worth
-        making awkward to set.
-        """
-        return [scheme.strip() for scheme in self.allowed_key_ref_schemes.split(",") if scheme.strip()]
-
-    @property
     def key_passphrase(self) -> bytes | None:
         """Resolve the configured PEM passphrase, or None.
 
@@ -592,9 +568,8 @@ class SigningSettings(BaseSettings):
 
         It cannot be a settings FIELD, which is why the rule needs a named bend rather than
         another entry: the variable's NAME is operator data, not a fact this module knows.
-        ``key_passphrase_env`` names it for the PEM passphrase, and a signing key's
-        ``private_key_ref`` of the form ``env:SOME_VAR`` names it per key row
-        (``src/core/signing/provider.py``). A field per possible name is not expressible.
+        ``key_passphrase_env`` names it for the PEM passphrase, and a field per possible
+        name is not expressible.
 
         Read per call rather than cached: CPython cannot zero a ``bytes``, so the SDK's
         guidance is to source key material per use rather than pin a literal in process

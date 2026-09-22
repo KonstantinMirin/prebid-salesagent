@@ -625,22 +625,14 @@ def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, 
     (``_provider_cache``) — cache success, never errors, so a later-fixed KEK is retried
     on the next call rather than pinned as permanently unresolvable.
 
-    ``env:`` / ``file:`` refs are resolved by the process's own environment or mount at
-    use time and carry no KEK of ours, so their resolvability is not knowable here —
-    they are taken at face value, exactly as before.
-
-    Matched on the scheme PREFIX rather than through ``parse_key_ref``, which RAISES on a
-    malformed reference. This function answers "what may this tenant honestly declare",
-    and it is called on the capabilities read path and on the admin setup checklist:
-    turning a malformed row into an exception there would fail discovery for a fault that
-    belongs to resolution, which reports it loudly at the point of use.
+    Every row is checked, because every row's private half is the ciphertext on it:
+    there is no other place a key can live and so no row whose resolvability is
+    unknowable from here.
     """
     from src.core.config import get_settings
     from src.core.exceptions import AdCPConfigurationError
-    from src.core.signing.provider import DB_SCHEME, resolve_signing_material
+    from src.core.signing.provider import resolve_signing_material
 
-    if not (row.private_key_ref or "").startswith(f"{DB_SCHEME}:"):
-        return True
     if get_settings().signing.key_passphrase is None:
         logger.warning(
             "Tenant %s holds ACTIVE signing key %s whose private half is encrypted under the "

@@ -2752,26 +2752,19 @@ class SigningKey(Base):
     """An RFC 9421 signing key this tenant owns (#1291 A2, salesagent-z6nr.8).
 
     Each tenant is a distinct seller identity with its own brand domain, so key
-    material is per-tenant. One row binds a unique ``kid`` to the public JWK we
-    publish AND to a reference the process resolves for the private half it never
-    stores — so the key we sign with, the key we publish, and the key material on
-    disk cannot silently disagree.
+    material is per-tenant. One row binds a unique ``kid`` to BOTH halves of the
+    key — the public JWK we publish and the encrypted private half — so the key we
+    sign with and the key we publish cannot silently disagree.
 
-    ``private_key_ref`` is a scheme-prefixed opaque reference (``db:<kid>``,
-    ``env:NAME``, ``file:/abs/path``), never key material. Which schemes resolve
-    is an agent-level posture (``SigningSettings.allowed_key_ref_schemes``), so a
-    deployment can forbid ``file:`` without touching tenant rows.
-
-    ``db:`` is the scheme this agent MINTS, and ``private_key_pem_encrypted`` is
-    where its private half lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
-    exactly as ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned
-    it, encrypted under the deployment KEK
-    (``SigningSettings.key_passphrase_env``). No envelope format and no encryption
-    code of ours sits between the two — the ciphertext IS the PEM. The column is
-    nullable because ``env:``/``file:`` rows point at material this process did
-    not write and must not copy; provisioning refuses ``db:`` outright when no
-    KEK is configured, so a NULL here can never mean "plaintext key in the
-    database".
+    ``private_key_pem_encrypted`` is where the private half lives, and the only
+    place it ever lives: the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM exactly as
+    ``adcp.signing.generate_signing_keypair(passphrase=...)`` returned it,
+    encrypted under the deployment KEK (``SigningSettings.key_passphrase_env``).
+    No envelope format and no encryption code of ours sits between the two — the
+    ciphertext IS the PEM. The column is NOT NULL: a row that exists has material,
+    so a published key with no signable private half is unrepresentable rather
+    than merely unusual. Provisioning refuses outright when no KEK is configured,
+    so the column can never hold plaintext.
 
     ``not_before`` / ``not_after`` are OURS, not the spec's — the published
     ``agent-signing-key`` schema carries only ``revoked_at`` plus JWK members.
@@ -2797,8 +2790,7 @@ class SigningKey(Base):
     alg: Mapped[str] = mapped_column(String(50), nullable=False)
     purpose: Mapped[str] = mapped_column(String(50), nullable=False, default=REQUEST_SIGNING)
     public_jwk: Mapped[dict] = mapped_column(JSONType, nullable=False)
-    private_key_ref: Mapped[str] = mapped_column(Text, nullable=False)
-    private_key_pem_encrypted: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    private_key_pem_encrypted: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -2844,7 +2836,6 @@ class SigningKey(Base):
             f"kid='{self.kid}', "
             f"alg='{self.alg}', "
             f"purpose='{self.purpose}', "
-            f"private_key_ref='***', "
             f"not_before={self.not_before}, "
             f"not_after={self.not_after}, "
             f"revoked_at={self.revoked_at}"

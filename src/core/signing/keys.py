@@ -7,23 +7,17 @@ already byte-shape-identical to the publication shape the spec mandates. We
 assemble no JWK and touch no curve.
 
 What this module owns is the part the SDK deliberately leaves to the caller:
-where the private half goes, and how the row that references it is written.
+where the private half goes, and how the row that holds it is written.
 
-**The application writes key material to no filesystem, and hands none back.**
-There is ONE mintable scheme, ``db:``: the private half is stored on the row as
-the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+**The private half lives in the database, and nowhere else.** It is stored on the
+key's own row as the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
 ``generate_signing_keypair(passphrase=...)`` already returns, encrypted under the
 deployment KEK. The ciphertext IS the PEM — there is no envelope format here and
 no encryption code of ours.
 
-``env:`` and ``file:`` are READ-ONLY schemes: both still RESOLVE (see
-``_REF_RESOLVERS`` in :mod:`src.core.signing.provider`), so rows carrying them go
-on signing, but neither can be minted. ``file:`` never could — minting into it
-would write a private key to a filesystem. ``env:`` could until salesagent-9misv,
-and it was the one scheme that stored the private half nowhere and therefore had
-to hand the PEM back to its caller; the admin route then flashed that PEM into a
-client-side session cookie. Deleting the mint deletes the only way this module can
-produce private key material for anyone to mishandle.
+There is no storage choice to make, so there is no locator, no scheme and no
+setting: the application writes key material to no filesystem, reads none from
+the environment, and hands none back to a caller.
 
 This function is the ONE birth site for a ``signing_keys`` row, and it does not
 complete unless the private key behind the row resolves and round-trips to the
@@ -42,7 +36,7 @@ from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
 from src.core.signing.algorithms import REQUEST_SIGNING, keygen_alg, mint_kid, narrow_alg, narrow_purpose
-from src.core.signing.provider import DB_SCHEME, assert_pem_publishes_jwk, assert_ref_scheme_allowed
+from src.core.signing.provider import assert_pem_publishes_jwk
 
 
 def provision_signing_key(
@@ -71,10 +65,6 @@ def provision_signing_key(
     than an answer. A caller that wants the row reads it back — see
     ``tests.helpers.signing.provision_key``, which does exactly that.
 
-    ``env:`` and ``file:`` remain RESOLVABLE (``_REF_RESOLVERS`` in
-    :mod:`src.core.signing.provider`) so every row minted before this keeps
-    signing. What is gone is the ability to mint one.
-
     Pass *kid* to name the key explicitly; otherwise
     :func:`~src.core.signing.algorithms.mint_kid` names it. Either way it is
     OURS: the SDK's default kid documents itself as "collision-resistant within a
@@ -88,17 +78,14 @@ def provision_signing_key(
 
     Order of operations, and every step is a precondition for the next:
 
-    1. ``db:`` is one this DEPLOYMENT will resolve — checked BEFORE any key
-       material exists, because ``publishable_at`` is resolvability-blind and would
-       publish a row the resolver later refuses. A deployment whose
-       ``allowed_key_ref_schemes`` omits ``db`` must not mint at all, which is why
-       this check survives the collapse to one scheme;
-    2. minting requires the KEK, so the stored PEM is ciphertext;
-    3. the keypair is minted;
-    4. the private half is loaded back and re-derives the public JWK about to be
+    1. minting requires the KEK, so the stored PEM is ciphertext — checked BEFORE
+       any key material exists, because ``publishable_at`` is resolvability-blind
+       and would otherwise publish a row nothing can open;
+    2. the keypair is minted;
+    3. the private half is loaded back and re-derives the public JWK about to be
        stored (:func:`~src.core.signing.provider.assert_pem_publishes_jwk`), which
        also proves the KEK round-trips;
-    5. only then is the row created.
+    4. only then is the row created.
 
     Every refusal below is an ``AdCPConfigurationError`` carrying a typed
     :class:`~src.core.errors.details.ConfigurationDetails`: ``capability`` names the
@@ -138,8 +125,6 @@ def provision_signing_key(
     stored_alg = narrow_alg(alg)
     stored_purpose = narrow_purpose(purpose)
 
-    assert_ref_scheme_allowed(DB_SCHEME)
-
     now = datetime.now(UTC)
     kid = kid or mint_kid(tenant_id, now)
     if not kid:
@@ -159,13 +144,12 @@ def provision_signing_key(
     if passphrase is None:
         raise AdCPConfigurationError(
             details=ConfigurationDetails(
-                capability="private_key_ref",
-                rejected_value=DB_SCHEME,
+                capability="signing_key",
                 # The knob name lives HERE and nowhere else a caller can reach: CODE_TABLE's
                 # sentence names no knob, so an admin surface rendering only str(exc) would
                 # leave the operator with nothing to set.
                 tracked_by=(
-                    "Refusing to mint a db: signing key with no key encryption key configured: set "
+                    "Refusing to mint a signing key with no key encryption key configured: set "
                     "key_passphrase_env (ADCP_SIGNING_KEY_PASSPHRASE_ENV) to the name of the "
                     "environment variable holding the passphrase. There is no plaintext fallback — "
                     "storing an unencrypted PEM would turn 'encrypted PEM in Postgres' into "
@@ -193,15 +177,11 @@ def provision_signing_key(
         passphrase=passphrase,
     )
 
-    # The locator IS the row's own ciphertext by kid — written here, at the one
-    # place a ref is minted, which is what makes a ref copied between rows
-    # detectable at resolve time.
     repo.create_from_keypair(
         kid=kid,
         alg=stored_alg,
         purpose=stored_purpose,
         public_jwk=public_jwk,
-        private_key_ref=f"{DB_SCHEME}:{kid}",
         private_key_pem_encrypted=pem,
         not_before=now,
         not_after=None,
