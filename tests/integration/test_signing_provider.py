@@ -292,6 +292,119 @@ class TestInitTripwire:
             assert _verifies(row, asyncio.run(provider.sign(SIGNATURE_BASE)))
 
 
+class TestDefaultDeploymentResolvesOnlyDb:
+    """salesagent-9misv item 3 -- the DEFAULT deployment permits ``db:`` and nothing else.
+
+    READ-time enforcement, which is a different gate from the mint-time one:
+    ``assert_ref_scheme_allowed`` is called from ``_resolve_key_ref`` on the way
+    to the PEM, so what this decides is whether a row that ALREADY EXISTS resolves.
+
+    This is deployment-visible and BREAKING. A deployment holding ``env:`` or
+    ``file:`` rows that sets no override stops resolving them, and those keys stop
+    signing. Keeping them is one explicit variable --
+    ``ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES=db,env,file`` -- which the second test
+    below pins, because a break with no documented escape hatch is just a break.
+
+    ``_REF_RESOLVERS`` is untouched: ``env:`` and ``file:`` remain resolvable CODE.
+    What changed is whether a default deployment permits reaching them.
+    """
+
+    @pytest.mark.parametrize("scheme", ["env", "file"])
+    def test_a_non_db_row_is_refused_when_the_deployment_sets_no_override(self, integration_db, monkeypatch, scheme):
+        """No override configured: the scheme gate refuses before any material is read.
+
+        The assertion is on WHICH refusal, not merely that one happened, and that
+        distinction is the whole test. Both schemes already fail on the pre-change
+        default for an unrelated reason -- nothing exports the env var, and the
+        file is not on disk -- so a test that only asserted "resolution raises"
+        would pass before and after while grading nothing.
+
+        ``accepted_values`` is the discriminator: it is the deployment's own
+        allow-list, rendered by ``assert_ref_scheme_allowed`` into the typed
+        details. Before this change it reads ``["db", "env", "file"]`` and this
+        scheme is IN it, so the gate does not fire at all.
+        """
+        from src.core.exceptions import AdCPConfigurationError
+        from tests.factories import SigningKeyFactory, TenantFactory
+
+        tenant_id = f"sk_default_{scheme}"
+        with BareIntegrationEnv() as env:
+            tenant = TenantFactory(tenant_id=tenant_id)
+            SigningKeyFactory(
+                tenant=tenant,
+                kid=f"adcp-legacy-{scheme}",
+                private_key_ref=f"{scheme}:ADCP_SIGNING_LEGACY_KEY" if scheme == "env" else f"{scheme}:/tmp/legacy.pem",
+            )
+            # Deliberately NOT set: this test is about what a deployment that
+            # configures nothing permits.
+            monkeypatch.delenv("ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES", raising=False)
+            monkeypatch.setattr("src.core.config._settings", None)
+
+            with pytest.raises(AdCPConfigurationError) as refusal:
+                resolve_provider(signing_key_repo(env, tenant_id), tenant_id, now=just_after_provisioning())
+
+        details = refusal.value.details
+        assert details is not None, "a scheme refusal must carry typed ConfigurationDetails, not bare text"
+        assert details.accepted_values == ["db"], (
+            "the DEFAULT deployment must permit db: and nothing else -- if this reads "
+            f"['db', 'env', 'file'] the default was not flipped; got {details.accepted_values!r}"
+        )
+        assert details.rejected_value == scheme, (
+            f"and the refusal must name the scheme it refused; got {details.rejected_value!r}"
+        )
+
+    @pytest.mark.parametrize("scheme", ["env", "file"])
+    def test_an_explicit_override_still_permits_the_legacy_schemes(self, integration_db, monkeypatch, scheme):
+        """The escape hatch works, so the break is opt-out rather than a dead end.
+
+        A deployment that still holds ``env:``/``file:`` rows keeps them by naming
+        them. What proves the override WORKED is that resolution gets PAST the
+        allow-list and fails on the material instead: these rows have no material
+        behind them (nothing exports the variable, no file is mounted), so the
+        refusal must come from the resolver rather than the gate.
+
+        The two refusals are distinguished by ``accepted_values``, which only
+        ``assert_ref_scheme_allowed`` sets -- ``_read_env_ref`` and
+        ``_read_file_ref`` leave it ``None``. Asserting ``!= ["db"]`` alone would
+        be vacuous, since ``None != ["db"]`` holds however the call failed; the
+        pairing below is what makes it real: the SAME row under NO override must
+        refuse with the allow-list, and under the override must not.
+        """
+        from src.core.exceptions import AdCPConfigurationError
+        from tests.factories import SigningKeyFactory, TenantFactory
+
+        tenant_id = f"sk_override_{scheme}"
+        ref = f"{scheme}:ADCP_SIGNING_LEGACY_KEY" if scheme == "env" else f"{scheme}:/tmp/legacy.pem"
+
+        def _refusal_details(allowed: str | None):
+            with BareIntegrationEnv() as env:
+                tenant = TenantFactory(tenant_id=f"{tenant_id}_{allowed or 'default'}".replace(",", ""))
+                SigningKeyFactory(tenant=tenant, kid=f"adcp-kept-{scheme}", private_key_ref=ref)
+                if allowed is None:
+                    monkeypatch.delenv("ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES", raising=False)
+                else:
+                    monkeypatch.setenv("ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES", allowed)
+                monkeypatch.setattr("src.core.config._settings", None)
+                with pytest.raises(AdCPConfigurationError) as refusal:
+                    resolve_provider(
+                        signing_key_repo(env, tenant.tenant_id), tenant.tenant_id, now=just_after_provisioning()
+                    )
+            return refusal.value.details
+
+        gated = _refusal_details(None)
+        permitted = _refusal_details("db,env,file")
+
+        assert gated is not None and gated.accepted_values == ["db"], (
+            "control: with no override the SAME row must be refused by the allow-list, otherwise "
+            f"this test cannot tell the override apart from nothing; got {gated and gated.accepted_values!r}"
+        )
+        assert permitted is not None and permitted.accepted_values is None, (
+            "with the override set, resolution must get PAST the allow-list and fail on the missing "
+            f"material instead -- only the scheme gate populates accepted_values; got "
+            f"{permitted and permitted.accepted_values!r}"
+        )
+
+
 class TestRevocationBeatsTheProviderCache:
     """A revoked key stops resolving IMMEDIATELY — inside the 60s cache window.
 

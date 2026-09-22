@@ -1016,8 +1016,9 @@ class TestComposeProvisionsWithNoOperatorAction:
             f"variable means renaming it in both places; got {sorted(service_env)}"
         )
         assert _SCHEMES_SETTING not in service_env, (
-            "compose sets no scheme override, so the dev stack depends on db: being in "
-            "SigningSettings.allowed_key_ref_schemes BY DEFAULT. If compose starts overriding it, "
+            "compose sets no scheme override, so the dev stack depends on the DEFAULT permitting "
+            "db: -- which since salesagent-9misv item 3 is the whole of it, "
+            "SigningSettings.allowed_key_ref_schemes == 'db'. If compose starts overriding it, "
             "this test stops grading the default and must be rewritten rather than relaxed"
         )
 

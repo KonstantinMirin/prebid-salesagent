@@ -433,10 +433,15 @@ class SigningSettings(BaseSettings):
         description="SigningProvider implementation: in_memory (default) or kms",
     )
     allowed_key_ref_schemes: str = Field(
-        default="db,env,file",
+        default="db",
         description=(
-            "Comma-separated private_key_ref schemes this deployment will resolve. "
-            "db: the encrypted PEM on the signing_keys row — the only scheme this agent MINTS. "
+            "Comma-separated private_key_ref schemes this deployment will RESOLVE, enforced at "
+            "read time by assert_ref_scheme_allowed. Default: db — the encrypted PEM on the "
+            "signing_keys row, and the only scheme this agent mints. "
+            "env: and file: remain implemented and resolvable, but a deployment must OPT IN by "
+            "naming them, e.g. ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES=db,env,file. A deployment "
+            "holding env:/file: rows that does not set this will stop resolving them, and those "
+            "keys will stop signing (salesagent-9misv). "
             "env: a PEM handed to the process by the orchestrator, for single-tenant deployments. "
             "file: read-only, for material someone else provisioned onto a mounted secret"
         ),
