@@ -561,8 +561,7 @@ def _jsonrpc_body(response: Any, *, surface: str) -> dict[str, Any]:
             return response.json()
         except ValueError as exc:
             raise WireRefusal(
-                f"{surface} returned HTTP {response.status_code} with a non-JSON body: "
-                f"{response.text[:800]!r}",
+                f"{surface} returned HTTP {response.status_code} with a non-JSON body: {response.text[:800]!r}",
                 response,
             ) from exc
 

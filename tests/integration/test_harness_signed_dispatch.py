@@ -390,7 +390,7 @@ def test_a_refusal_carries_its_envelope_on_every_leg(integration_db, transport):
     error = envelope.get("adcp_error") or {}
     assert error.get("code") == "request_signature_required", (
         f"the envelope must name the SAME refusal the challenge named, got {error.get('code')!r} "
-        f"beside WWW-Authenticate: Signature error=\"request_signature_required\" — one refusal "
+        f'beside WWW-Authenticate: Signature error="request_signature_required" — one refusal '
         f"reaching the buyer as two different codes is the defect asserting either alone hides"
     )
     expected = CODE_TABLE[CODE_BY_VALUE["request_signature_required"]].recovery
