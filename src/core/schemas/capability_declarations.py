@@ -20,6 +20,7 @@ model whose ``validate_backing()`` raises ``AdCPConfigurationError`` rather than
 silently clamping or emitting a non-conformant response.
 """
 
+import logging
 from collections.abc import Collection, Iterable
 from enum import Enum
 from typing import Any, NamedTuple
@@ -160,6 +161,12 @@ def _reject_mixed_namespaces(declared: Any) -> None:
 # wholesale_feed_webhooks has no field on the model either -- it is listed here so the
 # operator learns why rather than reading pydantic's generic extra-field error, and
 # because it is the third ``must_equal_when`` trigger.
+logger = logging.getLogger(__name__)
+
+#: Blocks this deployment cannot back, and WHY -- an issue number plus what is missing.
+#: Operator-facing only: these sentences are LOGGED at the refusal, never carried in the
+#: error's ``details``, because ``from_tenant`` parses on the request path and an
+#: unauthenticated caller would receive them.
 _UNBACKED_BLOCKS: dict[str, str] = {
     "content_standards": (
         "#1855 (no content-standards surface exists in this deployment: nothing implements local "
@@ -453,11 +460,25 @@ class CapabilityDeclarations(BaseModel):
         # error, so the operator learns WHICH block they cannot declare and why.
         # Unbacked first: "we do not implement this" is the more fundamental answer
         # than "this one is ours to derive".
+        #
+        # THE REASON IS LOGGED, NOT WIRED. ``from_tenant`` is the parse boundary of the
+        # request path -- ``posture_for_tenant`` calls it on every request and
+        # ``get_adcp_capabilities`` parses the same store -- so anything in ``details``
+        # here reaches an UNAUTHENTICATED caller. ``_UNBACKED_BLOCKS`` values name an
+        # internal issue number and enumerate what this deployment does not implement,
+        # which is operator remediation and reconnaissance both. ``block`` alone tells the
+        # buyer which declaration is refused, which is all they can act on;
+        # ``src/core/signing/provider.py`` quotes the spec section that forbids the rest.
         for block in sorted(_UNBACKED_BLOCKS):
             if block in declared:
+                logger.warning(
+                    "Tenant declared the unbacked capability block %r, which this deployment cannot back: %s",
+                    block,
+                    _UNBACKED_BLOCKS[block],
+                )
                 raise AdCPConfigurationError(
                     field=f"capability_declarations.{block}",
-                    details=ConfigurationDetails(block=block, tracked_by=_UNBACKED_BLOCKS[block]),
+                    details=ConfigurationDetails(block=block),
                 )
         # Same shape, same axes, a different reason string: ``tracked_by`` carries WHY the
         # block cannot be declared, which for a derived block is "this agent emits the

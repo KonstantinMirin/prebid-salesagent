@@ -44,7 +44,7 @@ import json
 import pytest
 
 from src.core.exceptions import AdCPConfigurationError
-from src.core.schemas.capability_declarations import CapabilityDeclarations
+from src.core.schemas.capability_declarations import _UNBACKED_BLOCKS, CapabilityDeclarations
 from tests.helpers.envelope_assertions import assert_envelope_shape, envelope_for
 
 
@@ -140,3 +140,45 @@ class TestDisjointnessNamesTheDeclaredNamespace:
         wire = _wire_text(envelope)
         assert "request_signing.warn_for" not in wire
         assert "request_signing.required_for" not in wire
+
+
+@pytest.mark.parametrize("block", sorted(_UNBACKED_BLOCKS))
+def test_an_unbacked_block_refusal_discloses_no_internal_tracking(block: str) -> None:
+    """The refusal names the block and nothing else this deployment knows about itself.
+
+    ``from_tenant`` is the parse boundary of the REQUEST path -- ``posture_for_tenant``
+    calls it on every request and ``get_adcp_capabilities`` parses the same store -- so
+    whatever lands in ``details`` here is served to an UNAUTHENTICATED caller. The
+    ``_UNBACKED_BLOCKS`` sentences are operator remediation: an internal issue number plus
+    an enumeration of what this deployment does not implement. Both halves are
+    reconnaissance, and the issue number resolves to a tracker the buyer cannot read.
+
+    So the sentence is LOGGED at the refusal and the envelope carries ``block`` alone,
+    which is the only part a buyer can act on -- they removed a block this seller refuses.
+    ``src/core/signing/provider.py`` quotes the spec section forbidding the rest, and
+    before this the two arms of one change disagreed about it.
+
+    Parametrized over the table rather than over three literals: a fourth unbacked block
+    added later is covered by construction, which is the whole reason the table exists.
+    """
+    with pytest.raises(AdCPConfigurationError) as caught:
+        CapabilityDeclarations.from_tenant({block: {"anything": True}})
+
+    envelope = envelope_for(caught.value)
+    assert_envelope_shape(
+        envelope,
+        "CONFIGURATION_ERROR",
+        recovery="terminal",
+        field=f"capability_declarations.{block}",
+        details={"block": block},
+    )
+
+    wire = _wire_text(envelope)
+    assert _UNBACKED_BLOCKS[block] not in wire, (
+        f"the operator sentence for {block!r} reached the buyer verbatim: {wire}"
+    )
+    for fragment in ("#", "no ", "implement"):
+        leaked = [
+            part for part in _UNBACKED_BLOCKS[block].split() if fragment in part and part in wire and len(part) > 3
+        ]
+        assert not leaked, f"{block!r} leaked {leaked!r} from its operator sentence into {wire}"

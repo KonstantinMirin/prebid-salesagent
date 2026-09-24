@@ -276,11 +276,22 @@ def posture_for_tenant(tenant: TenantContext | None) -> RequestSigningPosture:
     try:
         declarations = CapabilityDeclarations.from_tenant(tenant.capability_declarations)
     except AdCPSalesAgentError as exc:
+        # ``exc.details``, NOT ``str(exc)``. After ADR-010 the message is CODE_TABLE's
+        # sentence for CONFIGURATION_ERROR -- "Configuration error" -- which names no block
+        # and no axis, so the one log line that reports a SILENTLY UNENFORCED posture said
+        # nothing an operator could act on. The typed details carry the block.
+        #
+        # It still fails open, and that is the narrower of two bad answers rather than a
+        # good one: promoting an unreadable declaration to ``required`` would turn a config
+        # typo into a 401 on every AdCP surface. The real fix is that an unreadable
+        # declaration should not be storable -- validate on write, so this parse cannot
+        # fail on the request path at all. Tracked separately; this line only makes the
+        # current behaviour diagnosable.
         logger.warning(
             "Tenant %r has an unreadable capability declaration, so its request_signing posture "
-            "cannot be resolved and nothing is enforced for it: %s",
+            "cannot be resolved and NOTHING IS ENFORCED for it: %s",
             tenant.tenant_id,
-            exc,
+            exc.details,
         )
         return UNSUPPORTED_POSTURE
     return posture_from_declarations(declarations)
