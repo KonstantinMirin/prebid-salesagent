@@ -4,7 +4,11 @@ Tests the is_responsive, name_search, asset_types, and dimension filters
 that were added to match the AdCP spec.
 """
 
+from unittest.mock import patch
+
 from src.core.schemas import FormatId, ListCreativeFormatsRequest
+from src.core.tenant_context import TenantContext
+from tests.factories import TenantFactory
 from tests.helpers.capture_wrapper_req import mcp_tool, registry_impl
 
 DEFAULT_AGENT_URL = "https://creative.adcontextprotocol.org"
@@ -138,7 +142,15 @@ class TestListCreativeFormatsMCPToolSignature:
             seen["req"] = req
             return ListCreativeFormatsResponse(formats=[])
 
-        with registry_impl("list_creative_formats", _impl):
+        # The boundary resolves a tenant for every request -- two database reads, the id
+        # from the headers and then the row -- and this unit test has no database, so both
+        # are answered here. What the DTO carries, which is the subject, is untouched by
+        # which tenant it is.
+        with (
+            registry_impl("list_creative_formats", _impl),
+            patch("src.core.config_loader.tenant_id_for", return_value="test-tenant"),
+            patch.object(TenantContext, "load", return_value=TenantFactory.make_tenant(tenant_id="test-tenant")),
+        ):
             await mcp_tool("list_creative_formats")(format_ids=format_ids)
 
         req = seen["req"]

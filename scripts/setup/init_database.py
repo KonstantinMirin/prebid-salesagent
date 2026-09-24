@@ -105,6 +105,11 @@ def init_db(exit_on_error=False):
                 tenant_id="default",
                 name="Default Publisher",
                 subdomain="default",  # Proper subdomain routing
+                # Bare `localhost:8080` reaches this tenant through the ordinary Host
+                # strategy, the same one every other tenant uses. `default.localhost:8080`
+                # keeps working through the subdomain strategy. The id is just a name:
+                # nothing in the resolver treats this tenant differently from any other.
+                virtual_host="localhost",
                 is_active=True,
                 billing_plan="standard",
                 ad_server="mock",

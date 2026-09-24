@@ -45,6 +45,7 @@ class TestCapabilitiesRestPostRoute:
             response = client.post(
                 "/api/v1/capabilities",
                 json={"context": {"request_id": "buyer-echo-123"}},
+                headers=env.credential(),
             )
 
             assert response.status_code == 200, (

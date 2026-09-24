@@ -172,8 +172,7 @@ class BaseWorkflowManager:
             action_details: Details about the workflow step
         """
         try:
-            tenant = TenantContext.load(self.tenant_id)
-            slack_webhook_url = tenant.slack_webhook_url if tenant else None
+            slack_webhook_url = TenantContext.load(self.tenant_id).slack_webhook_url
 
             if not slack_webhook_url:
                 self.log("[yellow]No Slack webhook configured - skipping notification[/yellow]")

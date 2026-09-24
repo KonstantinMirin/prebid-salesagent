@@ -172,9 +172,10 @@ class TestBoundaryNegotiatesForEveryTool:
 
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
-        # Reached directly, past the boundary, the implementation just answers. The
-        # caller is anonymous and names no seller: a PublicIdentity with neither.
-        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_public_identity(tenant=None))
+        # Reached directly, past the boundary, the implementation just answers. The caller
+        # is anonymous -- a PublicIdentity with no principal -- which is all this needs:
+        # what it grades is that the impl does not negotiate, whoever asks.
+        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_public_identity())
         assert response.adcp.supported_versions is not None
 
 
@@ -183,15 +184,6 @@ class TestBuildAdcpBlockDry:
     across BOTH the no-tenant minimal response and the tenant-resolved full
     response -- no literal Adcp(...) duplication.
     """
-
-    def test_minimal_no_tenant_response_declares_derived_supported_versions(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-
-        assert response.adcp.supported_versions is not None
-        assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS
 
     def test_full_tenant_response_declares_same_derived_supported_versions(self):
         from src.core.tools.capabilities import _get_adcp_capabilities_impl

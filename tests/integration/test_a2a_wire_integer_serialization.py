@@ -40,6 +40,11 @@ class TestA2AHttpRouteIntegerRestoration:
         from src.app import app
 
         client = TestClient(app, raise_server_exceptions=False)
+
+        with CapabilitiesEnv() as env:
+            env.setup_default_data()
+            credential = env.credential()
+
         response = client.post(
             "/a2a",
             json={
@@ -56,7 +61,7 @@ class TestA2AHttpRouteIntegerRestoration:
                     }
                 },
             },
-            headers={"A2A-Version": "1.0"},
+            headers={"A2A-Version": "1.0", **credential},
         )
         assert response.status_code == 200, response.text
         body = response.json()

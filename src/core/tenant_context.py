@@ -61,17 +61,33 @@ class TenantContext(BaseModel):
     # --- Construction helpers ---
 
     @classmethod
-    def load(cls, tenant_id: str) -> "TenantContext | None":
-        """The tenant row for *tenant_id* from the database, or ``None`` when no such tenant.
+    def load(cls, tenant_id: str) -> "TenantContext":
+        """The tenant row for *tenant_id*. Raises when the id names no tenant.
 
         The one place a tenant is loaded by id. The resolver calls it for the tenant the
         request names; a background path that starts from a stored row's ``tenant_id``
         (delivery reporting for a media buy) calls it for the same reason.
+
+        An id that names no row is a FAULT on both paths, and the same one: the request
+        reached a host this seller does not serve, or a stored row points at a tenant that
+        no longer exists. Neither is a ``None`` a caller can do anything sensible with --
+        every answer this agent gives is per-tenant, so there is nothing to fall back to.
         """
         from src.core.config_loader import get_tenant_by_id
+        from src.core.errors.details import ConfigurationDetails
+        from src.core.exceptions import AdCPConfigurationError
 
         row = get_tenant_by_id(tenant_id)
-        return cls.from_dict(row) if row else None
+        if row is None:
+            raise AdCPConfigurationError(
+                details=ConfigurationDetails(
+                    tenant_id=tenant_id,
+                    capability="tenant",
+                    rejected_value=tenant_id,
+                    tracked_by="No tenant exists with this id. Check the host routing, or the stored tenant_id.",
+                ),
+            )
+        return cls.from_dict(row)
 
     @classmethod
     def from_orm_model(cls, tenant: Any) -> "TenantContext":

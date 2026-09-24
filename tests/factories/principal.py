@@ -69,6 +69,12 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
                 f"make_identity() got tenant overrides {', '.join(sorted(tenant_overrides))} "
                 "alongside an explicit tenant; set the fields on the TenantContext instead"
             )
+        if tenant is None:
+            raise TypeError(
+                "an identity always carries a tenant: capabilities, products and policy are all "
+                "per-tenant, so there is no answer to give without one. Name a tenant, or omit the "
+                "argument and take the factory's."
+            )
         if tenant is _UNSET:
             return TenantFactory.make_tenant(tenant_id=tenant_id, **tenant_overrides)
         if isinstance(tenant, Mapping):
@@ -158,8 +164,9 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         """The caller of a PUBLIC tool, anonymous by default, without DB persistence.
 
         ``principal_id=None`` (the default) is the anonymous caller; a string is a caller
-        whose credential resolved on a public tool. ``tenant=None`` is a request that named
-        no seller. The same override rules as ``make_identity`` apply.
+        whose credential resolved on a public tool -- that is the ONLY thing "public" means
+        here. The tenant is not optional on this type either: a request that named no seller
+        has no answer waiting for it. The same override rules as ``make_identity`` apply.
         """
         return PublicIdentity(
             principal=cls._principal_for(principal_id) if principal_id else None,

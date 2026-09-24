@@ -89,42 +89,6 @@ class TestRouteLandingPage:
         assert result.tenant is None
         assert result.effective_host == "unknown-domain.com"
 
-    @patch("src.core.domain_routing.get_tenant_by_subdomain")
-    @patch("src.core.domain_routing.extract_subdomain_from_host", return_value="mytenant")
-    @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=True)
-    def test_subdomain_with_tenant(self, mock_is_sales, mock_is_admin, mock_extract, mock_get_tenant):
-        """Sales-agent subdomains with tenant should route to type=subdomain."""
-        mock_get_tenant.return_value = {
-            "tenant_id": "mytenant",
-            "name": "My Tenant",
-            "subdomain": "mytenant",
-            "virtual_host": None,
-        }
-
-        headers = {"Host": "mytenant.sales-agent.example.com"}
-        result = route_landing_page(headers)
-
-        assert result.type == "subdomain"
-        assert result.tenant is not None
-        assert result.tenant["tenant_id"] == "mytenant"
-        assert result.effective_host == "mytenant.sales-agent.example.com"
-
-    @patch("src.core.domain_routing.get_tenant_by_subdomain")
-    @patch("src.core.domain_routing.extract_subdomain_from_host", return_value="nonexistent")
-    @patch("src.core.domain_routing.is_admin_domain", return_value=False)
-    @patch("src.core.domain_routing.is_sales_agent_domain", return_value=True)
-    def test_subdomain_without_tenant(self, mock_is_sales, mock_is_admin, mock_extract, mock_get_tenant):
-        """Sales-agent subdomains without tenant should route to type=subdomain with None tenant."""
-        mock_get_tenant.return_value = None
-
-        headers = {"Host": "nonexistent.sales-agent.example.com"}
-        result = route_landing_page(headers)
-
-        assert result.type == "subdomain"
-        assert result.tenant is None
-        assert result.effective_host == "nonexistent.sales-agent.example.com"
-
     def test_no_host_header(self):
         """Missing host header should route to type=unknown."""
         headers = {}

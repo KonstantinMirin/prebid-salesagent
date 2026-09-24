@@ -127,8 +127,7 @@ _SCHEMA_ROOT_ENV = "STORYBOARD_SCHEMA_ROOT"
 # tenant the request addresses, and nothing at this origin addresses one. `_detect_tenant`
 # (src/core/resolved_identity.py) tries the Host as a virtual_host and then its first label
 # as a subdomain; the stack seeds neither a virtual_host nor a `storyboard` subdomain
-# (scripts/setup/init_database_ci.py seeds `ci-test` and `iso-test`), and the
-# localhost-to-"default" fallback does not apply to a dotted alias. So no tenant was
+# (scripts/setup/init_database_ci.py seeds `ci-test` and `iso-test`). So no tenant was
 # identified, the token was looked up in none, and every credentialed step answered
 # AUTH_INVALID -> 401: 26 checks on run innet_140926_2318. (The A2A axis reports the same 26
 # steps failing one layer earlier, in the runner's own SSRF guard, so it is blocked on

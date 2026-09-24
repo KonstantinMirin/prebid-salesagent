@@ -8,7 +8,6 @@ ran as separate processes behind nginx.
 import asyncio
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
@@ -36,11 +35,9 @@ from src.admin.app import create_app
 from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
-from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
-from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
 from src.core.http_utils import path_from_asgi_scope
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
@@ -401,16 +398,6 @@ async def a2a_trailing_slash_redirect() -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
-_VALID_HOSTNAME_RE = re.compile(
-    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(\:\d{1,5})?$"
-)
-
-
-def _is_valid_hostname(value: str) -> bool:
-    """Validate that a string is a safe hostname (with optional port). Rejects path traversal and injection chars."""
-    return bool(value) and len(value) <= 253 and _VALID_HOSTNAME_RE.match(value) is not None
-
-
 def _card_with_url(server_url: str):
     """A copy of the static agent card advertising *server_url* as its interface."""
     dynamic_card = A2AAgentCard()
@@ -439,56 +426,24 @@ def _canonical_a2a_url(headers) -> str | None:
     return identity.endpoints["a2a"] if identity else None
 
 
-def _create_dynamic_agent_card(request: Request):
-    """Create agent card with the tenant's canonical A2A URL.
+def _create_dynamic_agent_card(request: Request) -> A2AAgentCard | None:
+    """The agent card advertising this tenant's canonical A2A URL, or None for no tenant.
 
-    When the Host routes to a tenant, the URL comes from that tenant's stored
-    host (:func:`canonical_agent_url`) — NOT from ``Apx-Incoming-Host`` /
-    ``Host`` / ``X-Forwarded-Proto``, which is the reverse-proxy routing state
-    security.mdx step 10 forbids deriving identity from. The header ladder below
-    survives only as the no-tenant fallback, where there is nothing stored to
-    read.
+    The URL is the tenant's STORED host (:func:`canonical_agent_url`), never a
+    value derived from the request's own routing headers: security.mdx step 10
+    forbids deriving identity from reverse-proxy state, and the card has to carry
+    the same string brand.json's A2A ``agents[].url`` does, byte for byte. Two
+    derivations would be two chances to disagree on a scheme, a port or a
+    trailing slash.
+
+    ``None`` when this Host serves no tenant. There is no card to build then: a card
+    describes a seller, and no seller was addressed. The caller renders that as a 404 --
+    the Host is wrong, which is not a fault of this deployment to report as one.
+    ``_card_with_url`` therefore never sees a ``None`` URL; it is typed ``str`` and the
+    branch is taken before it.
     """
-
-    def get_protocol(hostname: str) -> str:
-        # Prefer the scheme the edge proxy terminated and forwarded
-        # (X-Forwarded-Proto, set by our nginx) — the authoritative signal for the
-        # client-facing scheme. Fall back to a hostname heuristic only when the
-        # header is absent (e.g. direct, non-proxied access). This matches how the
-        # admin app already trusts X-Forwarded-Proto, and fixes the agent card
-        # advertising https for an http-only reverse proxy.
-        forwarded_proto = _get_header_case_insensitive(request.headers, "X-Forwarded-Proto")
-        if forwarded_proto:
-            # May be a comma-separated proxy chain; the first hop is client-facing.
-            proto = forwarded_proto.split(",")[0].strip().lower()
-            if proto in ("http", "https"):
-                return proto
-        return "http" if hostname.startswith("localhost") or hostname.startswith("127.0.0.1") else "https"
-
     server_url = _canonical_a2a_url(request.headers)
-    if server_url is not None:
-        return _card_with_url(server_url)
-
-    apx_incoming_host = _get_header_case_insensitive(request.headers, "Apx-Incoming-Host")
-    if apx_incoming_host and not _is_valid_hostname(apx_incoming_host):
-        logger.warning(f"Invalid Apx-Incoming-Host header value, ignoring: {apx_incoming_host!r}")
-        apx_incoming_host = None
-    if apx_incoming_host:
-        protocol = get_protocol(apx_incoming_host)
-        server_url = f"{protocol}://{apx_incoming_host}/a2a"
-    else:
-        host = _get_header_case_insensitive(request.headers, "Host") or ""
-        if host and not _is_valid_hostname(host):
-            logger.warning(f"Invalid Host header value, ignoring: {host!r}")
-            host = ""
-        sales_domain = get_sales_agent_domain()
-        if host and host != sales_domain:
-            protocol = get_protocol(host)
-            server_url = f"{protocol}://{host}/a2a"
-        else:
-            server_url = get_a2a_server_url() or "http://localhost:8080/a2a"
-
-    return _card_with_url(server_url)
+    return None if server_url is None else _card_with_url(server_url)
 
 
 # Override the SDK's static agent card endpoints with dynamic ones.
@@ -501,9 +456,11 @@ def _replace_routes():
     """Replace SDK agent card routes with dynamic versions that read request headers."""
 
     async def dynamic_agent_card(request: Request):
-        # to_thread: the card now reads the tenant's stored host from the
-        # database, and this endpoint is unauthenticated.
+        # to_thread: the card reads the tenant's stored host from the database, and
+        # this endpoint is unauthenticated.
         card = await asyncio.to_thread(_create_dynamic_agent_card, request)
+        if card is None:
+            return JSONResponse({"detail": "No agent is published at this host."}, status_code=404)
         return JSONResponse(agent_card_to_dict(card))
 
     replaced_paths: set[str] = set()
@@ -675,7 +632,7 @@ async def _handle_landing_page(request: Request):
     if result.type == "admin":
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    if result.type in ("custom_domain", "subdomain") and result.tenant:
+    if result.type == "custom_domain" and result.tenant:
         try:
             html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant, result.effective_host)
             return HTMLResponse(content=html_content)

@@ -140,11 +140,16 @@ class TestGetAdcpCapabilitiesImpl:
     """Test the _get_adcp_capabilities_impl function."""
 
     def test_impl_returns_response_without_context(self):
-        """Test that impl returns minimal response when no context is available."""
+        """The response shape when NO request object is sent, which is independent of the tenant.
+
+        The first argument is the request, not the caller: every assertion below is a
+        protocol-level fact (AdCP version, supported protocols, idempotency, specialisms)
+        that is the same for any seller.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        # Call without context - should return minimal response
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
+        # No request object — the tenant is ordinary and plays no part here.
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity())
 
         assert isinstance(response, GetAdcpCapabilitiesResponse)
         assert response.adcp is not None
@@ -163,7 +168,7 @@ class TestGetAdcpCapabilitiesImpl:
         """Test that impl response can be serialized to valid JSON."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
+        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity())
 
         # Should be able to serialize - use mode="json" for JSON-compatible output
         data = response.model_dump(mode="json")
@@ -693,13 +698,6 @@ class TestResponseShapeCapabilities:
     # case belongs to @T-UC-010-ext-a ("no_tenant - tenant absent, minimal capabilities"), which
     # is NOT COLLECTED at all, so nothing grades it.
 
-    def test_last_updated_absent_without_tenant(self):
-        """Response has no last_updated when no tenant context (minimal response)."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-        assert response.last_updated is None
-
     def test_features_defaults_with_tenant(self):
         """Features defaults: inline_creative_management=True, property_list_filtering=False.
 
@@ -737,16 +735,6 @@ class TestResponseShapeCapabilities:
         assert "features" in data["media_buy"]
         assert "execution" in data["media_buy"]
 
-    def test_minimal_response_no_media_buy(self):
-        """Minimal response (no tenant) omits media_buy from serialized output."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-        assert response.media_buy is None
-        data = response.model_dump(mode="json")
-        # media_buy is excluded from serialization when None
-        assert "media_buy" not in data
-
 
 class TestAccountBlockAndSigningDeclarations:
     """Pin the #1592 contract: account block + honest signing declarations.
@@ -766,29 +754,6 @@ class TestAccountBlockAndSigningDeclarations:
     signing keys plus trust-root publishability. What has NOT changed is that both are
     always PRESENT: an explicit false may become a different value, never silence.
     """
-
-    def test_no_tenant_response_omits_account_and_declares_the_agent_level_posture(self):
-        """No-tenant (minimal) path: account absent, both signing blocks present.
-
-        ``request_signing`` is an AGENT-level fact and stays honest with no tenant
-        resolved -- ``_resolve_identity`` really does verify for that caller, so a literal
-        false would under-declare it (#1291 D1). ``webhook_signing`` is the opposite case:
-        no tenant means no key, so false is the honest value. account stays absent
-        (BR-RULE-052 / ext-a: no tenant to derive billing/sandbox from).
-        """
-        from src.core.config import get_settings
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-
-        assert response.account is None
-
-        assert response.webhook_signing is not None
-        assert response.webhook_signing.supported is False
-
-        assert response.request_signing is not None
-        assert response.request_signing.supported is get_settings().signing.verifier_enabled
-        assert response.identity is None, "no tenant means no trust root to point a key origin at"
 
     def test_account_block_present_with_tenant_and_honest_constants(self):
         """Tenant-resolved path: account block present with the exact honest-constant shape.

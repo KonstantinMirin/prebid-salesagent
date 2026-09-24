@@ -72,7 +72,13 @@ class PublicIdentity(BaseModel):
     # The tenant the request names, its row loaded by the resolver. ONE type, never a
     # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
     # (transitional)", and that union is how dict-shaped tenant handling spread.
-    tenant: InstanceOf[TenantContext] | None = None
+    #
+    # REQUIRED, including here on the public path. Capabilities, products and policy are
+    # all per-tenant -- one seller may require request signing where another does not
+    # support it -- so an answer with no tenant is not "the agent in general", it is an
+    # answer to a question nobody asked. ``principal`` stays optional: that is what public
+    # means.
+    tenant: InstanceOf[TenantContext]
     # No ``protocol`` field: the transport is a label the boundary holds for its own
     # observability record (``invoke_tool``'s parameter), and nothing read it off the
     # identity. A field with no reader on an identity built for stored-id work
@@ -88,17 +94,16 @@ class PublicIdentity(BaseModel):
         return self.principal.principal_id if self.principal is not None else None
 
     @property
-    def tenant_id(self) -> str | None:
-        return self.tenant.tenant_id if self.tenant is not None else None
+    def tenant_id(self) -> str:
+        return self.tenant.tenant_id
 
     def replay_scope(self) -> tuple[str, str, str | None] | None:
         """``(tenant_id, principal_id, account_id)`` the idempotency cache keys on, or None.
 
-        A caller that resolved no tenant or no principal has no scope to be cached under.
-        Polymorphic rather than an ``isinstance`` at the boundary: the type that knows what
-        it carries answers.
+        An anonymous caller has no scope to be cached under. Polymorphic rather than an
+        ``isinstance`` at the boundary: the type that knows what it carries answers.
         """
-        if self.tenant is None or self.principal is None:
+        if self.principal is None:
             return None
         return self.tenant.tenant_id, self.principal.principal_id, None
 
@@ -186,7 +191,7 @@ def _signature_credential(
     subject: SignatureSubject | None,
     *,
     headers: Mapping[str, str],
-    tenant: TenantContext | None,
+    tenant: TenantContext,
     principal: Principal | None,
 ) -> Principal | None:
     """Read the request's RFC 9421 signature, and return the caller after it.
@@ -212,7 +217,7 @@ def _signature_credential(
     if subject is None:
         return principal
     signer = verify_inbound_signature(subject, headers=headers, tenant=tenant, principal=principal)
-    if principal is not None or signer is None or not signer.agent_url or tenant is None:
+    if principal is not None or signer is None or not signer.agent_url:
         return principal
 
     established = get_principal_by_agent_url(signer.agent_url, tenant.tenant_id)
@@ -226,8 +231,8 @@ def _signature_credential(
     return established
 
 
-def _detect_tenant(headers: Mapping[str, str]) -> str | None:
-    """The tenant_id this request names, by four header strategies. NO row is loaded.
+def _detect_tenant(headers: Mapping[str, str]) -> str:
+    """The tenant_id this request names, by two header strategies. NO row is loaded.
 
     Identification only. The token check is scoped by tenant_id, so which tenant cannot be
     deferred; the row is loaded once by ``TenantContext.load`` after the tenant is known.
@@ -237,37 +242,46 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     ``resolve_identity`` then discarded, re-querying it on first field access. One indexed
     column per strategy instead.
 
-    Strategy order, unchanged:
-    1. Host header -> virtual host, then subdomain
+    Strategy order:
+    1. Host header -> the tenant whose stored ``virtual_host`` it matches
     2. x-adcp-tenant header -> subdomain, then the literal id
-    3. Apx-Incoming-Host -> virtual host
-    4. localhost -> the "default" tenant
+
+    A Host resolves a tenant by MATCHING what that tenant stored, never by deriving one
+    from the host's shape. ``x-adcp-tenant`` is the explicit hint and keeps both spellings:
+    a runner cannot know the tenant_id when the seeder mints a fresh uuid4 per database, so
+    the subdomain is the only stable thing it can send.
+
+    A request naming no tenant is REFUSED. The seller decides which hosts it serves, so a
+    request that reached us on a host mapping to nothing is a misconfiguration of the
+    deployment, not a caller error to answer generically -- and there is no generic answer
+    to give: capabilities, products and policy are all per-tenant.
     """
     from src.core.config_loader import tenant_id_for
+    from src.core.errors.details import ConfigurationDetails
+    from src.core.exceptions import AdCPConfigurationError
 
     host = _get_header_case_insensitive(headers, "host") or ""
 
     tenant_id = tenant_id_for(virtual_host=host)
-    if not tenant_id and "." in host:
-        subdomain = host.split(".")[0]
-        if subdomain not in ["localhost", "adcp-sales-agent", "www", "admin"]:
-            tenant_id = tenant_id_for(subdomain=subdomain)
 
     if not tenant_id:
         hint = _get_header_case_insensitive(headers, "x-adcp-tenant")
         if hint:
             # The hint is a subdomain when one matches, and otherwise taken as the id
-            # itself -- unverified, exactly as before. An id that names no tenant fails
-            # later, at the principal lookup that is scoped by it.
+            # itself. Either way the row is loaded next, so an id naming no tenant is
+            # refused there, as what it is.
             tenant_id = tenant_id_for(subdomain=hint) or hint
 
     if not tenant_id:
-        apx_host = _get_header_case_insensitive(headers, "apx-incoming-host")
-        if apx_host:
-            tenant_id = tenant_id_for(virtual_host=apx_host)
-
-    if not tenant_id and host.split(":")[0] in ["localhost", "127.0.0.1", "localhost.localdomain"]:
-        tenant_id = tenant_id_for(subdomain="default")
+        raise AdCPConfigurationError(
+            details=ConfigurationDetails(
+                capability="tenant",
+                tracked_by=(
+                    "No tenant serves this request's Host. Point the host at a tenant's "
+                    "virtual_host or subdomain, or send x-adcp-tenant naming one."
+                ),
+            ),
+        )
 
     return tenant_id
 
@@ -448,13 +462,13 @@ def _resolve_identity(
     # ordering avoided. That saving was never available to a seller that enforces signing:
     # the posture has to be read to answer the request at all.
     tenant_id = _detect_tenant(headers)
-    tenant: TenantContext | None = TenantContext.load(tenant_id) if tenant_id else None
+    tenant = TenantContext.load(tenant_id)
 
     # Step 3: the SELLER's policy. A public tool's row does not require a credential, but
     # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
     # BR-UC-001 INV-1). The policy is seller data, so it can only be asked once the tenant
     # is loaded; the answer is the same AUTH_MISSING the row-level check mints below.
-    if not require_valid_token and tenant is not None and credential_required_for is not None:
+    if not require_valid_token and credential_required_for is not None:
         require_valid_token = credential_required_for(tenant)
 
     # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
@@ -463,7 +477,7 @@ def _resolve_identity(
     # after step 4b, because a signature may establish a principal below and the AUTH_INVALID
     # question is about the BEARER alone.
     principal: Principal | None = None
-    if auth_token and tenant is not None:
+    if auth_token:
         principal = get_principal_from_token(auth_token, tenant.tenant_id)
     bearer_rejected = bool(auth_token) and principal is None
 
@@ -541,7 +555,7 @@ def _resolve_identity(
     # this is the one place the postcondition can still fail -- the signature verified but
     # named nobody this seller onboarded, which is a credential that did not resolve. Same
     # answer as a token that did not: AUTH_INVALID.
-    if tenant is None or principal is None:
+    if principal is None:
         from src.core.exceptions import AdCPAuthenticationError
 
         raise AdCPAuthenticationError()
@@ -581,8 +595,6 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
     from src.core.exceptions import AdCPConfigurationError
 
     tenant = TenantContext.load(tenant_id)
-    if tenant is None:
-        raise AdCPConfigurationError()
     principal = get_principal_by_id(tenant_id, principal_id)
     if principal is None:
         raise AdCPConfigurationError()

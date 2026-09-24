@@ -15,11 +15,9 @@ from typing import Literal
 # Import existing tenant lookup functions from config_loader
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
 from src.core.config_loader import (
-    get_tenant_by_subdomain,
     get_tenant_by_virtual_host,
 )
 from src.core.domain_config import (
-    extract_subdomain_from_host,
     is_admin_domain,
     is_sales_agent_domain,
 )
@@ -106,7 +104,4 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
         # vs "completely unknown request" (show generic fallback). Caller decides how to handle.
         return RoutingResult("custom_domain", tenant, effective_host)
 
-    # Subdomain check (sales-agent domain with subdomain)
-    subdomain = extract_subdomain_from_host(effective_host)
-    tenant = get_tenant_by_subdomain(subdomain) if subdomain else None
-    return RoutingResult("subdomain", tenant, effective_host)
+    return RoutingResult("unknown", None, effective_host)

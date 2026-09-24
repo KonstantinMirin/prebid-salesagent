@@ -13,6 +13,7 @@ No Docker required. This is the regression gate between every Phase 2 step.
 
 import json
 import uuid
+from unittest.mock import patch
 
 import pytest
 from starlette.testclient import TestClient
@@ -20,7 +21,6 @@ from starlette.testclient import TestClient
 from src.app import _AGENT_CARD_PATHS, app
 from src.core.tools.registry import TOOLS
 from tests.factories.principal import PrincipalFactory
-from tests.helpers.agent_card import host_routes_to_no_tenant
 from tests.helpers.credentials import credential_headers
 
 # ``protocol="a2a"`` and the redundant ``tenant={...}`` are gone: the identity names no
@@ -124,17 +124,22 @@ def _extract_artifact_data(result: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
+#: The A2A endpoint a resolved tenant stores. This file grades the TRANSPORT — which
+#: discovery paths serve a card, and the JSON-RPC shapes — not where the URL comes from,
+#: so the one database read the card performs is answered with a fixed string. What that
+#: string must EQUAL for a real tenant is graded where a real tenant exists:
+#: ``tests/integration/test_trust_root_documents.py``.
+_STORED_A2A_URL = "https://seller.example.com/a2a"
+
+
 @pytest.fixture
 def client():
-    """TestClient for the unified FastAPI app, on a host that routes to no tenant.
+    """TestClient for the unified FastAPI app, with the card's tenant lookup answered.
 
-    Since #1291 the agent card reads the Host's tenant from the database to
-    advertise that tenant's canonical URL. This is a unit test with no database,
-    so it pins the branch it can actually exercise — an unclaimed host, where the
-    card still derives its URL from headers. ``host_routes_to_no_tenant`` supplies
-    only that routing answer; every other call in this file is untouched by it.
+    The agent card advertises the tenant's stored A2A endpoint, which is a database
+    read. This is a unit test with no database, so the lookup is supplied directly.
     """
-    with host_routes_to_no_tenant():
+    with patch("src.app._canonical_a2a_url", return_value=_STORED_A2A_URL):
         c = TestClient(app, raise_server_exceptions=False)
         yield c
         c.close()
@@ -393,31 +398,3 @@ class TestAgentCardDiscoveryPaths:
                 f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
                 f"all declared paths must serve one byte-identical card"
             )
-
-    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
-    def test_apx_incoming_host_derivation_applies_on_every_card_path(self, client, path):
-        """Apx-Incoming-Host + X-Forwarded-Proto drive supportedInterfaces[0].url on every path.
-
-        A path that returns 200 carrying the STATIC fallback host is still
-        broken — it would advertise the wrong A2A endpoint to every tenant — so
-        the derivation, not just the status code, is the obligation.
-        """
-        response = client.get(
-            path,
-            headers={"Apx-Incoming-Host": "tenant.example.com", "X-Forwarded-Proto": "https"},
-        )
-        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-        card = response.json()
-        assert card["supportedInterfaces"][0]["url"] == "https://tenant.example.com/a2a", (
-            f"{path} did not derive its URL from Apx-Incoming-Host/X-Forwarded-Proto"
-        )
-
-    @pytest.mark.parametrize("path", AGENT_CARD_PATHS)
-    def test_host_header_derivation_applies_on_every_card_path(self, client, path):
-        """The Host header (no Apx-Incoming-Host) drives the URL on every path too."""
-        response = client.get(path, headers={"Host": "publisher.example.com", "X-Forwarded-Proto": "http"})
-        assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-        card = response.json()
-        assert card["supportedInterfaces"][0]["url"] == "http://publisher.example.com/a2a", (
-            f"{path} did not derive its URL from the Host header"
-        )

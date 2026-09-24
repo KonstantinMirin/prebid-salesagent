@@ -165,7 +165,7 @@ class TestAuthOptionalEndpoints:
     async def test_list_creative_formats_without_auth(self, live_server):
         """list_creative_formats should be reachable without authentication via domain routing."""
         # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
-        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
+        mcp_client = make_mcp_client(live_server, tenant_header=None, host="test-custom-domain.example.com")
         try:
             async with mcp_client as client:
                 result = await client.call_tool("list_creative_formats", {})
@@ -188,7 +188,7 @@ class TestAuthOptionalEndpoints:
     async def test_get_products_without_auth_public_policy(self, live_server):
         """get_products should be reachable without authentication (public policy tenants)."""
         # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
-        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
+        mcp_client = make_mcp_client(live_server, tenant_header=None, host="test-custom-domain.example.com")
         try:
             async with mcp_client as client:
                 result = await client.call_tool("get_products", {"brief": "test campaign"})
@@ -201,7 +201,7 @@ class TestAuthOptionalEndpoints:
     async def test_get_products_filters_pricing_for_anonymous(self, live_server):
         """get_products should hide pricing information for anonymous users."""
         # Unauthenticated: tenant resolved via Host header only (no x-adcp-tenant).
-        mcp_client = make_mcp_client(live_server, tenant=None, host="test-custom-domain.example.com")
+        mcp_client = make_mcp_client(live_server, tenant_header=None, host="test-custom-domain.example.com")
         try:
             async with mcp_client as client:
                 result = await client.call_tool("get_products", {"brief": "test campaign"})

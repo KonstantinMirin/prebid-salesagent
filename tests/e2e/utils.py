@@ -18,7 +18,7 @@ def make_mcp_client(
     live_server: dict,
     *,
     token: str | None = None,
-    tenant: str | None = CI_TEST_SUBDOMAIN,
+    tenant_header: str | None = CI_TEST_SUBDOMAIN,
     dry_run: bool = False,
     session_id: str | None = None,
     host: str | None = None,
@@ -33,8 +33,10 @@ def make_mcp_client(
 
     - ``token``: the credential, sent as ``Authorization: Bearer`` (omit for
       unauthenticated flows).
-    - ``tenant``: value for ``x-adcp-tenant`` (default ``ci-test``; pass None to
-      omit, for example domain-routing tests that select the tenant via ``host``).
+    - ``tenant_header``: value for the ``x-adcp-tenant`` HINT header (default
+      ``ci-test``). ``None`` omits the header; the tenant is then resolved from
+      ``host`` alone, which is what domain-routing tests exercise. It names which
+      HEADER is sent, never whether a request has a tenant -- every request does.
     - ``dry_run``: adds ``X-Dry-Run: true`` (the ``e2e_client`` fixture default;
       lifecycle tests that must persist real state leave it off).
     - ``session_id``: adds ``X-Test-Session-ID`` for testing-hook isolation.
@@ -42,7 +44,7 @@ def make_mcp_client(
 
     Returns an un-entered ``Client``; callers use ``async with``.
     """
-    headers = credential_headers(token=token, tenant=tenant)
+    headers = credential_headers(token=token, tenant=tenant_header)
     if session_id is not None:
         headers["X-Test-Session-ID"] = session_id
     if dry_run:

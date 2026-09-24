@@ -151,6 +151,7 @@ class TestWireResponseIsRealWire:
         (the wire is a complete, valid instance of the response type).
         """
         with CreativeFormatsEnv() as env:
+            env.setup_default_data()
             result = env.call_via(Transport.MCP)
             assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
             assert result.payload is not None, "MCP: no typed payload captured"
@@ -170,6 +171,7 @@ class TestWireResponseIsRealWire:
         round-trip equality is the meaningful authenticity signal left post-fix.
         """
         with CreativeFormatsEnv() as env:
+            env.setup_default_data()
             result = env.call_via(Transport.MCP)
         assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
         assert "formats" in result.wire_response, "MCP: wire_response missing formats"
@@ -471,6 +473,7 @@ class TestDispatchersDeclareHasWireOnRealDispatch:
     @pytest.mark.parametrize("transport", [Transport.REST, Transport.A2A, Transport.MCP])
     def test_wire_transports_declare_a_wire_and_carry_one(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
+            env.setup_default_data()
             result = env.call_via(transport)
         assert result.has_wire is True, f"{transport}: success dispatch did not declare has_wire"
         assert result.wire_response is not None, (
@@ -604,6 +607,7 @@ class TestBothDispatchSeamsStashTheTransportResult:
     @pytest.mark.parametrize("transport", ["rest", "a2a", "mcp"])
     def test_call_via_stashes_the_transport_result(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
+            env.setup_default_data()
             ctx: dict = {"env": env}
             _call_via(ctx, transport)
             assert "error" not in ctx, f"{transport}: dispatch failed: {ctx.get('error')!r}"
