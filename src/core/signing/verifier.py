@@ -106,7 +106,7 @@ from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.exceptions import adcp_error_for
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 from src.core.schemas import Principal
-from src.core.signing.canonical import malformed_authority_reason, reject_malformed_target
+from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
 from src.core.signing.replay_store import PostgresReplayStore
@@ -493,6 +493,44 @@ def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResoluti
     )
 
 
+def _expected_key_origins(resolution: AgentResolution | None) -> dict[str, str] | None:
+    """The origin map the verifier pins the resolved JWKS against.
+
+    THREE CASES, because the counterparty's map has three states and only two of them
+    were being told apart.
+
+    * **Declared, with our purpose** — pass it through. The JWKS origin must match what
+      the counterparty published.
+    * **Declared, without our purpose** — pass it through unchanged, so the SDK refuses
+      ``request_signature_key_origin_missing``. A counterparty that published a map and
+      omitted ``request_signing`` has said something, and what it said is not "anywhere".
+    * **Not declared at all** — synthesize ``{request_signing: <brand.json origin>}``.
+      security.mdx @ v3.1.1 states that an absent map means SHARED ORIGIN, so the
+      assumption is the spec's and this makes it explicit rather than leaving it unmade.
+
+    That third case is the fix. It used to collapse into the second — ``key_origins or {}``
+    turned "advertised nothing" into "advertised an empty map", and the SDK refuses an
+    empty map exactly as it refuses one missing our purpose
+    (``adcp/signing/key_origins.py``: ``declared = (key_origins or {}).get(purpose)``, then
+    raise if ``None``). It takes a ``posture`` argument and uses it only to decorate the
+    message, so the refusal is NOT conditioned on the counterparty declaring one — which
+    v3.1.1 and L1127 both condition it on. The effect was that a buyer who signs but does
+    not verify could not comply: the capabilities schema admits
+    ``identity.key_origins.request_signing`` only for an agent declaring ``request_signing``
+    buckets, and we refused them for not declaring it.
+
+    Passing ``None`` instead is not the alternative. It tells the SDK the adopter never
+    threaded a map through, and the check is SKIPPED with a warning — losing the
+    shared-tenancy defence entirely rather than applying the spec's default.
+    """
+    if resolution is None:
+        return None
+    if resolution.key_origins is not None:
+        return resolution.key_origins
+    shared_origin = origin_of(resolution.brand_json_url)
+    return {_SIGNING_PURPOSE: shared_origin} if shared_origin else {}
+
+
 def _parse_keyid(headers: Mapping[str, str]) -> str | None:
     """The keyid named in the (unverified) ``Signature-Input`` header, or None.
 
@@ -698,7 +736,7 @@ def _run_verifier(
             max_skew_seconds=config.max_skew_seconds,
             max_window_seconds=config.max_window_seconds,
             agent_url=resolution.agent_url if resolution is not None else None,
-            expected_key_origins=(resolution.key_origins or {}) if resolution is not None else None,
+            expected_key_origins=_expected_key_origins(resolution),
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
             revocation_checker=revocation_checker,

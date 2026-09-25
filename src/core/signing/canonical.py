@@ -229,3 +229,21 @@ def _delegated(canonicalize: Callable[[str], str], url: str) -> str:
         return canonicalize(url)
     except _UpstreamTargetUriMalformedError as exc:
         raise TargetUriMalformedError(url, exc.reason) from exc
+
+
+def origin_of(url: str | None) -> str | None:
+    """The ``scheme://netloc`` of *url*, or ``None`` when it has neither.
+
+    Shared by the revocation reader (which compares a revocation list's issuer against
+    the counterparty's origin) and the verifier (which synthesizes the spec's
+    shared-origin default when a counterparty advertises no ``identity.key_origins``
+    map). One spelling, because two would be two chances to disagree about a port or a
+    default scheme -- and both callers feed their answer into the same equality test the
+    SDK performs.
+    """
+    if not url:
+        return None
+    parts = urlsplit(url)
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
