@@ -36,9 +36,24 @@
 #     creative, NOT_CANCELLABLE on re-cancelling a cancelled buy, and a creative still
 #     present in the library after cancellation.
 #
-# The net is 46 -> 36 entries. The 8 newly-surfaced gaps are tracked in the storyboard issue
-# map beside the other media_buy_seller gaps -- their storyboards were already listed there,
-# because their ``get_products`` steps were already ledgered.
+# The net is 46 -> 36 entries. Of the 8 newly-surfaced checks, three already have issues
+# raised from a later measurement of the same shape:
+#
+#   * dependency_impairment_cardinality::create_buy_two_packages -- #2267, the seller rejects
+#     two packages naming one product where the pinned schema permits it.
+#   * measurement_terms_rejected::create_media_buy_relaxed_terms -- #2269, the mock adapter's
+#     invented 1M-impression cap refuses a conformance-sized buy. That issue records the same
+#     masking this re-seed is undoing: "previously masked, because the create path died on
+#     fixture faults before reaching this scenario".
+#   * inventory_list_no_match::create_buy_no_match -- #1303, zero-inventory pre-validation.
+#
+# The other five (creative_fate_after_cancellation::list_creatives_before_cancel,
+# dependency_impairment::assign_creative_to_package,
+# inline_creatives_without_sync::create_buy_with_legacy_inline_creative,
+# invalid_transitions::second_cancel, inventory_list_targeting::create_buy_with_lists) have no
+# issue of their own yet and sit under the roadmap umbrella, #1247. Every affected storyboard
+# already had a row in docs/test-obligations/storyboard-issue-map.yaml, because its
+# ``get_products`` step was already ledgered, so no storyboard became untriaged here.
 #
 # WHAT THIS FILE COSTS, stated plainly. ``tests/storyboard/conftest.py`` xfails these ids with
 # strict=False, so a regression INSIDE a ledgered check does not redden the job, and the job's
