@@ -85,5 +85,13 @@ def hostname_of(host: str) -> str:
     Projecting a stored origin onto a hostname is not the defensive re-validation the
     architecture forbids: the column's contents are trusted exactly as stored, and what
     happens here is that one reader wants a different part of the same fact.
+
+    The answer is LOWERCASE -- ``urlsplit(...).hostname`` folds case -- and both callers
+    depend on that: ``_same_host`` compares this against a case-folded ``virtual_host``
+    column, and ``publisher_domain``'s pinned pattern (``^[a-z0-9]...``) admits no
+    uppercase at all. Only this side folding is what took every tenant-routing reader dark
+    for a host STORED with uppercase (PR #2191), so the column is folded too.
+    ``tests/unit/test_request_host_headers.py`` pins the fold rather than leaving it
+    inherited.
     """
     return urlsplit(f"//{host}").hostname or host

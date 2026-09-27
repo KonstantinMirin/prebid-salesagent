@@ -59,8 +59,16 @@ class TenantLookupRepository:
         return self._session.scalars(select(Tenant).filter_by(subdomain=subdomain)).first()
 
     def find_by_virtual_host(self, virtual_host: str) -> Tenant | None:
-        """The tenant holding ``virtual_host`` (``ix_tenants_virtual_host``), if any."""
-        return self._session.scalars(select(Tenant).filter_by(virtual_host=virtual_host)).first()
+        """The tenant holding ``virtual_host`` (``ix_tenants_virtual_host``), if any.
+
+        Case-folded, like the routing lookups below: a host differing only in case is the
+        SAME host, so a form offering ``Acme.example.com`` against a stored
+        ``acme.example.com`` is a collision and must be reported as one rather than
+        admitted and then never routed to.
+        """
+        return self._session.scalars(
+            select(Tenant).where(func.lower(Tenant.virtual_host) == virtual_host.lower())
+        ).first()
 
     def find_by_id_or_subdomain(self, tenant_id: str, subdomain: str) -> Tenant | None:
         """The tenant holding either key — the pair a tenant INSERT can collide on.
@@ -113,5 +121,14 @@ def _same_host(requested: str) -> ColumnElement[bool]:
     Host to host, so a request resolves whether or not either side spells the port:
     ``storyboard.adcp.test`` and ``storyboard.adcp.test:8443`` are the same tenant, and
     the deployment does not have to guess which form a proxy will forward.
+
+    BOTH SIDES ARE CASE-FOLDED, and neither half of that is optional. ``hostname_of`` goes
+    through ``urlsplit(...).hostname``, which lowercases — so the requested side arrives
+    folded whatever the client sent — while ``split_part`` on a ``Text`` column preserves
+    case. That asymmetry is why a tenant stored as ``Probe-Case.AdCP.test`` matched NO
+    spelling at all, not even its own: every reader of this predicate went dark together
+    and the tenant was reachable only by ``x-adcp-tenant`` (PR #2191). Folding the column
+    here also means a row written before ``Tenant.virtual_host``'s validator existed
+    resolves without a data fix.
     """
-    return func.split_part(Tenant.virtual_host, ":", 1) == hostname_of(requested)
+    return func.lower(func.split_part(Tenant.virtual_host, ":", 1)) == hostname_of(requested)
