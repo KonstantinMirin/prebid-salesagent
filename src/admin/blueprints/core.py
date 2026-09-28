@@ -432,6 +432,21 @@ def _tenant_already_exists(db_session, tenant_id: str, subdomain: str):
     return None
 
 
+def _missing_required_tenant_field(tenant_name: str, virtual_host: str) -> str | None:
+    """The first field this form cannot create a tenant without, or None.
+
+    ``virtual_host`` is among them because the operator running this form is the only
+    party who knows where the deployment answers for the tenant, and nothing derives one
+    on their behalf. A tenant created without it was reachable by no ``Host`` at all and
+    published ``http://localhost:8080`` as its public A2A endpoint.
+    """
+    if not tenant_name:
+        return "Tenant name is required"
+    if not virtual_host:
+        return "Virtual host is required — it is the address this tenant is served at"
+    return None
+
+
 @core_bp.route("/create_tenant", methods=["GET", "POST"])
 @require_auth(admin_only=True)
 @log_admin_action("create_tenant")
@@ -448,16 +463,8 @@ def create_tenant():
         virtual_host = request.form.get("virtual_host", "").strip()
         ad_server = request.form.get("ad_server", "").strip() or None  # Default to None, not mock
 
-        if not tenant_name:
-            flash("Tenant name is required", "error")
-            return render_template("create_tenant.html")
-
-        # The operator running this form is the only party who knows where the deployment
-        # answers for this tenant, so the form asks and nothing here derives. A tenant
-        # created without one was reachable by no Host at all, and published
-        # http://localhost:8080 as its public A2A endpoint.
-        if not virtual_host:
-            flash("Virtual host is required — it is the address this tenant is served at", "error")
+        if refusal := _missing_required_tenant_field(tenant_name, virtual_host):
+            flash(refusal, "error")
             return render_template("create_tenant.html")
 
         # Generate tenant ID if not provided
