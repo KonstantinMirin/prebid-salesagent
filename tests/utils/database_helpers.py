@@ -93,6 +93,12 @@ def create_tenant_with_timestamps(
     # Ensure we have required timestamp fields
     kwargs.setdefault("created_at", now)
     kwargs.setdefault("updated_at", now)
+    # A tenant declares the host it is served at: the column is NOT NULL and
+    # ix_tenants_virtual_host is UNIQUE, so the default is derived from the tenant_id to stay
+    # distinct across tenants one test creates together. Defaulted here for the same reason
+    # the timestamps are — a caller grading something else should not have to name it — and a
+    # caller that IS grading the host passes its own.
+    kwargs.setdefault("virtual_host", f"{tenant_id.replace('_', '-')}.adcp.test")
 
     return Tenant(tenant_id=tenant_id, name=name, subdomain=subdomain, billing_plan=billing_plan, **kwargs)
 
