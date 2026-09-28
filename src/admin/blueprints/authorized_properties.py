@@ -220,7 +220,7 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
     return _save_properties_batch(properties_data, tenant_id)
 
 
-def _construct_agent_url(tenant_id: str, request: Any) -> str:
+def _construct_agent_url(tenant_id: str) -> str:
     """This tenant's agent URL — the same string the agent card publishes.
 
     A counterparty fetches adagents.json and byte-matches the agent URL it finds there
@@ -233,6 +233,9 @@ def _construct_agent_url(tenant_id: str, request: Any) -> str:
     every tenant onto one URL), ``https://`` hardcoded, ``localhost`` outside production,
     and a try/except answering ``localhost`` again for any failure — so a verification that
     could not load the tenant reported success against a URL nothing published.
+
+    Takes no ``request``: the old ladder did not read one either, and a request parameter on
+    a function deriving a tenant's published identity is an invitation to start.
     """
     from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 
@@ -534,12 +537,12 @@ def verify_all_properties(tenant_id: str) -> Response:
 
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
-            agent_url = _construct_agent_url(tenant_id, request)
+            agent_url = _construct_agent_url(tenant_id)
         else:
             # Development: allow dev overrides from form
             agent_url = request.form.get("dev_agent_url", "").strip() or request.form.get("agent_url", "").strip()
             if not agent_url:
-                agent_url = _construct_agent_url(tenant_id, request)
+                agent_url = _construct_agent_url(tenant_id)
 
         verification_service = get_property_verification_service()
         results = verification_service.verify_all_properties(tenant_id, agent_url)
@@ -748,7 +751,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
         if is_production:
             # Production: ignore any dev overrides, always use tenant context
             logger.info("🔒 Production mode: ignoring any dev URL overrides")
-            agent_url = _construct_agent_url(tenant_id, request)
+            agent_url = _construct_agent_url(tenant_id)
             logger.info(f"🏢 Constructed agent URL from tenant context: {agent_url}")
         else:
             # Development: allow dev overrides from form
@@ -758,7 +761,7 @@ def verify_property_auto(tenant_id: str, property_id: str) -> Response:
 
             agent_url = dev_url or explicit_url
             if not agent_url:
-                agent_url = _construct_agent_url(tenant_id, request)
+                agent_url = _construct_agent_url(tenant_id)
                 logger.info(f"🏗️ No override provided, constructed from tenant: {agent_url}")
             else:
                 logger.info(f"🔧 Using override URL: {agent_url}")

@@ -154,7 +154,7 @@ def test_every_publisher_of_this_tenants_agent_url_names_the_same_origin(monkeyp
         from src.core.tenant_context import TenantContext
 
         published = canonical_agent_url(TenantContext(tenant_id=tenant.tenant_id, virtual_host=tenant.virtual_host))
-        verified = _construct_agent_url("pub-origin-t", None)
+        verified = _construct_agent_url("pub-origin-t")
 
         assert verified == published, (
             f"the adagents.json verifier derived {verified!r} while the card publishes {published!r}"
