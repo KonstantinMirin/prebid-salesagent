@@ -31,6 +31,11 @@ from starlette.testclient import TestClient
 ORIGIN = "mandatory-vhost.adcp.test"
 ADMIN_EMAIL = "test@example.com"
 
+#: A host no tenant declares, under the TLD RFC 2606 reserves for exactly this. It stands in
+#: for the attacker-supplied ``Host`` of a direct connection: every header on one is the
+#: caller's to choose, so a reader deriving the published origin from this one publishes it.
+UNSERVED_HOST = "attacker.invalid"
+
 
 def _stored_host(tenant_id: str) -> str | None:
     """The host the row actually holds, read the one way a tenant is loaded by id.
@@ -82,8 +87,57 @@ def test_a_ui_created_tenants_card_publishes_its_stored_origin(authenticated_adm
 
     card = TestClient(app).get("/.well-known/agent-card.json", headers={"Host": ORIGIN})
     assert card.status_code == 200, card.text
-    urls = [interface["url"] for interface in card.json()["supportedInterfaces"]]
+    interfaces = card.json()["supportedInterfaces"]
+    urls = [interface["url"] for interface in interfaces]
     assert urls == [f"https://{ORIGIN}/a2a"], f"the card published {urls}, not the origin the operator stored"
+
+    # An URL nothing selects is as unreachable as a wrong one, so the binding is graded with
+    # it. An A2A 1.x client picks its interface with
+    # `i.protocolBinding?.toUpperCase() === "JSONRPC"` (@a2a-js/sdk pick_interface.ts) --
+    # uppercased there, so this mirrors the comparison the client makes rather than pinning a
+    # spelling the client does not care about. A card matching none of its interfaces reports
+    # the agent UNREACHABLE without ever sending a request.
+    bindings = [(interface.get("protocolBinding") or "").upper() for interface in interfaces]
+    assert bindings == ["JSONRPC"], f"the card published protocolBinding {bindings}, which no A2A 1.x client selects"
+
+
+@pytest.mark.requires_db
+def test_the_card_publishes_the_stored_origin_when_the_host_header_names_another(integration_db):
+    """The one test that can tell a stored read from an echoed header.
+
+    ``_create_dynamic_agent_card`` states that neither the URL nor any field is derived from
+    the request, and every other card test sends ``Host: ORIGIN`` where ORIGIN is ALSO the
+    stored ``virtual_host`` — so an echo of the header and a read of the column produce the
+    same string, and all of them pass either way. Putting the echo back
+    (``agent_url=f"https://{request.headers['host']}/a2a"``) left 53 card tests green (#2191).
+
+    Naming the tenant by ``x-adcp-tenant`` is what frees ``Host`` to carry something else:
+    ``_detect_tenant`` tries the host against ``tenants.virtual_host`` first and falls through
+    to the literal id when no tenant declares it. So the request resolves the seeded tenant
+    while its ``Host`` names a host this deployment serves for nobody, and the two candidate
+    origins differ. On a direct connection every header is the caller's to choose, which is
+    why an echo here would answer ``https://attacker.invalid/a2a`` to whoever asked for it.
+    """
+    from src.app import app
+    from tests.factories import PrincipalFactory, TenantFactory
+    from tests.harness import ProductEnv
+
+    with ProductEnv(tenant_id="stored-origin-t", principal_id="stored-origin-p") as env:
+        tenant = TenantFactory(tenant_id="stored-origin-t", virtual_host=ORIGIN)
+        PrincipalFactory(tenant=tenant, principal_id="stored-origin-p")
+        env._commit_factory_data()
+
+        card = TestClient(app).get(
+            "/.well-known/agent-card.json",
+            headers={"Host": UNSERVED_HOST, "x-adcp-tenant": "stored-origin-t"},
+        )
+
+        assert card.status_code == 200, card.text
+        urls = [interface["url"] for interface in card.json()["supportedInterfaces"]]
+        assert urls == [f"https://{ORIGIN}/a2a"], (
+            f"the card published {urls} for a tenant whose stored origin is {ORIGIN!r}: "
+            f"a caller sending Host: {UNSERVED_HOST} reads its own header back as this agent's URL"
+        )
 
 
 @pytest.mark.requires_db
