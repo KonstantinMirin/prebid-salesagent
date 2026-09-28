@@ -229,11 +229,13 @@ class Tenant(Base, JSONValidatorMixin):
         ``http://localhost:8080`` as an admin-created tenant's PUBLIC A2A endpoint.
         Inventing one is what took A2A conformance from 30 passing checks to 0 (#1845).
 
-        Refusing HERE rather than in each creation path is what makes a host-less tenant
-        unrepresentable: every path writes through this hook, so a path added later cannot
-        miss the rule, and it fails loudly at assignment rather than at flush. The column is
-        ``nullable=False`` as well — this hook is what turns a blank string into the same
-        refusal, since SQL has no opinion about ``"   "``.
+        Two mechanisms, and each catches what the other cannot. This hook fires on every
+        ASSIGNMENT — construction with the keyword, and the later ``tenant.virtual_host = x``
+        the settings form does — so a path that names the field gets an immediate ValueError
+        rather than a constraint violation at flush, and it is the only thing that can refuse
+        a blank string, since SQL has no opinion about ``"   "``. A path that omits the field
+        ENTIRELY never assigns, so no validator can see it; ``nullable=False`` is what refuses
+        that one, at flush. Neither alone makes a host-less tenant unrepresentable.
 
         A ``Host`` names a DNS name and DNS is case-insensitive (RFC 7230 §5.4), so
         ``Probe-Case.Example.test`` and ``probe-case.example.test`` are one host — but the

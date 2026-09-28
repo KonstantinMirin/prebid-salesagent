@@ -56,9 +56,21 @@ def _auth_session(client) -> None:
 
 
 def _post_create(client):
+    """Post the form with every field it requires, so the SUBDOMAIN answer is what is graded.
+
+    ``virtual_host`` is required (a tenant declares the host it is served at), and the route
+    refuses a blank one BEFORE it reaches the duplicate-subdomain path. Omitting it would
+    make every case here assert the polite duplicate answer against a host-required refusal —
+    green for the wrong reason, or red for a reason these tests are not about.
+    """
     return client.post(
         "/create_tenant",
-        data={"name": "Contested Publisher", "subdomain": SUBDOMAIN, "ad_server": "mock"},
+        data={
+            "name": "Contested Publisher",
+            "subdomain": SUBDOMAIN,
+            "virtual_host": f"{SUBDOMAIN}.adcp.test",
+            "ad_server": "mock",
+        },
         follow_redirects=False,
     )
 
