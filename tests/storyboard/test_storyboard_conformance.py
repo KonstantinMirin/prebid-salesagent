@@ -576,7 +576,7 @@ def _below_pass_floor(protocol: str, summary: dict[str, Any]) -> dict[str, Any] 
     # Only a session that actually DIALLED an agent has a pass count worth flooring.
     # The ledger-fitness module drives this same collection through a stub runner
     # (``stub://`` urls, a handful of synthetic checks) to grade the fitness join; a
-    # floor of 30 against a stub that grades 1 is not a regression, it is a category
+    # recorded floor against a stub that grades 1 is not a regression, it is a category
     # error, and it changed that module's expected outcome counts when this landed.
     if not str(summary.get("agent_url", "")).startswith("http"):
         return None
