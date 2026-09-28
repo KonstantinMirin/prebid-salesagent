@@ -38,6 +38,7 @@ def _create_test_tenant_with_creative(session, tenant_id: str, creative_id: str)
         tenant_id=tenant_id,
         name=f"Test Tenant {tenant_id}",
         subdomain=tenant_id,
+        virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
         is_active=True,
     )
     session.add(tenant)

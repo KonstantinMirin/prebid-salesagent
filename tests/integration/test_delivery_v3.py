@@ -102,6 +102,7 @@ def _setup_base_state(session) -> dict:
         tenant_id=tenant_id,
         name="Test Tenant",
         subdomain="test",
+        virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
         is_active=True,
         ad_server="mock",
         auth_setup_mode=False,

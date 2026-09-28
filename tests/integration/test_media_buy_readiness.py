@@ -21,7 +21,15 @@ def test_tenant(integration_db, request):
     """Create a test tenant (requires integration_db fixture)."""
     tenant_id = f"test_readiness_{request.node.name[-20:]}"  # Truncate to avoid long names
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Test Tenant", subdomain="test", is_active=True, ad_server="mock")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Test Tenant",
+            subdomain="test",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
 

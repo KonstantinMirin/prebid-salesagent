@@ -57,10 +57,12 @@ class TestGAMProductConfiguration:
 
         with get_db_session() as db_session:
             # Create test tenant
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
             test_tenant = Tenant(
                 tenant_id=tenant_id,
                 name="Test Automation Tenant",
                 subdomain="test-auto",
+                virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
                 created_at=datetime.now(),
                 updated_at=datetime.now(),
             )

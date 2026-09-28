@@ -36,7 +36,13 @@ def test_settings_queries(integration_db):
 
     with get_db_session() as session:
         # Create tenant
-        tenant = Tenant(tenant_id=tenant_id, name="Test Tenant", subdomain="test-tenant")
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Test Tenant",
+            subdomain="test-tenant",
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+        )
         session.add(tenant)
 
         # Create principal

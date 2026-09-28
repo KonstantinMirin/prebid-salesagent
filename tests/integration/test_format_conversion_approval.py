@@ -81,10 +81,12 @@ def test_tenant(integration_db):
     """Create test tenant with mock ad server."""
     tenant_id = "test_format_conversion"
     with get_db_session() as session:
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
         tenant = Tenant(
             tenant_id=tenant_id,
             name="Format Test Tenant",
             subdomain="formattest",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
             is_active=True,
             ad_server="mock",
         )

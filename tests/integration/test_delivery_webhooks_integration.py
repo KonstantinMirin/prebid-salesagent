@@ -32,7 +32,11 @@ def _create_test_tenant_and_principal(ad_server: str | None = None) -> tuple[str
 
     with get_db_session() as session:
         tenant = Tenant(
-            tenant_id=tenant_id, name="Integration Tenant", subdomain="gam-pricing-test", ad_server="ad_server"
+            tenant_id=tenant_id,
+            name="Integration Tenant",
+            subdomain="gam-pricing-test",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            ad_server="ad_server",
         )
         principal = Principal.with_token(
             plaintext_token_for(principal_id),

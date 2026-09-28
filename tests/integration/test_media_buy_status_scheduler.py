@@ -43,6 +43,7 @@ def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
             ad_server="mock",
             is_active=True,
         )

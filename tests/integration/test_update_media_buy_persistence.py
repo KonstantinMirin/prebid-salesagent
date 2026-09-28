@@ -59,6 +59,7 @@ def test_tenant_setup(integration_db):
             tenant_id=tenant_id,
             name="Test Update Persist Tenant",
             subdomain="test-update-persist",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
             ad_server="mock",
             is_active=True,
             human_review_required=False,

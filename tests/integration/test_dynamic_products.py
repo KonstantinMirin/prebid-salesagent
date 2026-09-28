@@ -40,7 +40,16 @@ def _ensure_tenant(tenant_id: str) -> None:
     with get_db_session() as session:
         existing = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not existing:
-            session.add(Tenant(tenant_id=tenant_id, name=f"Test {tenant_id}", subdomain=tenant_id, ad_server="mock"))
+            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+            session.add(
+                Tenant(
+                    tenant_id=tenant_id,
+                    name=f"Test {tenant_id}",
+                    subdomain=tenant_id,
+                    virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+                    ad_server="mock",
+                )
+            )
             session.commit()
 
 
