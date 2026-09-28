@@ -36,6 +36,7 @@ class TestMockAdapterPublisherSync:
                 tenant_id="test_mock_sync",
                 name="Test Mock Sync Tenant",
                 subdomain="test-mock-sync",
+                virtual_host="test-mock-sync.adcp.test",
                 ad_server="mock",
                 authorized_emails=["test@example.com"],
                 created_at=datetime.now(UTC),

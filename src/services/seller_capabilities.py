@@ -64,6 +64,7 @@ from src.core.helpers.adapter_helpers import (
     get_adapter_class_for_tenant,
 )
 from src.core.helpers.channel_helpers import effective_channel_names
+from src.core.http_utils import hostname_of
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error
 from src.core.schemas.capability_declarations import (
@@ -315,10 +316,12 @@ class SellerCapabilities(BaseModel):
     fact about the seller, not about the request that asked — and it is the one field
     the card needs that the capabilities response has no home for.
 
-    ``agent_url`` is ``None`` exactly when no tenant resolved. A caller with nothing
-    to publish decides for itself what that means: the capabilities tool answers the
-    minimal description, the agent card answers 404, because a host this deployment
-    does not serve has no card.
+    ``agent_url`` is ``None`` exactly when no tenant resolved, which only the
+    ``get_adcp_capabilities`` TOOL can reach — a public tool answers an unrouted host with
+    the minimal description. The agent card cannot reach it: ``public_identity_for`` refuses
+    an unresolved tenant before the card handler runs, and a resolved tenant always declares
+    the host it is served at, so the card's ``url`` is always statable. The clause that used
+    to stand here said the card "answers 404" for this case; no card request ever gets here.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -457,10 +460,13 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         advisories, "publisher domains", _resolve_publisher_domains, default=[]
     )
 
-    # If no domains found, use a placeholder
+    # With no publisher partners recorded, the seller's portfolio is its own inventory, so
+    # the domain it names is the one it is served at. This used to be
+    # f"{tenant.subdomain}.example.com" — a domain nobody owns, on a reserved TLD, handed to
+    # a buyer as the publisher's own (#1845). hostname_of because AdCP's publisher_domain
+    # pattern admits no colon while virtual_host carries the port.
     if not publisher_domains:
-        # Use tenant name as placeholder domain
-        publisher_domains = [PublisherDomain(root=f"{tenant.subdomain}.example.com")]
+        publisher_domains = [PublisherDomain(root=hostname_of(tenant.virtual_host))]
 
     # Get advertising policies from tenant config
     advertising_policies: str | None = None

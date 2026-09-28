@@ -8,6 +8,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from sqlalchemy import select
 
 from src.admin.blueprints.core import get_tenant_from_hostname
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
@@ -78,6 +79,43 @@ def signup_onboarding():
     )
 
 
+def _self_serve_wildcard_domain() -> str | None:
+    """The domain a self-serve tenant may be named under, or None when there is none.
+
+    A signing-up publisher cannot know where this deployment answers, so signup is the one
+    creation path that DERIVES a host — and it may only do so where the derived name is
+    true by construction of the deployment. ``config/nginx/nginx-multi-tenant.conf`` serves
+    ``*.${SALES_AGENT_DOMAIN}`` and lets the app pick the tenant from the ``Host``, so those
+    two settings TOGETHER are what make ``f"{subdomain}.{domain}"`` a host something
+    actually serves.
+
+    On a single-tenant install nginx is ``server_name _`` with no wildcard, and the same
+    expression is fiction — which is precisely what #1845 published. So this answers None
+    there and the signup is refused rather than a host invented.
+    """
+    runtime = get_settings().runtime
+    if runtime.adcp_multi_tenant and runtime.sales_agent_domain:
+        return runtime.sales_agent_domain
+    return None
+
+
+def _signup_refusal(publisher_name: str, wildcard_domain: str | None) -> str | None:
+    """Why this signup cannot proceed, or None when it can.
+
+    ``wildcard_domain`` is required for the reason :func:`_self_serve_wildcard_domain`
+    gives: without it there is no host this tenant could be named at that the deployment
+    actually serves, and signup is the one path that would otherwise derive one.
+    """
+    if not publisher_name:
+        return "Publisher name is required"
+    if wildcard_domain is None:
+        return (
+            "Self-serve signup needs a multi-tenant deployment with SALES_AGENT_DOMAIN "
+            "configured. Ask an administrator to create this tenant."
+        )
+    return None
+
+
 @public_bp.route("/signup/provision", methods=["POST"])
 def provision_tenant():
     """Provision new tenant from signup form."""
@@ -97,8 +135,9 @@ def provision_tenant():
         adapter_type = request.form.get("adapter", "mock").strip()
 
         # Validation
-        if not publisher_name:
-            flash("Publisher name is required", "error")
+        wildcard_domain = _self_serve_wildcard_domain()
+        if refusal := _signup_refusal(publisher_name, wildcard_domain):
+            flash(refusal, "error")
             return redirect(url_for("public.signup_onboarding"))
 
         # Generate random subdomain and tenant ID (prevents subdomain squatting)
@@ -129,6 +168,8 @@ def provision_tenant():
                 tenant_id=tenant_id,
                 name=publisher_name,
                 subdomain=subdomain,
+                # The wildcard vhost nginx really serves — see _self_serve_wildcard_domain.
+                virtual_host=f"{subdomain}.{wildcard_domain}",
                 ad_server=adapter_type,
                 is_active=True,
                 billing_plan="standard",

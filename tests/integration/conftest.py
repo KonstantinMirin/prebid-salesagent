@@ -31,6 +31,7 @@ from tests.helpers.local_http_origin import run_local_origin
 from tests.helpers.local_mcp_origin import MCPOrigin, run_mcp_origin
 from tests.helpers.test_tls_material import load_gen_test_tls, server_ssl_context
 from tests.integration.migration_helpers import parse_postgres_url
+from tests.utils.database_helpers import vhost_for
 
 # ---------------------------------------------------------------------------
 # Shared test helpers for media buy repository tests
@@ -209,6 +210,10 @@ def test_tenant_with_data(integration_db):
             tenant_id=tenant_data["tenant_id"],
             name=tenant_data["name"],
             subdomain=tenant_data["subdomain"],
+            # Required (NOT NULL) and UNIQUE: a tenant declares the host it is served at.
+            # Derived from the tenant_id so tenants seeded together stay distinct. Nothing
+            # routes to it by Host — these fixtures address the tenant directly.
+            virtual_host=vhost_for(tenant_data["tenant_id"]),
             is_active=tenant_data["is_active"],
             ad_server="mock",  # Mock adapter is accepted in test environments (ADCP_TESTING=true)
             auth_setup_mode=False,  # Disable setup mode for production-ready auth
@@ -343,6 +348,7 @@ def sample_tenant(integration_db):
             tenant_id="test_tenant",
             name="Test Tenant",
             subdomain="test",
+            virtual_host="test-tenant.adcp.test",
             is_active=True,
             ad_server="mock",  # Mock adapter is accepted in test environments (ADCP_TESTING=true)
             auth_setup_mode=False,  # Disable setup mode for production-ready auth

@@ -26,14 +26,17 @@ class TenantContext(BaseModel):
     """Typed tenant context — replaces dict[str, Any] for tenant data.
 
     Created from the database Tenant ORM model at the transport boundary.
-    Immutable after creation. All fields have sensible defaults so tests
-    can construct with just TenantContext(tenant_id="test").
+    Immutable after creation. Two fields are required, because the row always carries
+    them and a projection that admitted less would put the decision back on every
+    reader: ``tenant_id`` names the tenant, and ``virtual_host`` is the host it is
+    served at — the type is how ``canonical_agent_url`` stops needing a fallback. Every
+    other field has a default, so a test names only what it is grading.
     """
 
     tenant_id: str
     name: str = ""
     subdomain: str = ""
-    virtual_host: str | None = None
+    virtual_host: str
     ad_server: str | None = None
     enable_axe_signals: bool = True
     authorized_emails: list[str] = []
@@ -60,7 +63,7 @@ class TenantContext(BaseModel):
 
     @field_validator("virtual_host")
     @classmethod
-    def _fold_virtual_host(cls, value: str | None) -> str | None:
+    def _fold_virtual_host(cls, value: str) -> str:
         """The host this projection carries is LOWERCASE, whoever built it.
 
         The read half of the same rule ``Tenant.virtual_host``'s validator states on the
@@ -71,7 +74,7 @@ class TenantContext(BaseModel):
         keeps a row written before that validator existed from publishing an origin in a
         case no other reader would produce.
         """
-        return value.lower() if value else value
+        return value.strip().lower()
 
     # --- Construction helpers ---
 

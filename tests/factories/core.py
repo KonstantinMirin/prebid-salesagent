@@ -132,6 +132,10 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
                 "tenant_id": tenant_id,
                 "name": f"Test Publisher {tenant_id}",
                 "subdomain": tenant_subdomain(tenant_id),
+                # A tenant always declares a host, so the projection requires one. Derived
+                # from the tenant_id here so two contexts built in one test differ, the way
+                # the ORM factory's Sequence does.
+                "virtual_host": f"{tenant_subdomain(tenant_id)}.example.com",
                 "ad_server": "mock",
                 **overrides,
             }

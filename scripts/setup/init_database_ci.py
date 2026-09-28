@@ -26,6 +26,16 @@ CI_TEST_ACCOUNT_ID = "ci-test-account"
 #: the id itself.
 CI_TEST_TENANT_ID = "ci-test"
 
+#: The hosts the two seeded test tenants declare. Both are addressed by ``x-adcp-tenant``
+#: and NOTHING routes to them by ``Host``: these values exist because ``virtual_host`` is
+#: mandatory and ``ix_tenants_virtual_host`` is UNIQUE, so the seeds need two distinct
+#: names. Stated plainly rather than dressed up as real origins. They sit under
+#: ``*.adcp.test``, the convention ``seed_storyboard_tenant.py`` established and the
+#: wildcard test cert already covers, so one line in the tls-proxy SNI map would make
+#: either routable if a test ever needs it to be.
+CI_TEST_VIRTUAL_HOST = "ci-test.adcp.test"
+ISO_TEST_VIRTUAL_HOST = "iso-test.adcp.test"
+
 
 #: The credential presented to that tenant: the plaintext token this script hashes into
 #: the CI principal's row. Owned here for the same reason as the subdomain above -- this
@@ -162,6 +172,7 @@ def init_db_ci():
                     tenant_id=tenant_id,
                     name="CI Test Tenant",
                     subdomain=CI_TEST_TENANT_ID,
+                    virtual_host=CI_TEST_VIRTUAL_HOST,
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=True,
@@ -542,6 +553,7 @@ def init_db_ci():
                     tenant_id=iso_tenant_id,
                     name="Isolation Test Tenant",
                     subdomain="iso-test",
+                    virtual_host=ISO_TEST_VIRTUAL_HOST,
                     billing_plan="test",
                     ad_server="mock",
                     enable_axe_signals=False,

@@ -314,6 +314,7 @@ class TestSelfServiceSignupFlow:
                 tenant_id="completiontest",
                 name="Completion Test Publisher",
                 subdomain="completiontest",
+                virtual_host="completiontest.adcp.test",
                 ad_server="mock",
                 is_active=True,
                 billing_plan="standard",

@@ -531,12 +531,24 @@ class TestGracefulDegradation:
         assert response.media_buy is not None
         assert MediaChannel.display in response.media_buy.portfolio.primary_channels
 
-    def test_db_exception_uses_placeholder_domain(self):
-        """Database exception during publisher domain query uses placeholder domain."""
+    def test_db_exception_falls_back_to_the_sellers_own_domain(self):
+        """With the partner query down, the placeholder is the seller's OWN host.
+
+        This assertion is changed, and the old one is why the defect survived: it demanded
+        ``testpub.example.com``, derived from the SUBDOMAIN — a domain nobody owns on a
+        reserved TLD, handed to a buyer as the publisher's own (#1845). A placeholder is
+        still correct here (the partner list could not be read), but the honest one is the
+        domain this seller is actually served at, which the tenant already declares.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         identity = _make_capabilities_identity(
-            tenant={"tenant_id": "t1", "name": "Test", "subdomain": "testpub"},
+            tenant={
+                "tenant_id": "t1",
+                "name": "Test",
+                "subdomain": "testpub",
+                "virtual_host": "seller-own-host.adcp.test",
+            },
         )
 
         with (
@@ -552,7 +564,9 @@ class TestGracefulDegradation:
         assert response.media_buy is not None
         domains = response.media_buy.portfolio.publisher_domains
         assert len(domains) == 1
-        assert "testpub.example.com" in domains[0].root
+        assert domains[0].root == "seller-own-host.adcp.test", (
+            f"the portfolio named {domains[0].root!r}, not the host the seller declares"
+        )
 
 
 class TestAdvertisingPolicies:

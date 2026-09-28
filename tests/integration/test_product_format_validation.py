@@ -49,6 +49,7 @@ def tenant_with_prereqs(integration_db):
             tenant_id="fmt_test_tenant",
             name="Format Test Tenant",
             subdomain="fmt-test",
+            virtual_host="fmt-test.adcp.test",
             is_active=True,
             ad_server="mock",
         )

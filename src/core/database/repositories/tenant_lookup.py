@@ -70,6 +70,15 @@ class TenantLookupRepository:
             select(Tenant).where(func.lower(Tenant.virtual_host) == virtual_host.lower())
         ).first()
 
+    def find_by_id(self, tenant_id: str) -> Tenant | None:
+        """The tenant with this id, active or not.
+
+        For an ADMIN view, which administers a deactivated tenant as readily as an active
+        one — the routing sibling below is :meth:`find_active_by_id`, and the difference
+        matters: routing must not answer for a tenant a deployment has turned off.
+        """
+        return self._session.get(Tenant, tenant_id)
+
     def find_by_id_or_subdomain(self, tenant_id: str, subdomain: str) -> Tenant | None:
         """The tenant holding either key — the pair a tenant INSERT can collide on.
 

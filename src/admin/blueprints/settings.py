@@ -231,7 +231,12 @@ def update_general(tenant_id):
                     if conflict is not None:
                         return conflict
                 else:
-                    tenant.virtual_host = None
+                    # An empty submission used to CLEAR the host, which is the same defect
+                    # the creation paths had: it left an existing tenant unreachable by any
+                    # Host and its card publishing a derived name. A tenant can be MOVED,
+                    # never un-addressed.
+                    flash("Virtual host is required — it is the address this tenant is served at", "error")
+                    return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
             # Update currency limits
             from decimal import Decimal, InvalidOperation

@@ -33,9 +33,8 @@ from src.admin.app import create_app
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
 from src.core.domain_routing import route_landing_page
-from src.core.errors.details import ConfigurationDetails
 from src.core.errors.issues import issues_from_validation_error
-from src.core.exceptions import AdCPConfigurationError, AdCPInvalidRequestError, AdCPSalesAgentError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import TransportProtocol, public_identity_for
@@ -399,10 +398,13 @@ def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
     two cannot describe the same seller differently. Neither the URL nor any field
     is derived here.
 
-    A request naming no tenant this deployment serves is refused by the resolver, and a
-    tenant that declares no host of its own is refused here: a card whose ``url`` cannot
-    be stated is a card that cannot be published. Both are CONFIGURATION_ERROR, and both
-    are seller-side.
+    A request naming no tenant this deployment serves is refused by the resolver, and that
+    is the only refusal: a resolved tenant always declares the host it is served at, so
+    ``seller.agent_url`` is always a string here and there is nothing left for this handler
+    to check. A guard for the None case stood here and was unreachable in both directions —
+    ``public_identity_for`` raises for an unresolved tenant, so this never held
+    ``identity.tenant is None``; and ``virtual_host`` is mandatory, so a resolved tenant
+    never lacked a URL.
 
     What used to happen instead was a ladder over request headers, which published
     whatever host the caller asked for:
@@ -411,12 +413,7 @@ def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
     syntax check. Every value in that ladder was attacker-supplied on a direct connection,
     and it answered a question ``canonical_agent_url`` already answers from stored state.
     """
-    identity = public_identity_for(request.headers)
-    seller = describe_seller(identity)
-    if seller.agent_url is None:
-        tenant = identity.tenant
-        raise AdCPConfigurationError(details=ConfigurationDetails(tenant_id=tenant.tenant_id if tenant else None))
-    return render_agent_card(seller)
+    return render_agent_card(describe_seller(public_identity_for(request.headers)))
 
 
 # The paths the agent card is served on. This set is the declaration; every card route

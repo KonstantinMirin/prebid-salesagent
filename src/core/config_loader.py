@@ -141,6 +141,22 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             # Create default tenant for single-tenant deployments
             logger.info("Single-tenant mode: Creating default tenant...")
 
+            # Nobody is present at bootstrap to state where this deployment answers, so it
+            # is asked to declare itself — and the answer is STORED, where an operator can
+            # see and correct it, rather than re-derived on every publish (#1845). None
+            # means a production install declaring neither ADCP_AGENT_URL nor
+            # SALES_AGENT_DOMAIN: it serves nothing by Host today, and a row holding
+            # "localhost" would look configured while serving nothing.
+            from src.core.agent_identity import deployment_virtual_host
+
+            virtual_host = deployment_virtual_host()
+            if virtual_host is None:
+                logger.warning(
+                    "Not creating a default tenant: this deployment declares no host "
+                    "(set ADCP_AGENT_URL or SALES_AGENT_DOMAIN, then restart)."
+                )
+                return None
+
             # The super admins are the initial authorization
             authorized_emails = get_settings().auth.super_admin_email_list
             authorized_domains = get_settings().auth.super_admin_domain_list
@@ -151,7 +167,8 @@ def ensure_default_tenant_exists() -> dict[str, Any] | None:
             default_tenant = Tenant(
                 tenant_id="default",
                 name="Default Publisher",
-                subdomain="default",  # Required field for routing
+                subdomain="default",  # An internal identifier; virtual_host is what routes
+                virtual_host=virtual_host,
                 ad_server="mock",  # Start with mock adapter, user can configure later
                 authorized_emails=authorized_emails,
                 authorized_domains=authorized_domains,
