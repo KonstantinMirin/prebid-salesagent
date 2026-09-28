@@ -96,7 +96,6 @@ _CAPTURE = _SIGNING_DIR / "capture.py"
 _VERIFIER = _SIGNING_DIR / "verifier.py"
 
 _DECODED_PATH_HELPER = "path_from_asgi_scope"
-_COLLAPSED_HEADERS_HELPER = "headers_from_asgi_scope"
 
 _SIGNED_PATH_FN = "_signed_path"
 _TARGET_URI_FN = "_target_uri"
@@ -211,15 +210,6 @@ def _find_decoded_path_reads(tree: ast.AST) -> list[tuple[int, str, str]]:
 def _decoded_path_linenos(tree: ast.AST) -> list[int]:
     """Detector shape ``assert_detector_catches_ast_snippets`` expects."""
     return [lineno for lineno, _fn, _form in _find_decoded_path_reads(tree)]
-
-
-def _find_collapsed_header_reads(tree: ast.AST) -> list[int]:
-    """Line numbers of ``headers_from_asgi_scope(...)`` calls — the last-wins dict view."""
-    return [
-        call.lineno
-        for call in iter_call_expressions(tree, name=_COLLAPSED_HEADERS_HELPER)
-        if isinstance(call.func, ast.Name)
-    ]
 
 
 def _scan_signing_package() -> set[tuple[str, str, str]]:
@@ -383,30 +373,17 @@ class TestStrictHeaderGateReadsRawHeaderList:
         collapses = [
             ast.unparse(child)
             for child in ast.walk(headers_expr)
-            if isinstance(child, ast.Call)
-            and isinstance(child.func, ast.Name)
-            and child.func.id in ("dict", _COLLAPSED_HEADERS_HELPER)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "dict"
         ]
         assert records_raw and not collapses, (
             f"HttpExchange({_RAW_HEADERS_ATTR}=...) must be built from scope['headers'] — the raw "
             f"list[tuple[bytes, bytes]] — and must not collapse it{f' (found {collapses})' if collapses else ''}. "
-            f"A dict()/{_COLLAPSED_HEADERS_HELPER}() collapse is LAST-WINS on a repeated header LINE, "
+            "A dict() collapse is LAST-WINS on a repeated header LINE, "
             "which is what negative/021, 022, 023 and 026 attack, and it satisfies the gate's raw "
             "parameter type with an already-lossy value."
         )
 
     @pytest.mark.arch_guard
-    def test_precheck_never_reads_the_collapsed_dict(self) -> None:
-        node = _function_node(_VERIFIER, _HEADER_PRECHECK_FN)
-        collapsed = _find_collapsed_header_reads(node)
-        assert collapsed == [], (
-            f"{_HEADER_PRECHECK_FN} calls {_COLLAPSED_HEADERS_HELPER}() at line(s) {collapsed}. "
-            "That dict view LAST-WINS on a repeated header line rather than joining it, so a "
-            "proxy-inserted second covered-header line is erased before the gate can see it. "
-            f"The gate must read scope['headers'] directly. Other callers of "
-            f"{_COLLAPSED_HEADERS_HELPER}() are fine — this is scoped to the gate."
-        )
-
     @pytest.mark.arch_guard
     def test_precheck_is_actually_wired(self) -> None:
         """Non-vacuity: a gate nobody calls is inert, and both tests above pass anyway."""
@@ -431,34 +408,6 @@ class TestStrictHeaderGateReadsRawHeaderList:
             "assembled somewhere else, and the collapse it exists to refuse may already have "
             "happened."
         )
-
-    @pytest.mark.arch_guard
-    def test_detector_catches_collapsed_header_read(self) -> None:
-        """Positive meta-test: the collapsed-dict read is flagged."""
-        assert_detector_catches_ast_snippets(
-            _find_collapsed_header_reads,
-            snippets={
-                "collapsed-dict-gate": (
-                    "from src.core.http_utils import headers_from_asgi_scope\n\n"
-                    "def _strict_header_precheck(scope):\n"
-                    "    headers = headers_from_asgi_scope(scope)\n"
-                    "    if ',' in headers.get('content-type', ''):\n"
-                    "        raise ValueError('malformed')\n"
-                ),
-            },
-        )
-
-    @pytest.mark.arch_guard
-    def test_detector_passes_raw_header_iteration(self) -> None:
-        """Negative meta-test: iterating the raw list is not flagged."""
-        source = (
-            "def _strict_header_precheck(scope):\n"
-            "    lines = {}\n"
-            "    for raw_name, raw_value in scope.get('headers', []):\n"
-            "        lines.setdefault(raw_name.decode('latin-1').lower(), []).append(raw_value)\n"
-            "    return lines\n"
-        )
-        assert _find_collapsed_header_reads(ast.parse(source)) == []
 
 
 class TestDeliberatelyDecodedSitesStayDecoded:

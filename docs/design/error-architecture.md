@@ -15,6 +15,7 @@ which lane a failure belongs in, or change how an error reaches the wire.
 - [An error names its code by its class](#an-error-names-its-code-by-its-class)
 - [Two lanes: a raised failure and an advisory](#two-lanes-a-raised-failure-and-an-advisory)
 - [Neither lane authors text](#neither-lane-authors-text)
+- [A code's group decides whether it also travels in a header](#a-codes-group-decides-whether-it-also-travels-in-a-header)
 - [Field-level rejections travel in issues](#field-level-rejections-travel-in-issues)
 - [retry_after is clamped once](#retry_after-is-clamped-once)
 - [Worked case: format discovery](#worked-case-format-discovery)
@@ -27,22 +28,31 @@ needs with it: the recovery classification, the suggestion, the message, and the
 status that signals the failure. Nothing else decides those four, and nothing decides
 them per raise site.
 
-The table holds 100 entries. `_load_published_codes` (`src/core/errors/codes.py:261`)
-loads the 92 codes AdCP 3.1.1 publishes at import, from the pinned bundle's
-`enums/error-code.json` through `importlib.resources`, so the table cannot drift from
-the file it came from. The other 8 are this platform's own: `AppErrorCode`
-(`src/core/errors/codes.py:118`) declares them with their `CodeEntry` inline, so
-declaring a code and declaring what it means are one act — a member with no entry is a
-`TypeError` at class creation.
+The table holds 128 entries, and they come from two sources.
+
+The SDK supplies the vocabulary for 120 of them. `_load_published_codes` reads the 92
+codes AdCP 3.1.1 publishes from the pinned bundle's `enums/error-code.json` through
+`importlib.resources`, so the table cannot drift from the file it came from. The other
+28 are the request-signature family, which `SignatureErrorCode` generates from
+`adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE`.
+
+The remaining 8 belong to this platform. `AppErrorCode` declares them with their
+`CodeEntry` inline, so declaring a code and declaring what it means are one act — a
+member with no entry raises `TypeError` at class creation.
+
+The signature family lacks one thing the other published codes have: metadata. The
+pinned `enums/error-code.json` carries `enumMetadata` for the codes it publishes and
+publishes none of the 28, so `src/core/errors/signature_codes.py` transcribes their
+recovery, suggestion, and message from the specification's own tables. That transcription
+is a fallback inside the published loop rather than a pass written over the top, so a
+future pin that publishes the family answers for it and the transcription stops being
+consulted.
 
 `recovery`, `suggestion` and `message` come from the pinned file and nowhere else. A
 message resolves from the first of two sources that has one: an authored override for
 the nine published codes whose pinned text is implementer-facing
 (`_AUTHORED_SPEC_MESSAGES` in `src/core/errors/codes.py`), then the pinned
-`enumDescriptions` with the trailing `Recovery: …` clause stripped. The SDK's
-`STANDARD_ERROR_CODES` used to sit between them; it shadowed published text for 37 of
-the 92 codes and covered none of the other 55, so it is gone and the SDK is a
-cross-check here as it is everywhere else.
+`enumDescriptions` with the trailing `Recovery: …` clause stripped. The SDK is a cross-check here, as it is everywhere else.
 
 `CodeEntry` refuses an empty suggestion or message, and a status outside 100..599, at
 construction (`src/core/errors/codes.py:108`). That check runs at the one place that
@@ -202,6 +212,49 @@ A details block is a declared class, never a dict. `ErrorDetails.to_wire`
 `code`, `subject_type`, `subject_id`, `field`, `rejected_value`, `accepted_values` — and
 declares no free-text field, so there is no slot for a sentence to move into.
 
+## A code's group decides whether it also travels in a header
+
+Most codes reach the buyer one way: inside the response envelope. The 28
+request-signature codes reach the buyer twice. AdCP requires a refused signature to
+name its code in a `WWW-Authenticate: Signature error="<code>"` header beside the
+envelope that already carries it.
+
+`CodeEntry.group` records which family a code belongs to. `CodeGroup` has two members:
+
+- `GENERAL`, the default, for a code that needs no special transport. The 92 published
+  codes and the 8 platform codes declare nothing and take it.
+- `SIGNATURE`, which the 28 request-signature rows declare.
+
+The fact lives on the code rather than on the reader that needs it.
+`AuthChallengeResponder` reads an AdCP code off a finished response body, by which point
+the exception class that knew the code's family is gone. A set of code strings held by
+that renderer would work and would be one line, and it would also be a second vocabulary
+that drifts from this table. A field named for what the code **is**, rather than for what
+one reader does with it, keeps the dependency pointing at the table.
+
+The wire gives no way to mark the family. `core/error.json` types `error.code` as an open
+string, and `enums/error-code.json` does not publish the signature codes at all, so the
+grouping has to be re-added on this side.
+
+`AuthChallengeResponder` (`src/core/auth_middleware.py`) is the one renderer. It buffers a
+JSON response, reads the AdCP code out of the finished body, and when
+`CODE_TABLE[code].group` is `SIGNATURE` it sets the status to `401` and attaches the
+challenge. A bearer refusal takes the same path and answers `Bearer` or
+`Bearer error="invalid_token"`.
+
+Three properties follow from putting this in one place:
+
+1. **Every transport answers the same way.** MCP, A2A, and REST each wrote their own
+   `401` before, and the three disagreed.
+2. **A second renderer cannot win.** The responder strips any inbound
+   `WWW-Authenticate` header unconditionally, then re-derives it from the body. Anything
+   further in that writes its own challenge has it overwritten.
+3. **The renderer knows nothing about tools.** Which tool a request called, and whether
+   that tool requires a caller, is decided at the boundary where the name is available.
+
+For how a signature refusal reaches the responder, see
+[Request signature architecture](signature-architecture.md).
+
 ## Field-level rejections travel in issues
 
 `issues[]` is the pin's structured field-level rejection map, and no raise site authors
@@ -306,30 +359,3 @@ The obligations above are about the buyer-facing tool, not this helper.
 | Recovery values stay inside the pinned set | `tests/unit/test_architecture_error_recovery_enum_conformance.py` |
 | The two authentication errors are the resolver's alone | `ruff-boundary.toml` TID251 |
 | A failure body is a valid response envelope | `AdcpErrorResponse` is a declared response class; the pin requires `status` and `of` sets it |
-
-## What this replaced
-
-The lanes used to disagree with each other and with the pin.
-
-The advisory lane was hand-built text: `wire_advisory()` constructed an entry and
-`normalize_advisory_errors()` repaired it afterwards, filling `recovery` and `suggestion`
-only where a caller had left them unset and never touching `message` at all.
-
-The raised lane took the buyer's text as arguments. Its constructor accepted `message`,
-`suggestion`, and `status_code`, and per-class `_default_message` / `_default_recovery` /
-`_default_suggestion` knobs supplied the rest, so a class could contradict the pinned
-classification for its own code. The HTTP status came from a per-class
-`_default_status_code`, writable by inheritance, so a class that re-coded itself kept its
-parent's status — 26 such declarations, per the note at `src/core/errors/codes.py:345`.
-`details` was typed `dict[str, Any]`, so each raise site assembled the facts in whatever
-shape it chose.
-
-On the way out, `ERROR_CODE_MAPPING`, `translate_error_code()`, and
-`to_wire_error_code()` then rewrote the code against a closed `WIRE_STANDARD_CODES` set,
-which an open vocabulary makes unnecessary. Each transport hand-assembled its own refusal
-dict, and none of those dicts could carry `status` or `context`, so every error body this
-seller emitted was invalid against every pinned response schema.
-
-None of those mechanisms exists; the names survive only in comments recording their
-removal (`src/core/exceptions.py:50-99`). The code a raise site declares is the code the
-buyer reads, and the four fields around it are table lookups.

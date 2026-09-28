@@ -4,17 +4,6 @@ from collections.abc import Mapping
 from typing import Any
 
 
-def headers_from_asgi_scope(scope: Mapping[str, Any]) -> dict[str, str]:
-    """Decode an ASGI scope's raw header list into a lowercase-keyed dict.
-
-    ASGI carries headers as ``list[tuple[bytes, bytes]]`` with latin-1 encoding and
-    no case normalization. Every pure-ASGI middleware needs the same decode, so it
-    lives here once rather than being re-derived per middleware — two copies is two
-    chances to disagree on the encoding or the casing rule.
-    """
-    return {name.decode("latin-1").lower(): value.decode("latin-1") for name, value in scope.get("headers", [])}
-
-
 def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:
     """The request path with any ASGI ``root_path`` mount prefix stripped.
 

@@ -4,8 +4,10 @@ For counterparties receiving webhooks from this sales agent. It covers how our w
 signatures are constructed, where to fetch the key that verifies them, and what the
 deprecated HMAC scheme means for you.
 
-Companion pages: [Signing posture and key discovery](posture-and-discovery.md) and the
-operator-facing [signing key runbook](../operations/signing-key-runbook.md).
+Companion pages: [Signing posture and key discovery](posture-and-discovery.md), the
+operator-facing [signing key runbook](../operations/signing-key-runbook.md), and
+[Request signature architecture](../design/signature-architecture.md), which describes how
+this agent mints, stores, and publishes the keys you verify against.
 
 AdCP spec version: **3.1.1**.
 

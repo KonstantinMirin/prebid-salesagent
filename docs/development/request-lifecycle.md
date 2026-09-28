@@ -129,10 +129,24 @@ credential or resolves an identity. Outermost first:
 1. **`AuthChallengeResponder`** (`src/core/auth_middleware.py`), registered last
    and therefore outermost (`src/app.py:629`). It sees the *finished* response
    of every transport, including the MCP mount and the A2A routes. When the JSON
-   body carries an AdCP `AUTH_MISSING` or `AUTH_INVALID` code it lifts the
-   status to `401` and attaches the `WWW-Authenticate` challenge — `Bearer`, or
-   `Bearer error="invalid_token"` for a presented credential that was rejected
-   (RFC 6750 §3, `auth_middleware.py:35-38`).
+   body carries a code that owes a challenge, it lifts the status to `401` and
+   attaches the `WWW-Authenticate` header.
+
+   Which codes owe one, and what the header says, comes from the code's own
+   entry rather than from a list this middleware holds. `CODE_TABLE[code].group`
+   answers it:
+
+   - `AUTH_MISSING` and `AUTH_INVALID` answer `Bearer` and
+     `Bearer error="invalid_token"` (RFC 6750 §3).
+   - The 28 codes in `CodeGroup.SIGNATURE` answer
+     `Signature error="<code>"`, so a refused signature names its exact
+     failure in the header as well as in the envelope.
+
+   See [A code's group decides whether it also travels in a
+   header](../design/error-architecture.md#a-codes-group-decides-whether-it-also-travels-in-a-header)
+   for why the family is a property of the code, and [Request signature
+   architecture](../design/signature-architecture.md) for how a signature
+   refusal reaches this point.
 2. **`CORSMiddleware`** (`src/app.py:619-625`): adds CORS headers to all
    responses (origins from `settings.runtime.allowed_origin_list`).
 3. **`a2a_messageid_compatibility_middleware`** (`src/app.py:540-576`),
@@ -281,7 +295,15 @@ between the two codes is in
 ### Identity: `_resolve_identity`
 
 All transports converge on one function before business logic runs
-(`src/core/resolved_identity.py:267-412`):
+(`src/core/resolved_identity.py:267-412`).
+
+A request signature is a credential, and this function reads it the way it reads
+a bearer token. The resolver loads the tenant and the principal, then calls
+`verify_inbound_signature` with what it already holds, so the verifier re-reads
+no headers and resolves no tenant of its own. A refusal leaves as a typed error
+and becomes a `401` at the middleware described earlier. For how the seller
+resolves a counterparty's public key and what each posture bucket enforces, see
+[Request signature architecture](../design/signature-architecture.md).
 
 ```
 _resolve_identity(
