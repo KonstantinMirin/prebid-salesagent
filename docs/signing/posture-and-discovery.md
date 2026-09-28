@@ -50,8 +50,8 @@ Three more rules matter when you read a declaration:
   signature wherever one appears. An explicit list narrows that to the operations named,
   and only then does "not listed" mean "outside the posture".
 - **`supported: false` collapses every bucket to "none".** If we advertise that we do not
-  verify signatures, no operation is required or warned regardless of what the other
-  fields say. Check `supported` first.
+  verify signatures, no operation is required regardless of what the other fields say.
+  Check `supported` first.
 - **JSON-RPC methods are not graded at all.** The pinned schema defines
   `protocol_methods_supported_for` / `_warn_for` / `_required_for` for wire methods such as
   `tasks/cancel`. We declare none of them and refuse a declaration that names one: those

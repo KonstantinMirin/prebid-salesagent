@@ -85,10 +85,11 @@ from tests.unit._architecture_helpers import REPO_ROOT, parse_module, src_python
 #:
 #: ONE table, where the pre-merge branch had two. Its second table held surfaces
 #: we exposed that were NOT AdCP operations — six A2A-only skills with no row
-#: anywhere. #1721 has no such surface: ``registry.is_adcp_operation`` makes "is
-#: there a row for it" and "is it an AdCP operation this seller implements" the
-#: same question, so a name we serve is an operation by construction and the only
-#: open question left is whether the pinned SDK happens to name it.
+#: anywhere. #1721 has no such surface: a ``TOOLS`` row is what makes a tool
+#: reachable on every transport, so "is there a row for it" and "is it an AdCP
+#: operation this seller implements" are one question, a name we serve is an
+#: operation by construction, and the only open question left is whether the pinned
+#: SDK happens to name it.
 _SDK_UNLISTED_OPERATIONS: dict[str, str] = {
     "complete_task": (
         "task-completion tool; absent from ADCP_TOOL_DEFINITIONS at adcp==6.6.0. "

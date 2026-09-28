@@ -138,9 +138,9 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     When the Buyer Agent syncs the creative
     Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
     # ONE variable apart from the scenario above: the same operation, the same key, the same
-    # tampered bytes — the bucket. This is the control that makes the warn completion mean
+    # tampered bytes — the bucket. This is the control that makes that completion mean
     # something: without it, "the request completed" is equally explained by a verifier that
-    # never rejects a digest mismatch at all, and the warn scenario would grade nothing.
+    # never rejects a digest mismatch at all, and the unbucketed scenario would grade nothing.
 
   @T-UC-006-local-signing-credentials-escalate-signed @request-signing @error-path @invariant @boundary
   Scenario: a signed-but-invalid registration carrying credentials is refused where the same request without them completes

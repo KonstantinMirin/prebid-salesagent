@@ -56,8 +56,13 @@ from src.core.signing.posture import (
     requires_trust_root,
 )
 
-#: The buckets a stored declaration may name, as they are spelled in it. Read off the model
-#: rather than typed out, so a bucket the pinned schema adds is covered the day it appears.
+#: The buckets a stored declaration may name, as they are spelled in it.
+#:
+#: TYPED OUT, not read off the model, and that is the point: the pinned type carries six
+#: bucket fields and this seller implements two. Deriving the tuple from the model would
+#: re-admit ``warn_for`` and the ``protocol_methods_*`` trio the moment it was written,
+#: which is exactly what :data:`_UNDECLARABLE_POSTURE_FIELDS` refuses. A bucket the schema
+#: ADDS therefore needs a decision here rather than arriving on its own.
 _ADCP_BUCKETS = ("required_for", "supported_for")
 
 #: Why the JSON-RPC namespace is undeclarable. One sentence for all three buckets, because
@@ -740,7 +745,7 @@ class CapabilityDeclarations(BaseModel):
                 origins.request_signing,
                 "request_signing",
                 posture is not None and request_signing_buckets_declared(posture),
-                "request_signing must name at least one operation or protocol method",
+                "request_signing must name at least one operation",
             ),
             (
                 origins.governance_signing,

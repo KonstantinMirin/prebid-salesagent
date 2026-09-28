@@ -728,10 +728,13 @@ _XFAIL_TAGS: dict[str, str] = {
     # T-UC-010-main (account.*, supported_pricing_models, media_buy.features,
     # execution.targeting.geo_*, portfolio, last_updated) now EXECUTES on every
     # transport for the first time; those asserts were being masked by this entry.
-    "T-UC-010-main-reporting-delivery": "media_buy.reporting_delivery_methods not emitted -- declaring it "
-    "is SPEC-FORBIDDEN while webhook_signing (RFC 9421) is unsupported: get-adcp-capabilities-response.json "
-    "must_equal_when requires webhook_signing.supported=true whenever the method list contains 'webhook'. "
-    "Production pushes HMAC-signed reporting webhooks but may not advertise them until RFC 9421 lands — #1291",
+    "T-UC-010-main-reporting-delivery": "media_buy.reporting_delivery_methods not emitted for THIS "
+    "scenario's tenant, which declares nothing and holds no signing key -- and its absence there is "
+    "spec-mandated, not a gap: get-adcp-capabilities-response.json must_equal_when requires "
+    "webhook_signing.supported=true whenever the method list contains 'webhook', and that value is DERIVED "
+    "from an active key this deployment can open on a publishable origin. The emitting case is graded by "
+    "@T-UC-010-v31-webhook-signing-required-when, whose Given seeds a keyed tenant and declares the method; "
+    "this scenario's Given asks only for a resolvable tenant, so it cannot reach that state",
     # Graduated: _build_adcp_block() now always emits
     # adcp.supported_versions (derived from SUPPORTED_ADCP_VERSIONS) on both
     # the no-tenant and tenant-resolved paths. T-UC-010-ext-a removed.

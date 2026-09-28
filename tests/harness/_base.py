@@ -1505,9 +1505,9 @@ class BaseTestEnv:
         in-process while the e2e leg scraped the production counter, and those are
         DIFFERENT EVENTS: the spy wraps ``verify_request_signature``, which runs
         BEFORE the Tier 3 brand-authorization check, while
-        ``record_signature_verified`` fires only after Tier 3 passes
-        (``request_verifier_middleware.py:565``, the one line reaching
-        ``await self.app``). So three of the four legs counted an event that PRECEDES
+        ``record_signature_verified`` fires only once the verifier has accepted
+        (``src/core/signing/verifier.py``, at the end of ``_verify_signed``). So three of
+        the four legs counted an event that PRECEDES
         the acceptance decision, and a scenario grading acceptance passed on a
         request the verifier refused. Both legs now read the same production counter
         — in-process off the shared registry, e2e over HTTP — so the oracle cannot
@@ -1774,10 +1774,10 @@ class BaseTestEnv:
         handler reads only that; the real resolver answers.
 
         Once the env CAN sign, this defers to ``_run_a2a_over_http``: an
-        ``on_message_send`` call has no wire, so ``RequestSignatureMiddleware``
-        (ASGI, above the whole app) never sees it and a signature would be
-        unobservable. See ``can_sign`` for why the fork is on the capability and
-        not on ``signed``.
+        ``on_message_send`` call puts no bytes on a wire, so ``SignedExchangeCapture``
+        records no exchange for it and the verifier is handed ``exchange=None`` --
+        a signature would be unobservable. See ``can_sign`` for why the fork is on the
+        capability and not on ``signed``.
 
         Args:
             skill_name: A2A skill name (e.g., "get_products").
@@ -2047,8 +2047,9 @@ class BaseTestEnv:
 
         Once the env CAN sign, this defers to ``_run_mcp_over_http``: FastMCP's
         in-memory transport is a pair of anyio object streams with no HTTP, no
-        ASGI and no headers, so ``RequestSignatureMiddleware`` — registered on
-        ``src.app.app`` — is not on that path at all. See ``can_sign``.
+        ASGI and no headers, so ``SignedExchangeCapture`` — registered on
+        ``src.app.app`` — is not on that path at all and the resolver receives no
+        exchange to verify. See ``can_sign``.
 
         Args:
             tool_name: MCP tool name (e.g., "get_products").
@@ -2132,14 +2133,11 @@ class BaseTestEnv:
         ``src.app.app`` the REST leg uses, each serialized ONCE and signed over
         exactly the bytes sent.
 
-        Only the ``tools/call`` frame is a graded operation. ``initialize`` names
-        a protocol method with no ``/``, which the pinned
-        ``protocol_methods_*`` pattern cannot represent, and
-        ``notifications/initialized`` is not something an AdCP posture declares —
-        both land in the ``none`` bucket, which
-        ``RequestSignatureMiddleware`` passes through WITHOUT calling the
-        verifier. Signing them anyway is correct (each gets its own fresh nonce)
-        and keeps "the verifier ran exactly once per dispatch" true.
+        Only the ``tools/call`` frame is a graded operation. ``initialize`` and
+        ``notifications/initialized`` are session frames that name no AdCP operation, so
+        FastMCP answers them without ever calling the boundary — no posture is read for
+        them and the verifier never sees them. Signing them anyway is correct (each gets
+        its own fresh nonce) and keeps "the verifier ran exactly once per dispatch" true.
 
         Driving the three frames by hand rather than through FastMCP's
         ``StreamableHttpTransport`` is deliberate: that client also opens a
@@ -2404,14 +2402,12 @@ class BaseTestEnv:
             # The credential travels as HEADERS even on the unsigned leg, and that is
             # ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every
             # leg. The dependency-override era posted bare here and had to bolt the
-            # tenant hint back on, because a FastAPI dep runs INSIDE the app while
-            # ``RequestSignatureMiddleware`` sits at the ASGI boundary OUTSIDE it — so a
-            # bare post reached the verifier anonymous, ``_detect_tenant_for_posture``
-            # answered ``(None, None)``, the posture fell back to ``supported=True``, and
-            # a request carrying ``push_notification_config.authentication`` was refused
-            # with a bodyless 401 before the ingest gate ran. The in-process MCP and A2A
-            # legs never traverse the ASGI stack, so they did not see it — the four legs
-            # were not running the same scenario.
+            # tenant hint back on: a bare post reached the resolver anonymous, no tenant
+            # resolved, the posture fell back to the agent-level default, and a request
+            # carrying ``push_notification_config.authentication`` was refused with a
+            # bodyless 401 before the ingest gate ran. The in-process MCP and A2A legs put
+            # no bytes on a wire and carry their credential another way, so they did not
+            # see it — the four legs were not running the same scenario.
             #
             # ``x-adcp-tenant`` is the load-bearing header there, not the bearer:
             # ``resolved_identity._detect_tenant`` resolves a tenant from Host -> virtual
@@ -2498,8 +2494,8 @@ class BaseTestEnv:
         *origin* is the scheme+authority the signature's ``@target-uri`` covers,
         and defaults to the in-process ASGI client's ``http://testserver`` — right
         for the three in-process legs and wrong for the one that leaves the
-        process. ``_verify_url`` (``request_verifier_middleware``) rebuilds the
-        authority from the ``Host`` header the proxy forwards VERBATIM, so an e2e
+        process. The capture's ``_target_uri`` (``src/core/signing/capture.py``) rebuilds
+        the authority from the ``Host`` header the proxy forwards VERBATIM, so an e2e
         caller must pass the real origin INCLUDING THE PORT or the signature
         covers a different target-uri than the verifier reconstructs and is
         refused as ``request_signature_invalid`` — a fixture bug wearing a

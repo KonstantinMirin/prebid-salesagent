@@ -401,9 +401,10 @@ class CreativeAgentRegistry:
         spec"; ``list_creative_formats`` is one — it has a task reference at
         ``creative/task-reference/list_creative_formats.mdx`` and appears in
         ``sdk_operation_names()`` (the cross-check leg). That is what makes signing
-        this dial legal at all. Note the predicate is NOT
-        ``src.core.signing.vocabulary.is_adcp_operation``: that one answers "does
-        THIS SELLER implement it", which is the inbound question. Graded by the
+        this dial legal at all. The question is NOT whether this seller has a
+        ``TOOLS`` row for the name -- that answers "does THIS SELLER implement it",
+        which is the inbound question, and it is False for every tool we only ever
+        CALL. Graded by the
         conformance storyboard only for the VERIFY direction; the emit direction
         here is ungraded.
 
@@ -977,9 +978,10 @@ class CreativeAgentRegistry:
         # ``sdk_operation_names()`` -- so security.mdx:1043 permits attributing a
         # signature to it. That check is what licenses ``sign=`` here, and it is the
         # reason the comment this replaced ("non-standard tool ... not in AdCP spec")
-        # could not be left standing above a signed dial. The predicate is NOT
-        # ``vocabulary.is_adcp_operation``: that answers "does this seller SERVE it",
-        # which is False for every tool we only ever CALL, ``get_signals`` included.
+        # could not be left standing above a signed dial. The question is NOT whether
+        # this seller has a ``TOOLS`` row for the name: that answers "does this seller
+        # SERVE it", which is False for every tool we only ever CALL, ``get_signals``
+        # included.
         return await call_operator_mcp_tool(
             _connection_agent_url(agent_url),
             "preview_creative",

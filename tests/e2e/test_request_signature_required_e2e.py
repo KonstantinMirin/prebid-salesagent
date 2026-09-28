@@ -20,11 +20,11 @@ engine, a different SQLAlchemy engine object than ``live_db_env``'s
 ``signing_declarations``), on BOTH REST and MCP naming surfaces (the ticket's own
 motivating gap).
 
-**WHERE THE RULE LIVES NOW — and why that changes what this module must send.**
-The ASGI ``RequestSignatureMiddleware`` this module was first written against is
-gone. Verification runs inside the ONE resolver,
-``src.core.resolved_identity._resolve_identity`` (step 4b), reached only from
-``src.core.tools._boundary.invoke_tool``; the typed
+**WHERE THE RULE LIVES — and why that decides what this module must send.**
+Verification runs inside the ONE resolver,
+``src.core.resolved_identity._resolve_identity``, reached only from
+``src.core.tools._boundary.invoke_tool`` (docs/development/request-lifecycle.md
+§ Identity); the typed
 ``AdCPRequestSignatureError`` it raises is lifted to ``401`` +
 ``WWW-Authenticate: Signature error="<code>"`` by ``AuthChallengeResponder``
 (``src/core/auth_middleware.py``), app-wide middleware that reads the AdCP code

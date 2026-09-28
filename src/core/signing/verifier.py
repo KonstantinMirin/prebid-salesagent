@@ -303,7 +303,7 @@ def _verify_signed(
 
     # ``bucket_for`` collapses TWO situations into ``none``: a seller declaring
     # ``supported: false``, which is not a verifier at all, and ``supported: true`` with the
-    # operation in none of the three lists, which IS one. Only the second is bound by the
+    # operation in neither declarable bucket, which IS one. Only the second is bound by the
     # spec's pre-check (:1226, "even for operations not in required_for"), and the storyboard
     # gates all 28 negative vectors on ``request_signing.supported: true`` alone. So the gate
     # reads ``supported``, never the bucket — reading the bucket would keep the defect for
@@ -495,8 +495,10 @@ def _jwks_is_well_known(resolution: AgentResolution) -> bool:
 
     So nothing here reads ``identity.key_origins``. With one possible location there is
     no origin to pin: the map's whole purpose is to declare where keys live when that can
-    vary. The full statement of the subset, and the two narrowings that did NOT land, are
-    in ``docs/design/request-signing-subset.md``.
+    vary. The subset this seller implements -- this narrowing, the enforcement narrowing
+    beside it, and the one that was MEASURED AND NOT TAKEN (``covers_content_digest`` stays
+    ``either``) -- is stated with its measurements in
+    ``docs/design/request-signing-subset.md``.
     """
     origin = origin_of(resolution.agent_url)
     return bool(origin) and resolution.jwks_uri == f"{origin}{WELL_KNOWN_JWKS_PATH}"

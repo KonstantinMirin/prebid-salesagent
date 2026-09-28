@@ -180,13 +180,17 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # geo / portfolio asserts beside it, which DO pass. Isolating it lets those
     # grade for the first time while this one keeps failing honestly.
     #
-    # Why it cannot pass, and why that is CORRECT rather than a defect: v3.1.1
+    # Why it cannot pass HERE, and why that is CORRECT rather than a defect: v3.1.1
     # get-adcp-capabilities-response.json carries a must_equal_when rule -- when
     # reporting_delivery_methods contains "webhook", webhook_signing.supported MUST
-    # be true. webhook_signing means RFC 9421, which is unimplemented (#1291).
-    # Production does push HMAC-signed reporting webhooks, but it may not ADVERTISE
-    # the method while RFC 9421 signing is off, so omitting the field is
-    # spec-mandated honesty. This scenario un-xfails when #1291 lands, not before.
+    # be true. That value is DERIVED from an active signing key this deployment can
+    # open on an origin it can publish a trust root from, and this scenario's Given
+    # asks only for a resolvable tenant: one that declares nothing and holds no key.
+    # Advertising the method for it would be the must_equal_when violation, so
+    # omitting the field is spec-mandated honesty. The emitting case is graded by
+    # @T-UC-010-v31-webhook-signing-required-when, whose Given seeds a keyed tenant
+    # and declares the method; this scenario un-xfails when its own Given can ask
+    # for that state.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/reporting_delivery_methods
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/webhook_signing
 

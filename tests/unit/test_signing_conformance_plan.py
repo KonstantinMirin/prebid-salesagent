@@ -77,7 +77,7 @@ def test_unsigned_vectors_are_the_only_ones_without_a_credential(vector_id: str)
     """Credential assignment is derived from the wire, not chosen per vector.
 
     Every SIGNED vector presents a principal token, because with no accepted
-    credential the middleware hands the verifier an empty JWKS resolver and every
+    credential the resolver hands the verifier an empty JWKS resolver and every
     signed vector short-circuits at step 7 — which would make ``negative/008``
     (which expects exactly ``request_signature_key_unknown``) pass for the wrong
     reason. The three UNSIGNED vectors present no credential the verifier accepts,

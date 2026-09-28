@@ -718,9 +718,9 @@ class AdCPRequestSignatureJwksUnavailableError(AdCPRequestSignatureError):
 
 
 class AdCPRequestSignatureJwksUntrustedError(AdCPRequestSignatureError):
-    """The signer's JWKS is served from an origin this verifier will not trust (401).
+    """The signer's JWKS is served from a location this verifier will not read (401).
 
-    Discovery, step 7. The ``jwks_uri`` resolves somewhere the key-origin rules do not permit, so its contents are not admissible however well-formed they are.
+    Discovery, step 7. The ``jwks_uri`` resolves somewhere a key may not be read from -- keys come from ``<agent origin>/.well-known/jwks.json`` (docs/design/signature-architecture.md § "Resolve a counterparty's public key") -- so its contents are not admissible however well-formed the document is. It is also the code for a ``jwks_uri`` the trust boundary refuses outright: an authority that will not canonicalize, or an SSRF-banned host.
 
     Wire code ``request_signature_jwks_untrusted``.
     """

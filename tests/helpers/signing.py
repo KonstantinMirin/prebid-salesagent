@@ -74,7 +74,7 @@ REQUEST_SIGNING = "request-signing"
 #: The counterparty as the Principal row carries it. ``agent_url`` is the ONLY
 #: legitimate source for a counterparty's identity (security.mdx forbids taking
 #: it from a header, a body field or any other self-assertion), and the
-#: middleware keys :data:`AGENT_RESOLUTION_CACHE` on exactly this value.
+#: verifier keys :data:`AGENT_RESOLUTION_CACHE` on exactly this value.
 COUNTERPARTY_AGENT_URL = "https://buyer.example.com/a2a"
 
 #: The ``keyid`` the counterparty signs under.
@@ -186,8 +186,8 @@ FAILED_METRIC = "adcp_request_signature_failed_total"
 #: The third counter of the same family: ``reason="absent"`` (no signature headers)
 #: or ``reason="ignored"`` (headers present, the posture buckets the operation as
 #: ``none``, nothing verified). Named here beside its two siblings because the
-#: ``ignored`` arm is the one observable that distinguishes "the middleware passed
-#: this request through and counted it" from "the middleware stopped counting" —
+#: ``ignored`` arm is the one observable that distinguishes "the verifier passed
+#: this request through and counted it" from "the verifier stopped counting" —
 #: the two look identical on the wire.
 UNSIGNED_METRIC = "adcp_request_unsigned_total"
 
@@ -725,14 +725,14 @@ def counterparty_key(
     *,
     agent_url: str = COUNTERPARTY_AGENT_URL,
 ) -> Iterator[None]:
-    """Seed the whole ``AgentResolution`` for *agent_url* into the middleware cache.
+    """Seed the whole ``AgentResolution`` for *agent_url* into the verifier's cache.
 
     The keyword argument defaults to the shared counterparty
     (:data:`COUNTERPARTY_AGENT_URL`) that every signing suite signs as; pass it only
     when a test needs a SECOND counterparty, which is the thing the default makes
     visible at the call site.
 
-    The middleware keys its resolver registry on the counterparty's ``agent_url``
+    The verifier keys its resolution cache on the counterparty's ``agent_url``
     (read from the Principal row — security.mdx forbids taking it from a header, a
     body field or any self-assertion), and the cached object carries the ``jwks``
     the checklist resolves keys from. Seeding the resolution is what lets these tests
@@ -846,7 +846,7 @@ def verifier_spy() -> Iterator[list[dict[str, Any]]]:
 
     Pure observation: the SDK verifier still runs and still decides. Recording the
     kwargs is what proves WHICH bytes were verified — and what makes a positive
-    conformance vector non-vacuous, since "non-4xx" is equally true of a middleware
+    conformance vector non-vacuous, since "non-4xx" is equally true of a verifier
     that skipped the path entirely.
 
     The patched attribute is called inside a worker thread (the boundary runs
@@ -875,7 +875,7 @@ def verifier_spy() -> Iterator[list[dict[str, Any]]]:
             raise
         # The RESULT under a reserved key, so a caller can assert the returned
         # ``VerifiedSigner.key_id`` — the only positive-path observable that
-        # distinguishes "the verifier accepted this signature" from "the middleware
+        # distinguishes "the verifier accepted this signature" from "the boundary
         # never looked". Absent when the verifier raised, which is itself the signal.
         record[VERIFIER_RESULT] = result
         return result
@@ -998,7 +998,7 @@ def scraped_counter_samples(text: str, sample_name: str, **labels: str) -> dict[
 
 
 #: Flask's admin app is mounted at ``/`` as well as ``/admin`` (``src/app.py``), in the
-#: same process as the ASGI middleware, and the route carries no ``@require_auth``.
+#: same process as the app under test, and the route carries no ``@require_auth``.
 METRICS_PATH = "/metrics"
 
 
@@ -1007,7 +1007,7 @@ def scraped_verified_count(base_url: str, key_id: str, *, when: str = "now") -> 
 
     The out-of-process oracle for "the verifier ran and ACCEPTED this signature", and
     the only one available across a container boundary: the in-process legs read this
-    same counter off the registry they share with the middleware, which the live
+    same counter off the registry they share with production, which the live
     server's verifier — running in another container — does not touch.
     ``record_signature_verified`` has ONE call site in ``src/``
     (``src/core/signing/verifier.py`` :391), on the branch reached only after the

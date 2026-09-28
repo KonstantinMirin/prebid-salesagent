@@ -1839,9 +1839,8 @@ _IDENTITY_STATES: dict[str, dict[str, Any] | IdentityMode] = {
 
 #: The posture the boundary outline describes only as "request_signing.supported_for
 #: non-empty". ONE operation, and deliberately NOT ``get_adcp_capabilities``: a bucket
-#: covering the operation under test would make the in-process rest leg (which traverses
-#: RequestSignatureMiddleware, unlike a2a/mcp) reject the very request the scenario is
-#: about, grading a signature refusal instead of the identity rule.
+#: covering the operation under test would have the verifier reject the very request the
+#: scenario is about, grading a signature refusal instead of the identity rule.
 _TRUST_ROOT_POSTURE: dict[str, Any] = {"supported": True, "supported_for": ["create_media_buy"]}
 
 #: ``identity.brand_json_url boundary`` rows: leading partition token -> the posture and
@@ -2452,9 +2451,8 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 #:
 #: No bucket names ``get_adcp_capabilities``. With a declared ``supported_for`` that omits
 #: it, ``_bucket_for`` puts the operation under test in the ``none`` bucket — otherwise the
-#: in-process rest leg (the only transport traversing RequestSignatureMiddleware) would
-#: reject the very request the scenario is about, and the row would grade a signature
-#: refusal instead of the relation.
+#: verifier would reject the very request the scenario is about, and the row would grade a
+#: signature refusal instead of the relation.
 _MONOTONICITY_BOUNDARY_POSTURES: dict[str, dict[str, Any]] = {
     "required_for = supported_for (full subset, equal sets)": {
         "supported": True,
@@ -2909,8 +2907,8 @@ def given_request_signing_buckets(ctx: dict, fragment: str) -> None:
     """Store a ``request_signing`` declaration written as ``request_signing.<bucket>=[...]``.
 
     One step for every bucket-set Given in the feature rather than one per scenario:
-    the namespace-split and subset scenarios differ only in WHICH buckets they name, and
-    a step per literal sentence is the duplication the BDD guards flag.
+    those Givens differ only in WHICH buckets they name and with what, and a step per
+    literal sentence is the duplication the BDD guards flag.
 
     ``supported`` is forced true because a bucket-naming posture with ``supported: false``
     enforces nothing — every operation resolves to the ``none`` bucket — so the scenario

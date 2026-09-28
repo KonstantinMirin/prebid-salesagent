@@ -21,11 +21,11 @@ Spec grounding (reproducible):
 
 Why a wrapper at all, and not the SDK checker straight through
 --------------------------------------------------------------
-``verifier.py:294`` calls the revocation checker with no ``try``, and
-``CachingRevocationChecker`` raises bare ``Exception`` subclasses. The verifier
-middleware's only catch is ``except SignatureVerificationError``
-(``request_verifier_middleware.py:341``), so every one of those escapes to
-``ServerErrorMiddleware`` and becomes a 500 instead of the graded 401. The SDK's
+The SDK's checklist calls the revocation checker with no ``try``, and
+``CachingRevocationChecker`` raises bare ``Exception`` subclasses. The only catch on that
+path is ``_verify_signed``'s ``except SignatureVerificationError``
+(``src/core/signing/verifier.py``), so every one of those escapes the boundary and becomes
+a 500 instead of the graded 401. The SDK's
 own docstring (``revocation_fetcher.py:600-602``) claims the verifier maps
 ``RevocationListFreshnessError`` to ``request_signature_revocation_stale``; it
 does not. This module is that missing translation, and it is a SINGLE site —
@@ -56,8 +56,8 @@ Do not "fix" this to match :1686-1689 without re-reading both citations.
 
 Concurrency
 -----------
-``_run_verifier`` runs under ``asyncio.to_thread``
-(``request_verifier_middleware.py:329``), which is exactly the thread-pool case
+``_run_verifier`` runs under the ``asyncio.to_thread`` that ``invoke_tool`` resolves
+identity in (``src/core/tools/_boundary.py``), which is exactly the thread-pool case
 ``revocation_fetcher.py:609-618`` says needs an external lock. The lock is
 therefore PER ISSUER ORIGIN and held only around that origin's check — never one
 process-wide lock, which would be held across the 10s-default HTTPS fetch inside
@@ -165,11 +165,9 @@ class _ResolutionCacheJwksResolver:
         # from this module, so a top-level import back into it would be a cycle. The name is
         # bound to the same dict object either way.
         #
-        # The module moved: the pre-merge branch kept the cache in the ASGI
-        # `request_verifier_middleware`, which #1721 replaced with `verifier.py` when
-        # verification moved into `_resolve_identity`. A function-local import is invisible to
-        # every import-time check, so this line survived the stage-0 port pointing at a module
-        # that no longer exists and would only have failed at checklist step 9 -- on a signed
+        # The cache lives in `verifier.py`, beside the walk that fills it. A function-local
+        # import is invisible to every import-time check, so a name that drifts here fails
+        # nowhere at import and would surface only at checklist step 9 -- on a signed
         # request from a counterparty publishing a revocation list, which no unit test reaches.
         from src.core.signing.verifier import AGENT_RESOLUTION_CACHE
 

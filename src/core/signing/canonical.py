@@ -56,8 +56,8 @@ The error code
 ``TargetUriMalformedError(ValueError)`` carrying it; this module re-raises everything
 as the facade's :class:`TargetUriMalformedError`, which additionally subclasses the
 SDK's ``SignatureVerificationError`` so BOTH caller populations keep their idiom: the
-verifier middleware's ``except SignatureVerificationError`` 401 path, and schema-land
-URL helpers that treat a bad URL as a ``ValueError``. One public type, pinned by the
+verifier's ``except SignatureVerificationError`` 401 path, and schema-land URL helpers
+that treat a bad URL as a ``ValueError``. One public type, pinned by the
 facade tests.
 
 **It is NOT the same code as the wire-header rejection.** Request vector
@@ -122,9 +122,9 @@ class TargetUriMalformedError(SignatureVerificationError, ValueError):
     Deliberately a subclass of BOTH caller idioms (design step 4 of
     ``salesagent-z6nr.33``):
 
-    * ``SignatureVerificationError`` — the verifier middleware's single ``except``
-      clause turns it into the graded 401 envelope (warn-mode aware), and
-      ``record_signature_failed`` reads ``.code`` off it like every other rejection;
+    * ``SignatureVerificationError`` — the verifier's single ``except`` clause turns it
+      into the graded 401 envelope, and ``record_signature_failed`` reads ``.code`` off it
+      like every other rejection;
     * ``ValueError`` — schema-land URL helpers (``canonical_agent_url`` and its
       consumers) keep the "a bad URL is a ValueError" contract without importing any
       verifier machinery.

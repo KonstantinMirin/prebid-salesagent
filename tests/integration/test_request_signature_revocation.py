@@ -7,14 +7,12 @@ Each test below encodes the behavior the REFINED plan creates
 post-review)"). The refinement AMENDS the original Implementation Plan and wins
 wherever the two differ.
 
-Ported onto #1721's request boundary. Inbound verification is no longer an ASGI
-middleware: :func:`src.core.signing.verifier.verify_inbound_signature` is called
-from ``_resolve_identity``, which the boundary runs under ``asyncio.to_thread``
-(``src/core/tools/_boundary.py:333``). Every citation below that used to name
-``request_verifier_middleware`` names ``src/core/signing/verifier.py`` instead;
-the DEFECTS those citations describe are unchanged, because the only catch on
-the path is still ``except SignatureVerificationError`` (``verifier.py:388``)
-and the SDK still raises bare ``Exception`` subclasses through it.
+:func:`src.core.signing.verifier.verify_inbound_signature` is called from
+``_resolve_identity``, which the boundary runs under ``asyncio.to_thread``
+(``src/core/tools/_boundary.py``). The defects this module grades turn on one
+property of that path: its only catch is ``_verify_signed``'s
+``except SignatureVerificationError``, and the SDK raises bare ``Exception``
+subclasses through it.
 
 Spec grounding (reproducible):
 ``git -C ~/projects/adcp show v3.1.1:docs/building/by-layer/L1/security.mdx``
@@ -625,9 +623,9 @@ class TestAbsentRevocationList:
 
         ``_ensure_fresh:779-781`` calls ``_refresh`` with no ``except`` on the
         cold path, so a bare ``CachingRevocationChecker`` would raise
-        ``RevocationListFetchError`` out of ``verifier.py:294``, past
-        ``request_verifier_middleware.py:341``, and 500 EVERY signed request
-        from that counterparty. Nobody in the ecosystem publishes a list today,
+        ``RevocationListFetchError`` out of the SDK checklist, past
+        ``_verify_signed``'s ``except SignatureVerificationError``, and 500 EVERY
+        signed request from that counterparty. Nobody in the ecosystem publishes a list today,
         so this is the default case.
 
         Fail-open here is spec-legitimate and not a quiet failure: :1333's MUST
@@ -760,8 +758,8 @@ class TestStaleRevocationList:
         """The translation F3 found missing, graded end to end.
 
         The SDK raises ``RevocationListFreshnessError`` — a bare ``Exception``
-        (``revocation_fetcher.py:122``) that ``verifier.py:294`` calls with no
-        ``try`` and that ``request_verifier_middleware.py:341`` cannot catch. The
+        (``revocation_fetcher.py:122``) that the SDK checklist calls with no ``try``
+        and that ``_verify_signed``'s ``except SignatureVerificationError`` cannot catch. The
         SDK's own docstring (:600-602) claims the verifier maps it to
         ``request_signature_revocation_stale``; it does not, so A5 owns the
         translation and this is the test that proves it exists.
@@ -893,9 +891,9 @@ class TestResolverReadsThroughTheResolutionCache:
 class TestNoCrossCounterpartyBlocking:
     """Locking is per checker; a blocked fetch holds nothing process-wide.
 
-    ``_run_verifier`` runs under ``asyncio.to_thread``
-    (``request_verifier_middleware.py:329``), which is exactly the thread-pool
-    case ``revocation_fetcher.py:609-618`` says needs an external lock. The
+    ``_run_verifier`` runs under the ``asyncio.to_thread`` the boundary resolves identity
+    in (``src/core/tools/_boundary.py``), which is exactly the thread-pool case
+    ``revocation_fetcher.py:609-618`` says needs an external lock. The
     obvious answer — one module-level ``threading.Lock`` around every
     ``__call__`` — is held across the 10s-default HTTPS fetch inside
     ``_ensure_fresh``, so ONE dead counterparty serializes and stalls every
