@@ -64,11 +64,9 @@ def _extract_tenant_subdomain(tenant_row: dict, virtual_host: str | None = None)
         Tenant subdomain if determinable
     """
     # The tenant's own slug, which is what this is FOR: a label to show and to build a
-    # display URL from. It used to prefer a subdomain parsed out of the request's host —
-    # against SALES_AGENT_DOMAIN first, then a bare "first label before the dot" — so the
-    # page could name the tenant something the tenant never called itself, decided by
-    # whichever host the reader happened to arrive on. The parse went with the subdomain
-    # strategy; the column it fell back to was the answer all along.
+    # display URL from. It comes off the row and never off the request's host — a label
+    # parsed out of whichever host the reader arrived on can name the tenant something
+    # the tenant never called itself.
     if tenant_row.get("subdomain"):
         return tenant_row["subdomain"]
 
@@ -244,12 +242,10 @@ def generate_tenant_landing_page(tenant_row: dict, virtual_host: str | None = No
         agent_card_url = f"{single_tenant_base}/.well-known/agent.json"
         admin_url = f"{single_tenant_base}/admin/"
     else:
-        # The admin lives where the reader already is. This used to ask whether the host was
-        # "external" — not under SALES_AGENT_DOMAIN — and, if so, point admin at a DIFFERENT
-        # origin built from the tenant's subdomain. There is no such second origin now: a
-        # tenant is served at the host it declares, and that is the host this page was
-        # fetched from. Sending a reader elsewhere could only send them
-        # to a name nothing serves, which is the class of bug that took the A2A axis to zero.
+        # The admin lives where the reader already is. There is no second origin to point
+        # at: a tenant is served at the host it declares, and that is the host this page
+        # was fetched from, so a link built from anything else names something nothing
+        # serves (#1845).
         admin_url = f"{base_url}/admin/"
 
     # Prepare template context

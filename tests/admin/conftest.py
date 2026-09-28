@@ -84,10 +84,9 @@ def ui_client():
 def authenticated_ui_client(ui_client):
     """Provide a UI client carrying a super-admin session.
 
-    Writes the session directly, the way every other admin test does. It used to POST a
-    default password to /test/auth — a login route composed only under a flag, which made
-    the fixture's success depend on whether the flag was set rather than on anything the
-    test was about.
+    Writes the session directly, the way every other admin test does. Posting a password to
+    a login route composed only under a flag would make this fixture's success depend on
+    whether the flag was set rather than on anything the test is about.
     """
     from tests.helpers.admin_session import admin_auth_session
 

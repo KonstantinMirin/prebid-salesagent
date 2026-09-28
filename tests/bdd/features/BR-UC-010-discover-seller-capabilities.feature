@@ -367,10 +367,10 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # CONFIGURATION_ERROR is what the pinned enum gives a seller-side deployment fault and
     # it classifies it terminal: the buyer has no lever and MUST NOT auto-retry.
     #
-    # This scenario used to assert a MINIMAL CAPABILITIES response instead -- adcp and
-    # supported_protocols with no account block. That answered a discovery request with a
-    # document describing nobody, which reads as "this agent exists and offers nothing"
-    # rather than "you have not said who you are asking".
+    # A MINIMAL CAPABILITIES response -- adcp and supported_protocols with no account
+    # block -- would answer a discovery request with a document describing nobody, which
+    # reads as "this agent exists and offers nothing" rather than "you have not said who
+    # you are asking".
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enum
 
   @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary

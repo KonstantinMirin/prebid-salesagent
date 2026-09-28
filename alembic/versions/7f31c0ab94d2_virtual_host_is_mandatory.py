@@ -21,20 +21,15 @@ depends_on: str | Sequence[str] | None = None
 def upgrade() -> None:
     """Make ``tenants.virtual_host`` NOT NULL.
 
-    A tenant declares the host it is served at, always. Since the routing change in
-    PR #2191 there are exactly two ways to name a tenant — ``Host`` against this column and
-    the ``x-adcp-tenant`` literal id — so a row holding NULL is unreachable by ``Host`` at
-    all, and the readers papered over it by inventing a host: the agent card published
-    ``http://localhost:8080`` as such a tenant's PUBLIC A2A endpoint.
+    A tenant declares the host it is served at, always: a request names a tenant by ``Host``
+    against this column or by the ``x-adcp-tenant`` literal id (#2191), so a row holding NULL
+    is unreachable by ``Host`` at all.
 
-    This REFUSES rather than backfills, and that is the deliberate choice. The only
-    expressions available to a backfill are ``<subdomain>.<SALES_AGENT_DOMAIN>`` and
-    ``<subdomain>.example.com``, and inventing a host from one of those is exactly what took
-    A2A conformance from 30 passing checks to 0 (#1845) — a name nothing on the network
-    served, published on a card, followed by every client that trusted it. A migration
-    cannot know where a deployment answers; the operator can, so the refusal names each
-    offending row and carries the statement that fixes it. Rows are not deleted either:
-    losing a publisher's tenant is worse than running one UPDATE.
+    This REFUSES rather than backfills. A migration cannot know where a deployment answers,
+    and any host it could invent is a name nothing serves, published on that tenant's agent
+    card as its own (#1845). The operator can know, so the refusal names each offending row
+    and carries the statement that fixes it. Rows are not deleted either: losing a
+    publisher's tenant is worse than running one UPDATE.
 
     A refusal changes no data in either direction, so this stays inside the structure-only
     rule: ``upgrade`` adds the constraint, ``downgrade`` removes it, and neither moves a

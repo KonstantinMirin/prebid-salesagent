@@ -182,11 +182,11 @@ _DECLARATION_DRIVEN_FIELDS = {"supported_protocols", "specialisms"}
 # The impl whose tenant-resolved response construction is in scope. The NO-TENANT
 # response is deliberately excluded: it has no tenant, so it cannot read a
 # tenant-scoped declaration, and it must keep emitting the defaults byte-for-byte.
-#: The function that DERIVES the tenant-path capability values. It used to be
-#: ``_get_adcp_capabilities_impl``; the derivation moved to the seller-capabilities
-#: service when the agent card became a second consumer of it, and this guard follows
-#: the derivation rather than the old address. Keying a guard on where a thing lived
-#: is how a guard survives an extraction while grading nothing.
+#: The function that DERIVES the tenant-path capability values, which is in the
+#: seller-capabilities service rather than the tool impl because the agent card is a
+#: second consumer of it. This guard names the derivation, not the address it is reached
+#: through: a guard keyed on where a thing lives survives an extraction while grading
+#: nothing.
 _TENANT_RESPONSE_IMPL = "describe_seller"
 
 

@@ -333,7 +333,7 @@ def _restore_a2a_wire_integers(
 
 # Create the A2A application and add routes. There is deliberately no module-level
 # card: a card describes a TENANT, so it is built per request from that tenant's
-# seller description. The static one existed only for _card_with_url to copy.
+# seller description.
 _request_handler = AdCPRequestHandler()
 
 # Build A2A routes using a2a-sdk 1.0 route factories
@@ -399,19 +399,14 @@ def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
     is derived here.
 
     A request naming no tenant this deployment serves is refused by the resolver, and that
-    is the only refusal: a resolved tenant always declares the host it is served at, so
-    ``seller.agent_url`` is always a string here and there is nothing left for this handler
-    to check. A guard for the None case stood here and was unreachable in both directions —
-    ``public_identity_for`` raises for an unresolved tenant, so this never held
-    ``identity.tenant is None``; and ``virtual_host`` is mandatory, so a resolved tenant
-    never lacked a URL.
+    is the only refusal: ``public_identity_for`` raises for an unresolved tenant, and a
+    resolved tenant always declares the host it is served at, so ``seller.agent_url`` is
+    always a string here and there is nothing left for this handler to check.
 
-    What used to happen instead was a ladder over request headers, which published
-    whatever host the caller asked for:
-    ``Host: evil.example.com`` came back as
-    ``supportedInterfaces[0].url == "https://evil.example.com/a2a"``, behind nothing but a
-    syntax check. Every value in that ladder was attacker-supplied on a direct connection,
-    and it answered a question ``canonical_agent_url`` already answers from stored state.
+    The published URL comes from stored state, never from a request header. On a direct
+    connection every header is attacker-supplied, so deriving the host from one would let
+    a caller sending ``Host: evil.example.com`` read back
+    ``supportedInterfaces[0].url == "https://evil.example.com/a2a"``.
     """
     return render_agent_card(describe_seller(public_identity_for(request.headers)))
 

@@ -98,10 +98,9 @@ def _ensure_test_auth_enabled():
 def authenticated_page(page, base_url):
     """Return a page carrying an authenticated admin session.
 
-    The session is SIGNED here rather than obtained by driving a login form. The form this
-    used to drive was served by /test/login, a route composed only under
-    ADCP_AUTH_TEST_MODE and backed by a default password — so what it exercised was a login
-    path no deployment has, while making the app under test differ from the deployed one.
+    The session is SIGNED here rather than obtained by driving a login form. A
+    password-backed form composed only for tests exercises a login path no deployment has,
+    and makes the app under test differ from the deployed one.
 
     What this suite grades is the admin UI once you are in; arriving with a session states
     that precondition instead of acting it out. A real login flow (OIDC / global OAuth) is

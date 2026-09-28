@@ -148,7 +148,7 @@ RUNNER_SYNTHETIC_KEY = (RUNNER_SYNTHETIC_STORYBOARD_ID, RUNNER_SYNTHETIC_STEP_ID
 
 #: The other synthetic check a run can produce: the protocol graded FEWER checks than
 #: the floor this repo has recorded. ``agent_reachability`` above catches a run that
-#: graded NOTHING; this catches the one that graded less than it used to, which no
+#: graded NOTHING; this catches the one that graded less than the recorded floor, which no
 #: pytest outcome can otherwise express -- a check that regresses from pass to SKIP
 #: removes its own failing item, so the suite gets greener as the agent gets worse.
 #
@@ -200,9 +200,7 @@ def load(path: Path) -> list[LedgerCheckId]:
     for every ledger in the repo — and this supplies the bracket grammar.
 
     A line the grammar rejects RAISES. Dropping it instead would let a typo'd
-    entry quietly stop grading its check with nothing to notice, so the drop
-    branch is gone — and so is the paragraph that used to justify it, because
-    leaving the justification in place is how the branch comes back.
+    entry quietly stop grading its check with nothing to notice.
     """
     if not path.is_file():
         return []

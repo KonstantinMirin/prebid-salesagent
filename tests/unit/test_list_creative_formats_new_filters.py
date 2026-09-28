@@ -113,9 +113,8 @@ class TestListCreativeFormatsNewFilters:
         assert req.name_search == "banner"
 
 
-# The MCP-signature class that stood here dispatched list_creative_formats with NO HEADERS
-# AT ALL, to watch typed FormatId objects reach the impl. Two reasons it is gone rather than
-# repaired: a request presenting no host and no tenant header is now REFUSED
-# (CONFIGURATION_ERROR), so its premise describes no request a buyer can make; and what it
-# graded is already graded harder by BR-UC-005, whose format_ids scenarios assert that the
-# filter SELECTS on the (agent_url, id) federation pair, on every transport including MCP.
+# Nothing here dispatches list_creative_formats with NO HEADERS to watch typed FormatId
+# objects reach the impl: a request presenting no host and no tenant header is REFUSED
+# (CONFIGURATION_ERROR), so that premise describes no request a buyer can make. The filter
+# is graded by BR-UC-005, whose format_ids scenarios assert that it SELECTS on the
+# (agent_url, id) federation pair, on every transport including MCP.

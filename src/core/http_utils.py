@@ -56,8 +56,8 @@ def requested_host(headers: HeaderSource) -> str | None:
     """The host this request is for: the ``Host``, and nothing else.
 
     Callers ask for the FACT, not for a header name, which is why this exists at all as a
-    one-line function — every reader phrasing it as its own header read is how eleven
-    copies came to disagree. What a proxy in front of this app did to produce that ``Host``
+    one-line function — a reader phrasing it as its own header read is a copy that can
+    disagree with this one. What a proxy in front of this app did to produce that ``Host``
     is the edge's business and has no spelling here.
     """
     return get_header_case_insensitive(headers, "Host")

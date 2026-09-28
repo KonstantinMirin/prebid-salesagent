@@ -47,7 +47,7 @@ def test_the_sales_agent_domain_answers_when_no_agent_url_is_declared(runtime):
 
 
 def test_an_agent_url_outranks_the_domain(runtime):
-    """Order matters: the more specific declaration wins, as it did in the deleted ladder."""
+    """Order matters: the more specific declaration wins."""
     with (
         patch.object(runtime, "adcp_agent_url", "https://explicit.example.com"),
         patch.object(runtime, "sales_agent_domain", "sales.example.com"),

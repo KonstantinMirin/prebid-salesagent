@@ -102,9 +102,9 @@ _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 
 # The baseline protocol/specialism sets every response advertises before any tenant
 # declaration is applied. ONE source consumed by both the no-tenant minimal response
-# and the tenant-resolved response -- the two used to carry independent
-# `[SupportedProtocol.media_buy]` literals, the same drift class _build_adcp_block was
-# extracted to prevent (salesagent-rldj). They now live in the declarations schema,
+# and the tenant-resolved response, so neither can advertise a set the other does not.
+# A literal in each is the drift class _build_adcp_block exists to prevent. They live
+# in the declarations schema,
 # because validate_backing() has to reason about the EMITTED set (defaults unioned with
 # the declaration) to check specialism roll-up.
 _DEFAULT_SUPPORTED_PROTOCOLS = DEFAULT_SUPPORTED_PROTOCOLS
@@ -121,8 +121,8 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
     """Log a discovery degradation AND surface it to the buyer as an advisory.
 
     ONE helper for all five degradation sites in ``_get_adcp_capabilities_impl``.
-    Before this, each site logged and fell through to a default, so the response
-    silently carried a placeholder (or an omission) and the buyer had no way to
+    A site that only logs and falls through to a default leaves the response
+    silently carrying a placeholder (or an omission), with no way for the buyer to
     tell "this seller has none" from "the lookup failed" — the quiet-failure class
     CLAUDE.md bans.
 
@@ -149,14 +149,13 @@ def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable
     """Run *resolve*; on failure record a degradation advisory and return *default*.
 
     ONE body for all five discovery lookups that degrade rather than fail the
-    response. Each site used to spell its own try/except/_record_degradation/
-    fall-back-to-a-default, which is five chances to forget the advisory (and
+    response. Spelled per site, the try/except/_record_degradation/
+    fall-back-to-a-default is five chances to forget the advisory (and
     silently emit a placeholder, the quiet-failure class CLAUDE.md bans) or to
     let an exception escape and 500 a response that is meant to degrade.
 
-    Broad ``except Exception`` is deliberate and matches what it replaces: this
-    is the degradation boundary, and the advisory is how the buyer learns a
-    section is missing rather than empty.
+    Broad ``except Exception`` is deliberate: this is the degradation boundary,
+    and the advisory is how the buyer learns a section is missing rather than empty.
     """
     try:
         return resolve()
@@ -167,10 +166,8 @@ def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable
 
 def _build_adcp_block(tenant: TenantContext | None) -> Adcp:
     """Build the top-level adcp.* envelope -- single source for both the
-    no-tenant minimal response and the tenant-resolved full response
-    (salesagent-rldj DRY fix; the two literal Adcp(...) constructions this
-    replaces had drifted apart before, the exact class of bug DRY exists to
-    prevent).
+    no-tenant minimal response and the tenant-resolved full response, so the two
+    cannot state different versions or a different idempotency posture.
 
     major_versions/supported_versions derive from SUPPORTED_ADCP_MAJORS/
     VERSIONS (src/core/version_negotiation.py), themselves derived from the
@@ -199,7 +196,7 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
     while ``account`` itself is optional. So a seller with an explicitly empty
     billing policy has no schema-legal block to emit -- omitting it is the only
     conformant answer, and emitting it with an empty array is a schema-INVALID
-    response (which is what this function used to build unconditionally).
+    response.
 
     supported_billing derives from resolve_supported_billing (src/core/billing_policy.py),
     the single source shared with the sync_accounts billing gate (_check_billing_policy)
@@ -346,9 +343,8 @@ class SellerCapabilities(BaseModel):
 def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     """This seller's capabilities for *identity*'s tenant.
 
-    The minimal description when no tenant resolved — this is the branch that used to
-    sit in ``_get_adcp_capabilities_impl`` and is the reason a public tool can answer
-    an unrouted host at all.
+    Answers with the minimal description when no tenant resolved, which is what lets a
+    public tool serve an unrouted host at all.
     """
     tenant = identity.tenant
 
@@ -392,9 +388,9 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         # tenant's product catalog -- the same thing its sibling publisher_domains
         # already summarizes from a real per-tenant table. So the channels are the
         # union of what each product effectively offers, under the ONE rule
-        # get_products applies per product (channel_helpers). A seller whose catalog
-        # declares its channels was previously described by its adapter CLASS's
-        # constant, which is per-adapter-type and cannot vary by tenant at all.
+        # get_products applies per product (channel_helpers). The adapter CLASS's
+        # constant cannot answer this: it is per-adapter-type and does not vary by
+        # tenant, so it describes a catalog it has never read.
         #
         # A tenant with NO catalog falls back to the adapter's defaults: an empty
         # catalog is not a claim of "no channels", and the ad server is the
@@ -461,10 +457,10 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     )
 
     # With no publisher partners recorded, the seller's portfolio is its own inventory, so
-    # the domain it names is the one it is served at. This used to be
-    # f"{tenant.subdomain}.example.com" — a domain nobody owns, on a reserved TLD, handed to
-    # a buyer as the publisher's own (#1845). hostname_of because AdCP's publisher_domain
-    # pattern admits no colon while virtual_host carries the port.
+    # the domain it names is the one it is served at — never a derived name, which reaches
+    # the buyer as the publisher's own domain while nobody owns it (#1845). hostname_of
+    # because AdCP's publisher_domain pattern admits no colon while virtual_host carries
+    # the port.
     if not publisher_domains:
         publisher_domains = [PublisherDomain(root=hostname_of(tenant.virtual_host))]
 

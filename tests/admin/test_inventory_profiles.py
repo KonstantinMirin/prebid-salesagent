@@ -50,9 +50,8 @@ def test_tenant(integration_db):
             name="Inventory Profile Test Tenant",
             subdomain="inv-prof-test",
             # The host this tenant is served at. `add_inventory_profile` refuses a tenant
-            # with no `primary_domain`, and that used to be satisfied by a fabricated
-            # `<subdomain>.example.com` — a domain nobody owns (#1845). A tenant that sells
-            # inventory states the host it sells from.
+            # with no `primary_domain`, and a derived one would be a domain nobody owns
+            # (#1845). A tenant that sells inventory states the host it sells from.
             virtual_host="inv-prof-test.example.com",
             ad_server="mock",
             is_active=True,
@@ -245,9 +244,9 @@ class TestInventoryProfileDelete:
 class TestAddInventoryProfileDuplicateId:
     """POST /tenant/<id>/inventory-profiles/add — duplicate profile_id.
 
-    ``uq_inventory_profile`` is the authority. The loser of the race used to get
-    a 302 carrying raw psycopg2 text in the flash, so the grading compares the
-    whole answer — status, redirect target and flash — against the winner's.
+    ``uq_inventory_profile`` is the authority, and the loser of the race must be answered
+    like any refusal rather than with raw psycopg2 text in the flash, so the grading
+    compares the whole answer — status, redirect target and flash — against the winner's.
     The loser runs first so its pre-check is genuinely clean.
     """
 

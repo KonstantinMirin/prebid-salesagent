@@ -88,10 +88,9 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     if is_admin_domain(effective_host):
         return RoutingResult("admin", None, effective_host)
 
-    # ONE lookup: the host a tenant declares it is served at. The branch that used to sit
-    # in front of this asked whether the host was under SALES_AGENT_DOMAIN and, if so, took
-    # a different path entirely — a second derivation of the same fact, deleted with the
-    # subdomain strategy.
+    # ONE lookup: the host a tenant declares it is served at. Every host reaches it, under
+    # SALES_AGENT_DOMAIN or not — a branch on the domain would be a second derivation of
+    # the same fact.
     tenant = get_tenant_by_virtual_host(effective_host)
     # ``custom_domain`` even when no tenant matched: the caller distinguishes "a host asking
     # for a tenant we do not serve" (it can offer signup) from "no host at all" (the generic

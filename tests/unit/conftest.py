@@ -150,8 +150,8 @@ def make_users_test_client():
             mock_db.return_value.__enter__ = MagicMock(return_value=mock_session)
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
             # The session an authenticated super admin carries, from the one definition of
-            # it. It used to be three test_* keys, which the deleted test-credential route
-            # minted and which only authenticated while the global flag was set.
+            # it — not hand-written session keys, which authenticate only while whatever
+            # minted them is composed into the app.
             from tests.helpers.admin_session import admin_auth_session
 
             admin_auth_session(client, "default")

@@ -220,14 +220,12 @@ class Tenant(Base, JSONValidatorMixin):
     def _fold_virtual_host(self, _key: str, value: str | None) -> str:
         """``virtual_host`` is PRESENT and ALL LOWERCASE, whatever the assignment was handed.
 
-        A tenant declares the host it is served at, always. Since the routing change in
-        PR #2191 there are exactly two ways to name a tenant — ``Host`` against this column,
-        and the ``x-adcp-tenant`` literal id — so a tenant holding no host is not merely
-        unpublishable, it is UNREACHABLE by ``Host`` at all, addressable only through a
-        header no proxy sends. Eight creation paths produced exactly such a tenant, and the
-        readers then papered over it by inventing a host: the card published
-        ``http://localhost:8080`` as an admin-created tenant's PUBLIC A2A endpoint.
-        Inventing one is what took A2A conformance from 30 passing checks to 0 (#1845).
+        A tenant declares the host it is served at, always. There are exactly two ways to
+        name a tenant (#2191) — ``Host`` against this column, and the ``x-adcp-tenant``
+        literal id — so a tenant holding no host is not merely unpublishable, it is
+        UNREACHABLE by ``Host`` at all, addressable only through a header no proxy sends.
+        The alternative is a reader inventing a host on the tenant's behalf, which puts a
+        string nothing on the network serves onto that tenant's agent card (#1845).
 
         Two mechanisms, and each catches what the other cannot. This hook fires on every
         ASSIGNMENT — construction with the keyword, and the later ``tenant.virtual_host = x``
@@ -240,15 +238,15 @@ class Tenant(Base, JSONValidatorMixin):
         A ``Host`` names a DNS name and DNS is case-insensitive (RFC 7230 §5.4), so
         ``Probe-Case.Example.test`` and ``probe-case.example.test`` are one host — but the
         column is ``Text`` and SQL comparison is not case-folding, so storing the first
-        and being asked for the second is a miss. Every reader that answers "which tenant
-        serves this request" went dark at once for such a row, leaving the tenant
-        reachable only through the ``x-adcp-tenant`` literal-id path (PR #2191).
+        and being asked for the second is a miss. Such a row is invisible to every reader
+        that answers "which tenant serves this request", leaving the tenant reachable only
+        through the ``x-adcp-tenant`` literal-id path (#2191).
 
         Normalising HERE rather than at each assignment is what makes the mismatch
         unrepresentable: the admin settings form, the storyboard seed script and anything
         added later all write through this hook, so there is no second spelling to keep in
         step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
-        which is what still resolves a row stored mixed-case before this existed.
+        which is what resolves a row that was stored mixed-case before this hook existed.
         """
         if value is None or not value.strip():
             raise ValueError(
@@ -288,19 +286,16 @@ class Tenant(Base, JSONValidatorMixin):
         the agent card publishes that string and a card naming the wrong port sends every
         client to a closed one. A publisher domain is a different part of the same fact:
         AdCP constrains ``publisher_properties[].publisher_domain`` to a pattern admitting
-        no colon, so the port comes off here. Feeding it in failed every product of such a
-        tenant and answered INTERNAL_ERROR for the whole catalogue.
+        no colon, so the port comes off here. Feeding an origin in fails every product of
+        such a tenant and answers INTERNAL_ERROR for the whole catalogue.
 
-        It is the ONE derivation of this value. Four sites used to repeat the expression,
-        and every one of them fed the colon through.
+        It is the ONE derivation of this value, so no caller can feed the colon through.
 
-        Always a string, because ``virtual_host`` is mandatory. The None branch that stood
-        here was the remaining half of #1845: the fallback under it built
-        ``f"{subdomain}.example.com"`` — a domain nobody owns, on a reserved TLD, handed to
-        buyers as the publisher's own — and deleting the fabrication left a None that every
-        caller then had to invent a placeholder for, which is the same defect one layer up.
-        A tenant declares the host it is served at, so the domain it is known by follows from
-        it and no caller has anything to decide.
+        Always a string, because ``virtual_host`` is mandatory. Neither a fabricated domain
+        nor a ``None`` belongs here: a made-up host reaches buyers as the publisher's own
+        (#1845), and a ``None`` only moves the invention into every caller. A tenant declares
+        the host it is served at, so the domain it is known by follows from it and no caller
+        has anything to decide.
         """
         from src.core.http_utils import hostname_of
 
@@ -494,12 +489,12 @@ class Product(Base, JSONValidatorMixin):
             return ensure_selection_type(self.properties)
 
         # The publisher this product is sold by, stated once for all three variants below.
-        # Tenant.primary_domain is always a real domain now that virtual_host is mandatory,
-        # so the only None left here is an UNLOADED self.tenant — a relationship this
-        # property was reached without, which is a different question from the tenant having
-        # no domain, and "unknown" is the honest answer to it. What this never does is
-        # FABRICATE: the value used to be f"{subdomain}.example.com", a domain nobody owns
-        # on a reserved TLD, handed to a buyer as the publisher's own (#1845).
+        # Tenant.primary_domain is always a real domain because virtual_host is mandatory,
+        # so the only None here is an UNLOADED self.tenant — a relationship this property
+        # was reached without, which is a different question from the tenant having no
+        # domain, and "unknown" is the honest answer to it. What this never does is
+        # FABRICATE a domain: a made-up host on a reserved TLD reaches a buyer as the
+        # publisher's own (#1845).
         publisher_domain = self.tenant.primary_domain if getattr(self, "tenant", None) else "unknown"
 
         if self.property_ids:

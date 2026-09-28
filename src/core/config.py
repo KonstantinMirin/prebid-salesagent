@@ -72,11 +72,11 @@ class RuntimeSettings(BaseSettings):
 
     @property
     def is_production(self) -> bool:
-        """One answer for the three spellings a deployment used to set.
+        """One answer for the three spellings a deployment can set.
 
-        ``PRODUCTION=true``, ``ENVIRONMENT=production`` and a Fly.io app name all meant
-        "this is production" to some site and not to others; security-sensitive checks
-        drifted on the difference. Any of the three is production.
+        ``PRODUCTION=true``, ``ENVIRONMENT=production`` and a Fly.io app name each mean
+        "this is production", so a security-sensitive check reading only one of them
+        disagrees with a check reading another. Any of the three is production.
         """
         return self.production or self.environment.lower() == "production" or bool(self.fly_app_name)
 
@@ -142,25 +142,19 @@ class TestingSettings(BaseSettings):
       spelled out here: ``test_architecture_no_outbound_insecure_hatch`` counts a literal
       mention as a declaration site, which is the right reading for a flag that can
       disable the address gate, so naming it in prose would quietly widen its pin. The
-      seven properties on this class that used to fork on ``adcp_testing`` are already
-      pinned shrink-only (GH #2255).
+      seven properties on :class:`Settings` that still fork on ``adcp_testing`` are pinned
+      shrink-only (GH #2255).
 
-    SEVEN FIELDS WENT, and they are the shape of what "removing a test flag" means.
-    ``adcp_auth_test_mode`` decided whether ``create_app`` COMPOSED a test-credential login
-    blueprint, so the app under test differed from the deployed one at composition -- a
-    frame above the request paths this rule usually polices. Its six ``test_*`` credentials
-    were that blueprint's password table. A suite's verdict could turn on whether the flag
-    happened to be set: two template tests passed on the CI box, which set it, and failed on
-    a laptop, which did not. The route is deleted; a test that needs an admin session signs
-    one (``tests/helpers/admin_session.py``), and a deployment reaches its first admin
-    through its identity provider, with per-tenant Setup Mode covering the interval before
-    SSO is switched on.
+    A field leaves this class by giving the behavior a real input, never by keeping the flag
+    somewhere else. A test that needs an admin session signs one
+    (``tests/helpers/admin_session.py``), and a deployment reaches its first admin through
+    its identity provider, with per-tenant Setup Mode covering the interval before SSO is
+    switched on -- so no composition-time credential flag is needed for either.
 
     Provisioning facts a deployment legitimately sets -- seed a demo tenant, seed sample
-    data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. They sat
-    in this class and that was the confusion worth removing: a name implying everything
-    inside is a test artifact hides which fields are actually defects, and a demo
-    deployment genuinely wants a demo tenant.
+    data, skip migrations -- are NOT here; they are :class:`ProvisioningSettings`. A name
+    implying everything inside is a test artifact would hide which fields are actually
+    defects, and a demo deployment genuinely wants a demo tenant.
     """
 
     model_config = _ENV

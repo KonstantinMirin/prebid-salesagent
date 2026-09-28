@@ -182,9 +182,9 @@ class AdminAccountEnv:
     def __enter__(self) -> AdminAccountEnv:
         # Not a BaseTestEnv, so it keeps its own __enter__ — but it owes the same
         # guarantee. Python does not call __exit__ when __enter__ raises, so a
-        # failure in _ensure_tenant used to strand the Flask client (integration)
+        # failure in _ensure_tenant would strand the Flask client (integration)
         # or the requests session (e2e) for the rest of the process. __exit__ is
-        # None-safe on every branch, so calling it here is the whole fix.
+        # None-safe on every branch, so calling it here is what releases them.
         try:
             if self._mode == "integration":
                 self._setup_integration()
@@ -251,10 +251,8 @@ class AdminAccountEnv:
     def _auth_e2e(self, tenant_id: str) -> None:
         """Cookie-based auth against the Docker stack — the session is SIGNED, not requested.
 
-        This used to POST a default password to /test/auth, a login route composed only
-        under ADCP_AUTH_TEST_MODE. The session that route minted is the same one
-        ``admin_session_cookie`` signs here, so the test states the session it needs
-        instead of asking a composed-in password path to mint one.
+        ``admin_session_cookie`` signs the same session a login would mint, so the test
+        states the session it needs instead of asking a password path to mint one.
         """
         from tests.helpers.admin_session import authenticate_http_session
 
@@ -466,11 +464,9 @@ class AdminAccountEnv:
 
         ``_created_account_ids`` covers both ways a row appears: seeded through
         ``create_account`` and created by POSTing the real admin form (recorded
-        in ``post_create``). Form-created rows used to survive the scenario,
-        which was harmless while a natural key could hold any number of accounts
-        — since salesagent-0njj a leaked row OCCUPIES its key, and the next
-        scenario creating the same brand+operator would be refused by a
-        collision it did not cause.
+        in ``post_create``). A form-created row surviving the scenario OCCUPIES its
+        natural key, so the next scenario creating the same brand+operator would be
+        refused by a collision it did not cause.
         """
         if not self._created_account_ids:
             return

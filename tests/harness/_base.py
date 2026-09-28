@@ -1217,13 +1217,11 @@ class BaseTestEnv:
         """Seed the tenant + principal this env PRESENTS, so the seller it names exists.
 
         Discovery scenarios (list_creative_formats, get_products) never run a Given step
-        that creates a tenant, and this used to run in e2e mode only, on the reasoning that
-        in-process "they don't need one (identity is a mock)". That reasoning holds for a
-        mocked resolver and not for a real database: a request naming a tenant no row
-        matches is REFUSED (CONFIGURATION_ERROR), because a deployment that cannot tell
-        which seller a request is for has no rule to apply. So every real-database env
-        seeds, and an env addressing a phantom tenant is no longer a thing a test can do
-        by accident.
+        that creates a tenant, and EVERY real-database env needs one regardless of mode: a
+        request naming a tenant no row matches is REFUSED (CONFIGURATION_ERROR), because a
+        deployment that cannot tell which seller a request is for has no rule to apply.
+        Seeding here is what keeps an env from addressing a phantom tenant by accident;
+        "identity is a mock, so no row is needed" holds only for a mocked resolver.
 
         Delegates to the idempotent ``setup_default_data`` (get-or-create) so there is ONE
         seeding path and an env that calls it itself does not double-create. Seeds the SAME

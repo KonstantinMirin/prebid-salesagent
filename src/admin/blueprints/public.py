@@ -25,8 +25,8 @@ public_bp = Blueprint("public", __name__)
 def landing():
     """Public landing page for self-service signup."""
     # Signup belongs at the main site, so a host that BELONGS to a tenant goes to that
-    # tenant's login instead. Which tenant a host names is the admin plane's one lookup;
-    # this used to re-derive it from the header ladder and a raw select of its own.
+    # tenant's login instead. Which tenant a host names is the admin plane's one lookup,
+    # asked here rather than re-derived.
     if get_tenant_from_hostname():
         flash("Signup is only available at the main site.", "info")
         return redirect(url_for("auth.login"))

@@ -1,16 +1,12 @@
 """Edge case and error handling tests for virtual host functionality.
 
-THREE HEADER TESTS WERE DELETED HERE (``test_malformed_headers``,
-``test_context_with_none_meta``, ``test_context_missing_meta_attribute``). Each built a
-``Mock(spec=Context)``, put a host value into it, read that value back out with a dict
-access written in the test body, and asserted the value was what the test had just set.
-No production code was called, so they could not fail — including when the header they
-were built around stopped being read at all.
-
-What they claimed to grade — that a malformed or absent host is handled rather than
-crashing — is graded where the host actually reaches production: ``requested_host`` in
+HEADER HANDLING IS NOT GRADED HERE. That a malformed or absent host is handled rather
+than crashing is graded where the host actually reaches production: ``requested_host`` in
 ``tests/unit/test_request_host_headers.py``, and end to end by
-``tests/bdd/features/local-tenant-identification-routes.feature``.
+``tests/bdd/features/local-tenant-identification-routes.feature``. A test that puts a host
+into a ``Mock(spec=Context)`` and reads it back with a dict access written in its own body
+calls no production code, so it cannot fail — not even when the header it was built around
+stops being read at all.
 """
 
 from unittest.mock import MagicMock, Mock, patch

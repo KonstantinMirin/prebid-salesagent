@@ -58,17 +58,10 @@ def check_no_fn_calls(files: list[Path]) -> list[str]:
 # a path into .claude/notes/ points at a working note that is deleted when the
 # work lands, and a review-round finding id (R1-19, SF-7, Chris-#2) exists only
 # inside such a note. Both make an internal artifact load-bearing for the suite.
-# Beads ids are deliberately NOT covered here: 733 of them already exist under
-# src/ and tests/, so banning them is its own sweep rather than a forward-lock,
-# and CLAUDE.md already directs FIXMEs at GitHub numbers.
-# The beads-id alternation that used to be the third line here was removed: it
-# contradicted the paragraph directly above it, and both were added in the SAME
-# commit (26783202f), so one of the two was a slip. The comment is the one that
-# holds up -- it names a checkable reason, and the count is now 478 beads ids
-# under src/ and tests/. A pattern matching 478 existing occurrences is not a
-# forward-lock; it made every file carrying one uncommittable, which is how it
-# surfaced. The docstring below still says "either form", counting two, which is
-# the same design speaking again. Banning beads ids remains "its own sweep".
+# Beads ids are deliberately NOT covered here: hundreds of them already exist
+# under src/ and tests/, so a pattern matching them is not a forward-lock — it
+# makes every file carrying one uncommittable. Banning them is its own sweep, and
+# CLAUDE.md already directs FIXMEs at GitHub numbers.
 _UNRESOLVABLE_CITATION_RE = re.compile(r"\.claude/notes/|\b(?:R\d-\d{1,2}|SF-\d{1,2}|Chris-#\d+)\b")
 
 

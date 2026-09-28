@@ -20,10 +20,9 @@ CI_TEST_ACCOUNT_ID = "ci-test-account"
 #: silent 401 the day one of them changes. The dependency runs tests -> scripts only; a
 #: script cannot import from tests/ (see scripts/ci/migration_helpers.py).
 #:
-#: It is a literal rather than a per-seed uuid4 BECAUSE the header names a tenant_id. It
-#: used to name a subdomain, which ``_detect_tenant`` looked up as a third way to identify
-#: a tenant; that strategy is gone, so the stable spelling has to be
-#: the id itself.
+#: It is a literal rather than a per-seed uuid4 BECAUSE the header names a tenant_id:
+#: ``_detect_tenant`` matches ``x-adcp-tenant`` against the id literally, so the stable
+#: spelling has to be the id itself.
 CI_TEST_TENANT_ID = "ci-test"
 
 #: The hosts the two seeded test tenants declare. Both are addressed by ``x-adcp-tenant``

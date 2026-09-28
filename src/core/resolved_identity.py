@@ -183,8 +183,8 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
        proxy in front of this app already forwards verbatim.
     2. ``x-adcp-tenant`` -> the tenant_id, LITERALLY. For a caller addressing a tenant
        explicitly rather than by the host it is served at: the test suites, the CLI, a
-       support tool. Unverified, as before — an id naming no tenant fails at the principal
-       lookup that is scoped by it.
+       support tool. Unverified — an id naming no tenant fails at the principal lookup that
+       is scoped by it.
 
     TWO means two, and a second spelling of either is not a redundancy: two readers of one
     fact disagree, and then one request resolves to two different tenants depending on which
@@ -194,23 +194,12 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     ``None`` is a real answer, not a gap to fill. A protected tool then answers AUTH_MISSING
     (no tenant means no principal lookup) and a public tool proceeds with no tenant, which
     its implementation already branches on. This is what a multi-tenant front does with a
-    host it does not serve, and guessing instead is what the two deleted strategies did.
+    host it does not serve; answering with a tenant the request never named is worse than
+    answering with none.
 
-    WHAT WAS DELETED, AND WHY. Nothing in the pinned spec asks for any
-    of this — a request is addressed to an agent's URL and the mapping to a tenant is the
-    seller's own business — so the four strategies were ours to keep or drop.
-
-    * ``Host`` -> first label as a SUBDOMAIN was subsumed by (1): a deployment serving
-      ``acme.example.com`` sets that tenant's ``virtual_host`` to it. What the strategy added
-      was permission to leave ``virtual_host`` unset, and it charged a second derivation of
-      one fact, a ``SALES_AGENT_DOMAIN`` setting existing only to support it, and
-      ``primary_domain``'s hardcoded ``{subdomain}.example.com`` — fiction on every real
-      deployment, and the string the CI tenant's agent card published, which took the A2A
-      conformance axis from 30 passing checks to 0.
-    * loopback -> the ``default`` tenant fired exactly when the request named nothing, and
-      answered with a tenant anyway. ``init_db`` creates that row on EVERY deployment
-      (``CREATE_DEMO_TENANT`` only picks its shape), and on a demo-seeded one it holds a
-      principal with a repository-constant token. GH #2259.
+    Nothing in the pinned spec asks for any of this — a request is addressed to an agent's
+    URL, and the mapping from that to a tenant is the seller's own business — so these two
+    ways in are ours to choose, and two is the whole set.
     """
     from src.core.config_loader import tenant_id_for
 
@@ -493,15 +482,12 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
     is this request for" that every tool gets -- so it asks here rather than deriving one
     of its own.
 
-    That derivation used to be ``route_landing_page``, which reads the ``Host`` and NOT
-    ``x-adcp-tenant`` (it read a vendor proxy header too, since deleted). The consequence
-    was measurable: a
-    storyboard run sends ``x-adcp-tenant`` (a token only verifies inside a tenant), so
-    every tool call resolved the CI tenant while the card, on the same request, resolved
-    none and fell back to echoing the caller's Host. The agent disagreed with itself about
-    its own identity. ``ruff-boundary.toml`` already names this disease on
-    ``_detect_tenant``: "a caller that detects its own tenant is a second tenant resolver,
-    and the two WILL disagree".
+    A derivation of its own would disagree with this one. A request may name its tenant by
+    ``x-adcp-tenant`` alone -- a storyboard run does, because a token only verifies inside a
+    tenant -- so a card reading the ``Host`` by itself describes a different seller than
+    every tool call on the same request, and the agent disagrees with itself about its own
+    identity. ``ruff-boundary.toml`` names this disease on ``_detect_tenant``: "a caller
+    that detects its own tenant is a second tenant resolver, and the two WILL disagree".
 
     NO CREDENTIAL IS READ, and that is deliberate rather than a simplification.
     ``_resolve_identity`` raises ``AUTH_INVALID`` for a credential that was presented and

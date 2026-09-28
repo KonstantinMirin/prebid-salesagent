@@ -215,14 +215,12 @@ def create_app(config=None, settings=None):
     cache = Cache(app)
     app.cache = cache  # Make cache available to blueprints
 
-    # NO before_request hook for "external domain" /admin requests. One stood here named
-    # redirect_external_domain_admin, and by the time it was deleted it returned None on
-    # every path it could reach: the redirect it named had already gone with the subdomain
-    # strategy (a tenant is served at the host it declares, so there is no second address
-    # to bounce to), leaving a hook whose only remaining act was to read the Approximated
-    # vendor header and log it. The edge folds that header into Host and drops it, so the
-    # read answers None too. A hook that computes a request classification in order to log
-    # a value nothing acts on is not a seam, it is a cost on every request.
+    # NO before_request hook for "external domain" /admin requests, and there is nothing
+    # for one to do: a tenant is served at the host it declares, so there is no second
+    # address to bounce an /admin request to, and the edge folds the Approximated vendor
+    # header into Host and drops it, so there is no second host to classify either. A hook
+    # that computes a classification in order to log a value nothing acts on is a cost on
+    # every request.
 
     # Debug: Log Set-Cookie headers on auth-related responses
     @app.after_request

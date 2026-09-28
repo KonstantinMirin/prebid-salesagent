@@ -1,14 +1,13 @@
 """A tenant served on a non-default port: one stored origin, three readers.
 
 ``virtual_host`` stores the ORIGIN a tenant is served at. Three readers want different
-parts of it, and satisfying two while breaking the third is what happened twice in one day:
+parts of it, and satisfying two while breaking the third is the failure this grades:
 
 * the agent card publishes the origin VERBATIM — a client connects to what the card says,
-  so dropping the port sent every A2A client to a closed one (27 passing conformance
-  checks to 0);
+  so dropping the port sends every A2A client to a closed one;
 * ``publisher_properties[].publisher_domain`` wants the HOSTNAME — AdCP's pattern admits
-  no colon, and feeding one in failed every product of the tenant, so ``get_products``
-  answered INTERNAL_ERROR for the whole catalogue;
+  no colon, and feeding one in fails every product of the tenant, so ``get_products``
+  answers INTERNAL_ERROR for the whole catalogue;
 * tenant resolution wants to match either spelling, because a deployment should not have
   to know which form a proxy forwards.
 

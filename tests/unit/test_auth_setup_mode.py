@@ -9,31 +9,21 @@ Auth setup mode allows test credentials to work per-tenant:
 # --- Test Source-of-Truth Audit ---
 # Audited: 2026-03-18
 #
-# DECISION_BACKED (7/16 tests):
+# DECISION_BACKED:
 #   test_auth_setup_mode_defaults_to_true_in_schema — product decision: "New tenants start
 #       with auth_setup_mode=True" (file module docstring)
-#   test_disable_setup_mode_requires_sso_enabled    — product decision: setup mode can only
+#   TestDisableSetupModeEndpoint                    — product decision: setup mode can only
 #       be disabled after SSO is configured (module docstring + endpoint logic comment)
-#   test_disable_setup_mode_allowed_with_sso        — same
-#   test_test_auth_allowed_when_both_enabled        — F-02 fix: BOTH env var AND
-#       auth_setup_mode=True required; documented in auth.py "# Require BOTH"
-#   test_test_auth_blocked_when_env_var_only        — F-02 regression: env var alone was the
-#       vulnerable case; documented in auth.py comment
-#   test_test_auth_blocked_when_setup_mode_only     — F-02 fix: auth_setup_mode alone must
-#       not grant access
-#   test_test_auth_blocked_when_both_disabled       — F-02 fix: neither condition → blocked
 #   test_migration_file_exists                      — deployment dependency: migration must
 #       exist for auth_setup_mode column to be present in production DB
 #
-# CHARACTERIZATION (3/16 tests):
+# CHARACTERIZATION:
 #   test_tenant_has_auth_setup_mode_field           — locks: Tenant ORM model has this
 #       attribute; no external spec defines internal model shape
 #   test_auth_setup_mode_is_boolean                 — locks: column python_type is bool;
 #       internal schema detail
 #   test_migration_has_correct_revision             — locks: revision ID and down_revision
 #       chain; internal migration structure
-#
-# SUSPECT (0 tests — all replaced by endpoint tests per issue #1149)
 # ---
 
 import os
@@ -74,9 +64,8 @@ class TestTenantAuthSetupMode:
 class TestDisableSetupModeEndpoint:
     """Endpoint-level tests for POST /disable-setup-mode.
 
-    Replaces SUSPECT MagicMock-only tests that reconstructed the endpoint
-    conditional in the test body. Uses make_users_test_client to call the
-    real route so a broken endpoint would actually fail.
+    Each test calls the real route through make_users_test_client, so a broken
+    endpoint fails here rather than being reconstructed in the test body.
     """
 
     def test_disable_setup_mode_rejects_when_not_sso_logged_in(self, make_users_test_client):
@@ -140,8 +129,7 @@ class TestMigration:
 class TestEnableSetupModeEndpoint:
     """Endpoint-level tests for POST /enable-setup-mode.
 
-    Replaces the SUSPECT MagicMock-only test that was unable to detect
-    a broken endpoint. Uses make_users_test_client to call the real route.
+    Calls the real route through make_users_test_client, so a broken endpoint fails here.
     """
 
     def test_enable_setup_mode_returns_success(self, make_users_test_client):
@@ -155,10 +143,9 @@ class TestEnableSetupModeEndpoint:
 class TestListUsersEndpoint:
     """Endpoint-level tests for GET /tenant/<id>/users respecting setup mode flags.
 
-    Replaces two SUSPECT tests that built the template context dict manually.
-    Each test calls the real Flask route and asserts on rendered HTML so a
-    regression in users.py (e.g., wrong kwarg name passed to render_template)
-    causes a real failure.
+    Each test calls the real Flask route and asserts on rendered HTML, rather than
+    building the template context by hand, so a regression in users.py (e.g., wrong
+    kwarg name passed to render_template) causes a real failure.
     """
 
     def test_list_users_renders_setup_mode_active_banner(self, make_users_test_client):

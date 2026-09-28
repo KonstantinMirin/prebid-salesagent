@@ -65,17 +65,16 @@ Three details deserve attention:
   header and render a tenant landing page.
 - **One handler serves the agent card on three paths** —
   `/.well-known/agent-card.json`, `/.well-known/agent.json`, and `/agent.json`.
-  It replaces the SDK's single static route and creates the other two
-  (`src/app.py:490-533`). When the `Host` routes to a tenant, the handler
-  advertises that tenant's **stored** host as the A2A URL
-  (`_canonical_a2a_url`, `src/app.py:416-432`), so the card publishes the same
-  string the tenant's `brand.json` carries. A `Host` that routes to no tenant is
-  REFUSED — `CONFIGURATION_ERROR`, recovery `terminal`, no card. It used to fall
-  back to a ladder over request headers, which
-  published whatever host the caller asked for: `Host: evil.example.com` came
-  back as `supportedInterfaces[0].url`. A card states a tenant's stored identity,
-  so with no tenant there is nothing truthful to publish
-  (`tests/e2e/test_a2a_endpoints_working.py:219` pins the refusal).
+  Every route derives from the `_AGENT_CARD_PATHS` declaration rather than from
+  the SDK's single static route (`_install_agent_card_routes`, `src/app.py`). The
+  card advertises the tenant's **stored** host as the A2A URL
+  (`canonical_agent_url`, reached through the seller description), so it publishes
+  the same string the tenant's `brand.json` carries, and never a host from a
+  request header — every header is caller-supplied, so `Host: evil.example.com`
+  would come back as `supportedInterfaces[0].url`. A `Host` that routes to no
+  tenant is REFUSED — `CONFIGURATION_ERROR`, recovery `terminal`, no card: a card
+  states a tenant's stored identity, so with no tenant there is nothing truthful
+  to publish (`tests/e2e/test_a2a_endpoints_working.py:219` pins the refusal).
 
 The app includes the health routes (`src/routes/health.py`) alongside the REST
 router (`src/app.py:604`), and the debug and reset routes only where the
@@ -98,12 +97,11 @@ application, forwarding `Host` verbatim because tenant routing is an exact
   resolver identifies the tenant from `Host` (or from an `x-adcp-tenant` the
   caller sent itself).
 - **Multi-tenant deployments** (`config/nginx/nginx-multi-tenant.conf`): the
-  proxy adds nothing. It used to parse the first label out of `$host` and inject
-  it as `x-adcp-tenant` — a third way to name a tenant, agreeing with the other
-  two only where a tenant's id happened to equal its subdomain. A wildcard
-  `server_name` now sends every host under the domain to the app with `$host`
-  passed through untouched (`:44-49`, `:121-132`), so the proxy has no opinion
-  about which tenant a request is for.
+  proxy names no tenant. A wildcard `server_name` sends every host under the
+  domain to the app with `$host` passed through untouched (`:44-49`, `:121-132`),
+  so the proxy has no opinion about which tenant a request is for. A `$tenant`
+  variable injected as `x-adcp-tenant` would be a third way to name one, agreeing
+  with the other two only where a tenant's id equals its subdomain.
 
 ### The in-network test stack
 
@@ -331,8 +329,8 @@ row once:
 2. `x-adcp-tenant` header → the tenant id, LITERALLY, for a caller addressing a
    tenant explicitly rather than by the host it is served at (the test suites,
    the CLI, a support tool). Unverified: an id naming no tenant fails at the
-   principal lookup that is scoped by it. No proxy sets this header — the
-   multi-tenant nginx used to inject it from the subdomain and no longer does.
+   principal lookup that is scoped by it. No proxy sets this header: it names the
+   tenant a CLIENT asked for.
 
 There is no third input, and a second spelling of either of these two would not be
 a redundancy: two readers of one fact disagree, and then one request resolves to

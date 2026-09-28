@@ -59,10 +59,10 @@ class TestLandingPages:
         configured the login page renders, and with one configured the admin hands
         off to it (``login()`` has always redirected straight to the sole provider).
 
-        This asserts OUR response and does not follow the chain off-site. It used to
-        follow it, which passed only where no provider was configured: CI sets Google
-        credentials, so the chain ran on to accounts.google.com and the assertion
-        graded GOOGLE's 404 for the dummy client_id as though the admin had served it.
+        This asserts OUR response and does not follow the chain off-site. Following it
+        grades whatever the provider answered — CI sets Google credentials, so the chain
+        runs on to accounts.google.com and its 404 for the dummy client_id arrives as
+        though the admin had served it.
         """
         response = requests.get(
             f"{live_server['admin']}/admin/login",

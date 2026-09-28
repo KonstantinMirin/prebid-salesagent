@@ -39,10 +39,9 @@ def browser_page(base_url: str) -> Iterator[Page]:
 def login_as_tenant_admin(page: Page, tenant_id: str) -> None:
     """Give *page* an authenticated admin session for *tenant_id*.
 
-    Signs the session rather than driving a login form. The form this used to click was
-    served by /test/login and backed by a default password — a route composed only under
-    ADCP_AUTH_TEST_MODE, so what it exercised was a login path no deployment has. It is
-    deleted; a test that needs a session states one (tests/helpers/admin_session).
+    Signs the session rather than driving a login form: a test that needs a session states
+    one (tests/helpers/admin_session). There is no password-backed login form to drive, and
+    one composed only for tests would exercise a login path no deployment has.
     """
     from urllib.parse import urlsplit
 

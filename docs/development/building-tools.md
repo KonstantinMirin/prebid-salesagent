@@ -9,7 +9,7 @@ The system rests on a small number of seams, and each seam is the single place t
 its concern. A tool is one registry row. One resolver identifies the caller. The boundary runs
 the tool once, for every transport. A response becomes a body in one function. An error names a
 code and supplies facts. Because there is one of each, a rule holds everywhere by
-construction, and most of the checks that used to police agreement between copies are gone.
+construction, and needs no check policing agreement between copies.
 
 The codebase targets AdCP 3.1.1 through the `adcp` SDK. The companion pages are
 [Architecture guide](architecture.md), [Request lifecycle](request-lifecycle.md),
@@ -1040,10 +1040,10 @@ Business code never reads `ADCP_TESTING`. Each allowance it implies has its own 
 such as `debug_routes_enabled`, `reference_formats_only`, and `loopback_webhooks_allowed`.
 Where an allowance selects a component, the selection happens at composition. The debug
 router is mounted or absent, and the creative registry is the reference-formats registry or
-the live one. (The admin UI's test-credential login blueprint used to be a third example.
-It is deleted: a flag that decides whether a blueprint is COMPOSED makes the app under test
-a different app from the deployed one, which is the defect this section describes rather
-than an illustration of doing it well.) Where an allowance gates one predicate inside one
+the live one. (A flag deciding whether an AUTH blueprint is composed is not such a
+selection: it makes the app under test a different app from the deployed one, which is the
+defect this section describes rather than an illustration of doing it well.) Where an
+allowance gates one predicate inside one
 function, such as `loopback_webhooks_allowed` or `relaxed_brand_validation`, that function
 reads it off the settings object per call: a swapped component carries only that bool.
 

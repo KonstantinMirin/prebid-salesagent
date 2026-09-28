@@ -1,10 +1,9 @@
 """Test how the admin plane resolves a request's host to a tenant.
 
 The ``Host`` is the one host input here as on the buyer-facing plane, and these assert the
-lookup ARGUMENT rather than only the returned tenant — the two earlier tests mocked the
-session to answer ANY query with a tenant, so they could not tell WHICH host had been
-looked up, which is the only thing that distinguishes "the Host was used" from "some host
-was used".
+lookup ARGUMENT rather than only the returned tenant. A mocked session that answers ANY
+query with a tenant cannot tell WHICH host was looked up, which is the only thing that
+distinguishes "the Host was used" from "some host was used".
 """
 
 from unittest.mock import Mock, patch

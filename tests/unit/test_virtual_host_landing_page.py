@@ -1,21 +1,16 @@
 """Unit tests for virtual host landing page functionality.
 
-FOUR TESTS WERE DELETED HERE, and the reason is worth keeping. They were named for
-tenant resolution (``..._with_virtual_host``, ``..._without_virtual_host``,
-``..._with_nonexistent_tenant``, ``..._header_case_insensitive``) but each one mocked
-``get_tenant_by_virtual_host``, reimplemented the root handler's header reading in the
-test body under a comment reading "simulate the root route handler logic", called the
-mock itself, and asserted that the mock returned what the test had just set on it. They
-graded a copy of production that lived in this file — hard rule 5 in tests/CLAUDE.md, and
-the "recomputing the expected value from setup" pitfall — so they could not fail when
-production changed, and they stayed green when the code they simulated was deleted.
+Everything here calls ``generate_tenant_landing_page`` and asserts on the HTML production
+returned.
 
-Which tenant a host resolves is graded where it is observable: on all four transports by
+WHICH TENANT A HOST RESOLVES IS NOT GRADED HERE. It is graded where it is observable: on
+all four transports by
 ``tests/bdd/features/local-tenant-identification-routes.feature``, and for the routing
-function by ``tests/unit/test_domain_routing.py``.
-
-What remains below is real: it calls ``generate_tenant_landing_page`` and asserts on the
-HTML that production returned.
+function by ``tests/unit/test_domain_routing.py``. A test that mocks
+``get_tenant_by_virtual_host`` and re-implements the root handler's header reading in its
+own body grades a copy of production that lives in this file — hard rule 5 in
+tests/CLAUDE.md, and the "recomputing the expected value from setup" pitfall — so it
+cannot fail when production changes.
 """
 
 from unittest.mock import patch

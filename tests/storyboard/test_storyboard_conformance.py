@@ -88,14 +88,12 @@ _PROTOCOLS: tuple[str, ...] = ("mcp", "a2a")
 # than the service on plaintext :8080 — and A2A is why the scheme has to be real. A2A is
 # card-first: the runner reads the RPC endpoint off `/.well-known/agent-card.json` rather
 # than being told it, and `src/app.py`'s `get_protocol` renders **https** for any host
-# that is not loopback. Dialed plaintext, the card published
-# `https://adcp-server-storyboard:8080/a2a` — TLS to a plaintext port — so every
-# card-derived call failed with `fetch failed`: 25 checks on run sa-0c74d963, one of them
-# the capability probe the runner SELECTS storyboards from, which is why that axis
-# executed 25 storyboards where MCP executed 44 and passed 3 where MCP passed 33. The card
-# was right and the origin was wrong. This front forwards `Host` verbatim and sets
-# `X-Forwarded-Proto`, the signal `get_protocol` prefers, so what it publishes is what it
-# speaks.
+# that is not loopback. Dialed on plaintext, the card therefore publishes an https URL for
+# a plaintext port and every card-derived call fails with `fetch failed` — including the
+# capability probe the runner SELECTS storyboards from, so the axis executes a fraction of
+# the storyboards its sibling does. The card is right and the origin is wrong. This front
+# forwards `Host` verbatim and sets `X-Forwarded-Proto`, the signal `get_protocol` prefers,
+# so what it publishes is what it speaks.
 #
 # MCP takes its endpoint directly (`/mcp/`, trailing slash included — FastMCP mounts it
 # that way). A2A takes the BASE url: the SDK appends `/.well-known/...` verbatim, so a
@@ -232,13 +230,12 @@ _BUNDLE_FETCH_TIMEOUT = 120
 def _materialize_bundle() -> str | None:
     """Put the pinned compliance tree on disk, fetching the release asset if needed.
 
-    THE GRADING SUITE RESOLVES ITS OWN BUNDLE. It used to require that a separate step had
-    already downloaded and extracted the tree: ``adcp_home()`` looks for
+    THE GRADING SUITE RESOLVES ITS OWN BUNDLE, rather than requiring that a separate step
+    downloaded and extracted the tree first. ``adcp_home()`` looks for
     ``tests/storyboard/runner/adcp-<version>/``, which is gitignored, and otherwise falls
-    through to ``~/projects/adcp`` -- one maintainer's personal clone. Any environment that
-    did not run ``.github/actions/_adcp-bundle`` first resolved to a path that has never
-    existed, every check de-collected, and the job exited 0 having graded nothing (measured:
-    run innet_080926_1118, storyboard.json summary {'passed': 1, 'skipped': 1}).
+    through to ``~/projects/adcp`` -- one maintainer's personal clone. An environment that
+    has not run ``.github/actions/_adcp-bundle`` therefore resolves to a path that has never
+    existed, every check de-collects, and the job exits 0 having graded nothing.
 
     Three sources, first hit wins, so every environment lands somewhere:
 

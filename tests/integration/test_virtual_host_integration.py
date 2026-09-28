@@ -1,23 +1,15 @@
 """Integration tests for virtual host functionality.
 
-FOUR TESTS WERE DELETED HERE, and what they were is worth recording so they are not
-recreated. ``test_header_parsing_*``, ``test_header_case_sensitivity``,
-``test_multiple_routing_headers_priority`` and ``test_context_error_handling`` each
-defined a local ``MockContext`` class, put headers into it, read them back out with a
-dict access written in the test body, and asserted on what the test had just stored.
-None of them imported or called anything from ``src``. ``test_multiple_routing_headers_
-priority`` is the clearest case: its name claimed to grade which of two headers takes
-priority, while its three assertions only checked that a dict returned the three values
-placed in it — so it would have passed just as well under the opposite priority, and it
-passed unchanged during the whole period when two resolvers in production disagreed about
-exactly that question.
+HEADER PARSING IS NOT GRADED HERE, and a test that defines a local ``MockContext``, puts
+headers into it and asserts on what it just stored imports nothing from ``src`` — such a
+test passes under any header priority, including one where two production resolvers
+disagree. Which tenant a host resolves is graded on all four transports by
+``tests/bdd/features/local-tenant-identification-routes.feature``.
 
-Which tenant a host resolves is graded on all four transports by
-``tests/bdd/features/local-tenant-identification-routes.feature``. What remains here is
-the one test in this file that called production, plus the case-folding class below —
-which is here rather than in BDD because two of the three readers it drives (the landing
-page and the agent card) are ROOT HTTP endpoints outside the tool dispatch the BDD
-harness speaks, and the point is to drive all three in one place.
+What is here is the tests that call production, plus the case-folding class below — which
+lives here rather than in BDD because two of the three readers it drives (the landing page
+and the agent card) are ROOT HTTP endpoints outside the tool dispatch the BDD harness
+speaks, and the point is to drive all three in one place.
 """
 
 import pytest

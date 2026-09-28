@@ -34,17 +34,12 @@ from scripts.audit import ledger
 from tests.helpers.ledger import load_ledger_nodeids
 
 # --- ledger pin ---
-# Re-seeded from ONE measured in-network run, test-results/innet_180926_2349, which scored
-# passed=49 failed=16 on both protocols with zero disparity. 18 mcp + 18 a2a, every failing
+# Seeded from ONE measured in-network run, test-results/innet_180926_2349, which scored
+# passed=49 failed=16 on both protocols with zero disparity: 18 mcp + 18 a2a, every failing
 # check failing on both surfaces -- so an asymmetric pair appearing here is an mcp-only fix
 # that left its a2a twin behind, which is the drift the per-protocol split exists to expose.
 # (The runner's own ``failed`` counter reads 16 while its per-check ``failures`` array carries
-# 18 records; the ledger keys on the records. Same shape as the first seeding's 23-vs-21.)
-#
-# WHAT MOVED, against the first seeding (innet_160926_1917, passed=30, 46 entries): 26 entries
-# graduated when the account-seeding fix took the score 30 -> 49, and 16 checks that the
-# resulting skip cascade had masked began executing and failing. Both halves are itemised in
-# the header of tests/storyboard/known_failures.txt. Net 46 -> 36.
+# 18 records; the ledger keys on the records.)
 #
 # The pass count is floored separately, in ``.storyboard-pass-floor``, because no pytest
 # outcome carries it: a check degrading from PASS to SKIP deletes its own failing item, so

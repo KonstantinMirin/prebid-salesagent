@@ -4,10 +4,9 @@ Covers alembic revision 7f31c0ab94d2.
 
 This is the half of the change that could repeat the defect it fixes. A backfill has only
 two expressions available — ``<subdomain>.<SALES_AGENT_DOMAIN>`` and
-``<subdomain>.example.com`` — and deriving a host from either is exactly what published
-``ci-test.sales-agent.example.com`` on a card, a name nothing on the network served, taking
-A2A conformance from 30 passing checks to 0 (#1845). So the revision refuses, names the
-offending rows, and leaves them for an operator who knows where the deployment answers.
+``<subdomain>.example.com`` — and either puts a host on a tenant's card that nothing on the
+network serves (#1845). So the revision refuses, names the offending rows, and leaves them
+for an operator who knows where the deployment answers.
 
 Runs against a MIGRATED database (``migration_db``), not the ordinary integration fixtures:
 those build the schema with ``Base.metadata.create_all``, which reads ``nullable=False``

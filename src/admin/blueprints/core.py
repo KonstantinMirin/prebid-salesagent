@@ -37,17 +37,14 @@ def get_tenant_from_hostname():
     """The tenant this admin request's host names, or None.
 
     The ONE host -> tenant lookup in the admin plane: ``public.landing`` and
-    ``auth.login`` call this rather than each rebuilding it. What they rebuilt was a
-    per-blueprint copy of the same two steps — read the host out of a two-header ladder,
-    then query ``tenants`` by ``virtual_host`` — and the copies differed in which branch
-    got the ``admin.`` guard.
+    ``auth.login`` call this rather than each rebuilding it, so neither can differ about
+    which host names a tenant or which tenants are eligible.
 
-    Both steps now have one owner: ``requested_host`` spells the header names
+    Both steps have one owner: ``requested_host`` spells the header names
     (``src/core/http_utils.py``) and ``TenantLookupRepository`` issues the query, the same
-    one ``config_loader`` routes buyer traffic with. That last part is a change in kind:
-    the hand-rolled copies matched ``virtual_host`` as an exact string and ignored
-    ``is_active``, so a deactivated tenant's host still resolved and a host naming the
-    same origin with a port did not. Routing is routing on both planes.
+    one ``config_loader`` routes buyer traffic with — so this honours ``is_active`` and the
+    column's folding, rather than matching ``virtual_host`` as an exact string. Routing is
+    routing on both planes.
 
     A host under ``admin.`` names the admin domain itself, not a tenant.
     """

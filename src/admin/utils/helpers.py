@@ -298,11 +298,11 @@ def _session_email(user_info: object) -> str:
 def _setup_session_reaches(tenant_id: str) -> bool:
     """Whether the caller's setup-mode session grants access to *tenant_id*.
 
-    Decided from the session alone — NO database read. What stood inline here first read
-    the tenant's auth_setup_mode, and ``get_db_session()`` is scoped: opening one inside an
+    Decided from the session alone — NO database read. Reading the tenant's auth_setup_mode
+    here would need one, and ``get_db_session()`` is scoped: opening a session inside an
     auth decorator nests within whatever session the caller already holds, and the inner
-    exit removes the scoped session and detaches the outer one. That is the defect fixed in
-    ``enable_oidc``, and here it discarded rows a caller had flushed but not committed.
+    exit removes the scoped session and detaches the outer one, discarding rows the caller
+    had flushed but not committed. ``enable_oidc`` carries the same rule.
 
     The scope check needs no database. The session states which tenant it is for, and this
     server signed it, so that statement is as trustworthy as the ``user`` the caller's own
@@ -310,8 +310,8 @@ def _setup_session_reaches(tenant_id: str) -> bool:
     names — which is what the approval-refusal tests grade, since a super admin crosses
     tenants by design and a refusal test authenticated as one proves nothing.
 
-    Never true in production: the route that minted these sessions is deleted, so the branch
-    is unreachable in a deployment, and this says so rather than leaving it to be inferred.
+    Never true in production: no route in a deployment mints such a session, so the branch
+    is unreachable there, and this says so rather than leaving it to be inferred.
     """
     if "test_user" not in session or get_settings().runtime.is_production:
         return False
@@ -335,26 +335,23 @@ def require_tenant_access(api_mode=False):
 
             # A SETUP-MODE SESSION, decided from the session alone — NO DATABASE READ.
             #
-            # What stood here read the tenant's auth_setup_mode first, to decide whether a
-            # ``test_user`` session counted. That is a DB read inside the auth decorator, on
-            # every request, and ``get_db_session()`` is scoped: opening one here nests
-            # inside whatever session the caller already holds, and the inner exit REMOVES
-            # the scoped session and detaches the outer one — the same defect fixed in
-            # ``enable_oidc``. It discarded rows a caller had flushed but not committed, and
-            # 14 inventory-tree tests asked for data they had just seeded and were told
-            # "total active: 0".
+            # Reading the tenant's auth_setup_mode to decide whether a ``test_user`` session
+            # counts would be a DB read inside the auth decorator, on every request, and
+            # ``get_db_session()`` is scoped: opening one here nests inside whatever session
+            # the caller already holds, and the inner exit REMOVES the scoped session and
+            # detaches the outer one, discarding rows the caller flushed but had not
+            # committed. ``enable_oidc`` carries the same rule.
             #
             # The scope check does not need the database. The session states which tenant it
             # is for, and a session is signed by this server, so what it states is as
-            # trustworthy as the ``user`` the path below reads. What this keeps is the
-            # TENANT-SCOPED grant: a caller who is not a super admin reaches exactly the
-            # tenant named in its own session, which is what the approval-refusal tests
-            # grade (a super admin crosses tenants by design, so a refusal test
-            # authenticated as one proves nothing).
+            # trustworthy as the ``user`` the path below reads. The grant is TENANT-SCOPED:
+            # a caller who is not a super admin reaches exactly the tenant named in its own
+            # session, which is what the approval-refusal tests grade (a super admin crosses
+            # tenants by design, so a refusal test authenticated as one proves nothing).
             #
-            # Never in production. The route that minted these sessions is deleted, so in a
-            # deployment this branch is unreachable by construction; the guard states that
-            # rather than leaving it to be inferred.
+            # Never in production: no route in a deployment mints such a session, so this
+            # branch is unreachable there by construction; the guard states that rather than
+            # leaving it to be inferred.
             if _setup_session_reaches(tenant_id):
                 g.user = session["test_user"]
                 return f(tenant_id, *args, **kwargs)

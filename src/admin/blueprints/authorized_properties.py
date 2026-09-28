@@ -228,14 +228,8 @@ def _construct_agent_url(tenant_id: str) -> str:
     the check simply fails. So this asks :func:`canonical_agent_url`, the one derivation,
     rather than deriving its own.
 
-    What stood here was a four-rung ladder that disagreed with the card in every
-    configuration: an ``ADCP_AGENT_URL`` override ABOVE the tenant's own host (collapsing
-    every tenant onto one URL), ``https://`` hardcoded, ``localhost`` outside production,
-    and a try/except answering ``localhost`` again for any failure — so a verification that
-    could not load the tenant reported success against a URL nothing published.
-
-    Takes no ``request``: the old ladder did not read one either, and a request parameter on
-    a function deriving a tenant's published identity is an invitation to start.
+    Takes no ``request``: a tenant's published identity comes from its row, and a request
+    parameter on a function deriving it is an invitation to read a header instead.
     """
     from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 

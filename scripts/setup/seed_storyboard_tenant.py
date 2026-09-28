@@ -7,13 +7,11 @@ absent, and this needs the bundle. Splitting them is what lets this refuse rathe
 degrade.
 
 WHY THIS TENANT EXISTS AT ALL. The agent card publishes a tenant's STORED host
-(``canonical_agent_url``), and the e2e stack runs two agent fronts against one database.
-The CI tenant declares no ``virtual_host``, so with its identity the card advertised
-``ci-test.<SALES_AGENT_DOMAIN>`` — a name nothing on the compose network answers. A2A is
-card-first: the runner fetched the card, followed that URL, and every check errored
-``getaddrinfo ENOTFOUND`` — 0 passed, 64 failed, 25 of 72 storyboards executed, while MCP
-kept 30/21/249 because it reads no card. One tenant per front keeps each card true about
-the agent that served it, and ``virtual_host`` is unique, so the two cannot collide.
+(``canonical_agent_url``), and the e2e stack runs two agent fronts against one database. A2A
+is card-first: the runner fetches the card and follows the URL it names, so a tenant whose
+host names nothing on the compose network errors every check with ``getaddrinfo ENOTFOUND``
+while MCP is unaffected, because it reads no card. One tenant per front keeps each card true
+about the agent that served it, and ``virtual_host`` is unique, so the two cannot collide.
 
 WHY THE INVENTORY IS READ, NOT WRITTEN HERE. 49 of the 52 pinned storyboards name
 ``test-kits/acme-outdoor.yaml`` as their ``prerequisites.test_kit``; it is the seller-side
@@ -376,14 +374,12 @@ def seed_storyboard_tenant() -> str:
             session.rollback()
             print(f"  ⚠️  Prerequisites race condition: {e}")
 
-        # A CATALOGUE. Measured, not assumed: moving the runner from the CI tenant to this
-        # one with an empty catalogue lost four checks that had been passing —
-        # error_compliance::nonexistent_product, error_compliance::reversed_dates_error,
-        # governance_conditions::get_products_brief and refine_products::get_products_brief
-        # — and left inventory_list_targeting failing, because get_products_brief is the
-        # FIRST step of those storyboards and everything downstream depends on it. The CI
-        # tenant's two products had been carrying every product-dependent storyboard
-        # invisibly; a tenant of this suite's own has to carry them itself.
+        # A CATALOGUE, because the product-dependent storyboards cannot start without one:
+        # get_products_brief is the FIRST step of error_compliance::nonexistent_product,
+        # error_compliance::reversed_dates_error, governance_conditions::get_products_brief
+        # and refine_products::get_products_brief, and everything downstream depends on it,
+        # so an empty catalogue fails those four and leaves inventory_list_targeting
+        # failing too.
         #
         # The test kit declares no products: per-storyboard catalogue state is what
         # comply_test_controller seeds (#1834), and half the 249 skipped checks wait on it.

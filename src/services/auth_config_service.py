@@ -246,10 +246,8 @@ def get_tenant_redirect_uri(tenant: Tenant) -> str:
         Full redirect URI
     """
     if tenant.virtual_host:
-        # The host this tenant is served at, and the only per-tenant answer. The branch
-        # that used to sit under this built one from the subdomain and SALES_AGENT_DOMAIN;
-        # it went with the subdomain strategy, because a redirect URI
-        # has to be a host the tenant is actually reachable at and only virtual_host says
+        # The host this tenant is served at, and the only per-tenant answer: a redirect URI
+        # has to be a host the tenant is actually reachable at, and only virtual_host says
         # so. A tenant that declares none falls through to the deployment-wide answers.
         base = f"https://{tenant.virtual_host}"
     elif main_url := get_sales_agent_url():
@@ -269,11 +267,10 @@ def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | No
     """Whether *config* is verified for *tenant*'s CURRENT redirect URI.
 
     A predicate over rows the caller already has, so a caller inside a session asks it
-    without opening a second one. ``enable_oidc`` used to call the session-opening
-    :func:`is_oidc_config_valid` from inside its own session: the inner context's exit
-    removes the scoped session, which detaches the outer one, so the ``commit()`` after it
-    wrote NOTHING. The service logged "Enabled OIDC" and ``oidc_enabled`` stayed false --
-    a silent failure on the one step that turns a tenant's SSO on.
+    without opening a second one. Asking the session-opening :func:`is_oidc_config_valid`
+    from inside a session instead loses the write silently: the inner context's exit
+    removes the scoped session, which detaches the outer one, so a ``commit()`` after it
+    writes NOTHING and ``oidc_enabled`` stays false while the service logs success.
     """
     if not config or not tenant:
         return False

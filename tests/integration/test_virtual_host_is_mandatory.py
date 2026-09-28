@@ -1,15 +1,10 @@
 """A tenant always declares the host it is served at, and every publisher reads that one.
 
 ``virtual_host`` is the only statement of where a tenant answers. A tenant holding none is
-not merely unpublishable: since the routing change in PR #2191 there are exactly two ways
-to name a tenant — ``Host`` against ``tenants.virtual_host``, and the ``x-adcp-tenant``
-literal id — so a host-less tenant is UNREACHABLE by ``Host`` at all. The defect this
-module grades is that every creation path produced exactly such a tenant, and the readers
-then papered over it by INVENTING a host: ``canonical_agent_url`` fell through to
-``http://localhost:{port}`` and published it as the tenant's public A2A endpoint, while the
-adagents.json verifier invented a different one on the same row. Inventing a host is what
-took A2A conformance from 30 passing checks to 0 (#1845) — a name nothing on the network
-served, followed by every client that trusted the card.
+not merely unpublishable: there are exactly two ways to name a tenant — ``Host`` against
+``tenants.virtual_host``, and the ``x-adcp-tenant`` literal id (#2191) — so a host-less
+tenant is UNREACHABLE by ``Host`` at all, and a reader handed one can only INVENT a host,
+publishing on the card a name nothing on the network serves (#1845).
 
 So the rule is the column's, not each reader's: a tenant cannot exist without a host, and
 no code derives one. These tests drive the outer surfaces that rule has to hold at — the

@@ -1,15 +1,14 @@
 """Typed tenant context model.
 
-Replaces the fragile dict[str, Any] tenant representation with a typed,
-validated Pydantic model. All tenant fields are explicitly defined with
-appropriate defaults.
+A typed, validated Pydantic model of a tenant: every field is explicitly
+declared, with a default where one is sound.
 
 The resolver (``src/core/resolved_identity._resolve_identity``) loads it once per request
 and hands it on as ``ResolvedIdentity.tenant``. Nothing downstream loads a tenant again.
 
-It is read by attribute only: ``tenant.tenant_id``. The dict shim (``__getitem__``, ``get``,
-``keys``, ``__contains__``) that let ``tenant["tenant_id"]`` compile is gone, so mypy sees
-every field a reader names.
+It is read by attribute only: ``tenant.tenant_id``. There is deliberately no dict shim
+(``__getitem__``, ``get``, ``keys``, ``__contains__``), so ``tenant["tenant_id"]`` does not
+compile and mypy sees every field a reader names.
 """
 
 import logging
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class TenantContext(BaseModel):
-    """Typed tenant context — replaces dict[str, Any] for tenant data.
+    """A tenant's fields, typed, as every reader downstream of the boundary sees them.
 
     Created from the database Tenant ORM model at the transport boundary.
     Immutable after creation. Two fields are required, because the row always carries

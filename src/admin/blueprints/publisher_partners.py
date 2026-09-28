@@ -358,8 +358,8 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                 )
 
             # The one derivation, so this matches the URL the card publishes byte for byte —
-            # a counterparty's adagents.json check compares the two. The 500 that stood here
-            # refused a tenant with no host; the column no longer admits one.
+            # a counterparty's adagents.json check compares the two. Always a string: the
+            # column does not admit a tenant with no host.
             agent_url: str = canonical_agent_url(tenant)
 
             # Fetch authorization for each publisher (real verification for non-mock tenants)
@@ -519,8 +519,8 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
                 return jsonify({"error": "Publisher not found"}), 404
 
             # The one derivation, so this matches the URL the card publishes byte for byte —
-            # a counterparty's adagents.json check compares the two. The 500 that stood here
-            # refused a tenant with no host; the column no longer admits one.
+            # a counterparty's adagents.json check compares the two. Always a string: the
+            # column does not admit a tenant with no host.
             agent_url: str = canonical_agent_url(tenant)
 
             # Fetch fresh authorization context

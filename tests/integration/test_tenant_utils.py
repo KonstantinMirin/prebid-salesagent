@@ -85,16 +85,15 @@ def test_serialize_tenant_nullable_fields_have_defaults(integration_db):
         assert result["authorized_domains"] == []  # Default empty list
         assert result["auto_approve_formats"] == []  # Default empty list
 
-        # virtual_host is NOT one of the nullable fields any more, so it cannot stand as an
-        # example of one. It used to be asserted None here, which characterized the contract
-        # this change deletes: a tenant always declares the host it is served at, the column
-        # refuses NULL, and what the serializer owes is to round-trip the stored value.
+        # virtual_host is not a nullable field, so it cannot stand as an example of one: a
+        # tenant always declares the host it is served at, the column refuses NULL, and what
+        # the serializer owes is to round-trip the stored value.
         assert result["virtual_host"] == "test.adcp.test"
 
         # TEST: Nullable scalar fields are None (no default)
         assert result["slack_webhook_url"] is None
-        # admin_token assertion removed: serialize_tenant_to_dict no longer emits the key
-        # (84a86e019 dropped the tenant admin credential; principal tokens are hashed).
+        # No admin_token assertion: serialize_tenant_to_dict emits no such key — there is no
+        # tenant admin credential, and principal tokens are hashed.
 
 
 @pytest.mark.requires_db

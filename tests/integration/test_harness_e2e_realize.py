@@ -158,9 +158,8 @@ class TestCreativeFormatsE2EValidation:
                 env.set_registry_formats([bogus])
 
 
-# TestAccountSyncQuietFailureFix stood here, asserting set_billing_policy /
-# set_approval_mode raise when the tenant row does not exist yet. A real-database env now
-# seeds the tenant it presents on entry, because a request naming a tenant no row matches
-# is refused -- so "before the tenant exists" is not a state a test inside a `with env:`
-# block can reach. The harness guards remain as cheap assertions; what is gone is a test
-# that had to fabricate an unreachable state to run.
+# There is nothing here grading set_billing_policy / set_approval_mode against a missing
+# tenant row: a real-database env seeds the tenant it presents on entry, because a request
+# naming a tenant no row matches is refused -- so "before the tenant exists" is not a state
+# a test inside a `with env:` block can reach. The harness guards for it remain as cheap
+# assertions.

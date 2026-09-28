@@ -508,11 +508,9 @@ def render_agent_card(seller: SellerCapabilities) -> AgentCard:
     A RENDERER: it decides shape, never content. Every claim a buyer could act on
     comes off ``seller`` — the interface URL, the AdCP version, the protocols this
     seller supports — which is the same object ``get_adcp_capabilities`` renders, so
-    the card and the tool cannot describe one seller two ways. Three literals that
-    used to sit here were exactly that kind of drift: ``protocols_supported`` was
-    hardcoded ``["media_buy"]`` while the capabilities tool derived the real set from
-    ``tenants.capability_declarations``, and ``documentation_url`` shipped a
-    ``your-org`` placeholder on the wire.
+    the card and the tool cannot describe one seller two ways. A literal here would be
+    exactly that drift: a hardcoded ``protocols_supported`` states as fact what the
+    capabilities tool derives from ``tenants.capability_declarations``.
 
     What IS declared here is declared honestly, because it describes this A2A server
     rather than the seller: ``push_notifications=False`` is the same fact as the four
@@ -548,8 +546,8 @@ def render_agent_card(seller: SellerCapabilities) -> AgentCard:
             # selects its interface with `i.protocolBinding?.toUpperCase() === "JSONRPC"`
             # (@a2a-js/sdk pick_interface.ts), so a card that omits it matches NOTHING: the
             # client finds no usable interface and reports the agent UNREACHABLE, having
-            # never sent a request. Measured against @adcp/sdk 14.0.0-rc.35, whose runner
-            # graded 0 checks for exactly this reason.
+            # never sent a request — @adcp/sdk 14.0.0-rc.35's conformance runner grades
+            # zero checks against such a card.
             AgentInterface(url=seller.agent_url, protocol_binding="JSONRPC", protocol_version="1.0"),
         ],
         capabilities=AgentCapabilities(push_notifications=False, extensions=[adcp_extension]),
@@ -559,6 +557,5 @@ def render_agent_card(seller: SellerCapabilities) -> AgentCard:
     )
 
 
-# Standalone execution removed — A2A is now integrated into the unified
-# FastAPI app (src/app.py) via add_routes_to_app(). The AdCPRequestHandler
-# and create_agent_card() are imported by src/app.py.
+# There is no standalone entry point: A2A is served by the unified FastAPI app
+# (src/app.py), which imports AdCPRequestHandler and render_agent_card from here.

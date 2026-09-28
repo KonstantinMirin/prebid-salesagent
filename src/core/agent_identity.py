@@ -7,17 +7,16 @@ identities, and a counterparty comparing the URL it invoked against the one we
 published would fail with no diagnostic.
 
 So the scheme and host come from the tenant row, never from a request header —
-not ``Host``, not ``X-Forwarded-Proto``. The ladder over those that used to sit in
-``src/app.py`` is gone: it published whatever host the caller asked for, behind
-nothing but a syntax check.
+not ``Host``, not ``X-Forwarded-Proto``. Every header is caller-supplied on a direct
+connection, so a card derived from one publishes whatever host the caller asked for.
 
-Nor is there a ladder UNDER the row any more. A tenant always declares a host —
+There is no default under the row either. A tenant always declares a host —
 ``Tenant.virtual_host`` refuses a blank and the column refuses NULL — so there is
 nothing for a default to answer, and :func:`canonical_agent_url` cannot return a name
 the tenant does not live at. The one place a host is still derived is
 :func:`deployment_virtual_host`, which runs at CREATION for the tenant a deployment
-bootstraps for itself and STORES its answer; see its own note for why that is the
-opposite of #1845 rather than a repeat of it.
+bootstraps for itself and STORES its answer; see its own note for why deriving there
+is sound and deriving at publish time is not (#1845).
 
 Scope. This module is the DERIVATION and nothing else. The agent card reads it
 through :mod:`src.services.seller_capabilities`, which is also what
@@ -50,8 +49,7 @@ class DeclaresHost(Protocol):
     A tenant reaches this function in two shapes — the ORM row an admin view holds and
     the ``TenantContext`` projection the resolver hands a tool — and both already carry
     the host. Naming the ATTRIBUTE rather than either class is what lets every caller
-    pass the row it is already holding instead of re-loading the other shape, which is
-    why the four sites that used to derive their own URL can now call this one.
+    pass the row it is already holding instead of re-loading the other shape.
     """
 
     @property
@@ -68,15 +66,10 @@ def canonical_agent_url(tenant: DeclaresHost) -> str:
     served at (it may carry a port, because the card publishes this string and a client
     connects to what the card says). Stored state, never request state, and never derived.
 
-    Two rungs used to stand below it, and both published a name the tenant did not live
-    at. ``f"{subdomain}.{SALES_AGENT_DOMAIN}"`` put ``ci-test.sales-agent.example.com`` on
-    the CI tenant's card — nothing on the network served it, and the A2A runner followed it
-    and failed every check (#1845). ``local_base_url`` then put ``http://localhost:8080``
-    on every admin-created tenant's card as its PUBLIC A2A endpoint. A second derivation of
-    "where is this tenant" is a second chance to be wrong about it, and the tenant already
-    answers the question — so the column is mandatory (``Tenant.virtual_host`` refuses a
-    blank) and this reads it verbatim. This is a read of one column: nothing here opens a
-    session.
+    A second derivation of "where is this tenant" is a second chance to be wrong about it,
+    and the tenant already answers the question — so the column is mandatory
+    (``Tenant.virtual_host`` refuses a blank) and this reads it verbatim (#1845). This is a
+    read of one column: nothing here opens a session.
     """
     return f"{_get_protocol_for_domain(tenant.virtual_host)}://{tenant.virtual_host}"
 
@@ -88,11 +81,10 @@ def deployment_virtual_host() -> str | None:
     somebody who knows where it answers and states it; this exists because nobody is present
     at ``init_db`` time to state anything, and the column is mandatory.
 
-    The ladder here is the same one deleted from :func:`canonical_agent_url`, and the
-    difference is the whole point: this runs ONCE, at creation, and its answer is STORED in
-    a column an operator can see and correct. #1845 re-derived a host at PUBLISH time, for
-    tenants that never lived at it, on every request — so no operator ever saw the value
-    that was going out.
+    Deriving a host is sound HERE and nowhere else: this runs once, at creation, and its
+    answer is STORED in a column an operator can see and correct. The same derivation at
+    PUBLISH time runs on every request and puts a host on the card that no operator ever
+    sees, for a tenant that may not live at it (#1845).
 
     Returns None in production declaring neither ``ADCP_AGENT_URL`` nor
     ``SALES_AGENT_DOMAIN``: such an install serves nothing by ``Host`` today, and storing

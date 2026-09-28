@@ -214,10 +214,8 @@ def login():
     tenant_name = None
 
     # Extract tenant from headers FIRST (before any redirects)
-    # The admin plane's one host -> tenant lookup. The two copies that stood here read the
-    # proxy header and the Host through their own ladder and queried ``tenants`` directly,
-    # which is the duplication being removed; the log line below no longer names which
-    # header carried the host because ``requested_host`` is the one place that decides.
+    # The admin plane's one host -> tenant lookup. ``requested_host`` is the one place that
+    # decides which header carried the host, so the log line below does not name one.
     detected_tenant = get_tenant_from_hostname()
     if detected_tenant:
         tenant_context = detected_tenant.tenant_id
@@ -857,10 +855,10 @@ def gam_callback():
                 redirect_uri=callback_uri,
             )
         except OutboundError as exc:
-            # The seam RAISES on a non-2xx rather than returning one, so what used to
-            # be an `if not token_response.ok` branch is this handler. Google's error
-            # body is not readable here by design — the seam discards a failed
-            # response — so the specific-cause messages below now key off the status.
+            # The seam RAISES on a non-2xx rather than returning one, so a failed exchange
+            # arrives here rather than as a falsy response. Google's error body is not
+            # readable here by design — the seam discards a failed response — so the
+            # specific-cause messages below key off the status.
             status = exc.http_status
             logger.error("Token exchange failed: status=%s, error=%s", status, exc)
 

@@ -231,10 +231,9 @@ def update_general(tenant_id):
                     if conflict is not None:
                         return conflict
                 else:
-                    # An empty submission used to CLEAR the host, which is the same defect
-                    # the creation paths had: it left an existing tenant unreachable by any
-                    # Host and its card publishing a derived name. A tenant can be MOVED,
-                    # never un-addressed.
+                    # An empty submission is refused rather than CLEARING the host, which
+                    # would leave an existing tenant unreachable by any Host. A tenant can
+                    # be MOVED, never un-addressed.
                     flash("Virtual host is required — it is the address this tenant is served at", "error")
                     return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
@@ -1283,11 +1282,10 @@ def update_business_rules(tenant_id):
 def _resolve_owned_domain(tenant_id: str, domain: str | None) -> OwnedDomain | None:
     """Prove the tenant owns *domain*, or report that the tenant is missing.
 
-    The ownership rule used to be written inside ONE of the Approximated
-    handlers, which is precisely why its two sibling routes never had it. The
-    status and unregister routes now share it from here; register_approximated_domain
-    still proves it inline (see the comment there) because its raw ``select()``
-    is a live no-raw-select allowlist row.
+    One owner for the ownership rule, so no Approximated handler can be written
+    without it. The status and unregister routes share it from here;
+    register_approximated_domain still proves it inline (see the comment there)
+    because its raw ``select()`` is a live no-raw-select allowlist row.
 
     ``tenant.virtual_host`` is read INSIDE the session block on purpose -- a
     detached instance would raise at the read rather than refuse.

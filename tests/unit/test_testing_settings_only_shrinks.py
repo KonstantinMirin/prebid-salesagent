@@ -15,8 +15,8 @@ FIELDS that exist to be forked on. The properties are the readers; these are the
 
 ``ProvisioningSettings`` is deliberately not covered. Its three fields — seed a demo
 tenant, seed sample data, skip migrations — are facts an operator asks of a fresh
-deployment, read once at init, and none of them asks whether a suite is running. They lived
-on ``TestingSettings`` and that was the confusion worth removing: a class name implying
+deployment, read once at init, and none of them asks whether a suite is running. Keeping
+them off ``TestingSettings`` is what lets this pin mean something: a class name implying
 everything inside is a test artifact hides which fields are actually defects.
 """
 
@@ -31,13 +31,11 @@ EXPECTED_TESTING_FIELDS: frozenset[str] = frozenset(
         # loopback check while a suite runs. Goes when the test environments' loopback
         # origins are reachable without it — the same work ADCP_OUTBOUND_ALLOW_PRIVATE needs.
         "adcp_testing",
-        # SEVEN FIELDS WERE REMOVED HERE, which is the direction this pin exists to allow.
-        # adcp_auth_test_mode decided whether create_app COMPOSED a test-credential login
-        # blueprint, and its six test_* credentials were that blueprint's password table.
-        # The blueprint is deleted: a test that needs an admin session signs one
-        # (tests/helpers/admin_session), and a deployment reaches its first admin through
-        # its identity provider, with per-tenant Setup Mode covering the interval before SSO
-        # is enabled.
+        # A field goes by giving the behavior a real input, which is the direction this pin
+        # exists to allow. No credential flag is needed for admin access: a test that needs
+        # an admin session signs one (tests/helpers/admin_session), and a deployment reaches
+        # its first admin through its identity provider, with per-tenant Setup Mode covering
+        # the interval before SSO is enabled.
     }
 )
 
