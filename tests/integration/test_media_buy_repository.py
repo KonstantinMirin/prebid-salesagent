@@ -31,7 +31,15 @@ def tenant_a(integration_db):
     """Create tenant A."""
     tenant_id = "repo_test_tenant_a"
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Tenant A", subdomain="tenant-a", is_active=True, ad_server="mock")
+        # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Tenant A",
+            subdomain="tenant-a",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
     yield tenant_id
@@ -43,7 +51,14 @@ def tenant_b(integration_db):
     """Create tenant B (for cross-tenant isolation tests)."""
     tenant_id = "repo_test_tenant_b"
     with get_db_session() as session:
-        tenant = Tenant(tenant_id=tenant_id, name="Tenant B", subdomain="tenant-b", is_active=True, ad_server="mock")
+        tenant = Tenant(
+            tenant_id=tenant_id,
+            name="Tenant B",
+            subdomain="tenant-b",
+            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            is_active=True,
+            ad_server="mock",
+        )
         session.add(tenant)
         session.commit()
     yield tenant_id
