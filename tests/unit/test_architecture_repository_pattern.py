@@ -140,8 +140,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     ("tests/integration/test_cross_principal_security.py", "test_cross_tenant_isolation_also_enforced"),
     # tests/integration/test_database_health_integration.py
     ("tests/integration/test_database_health_integration.py", "test_health_check_performance_with_real_database"),
-    # tests/integration/test_database_integration.py
-    ("tests/integration/test_database_integration.py", "test_settings_queries"),
     # tests/integration/test_delivery_simulator_restart.py
     ("tests/integration/test_delivery_simulator_restart.py", "test_tenant"),
     ("tests/integration/test_delivery_simulator_restart.py", "test_principal"),
@@ -357,8 +355,6 @@ INTEGRATION_SESSION_ADD_ALLOWLIST = {
     # mock_api_key_auth fixed — stores the API key digest through
     # TenantManagementConfigRepository (salesagent-3cs7o.18)
     ("tests/integration/test_tenant_management_api_integration.py", "test_tenant"),
-    # tests/integration/test_tenant_settings_comprehensive.py
-    ("tests/integration/test_tenant_settings_comprehensive.py", "test_database_queries"),
     # tests/integration/test_tenant_utils.py
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_json_fields_are_deserialized"),
     ("tests/integration/test_tenant_utils.py", "test_serialize_tenant_nullable_fields_have_defaults"),
