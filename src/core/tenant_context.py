@@ -15,7 +15,7 @@ every field a reader names.
 import logging
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from src.core.config_loader import safe_json_loads
 
@@ -57,6 +57,21 @@ class TenantContext(BaseModel):
     # #1592 T1a: implementation-backed AdCP capability declaration blocks.
     # None = nothing declared = the pre-#1592 capabilities wire.
     capability_declarations: dict[str, Any] | None = None
+
+    @field_validator("virtual_host")
+    @classmethod
+    def _fold_virtual_host(cls, value: str | None) -> str | None:
+        """The host this projection carries is LOWERCASE, whoever built it.
+
+        The read half of the same rule ``Tenant.virtual_host``'s validator states on the
+        write half: a ``Host`` names a DNS name and DNS is case-insensitive, so the one
+        canonical spelling is the folded one. Every reader that publishes or byte-matches
+        this tenant's origin — the agent card, ``get_adcp_capabilities`` — reads it from
+        here through ``canonical_agent_url``, so folding once at the projection is what
+        keeps a row written before that validator existed from publishing an origin in a
+        case no other reader would produce.
+        """
+        return value.lower() if value else value
 
     # --- Construction helpers ---
 

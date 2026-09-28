@@ -151,3 +151,16 @@ class TestUniquenessChecksStillSeeInactiveTenants:
             repo = TenantLookupRepository(env.get_session())
 
             assert repo.find_by_id_or_subdomain("nobody", "taken-either").tenant_id == "tlr_u3"
+
+    def test_a_virtual_host_differing_only_in_case_is_the_same_host_and_is_taken(self, integration_db):
+        """The uniqueness check folds case, like the routing lookups above.
+
+        A host is a DNS name, so ``Taken.Example.com`` and ``taken.example.com`` are one
+        host. Answering "free" for the second would admit a row the routing lookups then
+        resolve to whichever of the two they happen to see first.
+        """
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tlr_u4", virtual_host="case.example.com")
+            repo = TenantLookupRepository(env.get_session())
+
+            assert repo.find_by_virtual_host("Case.Example.COM").tenant_id == "tlr_u4"

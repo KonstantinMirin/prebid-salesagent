@@ -83,8 +83,13 @@ def tenant_owns_domain(tenant: Tenant, domain: str | None) -> OwnedDomain:
     domain)`` and the proof means nothing. Read ``tenant.virtual_host`` INSIDE
     the caller's session block -- a detached instance raises here, not at the
     dial.
+
+    Case-folded on both sides, because ``virtual_host`` is lowercase end to end and a
+    host differing only in case is the SAME host. An exact comparison here
+    refused an operator who typed the domain with a capital, and claimed the tenant did
+    not own a domain it is served at.
     """
-    if not isinstance(domain, str) or not domain or tenant.virtual_host != domain:
+    if not isinstance(domain, str) or not domain or (tenant.virtual_host or "").lower() != domain.lower():
         raise DomainNotOwned("Domain must match tenant's virtual_host")
     return OwnedDomain(domain=domain)
 

@@ -34,3 +34,14 @@ class TestHostnameOf:
 
     def test_empty_host_stays_empty(self):
         assert hostname_of("") == ""
+
+    def test_the_answer_is_lowercase(self):
+        """A contract both callers depend on, pinned here because neither can state it.
+
+        ``_same_host`` compares this against a case-folded ``virtual_host`` column, and
+        ``Tenant.primary_domain`` feeds it to ``publisher_domain``, whose pinned pattern
+        (``^[a-z0-9]...``) admits no uppercase. A host stored with a capital matched no
+        spelling at all while only one of the two sides folded (PR #2191).
+        """
+        assert hostname_of("Probe-Case.AdCP.test:8443") == "probe-case.adcp.test"
+        assert hostname_of("PROBE-CASE.ADCP.TEST") == "probe-case.adcp.test"

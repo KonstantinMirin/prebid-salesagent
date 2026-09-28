@@ -33,7 +33,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 from sqlalchemy.sql import func
 
 from src.core.billing_policy import BILLING_PARTY_VALUES
@@ -215,6 +215,25 @@ class Tenant(Base, JSONValidatorMixin):
 
     # JSON validators are inherited from JSONValidatorMixin
     # No need for duplicate validators here
+
+    @validates("virtual_host")
+    def _fold_virtual_host(self, _key: str, value: str | None) -> str | None:
+        """``virtual_host`` is ALL LOWERCASE, whatever the assignment was handed.
+
+        A ``Host`` names a DNS name and DNS is case-insensitive (RFC 7230 §5.4), so
+        ``Probe-Case.Example.test`` and ``probe-case.example.test`` are one host — but the
+        column is ``Text`` and SQL comparison is not case-folding, so storing the first
+        and being asked for the second is a miss. Every reader that answers "which tenant
+        serves this request" went dark at once for such a row, leaving the tenant
+        reachable only through the ``x-adcp-tenant`` literal-id path (PR #2191).
+
+        Normalising HERE rather than at each assignment is what makes the mismatch
+        unrepresentable: the admin settings form, the storyboard seed script and anything
+        added later all write through this hook, so there is no second spelling to keep in
+        step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
+        which is what still resolves a row stored mixed-case before this existed.
+        """
+        return value.lower() if value else value
 
     @property
     def gemini_api_key(self) -> str | None:
