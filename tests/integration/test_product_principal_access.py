@@ -18,6 +18,7 @@ from src.core.database.models import (
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 
 @pytest.mark.requires_db
@@ -32,7 +33,7 @@ def test_product_stores_and_retrieves_allowed_principal_ids(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-principal",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -91,7 +92,7 @@ def test_product_with_null_allowed_principal_ids(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-null-principal",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -150,7 +151,7 @@ def test_convert_product_includes_allowed_principal_ids(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-convert",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -221,7 +222,7 @@ def test_allowed_principal_ids_excluded_from_serialization(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-serialize",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -293,7 +294,7 @@ def test_principal_model_exists_for_access_control(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-principal-model",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,

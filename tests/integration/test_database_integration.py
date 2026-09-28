@@ -33,6 +33,7 @@ def test_settings_queries(integration_db):
     # Create test data first
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal, Tenant
+    from tests.utils.database_helpers import vhost_for
 
     with get_db_session() as session:
         # Create tenant
@@ -41,7 +42,7 @@ def test_settings_queries(integration_db):
             name="Test Tenant",
             subdomain="test-tenant",
             # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
         )
         session.add(tenant)
 

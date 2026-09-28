@@ -32,6 +32,7 @@ def test_database_queries(integration_db):
     # Create test data first
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Principal, Tenant
+    from tests.utils.database_helpers import vhost_for
 
     tenant_id = "default"
 
@@ -42,7 +43,7 @@ def test_database_queries(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-tenant",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
         )
         session.add(tenant)
 

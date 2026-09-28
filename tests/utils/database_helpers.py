@@ -19,6 +19,29 @@ from src.core.database.models import (
 )
 from tests.factories.principal import plaintext_token_for
 
+#: The suffix every fixture-minted host carries. ``.test`` is reserved by RFC 2606 precisely
+#: so it can never resolve, and ``adcp.test`` is the convention
+#: ``scripts/setup/seed_storyboard_tenant.py`` established and the wildcard test certificate
+#: already covers. Deliberately NOT ``.example.com``: a fixture host is not a real origin and
+#: must not read like one.
+TEST_VHOST_SUFFIX = "adcp.test"
+
+
+def vhost_for(tenant_id: str) -> str:
+    """A fixture host for *tenant_id* — the one derivation, called rather than copied.
+
+    ``tenants.virtual_host`` is NOT NULL and ``ix_tenants_virtual_host`` is UNIQUE, so every
+    fixture tenant needs a host and no two may share one. Deriving it from the tenant_id
+    satisfies both at once, and doing it HERE means the convention has one definition: this
+    expression was inlined at two dozen call sites before it was extracted, which is the
+    shape CLAUDE.md names a defect rather than a style preference.
+
+    Underscores become hyphens because a tenant_id may hold them and a DNS label may not.
+    Nothing routes to the result — a fixture addresses its tenant directly, by id — so this is
+    a value that satisfies a column, not a claim about where anything is served.
+    """
+    return f"{tenant_id.replace('_', '-')}.{TEST_VHOST_SUFFIX}"
+
 
 @contextmanager
 def bind_factories_to_session(session):
@@ -93,12 +116,10 @@ def create_tenant_with_timestamps(
     # Ensure we have required timestamp fields
     kwargs.setdefault("created_at", now)
     kwargs.setdefault("updated_at", now)
-    # A tenant declares the host it is served at: the column is NOT NULL and
-    # ix_tenants_virtual_host is UNIQUE, so the default is derived from the tenant_id to stay
-    # distinct across tenants one test creates together. Defaulted here for the same reason
-    # the timestamps are — a caller grading something else should not have to name it — and a
+    # A tenant declares the host it is served at. Defaulted here for the same reason the
+    # timestamps are — a caller grading something else should not have to name it — and a
     # caller that IS grading the host passes its own.
-    kwargs.setdefault("virtual_host", f"{tenant_id.replace('_', '-')}.adcp.test")
+    kwargs.setdefault("virtual_host", vhost_for(tenant_id))
 
     return Tenant(tenant_id=tenant_id, name=name, subdomain=subdomain, billing_plan=billing_plan, **kwargs)
 

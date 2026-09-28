@@ -34,6 +34,7 @@ from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
     read_media_buy_state,
 )
+from tests.utils.database_helpers import vhost_for
 
 
 def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
@@ -43,7 +44,7 @@ def _create_test_tenant(tenant_id: str = "test_tenant") -> str:
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             is_active=True,
         )

@@ -19,7 +19,7 @@ from tests.integration.conftest import (
     add_required_setup_data,
     create_test_product_with_pricing,
 )
-from tests.utils.database_helpers import create_tenant_with_timestamps
+from tests.utils.database_helpers import create_tenant_with_timestamps, vhost_for
 
 
 # Test fixtures
@@ -69,7 +69,7 @@ class TestSessionManagement:
                     tenant_id=tenant_id,
                     name=name,
                     subdomain=tenant_id.lower(),
-                    virtual_host=f"{tenant_id.lower().replace('_', '-')}.adcp.test",
+                    virtual_host=vhost_for(tenant_id.lower()),
                     authorized_emails=[],
                     policy_settings={},
                     created_at=now,

@@ -19,6 +19,8 @@ import re
 
 from sqlalchemy import text
 
+from tests.utils.database_helpers import vhost_for
+
 
 def parse_postgres_url() -> tuple[str, str, str, int] | None:
     """Parse DATABASE_URL into connection components.
@@ -106,7 +108,7 @@ def reset_to_revision(
                 "tid": tenant_id,
                 "name": tenant_name,
                 "subdomain": subdomain,
-                "vhost": f"{tenant_id.replace('_', '-')}.adcp.test",
+                "vhost": vhost_for(tenant_id),
             },
         )
     return engine, db_url

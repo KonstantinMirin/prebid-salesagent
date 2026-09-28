@@ -15,6 +15,7 @@ from src.core.database.models import (
     PropertyTag,
     Tenant,
 )
+from tests.utils.database_helpers import vhost_for
 
 
 @pytest.mark.requires_db
@@ -32,7 +33,7 @@ def test_create_product_with_inventory_profile(integration_db):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test-profile",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -121,7 +122,7 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
             tenant_id=tenant1_id,
             name="Tenant 1",
             subdomain="tenant1",
-            virtual_host=f"{tenant1_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant1_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,
@@ -130,7 +131,7 @@ def test_product_creation_validates_profile_belongs_to_tenant(integration_db):
             tenant_id=tenant2_id,
             name="Tenant 2",
             subdomain="tenant2",
-            virtual_host=f"{tenant2_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant2_id),
             ad_server="mock",
             billing_plan="basic",
             is_active=True,

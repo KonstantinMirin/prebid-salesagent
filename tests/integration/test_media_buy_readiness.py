@@ -12,6 +12,7 @@ from src.admin.services.media_buy_readiness_service import MediaBuyReadinessServ
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative, CreativeAssignment, MediaBuy, Principal, Tenant
 from tests.factories.principal import plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -26,7 +27,7 @@ def test_tenant(integration_db, request):
             tenant_id=tenant_id,
             name="Test Tenant",
             subdomain="test",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             is_active=True,
             ad_server="mock",
         )

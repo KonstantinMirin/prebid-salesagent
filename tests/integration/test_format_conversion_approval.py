@@ -30,7 +30,7 @@ from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.adcp_factories import create_test_db_product
 from tests.helpers.media_buy_approval import run_approval
-from tests.utils.database_helpers import bind_factories_to_session
+from tests.utils.database_helpers import bind_factories_to_session, vhost_for
 
 
 def create_media_package(
@@ -86,7 +86,7 @@ def test_tenant(integration_db):
             tenant_id=tenant_id,
             name="Format Test Tenant",
             subdomain="formattest",
-            virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+            virtual_host=vhost_for(tenant_id),
             is_active=True,
             ad_server="mock",
         )

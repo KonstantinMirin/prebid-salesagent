@@ -35,6 +35,7 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from tests.factories import PricingOptionFactory
 from tests.factories.media_buy import request_package
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
+from tests.utils.database_helpers import vhost_for
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -102,7 +103,7 @@ def _setup_base_state(session) -> dict:
         tenant_id=tenant_id,
         name="Test Tenant",
         subdomain="test",
-        virtual_host=f"{tenant_id.replace('_', '-')}.adcp.test",
+        virtual_host=vhost_for(tenant_id),
         is_active=True,
         ad_server="mock",
         auth_setup_mode=False,
