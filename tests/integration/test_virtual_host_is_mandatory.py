@@ -38,20 +38,22 @@ ADMIN_EMAIL = "test@example.com"
 
 
 def _stored_host(tenant_id: str) -> str | None:
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Tenant
+    """The host the row actually holds, read the one way a tenant is loaded by id.
 
-    with get_db_session() as session:
-        row = session.get(Tenant, tenant_id)
-        return row.virtual_host if row else None
+    ``TenantContext.load`` rather than a session of our own: it is the sanctioned read
+    (CLAUDE.md Pattern #8 bans ``get_db_session()`` in a test body), and it is the same
+    projection every production reader sees, so this grades what the card would publish.
+    """
+    from src.core.tenant_context import TenantContext
+
+    loaded = TenantContext.load(tenant_id)
+    return loaded.virtual_host if loaded else None
 
 
 def _tenant_exists(tenant_id: str) -> bool:
-    from src.core.database.database_session import get_db_session
-    from src.core.database.models import Tenant
+    from src.core.tenant_context import TenantContext
 
-    with get_db_session() as session:
-        return session.get(Tenant, tenant_id) is not None
+    return TenantContext.load(tenant_id) is not None
 
 
 def _as_production_admin(client) -> None:

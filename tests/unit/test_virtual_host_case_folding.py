@@ -37,9 +37,23 @@ class TestTheColumnFoldsOnAssignment:
 
         assert tenant.virtual_host == MIXED.lower()
 
-    def test_a_tenant_declaring_no_host_keeps_none(self):
-        """``None`` is a real answer — a tenant without a domain is a real seller."""
-        assert Tenant(tenant_id="t", virtual_host=None).virtual_host is None
+    def test_a_tenant_declaring_no_host_is_refused(self):
+        """``None`` is no longer an answer: a tenant declares the host it is served at.
+
+        This assertion is inverted from what it said before. ``None`` used to be read as a
+        real state ("a print publisher has no domain"), but with Host-against-virtual_host
+        one of only two ways to name a tenant (PR #2191), a host-less tenant is unreachable
+        rather than domain-less — and every reader papered over it by inventing a host, which
+        is what took A2A conformance from 30 checks to 0 (#1845). The same hook that folds
+        case refuses the absence, so no creation path can produce one.
+        """
+        with pytest.raises(ValueError):
+            Tenant(tenant_id="t", virtual_host=None)
+
+    def test_a_blank_host_is_refused_too(self):
+        """SQL has no opinion about ``"   "``, so the hook is what makes NOT NULL mean it."""
+        with pytest.raises(ValueError):
+            Tenant(tenant_id="t", virtual_host="   ")
 
 
 class TestTheDomainOwnershipGateFoldsBothSides:
@@ -57,6 +71,12 @@ class TestTheDomainOwnershipGateFoldsBothSides:
         with pytest.raises(DomainNotOwned):
             tenant_owns_domain(tenant, "other.example.com")
 
-    def test_a_tenant_with_no_host_owns_nothing(self):
-        with pytest.raises(DomainNotOwned):
+    def test_a_host_less_tenant_cannot_reach_the_gate_at_all(self):
+        """The gate's no-host case is now unreachable, so the refusal moved to construction.
+
+        This used to assert ``DomainNotOwned`` for a tenant holding no host. Such a tenant
+        can no longer be built, which is a stronger guarantee than the gate refusing one:
+        the state the branch defended against does not exist.
+        """
+        with pytest.raises(ValueError):
             tenant_owns_domain(Tenant(tenant_id="t", virtual_host=None), "acme.example.com")
