@@ -346,7 +346,7 @@ def pytest_configure(config: pytest.Config) -> None:
     # Guard: BDD_E2E_ENABLED is incompatible with xdist. Under -n>0 the e2e_rest
     # transport is silently dropped at collection (the worker's
     # pytest_generate_tests never appends it), so the suite goes green WITHOUT
-    # ever running the 5th transport. The ctx fixture's hard-error can't catch
+    # ever running the e2e_rest transport. The ctx fixture's hard-error can't catch
     # this — collection never happens. Turn the silent drop into a hard error.
     # In-network bdd already pins BDD_XDIST_N=0 (docker-compose.e2e.yml). (#1420)
     # Exception: with E2E_PER_WORKER=1 each xdist worker targets its OWN server +
@@ -1512,7 +1512,7 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # `rest` (all three mutations verified to leave the guard green). What the
 # bracket discipline DOES buy is refusing a row id that merely contains a
 # transport name.
-_NODEID_TRANSPORTS = ("e2e_rest", "a2a", "mcp", "rest", "impl")
+_NODEID_TRANSPORTS = ("e2e_rest", "a2a", "mcp", "rest")
 _TRANSPORT_IN_NODEID = re.compile(r"\[(" + "|".join(_NODEID_TRANSPORTS) + r")[-\]]")
 
 
