@@ -127,8 +127,9 @@ def create_tenant():
         try:
             data = request.get_json()
 
-            # Validate required fields
-            required_fields = ["name", "subdomain", "ad_server"]
+            # Validate required fields. virtual_host is among them because it is the only
+            # way a request can name the tenant being created, and nothing derives one.
+            required_fields = ["name", "subdomain", "ad_server", "virtual_host"]
             for field in required_fields:
                 if field not in data:
                     return jsonify({"error": f"Missing required field: {field}"}), 400
@@ -171,6 +172,7 @@ def create_tenant():
                 tenant_id=tenant_id,
                 name=data["name"],
                 subdomain=data["subdomain"],
+                virtual_host=data["virtual_host"],
                 ad_server=data["ad_server"],
                 is_active=data.get("is_active", True),
                 billing_plan=data.get("billing_plan", "standard"),

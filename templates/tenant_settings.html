@@ -604,8 +604,8 @@
                     <h3>Domain Configuration</h3>
                     <div class="form-grid">
                         <div class="form-group">
-                            <label for="virtual_host">Custom Domain (Optional)</label>
-                            <input type="text" id="virtual_host" name="virtual_host" value="{{ tenant.virtual_host or '' }}" placeholder="e.g. sales-agent.yourcompany.com">
+                            <label for="virtual_host">Custom Domain *</label>
+                            <input type="text" id="virtual_host" name="virtual_host" required value="{{ tenant.virtual_host }}" placeholder="e.g. sales-agent.yourcompany.com">
                             <small>
                                 <p style="margin-top: 0.5rem; color: #666; font-size: 0.85em;">
                                     {% if single_tenant_mode %}

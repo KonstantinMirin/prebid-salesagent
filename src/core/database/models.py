@@ -63,7 +63,7 @@ class Tenant(Base, JSONValidatorMixin):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     subdomain: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
-    virtual_host: Mapped[str | None] = mapped_column(Text, nullable=True)
+    virtual_host: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -217,8 +217,23 @@ class Tenant(Base, JSONValidatorMixin):
     # No need for duplicate validators here
 
     @validates("virtual_host")
-    def _fold_virtual_host(self, _key: str, value: str | None) -> str | None:
-        """``virtual_host`` is ALL LOWERCASE, whatever the assignment was handed.
+    def _fold_virtual_host(self, _key: str, value: str | None) -> str:
+        """``virtual_host`` is PRESENT and ALL LOWERCASE, whatever the assignment was handed.
+
+        A tenant declares the host it is served at, always. Since the routing change in
+        PR #2191 there are exactly two ways to name a tenant — ``Host`` against this column,
+        and the ``x-adcp-tenant`` literal id — so a tenant holding no host is not merely
+        unpublishable, it is UNREACHABLE by ``Host`` at all, addressable only through a
+        header no proxy sends. Eight creation paths produced exactly such a tenant, and the
+        readers then papered over it by inventing a host: the card published
+        ``http://localhost:8080`` as an admin-created tenant's PUBLIC A2A endpoint.
+        Inventing one is what took A2A conformance from 30 passing checks to 0 (#1845).
+
+        Refusing HERE rather than in each creation path is what makes a host-less tenant
+        unrepresentable: every path writes through this hook, so a path added later cannot
+        miss the rule, and it fails loudly at assignment rather than at flush. The column is
+        ``nullable=False`` as well — this hook is what turns a blank string into the same
+        refusal, since SQL has no opinion about ``"   "``.
 
         A ``Host`` names a DNS name and DNS is case-insensitive (RFC 7230 §5.4), so
         ``Probe-Case.Example.test`` and ``probe-case.example.test`` are one host — but the
@@ -233,7 +248,12 @@ class Tenant(Base, JSONValidatorMixin):
         step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
         which is what still resolves a row stored mixed-case before this existed.
         """
-        return value.lower() if value else value
+        if value is None or not value.strip():
+            raise ValueError(
+                f"tenant {self.tenant_id!r}: virtual_host is required — a tenant declares the "
+                "host it is served at, and nothing derives one on its behalf"
+            )
+        return value.strip().lower()
 
     @property
     def gemini_api_key(self) -> str | None:
@@ -259,7 +279,7 @@ class Tenant(Base, JSONValidatorMixin):
         self._gemini_api_key = encrypt_api_key(value)
 
     @property
-    def primary_domain(self) -> str | None:
+    def primary_domain(self) -> str:
         """The publisher domain this tenant is known by — a HOSTNAME, never an origin.
 
         ``virtual_host`` stores the origin the tenant is served at, port included, because
@@ -272,16 +292,17 @@ class Tenant(Base, JSONValidatorMixin):
         It is the ONE derivation of this value. Four sites used to repeat the expression,
         and every one of them fed the colon through.
 
-        A tenant that declares no host has NO publisher domain, and returns None rather than
-        inventing one. The fallback that stood here built ``f"{subdomain}.example.com"`` — a
-        domain nobody owns, on a reserved TLD, handed to buyers as the publisher's own
-        (#1845). Callers that must state something say so explicitly; making ``virtual_host``
-        mandatory instead is a design change this does not make, because a publisher without
-        a domain is a real seller (a print title) rather than a misconfiguration.
+        Always a string, because ``virtual_host`` is mandatory. The None branch that stood
+        here was the remaining half of #1845: the fallback under it built
+        ``f"{subdomain}.example.com"`` — a domain nobody owns, on a reserved TLD, handed to
+        buyers as the publisher's own — and deleting the fabrication left a None that every
+        caller then had to invent a placeholder for, which is the same defect one layer up.
+        A tenant declares the host it is served at, so the domain it is known by follows from
+        it and no caller has anything to decide.
         """
         from src.core.http_utils import hostname_of
 
-        return hostname_of(self.virtual_host) if self.virtual_host else None
+        return hostname_of(self.virtual_host)
 
     @property
     def is_gam_tenant(self) -> bool:
@@ -469,33 +490,29 @@ class Product(Base, JSONValidatorMixin):
         # Convert product's authorization to AdCP publisher_properties format
         if self.properties:
             return ensure_selection_type(self.properties)
-        elif self.property_ids:
+
+        # The publisher this product is sold by, stated once for all three variants below.
+        # Tenant.primary_domain is always a real domain now that virtual_host is mandatory,
+        # so the only None left here is an UNLOADED self.tenant — a relationship this
+        # property was reached without, which is a different question from the tenant having
+        # no domain, and "unknown" is the honest answer to it. What this never does is
+        # FABRICATE: the value used to be f"{subdomain}.example.com", a domain nobody owns
+        # on a reserved TLD, handed to a buyer as the publisher's own (#1845).
+        publisher_domain = self.tenant.primary_domain if getattr(self, "tenant", None) else "unknown"
+
+        if self.property_ids:
             # AdCP 2.0.0 by_id variant
-            # primary_domain is None for a tenant that declares no virtual_host — a real
-            # state (a print publisher has no domain), so this states a placeholder rather
-            # than refusing. What it no longer does is FABRICATE: the value here used to be
-            # f"{subdomain}.example.com", a domain nobody owns on a reserved TLD, handed to
-            # a buyer as the publisher's own (#1845).
-            publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
             return [
                 {"publisher_domain": publisher_domain, "property_ids": self.property_ids, "selection_type": "by_id"}
             ]
-        elif self.property_tags:
+        if self.property_tags:
             # AdCP 2.0.0 by_tag variant
-            # primary_domain is None for a tenant that declares no virtual_host — a real
-            # state (a print publisher has no domain), so this states a placeholder rather
-            # than refusing. What it no longer does is FABRICATE: the value here used to be
-            # f"{subdomain}.example.com", a domain nobody owns on a reserved TLD, handed to
-            # a buyer as the publisher's own (#1845).
-            publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
             return [
                 {"publisher_domain": publisher_domain, "property_tags": self.property_tags, "selection_type": "by_tag"}
             ]
 
         # Default: Use "all" variant (all properties from this publisher)
         # This ensures products always have publisher_properties as required by AdCP spec
-        # See the note above: a placeholder, never a fabricated domain (#1845).
-        publisher_domain = (self.tenant.primary_domain if getattr(self, "tenant", None) else None) or "unknown"
         return [{"publisher_domain": publisher_domain, "selection_type": "all"}]
 
     @property

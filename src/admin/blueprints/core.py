@@ -445,10 +445,19 @@ def create_tenant():
         # Get form data
         tenant_name = request.form.get("name", "").strip()
         subdomain = request.form.get("subdomain", "").strip()
+        virtual_host = request.form.get("virtual_host", "").strip()
         ad_server = request.form.get("ad_server", "").strip() or None  # Default to None, not mock
 
         if not tenant_name:
             flash("Tenant name is required", "error")
+            return render_template("create_tenant.html")
+
+        # The operator running this form is the only party who knows where the deployment
+        # answers for this tenant, so the form asks and nothing here derives. A tenant
+        # created without one was reachable by no Host at all, and published
+        # http://localhost:8080 as its public A2A endpoint.
+        if not virtual_host:
+            flash("Virtual host is required — it is the address this tenant is served at", "error")
             return render_template("create_tenant.html")
 
         # Generate tenant ID if not provided
@@ -465,6 +474,7 @@ def create_tenant():
                 tenant_id=tenant_id,
                 name=tenant_name,
                 subdomain=subdomain,
+                virtual_host=virtual_host,
                 is_active=True,
                 ad_server=ad_server,
                 created_at=datetime.now(UTC),

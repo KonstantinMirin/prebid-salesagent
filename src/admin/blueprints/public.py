@@ -8,6 +8,7 @@ from flask import Blueprint, flash, redirect, render_template, request, session,
 from sqlalchemy import select
 
 from src.admin.blueprints.core import get_tenant_from_hostname
+from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
@@ -101,6 +102,23 @@ def provision_tenant():
             flash("Publisher name is required", "error")
             return redirect(url_for("public.signup_onboarding"))
 
+        # A signing-up publisher cannot know where this deployment answers, so this is the
+        # one creation path that derives its host — and it may only do so where the derived
+        # name is true by construction of the deployment. config/nginx/nginx-multi-tenant.
+        # conf serves *.${SALES_AGENT_DOMAIN} and lets the app pick the tenant from the
+        # Host, so those two settings TOGETHER are what make f"{subdomain}.{domain}" a host
+        # something actually serves. On a single-tenant install nginx is server_name _ with
+        # no wildcard, and the same expression is fiction — which is precisely what #1845
+        # published. So the signup is refused there rather than inventing a host.
+        runtime = get_settings().runtime
+        if not (runtime.adcp_multi_tenant and runtime.sales_agent_domain):
+            flash(
+                "Self-serve signup needs a multi-tenant deployment with SALES_AGENT_DOMAIN "
+                "configured. Ask an administrator to create this tenant.",
+                "error",
+            )
+            return redirect(url_for("public.signup_onboarding"))
+
         # Generate random subdomain and tenant ID (prevents subdomain squatting)
         # Format: 8 character hex (e.g., "a7f3d92b")
         import uuid
@@ -129,6 +147,8 @@ def provision_tenant():
                 tenant_id=tenant_id,
                 name=publisher_name,
                 subdomain=subdomain,
+                # The wildcard vhost nginx really serves — see the gate above.
+                virtual_host=f"{subdomain}.{runtime.sales_agent_domain}",
                 ad_server=adapter_type,
                 is_active=True,
                 billing_plan="standard",

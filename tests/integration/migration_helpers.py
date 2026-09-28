@@ -97,10 +97,17 @@ def reset_to_revision(
         conn.execute(text("DELETE FROM tenants"))
         conn.execute(
             text(
-                "INSERT INTO tenants (tenant_id, name, subdomain, ad_server, is_active) "
-                "VALUES (:tid, :name, :subdomain, 'mock', true)"
+                "INSERT INTO tenants (tenant_id, name, subdomain, virtual_host, ad_server, is_active) "
+                "VALUES (:tid, :name, :subdomain, :vhost, 'mock', true)"
             ),
-            {"tid": tenant_id, "name": tenant_name, "subdomain": subdomain},
+            # virtual_host is NOT NULL from revision 7f31c0ab94d2 and its index is UNIQUE, so
+            # the value is derived from the tenant_id to stay distinct across seeded tenants.
+            {
+                "tid": tenant_id,
+                "name": tenant_name,
+                "subdomain": subdomain,
+                "vhost": f"{tenant_id.replace('_', '-')}.adcp.test",
+            },
         )
     return engine, db_url
 

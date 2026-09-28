@@ -12,6 +12,7 @@ from werkzeug.wrappers import Response
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
+from src.core.agent_identity import canonical_agent_url
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -220,52 +221,26 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
 
 
 def _construct_agent_url(tenant_id: str, request: Any) -> str:
-    """Construct the agent URL using existing tenant resolution logic."""
-    from src.core.database.models import Tenant
+    """This tenant's agent URL — the same string the agent card publishes.
 
-    logger.info(f"🏗️ Constructing agent URL for tenant: {tenant_id}")
+    A counterparty fetches adagents.json and byte-matches the agent URL it finds there
+    against the one the card published, and there is no diagnostic when the two disagree —
+    the check simply fails. So this asks :func:`canonical_agent_url`, the one derivation,
+    rather than deriving its own.
 
-    runtime = get_settings().runtime
+    What stood here was a four-rung ladder that disagreed with the card in every
+    configuration: an ``ADCP_AGENT_URL`` override ABOVE the tenant's own host (collapsing
+    every tenant onto one URL), ``https://`` hardcoded, ``localhost`` outside production,
+    and a try/except answering ``localhost`` again for any failure — so a verification that
+    could not load the tenant reported success against a URL nothing published.
+    """
+    from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 
-    # Check if we have an explicit override for testing
-    override_url = runtime.adcp_agent_url
-    if override_url:
-        logger.info(f"🔧 Using ADCP_AGENT_URL override: {override_url}")
-        return override_url
-
-    # Get tenant information directly from database using tenant_id parameter
-    try:
-        with get_db_session() as db_session:
-            stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
-            tenant_obj = db_session.scalars(stmt).first()
-            if not tenant_obj:
-                raise ValueError(f"Tenant {tenant_id} not found")
-
-            subdomain = tenant_obj.subdomain or tenant_id
-            virtual_host = tenant_obj.virtual_host
-
-        logger.info(f"🏢 Tenant info - subdomain: '{subdomain}', virtual_host: '{virtual_host}'")
-
-        # In production, the host the tenant declares it is served at. The fallback that
-        # used to sit here built one from the subdomain and SALES_AGENT_DOMAIN, and went
-        # with the subdomain strategy: a tenant that declares no host
-        # has no per-tenant URL to give, and inventing one produces a name nothing serves.
-        if runtime.is_production and virtual_host:
-            url = f"https://{virtual_host}"
-            logger.info(f"🌐 Production: using virtual_host -> {url}")
-            return url
-
-        # For development, use MCP server port
-        url = runtime.local_base_url
-        logger.info(f"🛠️ Development: using localhost -> {url}")
-        return url
-
-    except Exception as e:
-        # Fallback if tenant context unavailable
-        logger.warning(f"⚠️ Failed to get tenant context: {e}")
-        url = runtime.local_base_url
-        logger.info(f"🆘 Fallback: using localhost -> {url}")
-        return url
+    with get_db_session() as db_session:
+        tenant = TenantLookupRepository(db_session).find_by_id(tenant_id)
+        if not tenant:
+            raise ValueError(f"Tenant {tenant_id} not found")
+        return canonical_agent_url(tenant)
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")
