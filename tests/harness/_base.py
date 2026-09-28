@@ -1354,12 +1354,12 @@ class BaseTestEnv:
         The Given side of every enforcement scenario: production then does the rest
         for real — ``CapabilityDeclarations.from_tenant`` parses and relation-checks
         the document, ``posture_for_tenant`` reads it, ``bucket_for`` applies the
-        ``required_for > warn_for > supported_for`` precedence.
+        ``required_for > supported_for`` precedence.
 
         THREE SHAPES, and the third is the one that must not be collapsed into the
         others:
 
-        * ``bucket="required" | "warn" | "supported"`` with *operations* — delegates to
+        * ``bucket="required" | "supported"`` with *operations* — delegates to
           :func:`~tests.helpers.signing.bucketed_declaration`, which names those
           operations in the bucket AND in ``supported_for`` (an operation cannot be
           required without being supported) and so leaves every other operation in
@@ -1572,8 +1572,8 @@ class BaseTestEnv:
         identity at all. ``prometheus_client.REGISTRY`` is process-global and never
         reset, and ``tox.ini``'s ``--dist loadfile`` puts every transport leg of a
         scenario in ONE worker process, so an absolute read here is satisfied on the
-        a2a and mcp legs by the rest leg's own increment — the two legs the warn
-        contrast exists for. That is a cross-transport claim graded at one transport,
+        a2a and mcp legs by the rest leg's own increment. That is a cross-transport
+        claim graded at one transport,
         which is the defect this seam was added to avoid rather than reproduce.
 
         THE WINDOW OPENS when the seller declares its posture
@@ -1972,9 +1972,9 @@ class BaseTestEnv:
         #1721 has no such middleware: the verifier runs inside ``_resolve_identity``,
         which ``invoke_tool`` reaches only once ``TOOLS[tool_name]`` resolved, so the
         operation graded against the posture is the SKILL and the ``protocol_methods_*``
-        namespace is never consulted at all (``verifier._bucket_for``, whose docstring
-        states it structurally: no ``protocol_method`` is passed because there is no
-        value at that boundary that COULD be graded against it).
+        namespace is never consulted at all — ``bucket_for`` takes an AdCP operation and
+        reads the AdCP buckets, so there is no argument at that boundary that COULD be
+        graded against the protocol trio.
 
         Meanwhile ``message/send`` was not merely representable but unserved: the
         dispatcher routes by method name before any version check, answers an unknown
@@ -2529,8 +2529,8 @@ class BaseTestEnv:
           :func:`~tests.helpers.signing.tampered_signing_body` of those bytes, with the
           ORIGINAL bytes returned. Well-formed headers, real crypto, and a
           ``content-digest`` that covers a body the wire does not carry: a CHECKLIST
-          failure rather than a header rejection, which is the distinction ``warn_for``
-          turns on.
+          failure rather than a header rejection, which is the distinction the narrowed
+          ``none`` bucket turns on.
 
         Rule 2 above holds for all four: the credential and the tenant hint are carried
         whether or not a signature is, so a realization is the ONLY variable.

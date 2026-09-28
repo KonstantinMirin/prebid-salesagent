@@ -70,7 +70,6 @@ from __future__ import annotations
 import logging
 import threading
 from typing import Any
-from urllib.parse import urlsplit
 
 from adcp.signing import SSRFValidationError
 from adcp.signing.agent_resolver import AgentResolution
@@ -87,6 +86,7 @@ from adcp.signing.revocation_fetcher import (
 
 from src.core.config import SigningSettings
 from src.core.metrics import record_signature_revocation_unavailable
+from src.core.signing.canonical import origin_of
 
 logger = logging.getLogger(__name__)
 
@@ -119,16 +119,6 @@ _UNAVAILABLE_REASONS: tuple[tuple[type[Exception], str], ...] = (
 )
 
 
-def _origin_of(url: str | None) -> str | None:
-    """The ``scheme://netloc`` of *url*, or None if it has neither."""
-    if not url:
-        return None
-    parts = urlsplit(url)
-    if not parts.scheme or not parts.netloc:
-        return None
-    return f"{parts.scheme}://{parts.netloc}"
-
-
 def _issuer_origin(resolution: AgentResolution | None, config: SigningSettings) -> str | None:
     """Where this counterparty's combined revocation list is served.
 
@@ -138,10 +128,10 @@ def _issuer_origin(resolution: AgentResolution | None, config: SigningSettings) 
     pin is for a deployment fronted by one governance issuer.
     """
     if config.revocation_issuer_origin:
-        return _origin_of(config.revocation_issuer_origin)
+        return origin_of(config.revocation_issuer_origin)
     if resolution is None:
         return None
-    return _origin_of(resolution.brand_json_url)
+    return origin_of(resolution.brand_json_url)
 
 
 class _ResolutionCacheJwksResolver:
@@ -184,7 +174,7 @@ class _ResolutionCacheJwksResolver:
         from src.core.signing.verifier import AGENT_RESOLUTION_CACHE
 
         for resolution in list(AGENT_RESOLUTION_CACHE.values()):
-            if not self._match_all and _origin_of(resolution.brand_json_url) != self._origin:
+            if not self._match_all and origin_of(resolution.brand_json_url) != self._origin:
                 continue
             jwk = StaticJwksResolver(resolution.jwks)(keyid)
             if jwk is not None:

@@ -68,11 +68,12 @@ a2a-sdk and FastMCP session machinery answer without calling the boundary at all
 asserts exactly that, so the coverage boundary is a measured fact rather than an
 omission. What they would have graded is graded elsewhere: their canonicalization at
 L1 by ``test_signing_conformance_signature_base.py`` and
-``test_signing_conformance_canonicalization.py``, ``010``'s raw-path ``@target-uri``
-derivation by ``test_architecture_signed_target_uri_raw_path.py``, and ``028``'s
-namespace rule by ``tests/unit/test_request_signing_namespace_split.py``.
-``protocol_methods_required_for`` ENFORCEMENT is ungraded here and is a recorded gap
-in :mod:`src.core.signing.verifier`'s own docstring.
+``test_signing_conformance_canonicalization.py``, and ``010``'s raw-path ``@target-uri``
+derivation by ``test_architecture_signed_target_uri_raw_path.py``. ``028`` grades an
+agent that DECLARES ``protocol_methods_required_for``, which this seller refuses to
+store at all (``docs/design/request-signing-subset.md``), so the vector is inapplicable
+by construction rather than ungraded — see
+``tests/unit/test_signing_conformance_plan.py``.
 
 Where the composition rule's first branch is decided
 -----------------------------------------------------
@@ -155,7 +156,6 @@ from tests.helpers.app_state import preserved_global_app_state
 from tests.helpers.asgi_wire import WireResponse, build_scope, send_wire_request
 from tests.helpers.signing import (
     COUNTERPARTY_AGENT_URL,
-    COUNTERPARTY_KEY_ORIGIN,
     FAILED_METRIC,
     VERIFIED_METRIC,
     VERIFIER_RESULT,
@@ -678,7 +678,7 @@ def test_every_row_names_the_route_the_plan_claims(vector_id) -> None:
 
     All 40 rows, not just the ``/api/v1`` ones: ``negative/028``'s ``POST /mcp`` is in
     the table's scope precisely BECAUSE it names no registry route — that is what puts
-    it on the unrouted side and leaves ``protocol_methods_required_for`` ungraded here.
+    it on the unrouted side.
 
     The pathological-path rows (``/./``, ``%e2%98%83``, ``%7E%2D%5F%2E``, ``%2F``) name
     no route either. Pinning that against the live route table is what stops a registry
@@ -881,9 +881,12 @@ def test_unknown_keyid_vector_resolves_the_counterparty_before_failing(integrati
             "the counterparty was NOT resolved, so this rejection is on a missing principal, not "
             f"on the keyid: agent_url={options.agent_url!r}"
         )
-        assert options.expected_key_origins == {"request_signing": COUNTERPARTY_KEY_ORIGIN}, (
-            f"expected_key_origins is {options.expected_key_origins!r} — the step-7 key-origin "
-            "check shipped OFF, so the rejection cannot be attributed to the keyid"
+        published = [key["kid"] for key in _jwks_for(_VECTORS[vector_id])["keys"]]
+        assert published, f"{vector_id} references no JWKS kid, so there is nothing for the keyid to miss"
+        assert all(options.jwks_resolver(kid) is not None for kid in published), (
+            "the resolver handed to the checklist does not carry the counterparty's PUBLISHED keys "
+            f"{published}, so it is the EMPTY resolver and every keyid would answer key_unknown — the "
+            "rejection cannot be attributed to the keyid this vector names"
         )
 
 

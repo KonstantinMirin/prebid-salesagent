@@ -42,18 +42,6 @@
             {% endfor %}
         </select>
     </div>
-    <div>
-        <label for="ref_scheme">Key storage</label>
-        <select id="ref_scheme" name="ref_scheme">
-            {% for scheme in ref_schemes %}
-            <option value="{{ scheme }}">{{ scheme }}</option>
-            {% endfor %}
-        </select>
-    </div>
-    <div>
-        <label for="env_var_name">Environment variable (env storage only)</label>
-        <input id="env_var_name" name="env_var_name" placeholder="ADCP_SIGNING_KEY_PEM">
-    </div>
     <button type="submit" class="btn btn-primary">
         <i class="fas fa-plus"></i> Provision Key
     </button>
@@ -66,7 +54,6 @@
             <th>Key ID</th>
             <th>Algorithm</th>
             <th>Purpose</th>
-            <th>Storage</th>
             <th>Status</th>
             <th>Not before</th>
             <th></th>
@@ -78,7 +65,6 @@
             <td class="kid">{{ key.kid }}</td>
             <td>{{ key.alg }}</td>
             <td>{{ key.purpose }}</td>
-            <td>{{ key.private_key_ref.split(':')[0] }}</td>
             <td>
                 {% if key.revoked_at %}
                 <span class="status-badge status-revoked">revoked {{ key.revoked_at }}</span>

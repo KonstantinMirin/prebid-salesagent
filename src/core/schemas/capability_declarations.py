@@ -20,6 +20,7 @@ model whose ``validate_backing()`` raises ``AdCPConfigurationError`` rather than
 silently clamping or emitting a non-conformant response.
 """
 
+import logging
 from collections.abc import Collection, Iterable
 from enum import Enum
 from typing import Any, NamedTuple
@@ -27,7 +28,6 @@ from typing import Any, NamedTuple
 from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     ExperimentalFeature,
-    ProtocolMethodsRequiredForItem,
     ReportingDeliveryMethod,
     SupportedProtocol,
 )
@@ -56,82 +56,83 @@ from src.core.signing.posture import (
     requires_trust_root,
 )
 
-#: The two AdCP-namespace bucket names and the three protocol-method ones, as they are
-#: spelled in a stored declaration. Read off the model rather than typed out, so a bucket the
-#: pinned schema adds is covered by the split the day the field appears.
-_ADCP_BUCKETS = ("required_for", "warn_for", "supported_for")
-_PROTOCOL_BUCKETS = ("protocol_methods_required_for", "protocol_methods_warn_for", "protocol_methods_supported_for")
+#: The buckets a stored declaration may name, as they are spelled in it. Read off the model
+#: rather than typed out, so a bucket the pinned schema adds is covered the day it appears.
+_ADCP_BUCKETS = ("required_for", "supported_for")
+
+#: Why the JSON-RPC namespace is undeclarable. One sentence for all three buckets, because
+#: one fact makes all three unenforceable.
+_PROTOCOL_METHODS_REASON = (
+    "the JSON-RPC protocol-method namespace, which no request reaching this seller's "
+    "request boundary carries: those methods are answered by the a2a-sdk's own handlers and "
+    "by FastMCP's session machinery. The one channel worth protecting there -- "
+    "tasks/pushNotificationConfig/set registering a webhook and its credentials -- is "
+    "declined wholesale by this agent, and webhook configuration arrives instead as a "
+    "declared field of an AdCP request body, signed like any other body"
+)
+
+#: The ``request_signing`` properties the pinned schema defines and this seller does NOT
+#: implement, each with what an operator should do instead.
+#:
+#: They are inherited from the library type rather than removed from the model (CLAUDE.md
+#: Pattern #1 -- the parent IS the pinned schema), so the refusal below is what keeps them
+#: off the wire: a value no tenant can store is a value no response can echo.
+#:
+#: Operator-facing only, on the same terms as ``_UNBACKED_BLOCKS``: the sentence is LOGGED
+#: at the refusal and never carried in the error's ``details``, because ``from_tenant``
+#: parses on the request path and an unauthenticated caller would receive it.
+_UNDECLARABLE_POSTURE_FIELDS: dict[str, str] = {
+    "warn_for": (
+        "a third enforcement outcome this seller does not implement: it answers 200 to a "
+        "signed-but-INVALID request, which tells a counterparty whose signing is broken that "
+        "it is working. Use supported_for (refuse an invalid signature) or required_for "
+        "(additionally refuse an unsigned request from an unauthenticated caller)"
+    ),
+    "protocol_methods_supported_for": _PROTOCOL_METHODS_REASON,
+    "protocol_methods_warn_for": _PROTOCOL_METHODS_REASON,
+    "protocol_methods_required_for": _PROTOCOL_METHODS_REASON,
+}
 
 
-def _is_protocol_method(name: str) -> bool:
-    """Whether *name* is a JSON-RPC protocol method name, per the PINNED SCHEMA.
+def _reject_undeclarable_posture_fields(declared: Any) -> None:
+    """Refuse a ``request_signing`` posture naming a field this seller does not implement.
 
-    Asked by validating the candidate against the generated ``protocol_methods_*`` item
-    model, whose ``^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$`` pattern is what the schema means by
-    that namespace. The rule is READ from the pin rather than transcribed as a ``/`` test
-    that would drift the day the pattern changed.
-    """
-    try:
-        ProtocolMethodsRequiredForItem(root=name)
-    except ValidationError:
-        return False
-    return True
+    STRICT, the same policy ``_UNBACKED_BLOCKS`` applies one level up: a posture may be
+    declared -- and therefore emitted -- only where the implementation backs it. A field
+    stored and echoed but never enforced is the silent-unverified failure the signing area
+    exists to remove, and it is worse than a refusal because the buyer reads the emitted
+    block as a promise.
 
+    Runs on the RAW declaration, BEFORE ``model_validate``, for the same reason the
+    namespace check it replaces did: here the strings are still strings, all four fields can
+    be reported together, and the operator gets the rule they broke rather than pydantic's
+    account of a type.
 
-def _reject_mixed_namespaces(declared: Any) -> None:
-    """The namespace split, refused at CONFIGURATION time. security.mdx @ v3.1.1 :1053.
-
-        AdCP tool names (no ``/``) MUST NOT appear in any ``protocol_methods_*`` array, and
-        JSON-RPC method names (containing ``/``) MUST NOT appear in ``supported_for`` /
-        ``warn_for`` / ``required_for``. Verifiers MUST reject capability blocks that violate
-        the namespace split with a configuration-time error rather than silently coercing
-        strings between the two.
-
-    Runs on the RAW declaration, BEFORE ``model_validate``, and that placement is the point.
-    The generated ``protocol_methods_*`` item model would refuse a slash-free AdCP tool name
-    on its own -- with pydantic's "String should match pattern '^[a-z]...'", which names a
-    regex rather than the rule an operator broke. The spec asks for a configuration-time
-    error about the NAMESPACE SPLIT, so it is raised here, where the strings are still
-    strings and both directions can be reported together.
-
-    NEITHER DIRECTION TESTS FOR A ``/``. That test is a second definition of a question two
-    other modules already answer, and it answers it wrongly in both directions:
-    ``get_signals`` has no slash and is not a tool this seller implements, while
-    ``tasks/cancel`` has one and is not an AdCP operation either. So each half asks the
-    authority that owns it -- the REGISTRY for "is this an AdCP operation of this seller"
-    (``src.core.tools.registry.is_adcp_operation``, which IS what makes a name one), and the
-    PINNED SCHEMA for "is this a protocol method" (:func:`_is_protocol_method`).
-
-    Anything that is not a mapping of lists is left alone: this is a namespace check, not a
-    type check, and the shape is pydantic's to refuse a moment later.
+    A key present with an EMPTY list is refused too. It is not inert -- an explicit
+    ``protocol_methods_supported_for: []`` is a narrowing the pin gives meaning to, and
+    accepting it would mean accepting the axis while refusing its values.
     """
     from src.core.exceptions import AdCPConfigurationError
-    from src.core.tools.registry import is_adcp_operation
 
     posture = declared.get("request_signing") if isinstance(declared, dict) else None
     if not isinstance(posture, dict):
         return
-
-    def _names(buckets: tuple[str, ...]) -> list[str]:
-        return [name for bucket in buckets for name in (posture.get(bucket) or []) if isinstance(name, str)]
-
-    misplaced = sorted(
-        {name for name in _names(_ADCP_BUCKETS) if _is_protocol_method(name)}
-        | {name for name in _names(_PROTOCOL_BUCKETS) if is_adcp_operation(name)}
-    )
-    if misplaced:
-        raise AdCPConfigurationError(
-            details=ConfigurationDetails(
-                capability="capability_declarations.request_signing",
-                rejected_value=misplaced,
-                tracked_by=(
-                    "The two buckets are matched against disjoint envelope fields "
-                    "(security.mdx @ v3.1.1 :1053): AdCP operation names belong in "
-                    "required_for/warn_for/supported_for, JSON-RPC method names in the "
-                    "matching protocol_methods_* bucket."
-                ),
-            ),
+    named = sorted(field for field in _UNDECLARABLE_POSTURE_FIELDS if field in posture)
+    if not named:
+        return
+    for field in named:
+        logger.warning(
+            "Tenant declared request_signing.%s, which this deployment does not implement: %s",
+            field,
+            _UNDECLARABLE_POSTURE_FIELDS[field],
         )
+    raise AdCPConfigurationError(
+        field="capability_declarations.request_signing",
+        details=ConfigurationDetails(
+            rejected_value=named,
+            accepted_values=sorted(_ADCP_BUCKETS),
+        ),
+    )
 
 
 # Two refusal tables, for two genuinely different reasons. Both make
@@ -160,6 +161,12 @@ def _reject_mixed_namespaces(declared: Any) -> None:
 # wholesale_feed_webhooks has no field on the model either -- it is listed here so the
 # operator learns why rather than reading pydantic's generic extra-field error, and
 # because it is the third ``must_equal_when`` trigger.
+logger = logging.getLogger(__name__)
+
+#: Blocks this deployment cannot back, and WHY -- an issue number plus what is missing.
+#: Operator-facing only: these sentences are LOGGED at the refusal, never carried in the
+#: error's ``details``, because ``from_tenant`` parses on the request path and an
+#: unauthenticated caller would receive them.
 _UNBACKED_BLOCKS: dict[str, str] = {
     "content_standards": (
         "#1855 (no content-standards surface exists in this deployment: nothing implements local "
@@ -175,6 +182,11 @@ _UNBACKED_BLOCKS: dict[str, str] = {
 # configuration. ``webhook_signing`` comes from key material plus trust-root
 # publishability (``webhook_signing_posture``), and C1's outbound sender reads that
 # same object -- so a declared value could only ever contradict what we actually do.
+#
+# Operator-facing only, on the same terms as ``_UNBACKED_BLOCKS``: the sentence names the
+# platform state this deployment derives the value from, which is remediation for whoever
+# wrote the declaration and reconnaissance for anyone else, so it is LOGGED at the refusal
+# and never carried in the error's ``details``.
 _DERIVED_BLOCKS: dict[str, str] = {
     "webhook_signing": (
         "it is DERIVED from this tenant's signing keys and the origin its trust root is served "
@@ -453,32 +465,46 @@ class CapabilityDeclarations(BaseModel):
         # error, so the operator learns WHICH block they cannot declare and why.
         # Unbacked first: "we do not implement this" is the more fundamental answer
         # than "this one is ours to derive".
+        #
+        # THE REASON IS LOGGED, NOT WIRED. ``from_tenant`` is the parse boundary of the
+        # request path -- ``posture_for_tenant`` calls it on every request and
+        # ``get_adcp_capabilities`` parses the same store -- so anything in ``details``
+        # here reaches an UNAUTHENTICATED caller. ``_UNBACKED_BLOCKS`` values name an
+        # internal issue number and enumerate what this deployment does not implement,
+        # which is operator remediation and reconnaissance both. ``block`` alone tells the
+        # buyer which declaration is refused, which is all they can act on;
+        # ``src/core/signing/provider.py`` quotes the spec section that forbids the rest.
         for block in sorted(_UNBACKED_BLOCKS):
             if block in declared:
+                logger.warning(
+                    "Tenant declared the unbacked capability block %r, which this deployment cannot back: %s",
+                    block,
+                    _UNBACKED_BLOCKS[block],
+                )
                 raise AdCPConfigurationError(
                     field=f"capability_declarations.{block}",
-                    details=ConfigurationDetails(block=block, tracked_by=_UNBACKED_BLOCKS[block]),
+                    details=ConfigurationDetails(block=block),
                 )
-        # Same shape, same axes, a different reason string: ``tracked_by`` carries WHY the
-        # block cannot be declared, which for a derived block is "this agent emits the
-        # derived value" rather than an issue number. A second key (``derived_because``)
-        # would be a second spelling of one axis, which ``ConfigurationDetails`` exists to
-        # prevent -- the two tables are told apart by the sentence, not by the key name.
+        # Same shape, same axes, same disclosure rule: the reason is LOGGED and the envelope
+        # carries ``block`` alone. A derived block's sentence is operator remediation just
+        # as an unbacked one's is -- it describes which platform state this deployment
+        # derives the value from -- and this parse runs on the request path, so anything in
+        # ``details`` reaches an unauthenticated caller.
         for block in sorted(_DERIVED_BLOCKS):
             if block in declared:
+                logger.warning(
+                    "Tenant declared the derived capability block %r, which is not the operator's to declare: %s",
+                    block,
+                    _DERIVED_BLOCKS[block],
+                )
                 raise AdCPConfigurationError(
                     field=f"capability_declarations.{block}",
-                    details=ConfigurationDetails(
-                        block=block,
-                        tracked_by=(
-                            f"Remove the block -- this agent emits the derived value, because {_DERIVED_BLOCKS[block]}."
-                        ),
-                    ),
+                    details=ConfigurationDetails(block=block),
                 )
 
-        # The namespace split, before pydantic sees the strings -- see the function for why
-        # the placement is the point rather than an ordering convenience.
-        _reject_mixed_namespaces(declared)
+        # The undeclarable posture fields, before pydantic sees the strings -- see the
+        # function for why the placement is the point rather than an ordering convenience.
+        _reject_undeclarable_posture_fields(declared)
 
         # ValidationError only -- never a broad `except Exception`, which would
         # flatten any typed AdCPSalesAgentError raised from a nested validator into a
@@ -558,9 +584,9 @@ class CapabilityDeclarations(BaseModel):
     #
     # Ordered as the pin orders them, because the order decides WHICH field a
     # rejection names and the graded rows depend on the name:
-    #   (a) namespace split          -- on RequestSigningPosture itself (inherited)
-    #   (b) required_for  subset of supported_for  (both namespaces)
-    #   (c) warn_for      subset of supported_for, disjoint from required_for
+    #   (a) undeclarable fields      -- _reject_undeclarable_posture_fields, on the RAW
+    #                                   declaration, before pydantic types anything
+    #   (b) required_for  subset of supported_for
     #   (d) must_equal_when          -- needs platform state, see
     #                                   validate_signing_platform_backing
     #   (e) required_when            -- identity.brand_json_url obliged
@@ -615,67 +641,39 @@ class CapabilityDeclarations(BaseModel):
         self._validate_identity_relations(posture)
 
     def _validate_bucket_monotonicity(self, posture: RequestSigningPosture) -> None:
-        """``required_for``/``warn_for`` may only name what a DECLARED ``supported_for`` does.
+        """``required_for`` may only name what a DECLARED ``supported_for`` does.
 
-        ``x-adcp-validation.subset_of`` on both namespaces: "an operation can't be
-        required without being supported". The rule bites only where the operator actually
-        WROTE the narrowing bucket, which is why the loop keys on ``model_fields_set``
-        rather than on the value:
+        ``x-adcp-validation.subset_of``: "an operation can't be required without being
+        supported". The rule bites only where the operator actually WROTE the narrowing
+        bucket, which is why it keys on ``model_fields_set`` rather than on the value:
 
         * an ABSENT ``supported_for`` means "wherever a signature appears" — the same
-          reading ``_bucket_for`` gives a null ``supported_for``, and the reading the pin's
-          own graded corpus requires: ``negative/028-unsigned-protocol-method-required``
-          declares ``protocol_methods_required_for: ["tasks/cancel"]`` and NO
-          ``protocol_methods_supported_for``, and is graded as a LEGAL declaration whose
-          unsigned request must be rejected. Keying on the value would have refused that
-          declaration, because the SDK defaults that bucket to ``[]`` (not ``None``) and an
-          empty list read as a narrowing forbids every required method.
+          reading ``_bucket_for`` gives a null ``supported_for``. Keying on the value would
+          refuse that, because the SDK defaults the bucket to ``[]`` (not ``None``) and an
+          empty list read as a narrowing forbids every required operation.
         * an EXPLICIT ``supported_for: []`` alongside a non-empty ``required_for`` IS the
           contradiction the rule exists for, and is rejected.
-
-        ``warn_for`` disjoint from ``required_for``: an operation cannot be both graded
-        in shadow mode and rejected outright, and silently letting one win would enforce
-        a rule the buyer was never told.
         """
-        for subset_field, superset_field in (
-            ("required_for", "supported_for"),
-            ("protocol_methods_required_for", "protocol_methods_supported_for"),
-            ("warn_for", "supported_for"),
-        ):
-            narrowed = getattr(posture, superset_field)
-            if superset_field not in posture.model_fields_set or narrowed is None:
-                continue
-            extra = sorted(bucket_names(getattr(posture, subset_field)) - bucket_names(narrowed))
-            if extra:
-                self._reject(
-                    f"request_signing.{subset_field}",
-                    f"An operation cannot be required or warned on without being supported: every "
-                    f"name here must also appear in "
-                    f"capability_declarations.request_signing.{superset_field} "
-                    f"(get-adcp-capabilities-response.json x-adcp-validation.subset_of).",
-                    rejected_value=extra,
-                    accepted_values=sorted(bucket_names(narrowed)),
-                )
-
-        for warn_field, required_field in (
-            ("warn_for", "required_for"),
-            ("protocol_methods_warn_for", "protocol_methods_required_for"),
-        ):
-            both = sorted(bucket_names(getattr(posture, warn_field)) & bucket_names(getattr(posture, required_field)))
-            if both:
-                self._reject(
-                    f"request_signing.{warn_field}",
-                    f"An operation is graded in shadow mode or rejected outright, never both: "
-                    f"capability_declarations.request_signing.{required_field} names it too.",
-                    rejected_value=both,
-                )
+        narrowed = posture.supported_for
+        if "supported_for" not in posture.model_fields_set or narrowed is None:
+            return
+        extra = sorted(bucket_names(posture.required_for) - bucket_names(narrowed))
+        if extra:
+            self._reject(
+                "request_signing.required_for",
+                "An operation cannot be required without being supported: every name here must "
+                "also appear in capability_declarations.request_signing.supported_for "
+                "(get-adcp-capabilities-response.json x-adcp-validation.subset_of).",
+                rejected_value=extra,
+                accepted_values=sorted(bucket_names(narrowed)),
+            )
 
     def _validate_identity_relations(self, posture: RequestSigningPosture | None) -> None:
         """Rules (e), (f-pattern) and (g) — the trust-root pointer's obligations.
 
         ``webhook_signing.supported`` is one of the six ``required_when`` triggers but is
         DERIVED, so it cannot be evaluated here; the declaration-time half covers the
-        four ``request_signing`` bucket triggers, and the derived trigger is checked in
+        ``request_signing`` bucket triggers, and the derived trigger is checked in
         :meth:`validate_signing_platform_backing`. That split is why a keyed tenant that
         declares nothing at all is still obliged to emit ``brand_json_url`` -- the
         obligation is on the EMITTED document, and emission derives it.
@@ -689,21 +687,14 @@ class CapabilityDeclarations(BaseModel):
         if posture is not None and requires_trust_root(posture, webhook_signing_supported=False) and not declared_url:
             self._reject(
                 "identity.brand_json_url",
-                "Required when request_signing names any operation or protocol method: a "
-                "counterparty resolves this agent's signing keys through the brand.json served "
-                "there, so a posture with no trust-root pointer cannot be verified "
+                "Required when request_signing names any operation: a counterparty resolves this "
+                "agent's signing keys through the brand.json served there, so a posture with no "
+                "trust-root pointer cannot be verified "
                 "(get-adcp-capabilities-response.json x-adcp-validation.required_when).",
                 # The names that FIRED the trigger, so the operator can either add the
-                # pointer or drop them. Exactly the four buckets
-                # ``request_signing_buckets_declared`` reads -- ``warn_for`` is not a
-                # trigger in either namespace, and listing it here would name operations
-                # that did not oblige anything.
-                rejected_value=sorted(
-                    bucket_names(posture.supported_for)
-                    | bucket_names(posture.required_for)
-                    | bucket_names(posture.protocol_methods_supported_for)
-                    | bucket_names(posture.protocol_methods_required_for)
-                ),
+                # pointer or drop them -- exactly the buckets
+                # ``request_signing_buckets_declared`` reads.
+                rejected_value=sorted(bucket_names(posture.supported_for) | bucket_names(posture.required_for)),
             )
 
         # (f) pattern. The SDK types brand_json_url as a bare AnyUrl -- the schema's

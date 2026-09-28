@@ -62,11 +62,9 @@ is EQUALITY with what we declare, which is what a receiver statically validates.
 **3. The inbound half** (``TestInboundRequestSigningHonesty``). ``request_signing``
 is behavioral: its buckets change what the verifier does. The advertised block and
 the ``VerifierCapability`` B1 enforces must be two views of ONE object, so the test
-derives both and asserts they agree — plus asserts EXPLICITLY that ``warn_for`` and
-the three ``protocol_methods_*`` buckets are ABSENT from ``VerifierCapability``
-(SDK divergence #1, recorded on ``RequestSigningPosture.to_verifier_capability``),
-so that lossy projection stays visible instead of decaying into silent
-under-enforcement.
+derives both and asserts they agree. Every bucket this seller can declare reaches
+``VerifierCapability``, which is what the undeclarable half bought: the projection is
+no longer lossy, so there is no compensation left to keep visible.
 
 **4. Both construction sites, one builder** (``TestBothConstructionSitesAgree``).
 ``request_signing.supported`` is an AGENT-level fact — the pin defines it as
@@ -116,12 +114,11 @@ _ALG = "ed25519"
 #: precisely why the gate has to be graded rather than assumed unreachable.
 _UNPUBLISHABLE_HOST = "localhost:8080"
 
-#: The buckets ``VerifierCapability`` silently DROPS. Asserted absent rather than
-#: remembered: the SDK carries 4 of the 8 schema properties and 2 of the 6 buckets,
-#: and a bucket handed to it "looks like configuration and does nothing".
-_BUCKETS_THE_SDK_DROPS = frozenset(
-    {"warn_for", "protocol_methods_required_for", "protocol_methods_warn_for", "protocol_methods_supported_for"}
-)
+#: The buckets ``VerifierCapability`` carries, and therefore the ones a declaration may
+#: name: the SDK silently drops any other, where it would read like configuration and do
+#: nothing. Asserted rather than remembered — if the pin grows a bucket, the declaration
+#: side must refuse it until the SDK carries it.
+_BUCKETS_THE_SDK_CARRIES = frozenset({"required_for", "supported_for"})
 
 
 class _Seeded(NamedTuple):
@@ -429,20 +426,17 @@ class TestInboundRequestSigningHonesty:
         (``TenantContext.load``), so the test gives production exactly the object
         production gets rather than a harness projection of it.
 
-        The declaration is deliberately non-trivial in the two ways that matter:
-        it names a JSON-RPC method in the ``protocol_methods_*`` namespace (never in
-        an AdCP bucket — security.mdx :1045-1059 requires that split be rejected at
-        configuration time, not coerced), and it declares ``identity.brand_json_url``
-        because a non-empty bucket fires the schema's ``required_when``. The value
-        is the DERIVED one (``src/core/agent_identity.brand_json_url``), never a
-        second literal: a second literal for a key origin is a
-        ``request_signature_key_origin_mismatch`` waiting to happen.
+        The declaration is deliberately non-trivial in the two ways that matter: its
+        ``required_for`` is a strict SUBSET of ``supported_for``, so the two emitted
+        buckets cannot agree by being equal, and it declares ``identity.brand_json_url``
+        because a non-empty bucket fires the schema's ``required_when``. The value is the
+        DERIVED one (``src/core/agent_identity.brand_json_url``), never a second literal:
+        a second literal for a key origin is a ``request_signature_key_origin_mismatch``
+        waiting to happen.
 
-        The last two assertions pin the SDK's lossy projection AS a loss. Four of
-        the six buckets never reach ``VerifierCapability``; ``bucket_for`` keeps
-        them. Asserting their absence is what stops a future refactor from handing
-        them to the SDK — where they would read like configuration and enforce
-        nothing.
+        The last assertion pins that the projection is COMPLETE: every bucket a tenant
+        can declare is a field ``VerifierCapability`` carries, so nothing is enforced
+        outside the SDK and there is no compensation to keep in step.
         """
         from src.core.agent_identity import brand_json_url
         from src.core.database.models import Tenant
@@ -457,9 +451,6 @@ class TestInboundRequestSigningHonesty:
             "covers_content_digest": "required",
             "supported_for": ["get_products", "create_media_buy", "list_creative_formats"],
             "required_for": ["create_media_buy"],
-            "warn_for": ["get_products"],
-            "protocol_methods_supported_for": ["tasks/get"],
-            "protocol_methods_required_for": ["tasks/get"],
         }
         honesty_env.declare_capabilities(
             request_signing=declaration,
@@ -500,24 +491,11 @@ class TestInboundRequestSigningHonesty:
             f"{sorted(enforced.supported_for)!r}"
         )
 
-        # The declaration must reach the wire unchanged — including the buckets the
-        # SDK cannot carry, which is exactly why they must be on the wire.
-        assert block["warn_for"] == declaration["warn_for"], (
-            f"advertised warn_for={block.get('warn_for')!r}, declared {declaration['warn_for']!r}: "
-            "warn_for is enforced by RequestSigningPosture.bucket_for, not by the SDK, so dropping "
-            "it from the wire hides a shadow-mode rule buyers are already being graded against"
-        )
-        assert block["protocol_methods_required_for"] == declaration["protocol_methods_required_for"], (
-            "the protocol_methods_* namespace must reach the wire as declared; advertised "
-            f"{block.get('protocol_methods_required_for')!r}, declared "
-            f"{declaration['protocol_methods_required_for']!r}"
-        )
-
         projected = {field.name for field in dataclasses.fields(VerifierCapability)}
-        assert _BUCKETS_THE_SDK_DROPS.isdisjoint(projected), (
-            f"VerifierCapability now carries {sorted(_BUCKETS_THE_SDK_DROPS & projected)}. The "
-            "projection was lossy on purpose and bucket_for compensates; if the SDK grew these "
-            "fields, delete the compensation instead of leaving two enforcers"
+        assert _BUCKETS_THE_SDK_CARRIES <= projected, (
+            f"VerifierCapability no longer carries {sorted(_BUCKETS_THE_SDK_CARRIES - projected)}, so a "
+            "bucket this seller advertises is enforced by nothing the SDK reads. Either the SDK moved "
+            "or the declaration surface grew past it"
         )
 
 

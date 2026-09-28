@@ -34,29 +34,27 @@ resolved ``TOOLS[tool_name]`` before calling the resolver, so the AdCP-namespace
 known exactly, on all three transports, with no per-transport parse and no "unnameable
 request" to fail closed on.
 
-What the boundary cannot see — READ THIS BEFORE TRUSTING THE COVERAGE
----------------------------------------------------------------------
-Everything above holds for requests that reach ``invoke_tool``. Requests that do not are NOT
-verified here, and there are two classes of them:
+What the boundary cannot see, and why nothing is owed there
+----------------------------------------------------------
+Everything above holds for requests that reach ``invoke_tool``. The JSON-RPC
+protocol-method namespace does not: ``tasks/cancel``, ``tasks/get`` and
+``tasks/pushNotificationConfig/*`` are answered by the a2a-sdk's own handlers and by
+FastMCP's session machinery, none of which calls the boundary. That used to be a recorded
+GAP, because a tenant could declare ``protocol_methods_required_for`` and get no
+enforcement. It is not one now, on both halves:
 
-* **the JSON-RPC protocol-method namespace.** ``protocol_methods_required_for`` /
-  ``_warn_for`` / ``_supported_for`` grade the ENVELOPE's ``method`` — ``tasks/cancel``,
-  ``tasks/get``, ``tasks/pushNotificationConfig/set``. Those methods are answered by the
-  a2a-sdk's own handlers and by FastMCP's session machinery; none of them calls the
-  boundary. :meth:`~src.core.signing.posture.RequestSigningPosture.bucket_for` implements the
-  matching correctly and nothing reaches it with a protocol method, so a tenant declaring
-  those buckets today gets no enforcement.
-* **the webhook-credential escalation on that same namespace.**
-  ``tasks/pushNotificationConfig/set`` registers a webhook AND its credentials with no skill
-  invocation anywhere in sight, which is exactly the shape security.mdx @ v3.1.1 :1462-1465
-  requires a signature for. On the AdCP namespace the escalation IS enforced
-  (:mod:`src.core.signing.webhook_credentials`, read off the validated request); on the
-  protocol namespace it is not.
-
-Both are a consequence of moving verification downstream of transport unwrapping, and the
-fix is not a second verifier: it is for those handlers to reach the same boundary. Recorded
-rather than hidden, because a posture that advertises ``protocol_methods_required_for`` and
-enforces nothing is the silent-unverified failure this whole area exists to remove.
+* the three ``protocol_methods_*`` buckets are UNDECLARABLE
+  (``src.core.schemas.capability_declarations``), so there is no posture naming a method
+  this verifier never sees;
+* the escalation the namespace was worth protecting —
+  ``tasks/pushNotificationConfig/set`` registering a webhook and its credentials outside
+  any skill invocation (security.mdx @ v3.1.1 :1462-1465) — is a channel this agent
+  DECLINES wholesale: the card advertises ``push_notifications=False``, all four
+  ``tasks/pushNotificationConfig/*`` handlers refuse, and the ``message/send`` envelope
+  field is refused too (``src.a2a_server.adcp_a2a_server._refuse_envelope_push_config``).
+  Webhook configuration reaches this seller only as a declared field of an AdCP request
+  body, where the escalation IS enforced (:mod:`src.core.signing.webhook_credentials`,
+  read off the validated request).
 
 Spec grounding: AdCP 3.1.1 via ``adcp==6.6.0``;
 ``v3.1.1:docs/building/by-layer/L1/security.mdx`` (there is no ``dist/docs/3.1.1/`` at that
@@ -106,7 +104,7 @@ from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.exceptions import adcp_error_for
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 from src.core.schemas import Principal
-from src.core.signing.canonical import malformed_authority_reason, reject_malformed_target
+from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
 from src.core.signing.replay_store import PostgresReplayStore
@@ -117,13 +115,15 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 logger = logging.getLogger(__name__)
 
-#: Process-level ``{agent_url: AgentResolution}``. The WHOLE resolution is kept, not just the
-#: JWKS: ``expected_key_origins`` comes from it and is mandatory on every verify for
-#: brand-json-sourced keys. Entries expire by ``agent_resolution_ttl_seconds`` against
-#: ``AgentResolution.fetched_at``.
+#: Process-level ``{agent_url: AgentResolution}``. The WHOLE resolution is kept, not just
+#: the JWKS, because the JWKS LOCATION is checked against the agent's own origin before the
+#: resolution is admitted (:func:`_jwks_is_well_known`). Entries expire by
+#: ``agent_resolution_ttl_seconds`` against ``AgentResolution.fetched_at``.
 AGENT_RESOLUTION_CACHE: dict[str, AgentResolution] = {}
 
-#: The purpose key under the counterparty's ``identity.key_origins`` map.
+#: The signing purpose this verifier reads keys for. Names the ``adcp_use`` a JWK must
+#: declare; it is NOT a lookup key into ``identity.key_origins``, which this seller does not
+#: consult -- see :func:`_jwks_is_well_known`.
 _SIGNING_PURPOSE = "request_signing"
 
 
@@ -152,22 +152,6 @@ class _CounterpartyResolution:
 
     resolution: AgentResolution | None
     source: Literal["walk", "registry"]
-
-
-class _BrandJsonJwksResolver(StaticJwksResolver):
-    """A resolver that tells the verifier its keys came from the brand.json walk.
-
-    The SDK engages the spec's step-7 key-origin consistency check ONLY for resolvers
-    advertising ``jwks_source = "brand_json"`` and exposing the resolved ``jwks_uri``; a plain
-    ``StaticJwksResolver`` is treated as a publisher-pinned tuple and skips the check with
-    nothing but a warning. Declaring the conformance is documented adopter API.
-    """
-
-    jwks_source = "brand_json"
-
-    def __init__(self, jwks: dict[str, Any], *, jwks_uri: str) -> None:
-        super().__init__(jwks)
-        self.jwks_uri = jwks_uri
 
 
 class _FailedDiscoveryJwksResolver:
@@ -254,11 +238,6 @@ def verify_inbound_signature(
 
 def _bucket_for(posture: RequestSigningPosture, subject: SignatureSubject) -> PostureBucket:
     """The enforcement bucket for this request, with the credential escalation applied.
-
-    ``bucket_for`` is asked for the AdCP-operation namespace ONLY: ``protocol_method`` is not
-    passed, because the envelope that reached the boundary named an AdCP operation. That is
-    the cross-namespace rule (:1053) expressed structurally rather than checked — there is no
-    value here that COULD be graded against ``protocol_methods_*``.
 
     ":1375 regardless of ``required_for`` membership" promotes the REQUEST, not one branch. It
     is applied HERE, before the signed/unsigned split, which is what keeps the escalation from
@@ -395,20 +374,15 @@ def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: P
     """The ONE owner of rejection policy: the spec's two phases, as one branch.
 
     AdCP 3.1.1 ``security.mdx`` puts header well-formedness in a PRE-CHECK above the operation
-    bucket (:1226) and signature validity in a checklist inside it (:1273 scoping ``warn_for``
-    to signed-but-invalid). The SDK collapses presence and parse into a single call, so the
-    phase boundary cannot be drawn by ordering two calls. It is drawn on WHICH EXCEPTION
-    bypasses the warn arm — ``is_precheck`` below.
+    bucket (:1226) and signature validity in a checklist inside it. The SDK collapses presence
+    and parse into a single call, so the phase boundary cannot be drawn by ordering two calls.
+    It is drawn on WHICH EXCEPTION bypasses the narrowed ``none`` bucket's pass-through —
+    ``is_precheck`` below, because :1226 binds the pre-check "even for operations not in
+    ``required_for``".
 
     The PAIR, never the bare code: ``request_signature_header_malformed`` is raised at five
     different steps, and steps 2/5/6/8 are checklist failures on a WELL-FORMED header, which
-    :1273 keeps warn-suppressible.
-
-    Warn mode is OURS: ``VerifierCapability`` carries 4 of ``request_signing``'s 8 properties
-    and 2 of its 6 operation buckets, so handing ``warn_for`` to the SDK would silently drop
-    it. It is implemented the only way it can be — call the verifier, catch, emit the metric,
-    continue — and it is observable on the WIRE (200 where ``supported_for`` answers 401), not
-    merely in a counter.
+    the pre-check does not own.
     """
     is_precheck = exc.code == REQUEST_SIGNATURE_HEADER_MALFORMED and exc.step == 1
     # Suppressed for exactly one case: the narrowed ``none`` bucket verifies against an EMPTY
@@ -419,14 +393,6 @@ def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: P
         record_signature_failed(operation, exc.code)
     if is_precheck:
         _refuse(exc, operation, recorded=True)
-    if bucket == "warn":
-        logger.warning(
-            "Request signature failed in warn mode (not refusing): code=%s step=%s operation=%r",
-            exc.code,
-            exc.step,
-            operation,
-        )
-        return None
     if bucket == "none":
         # Pass-through, and the series stays alive: the request genuinely IS ignored (it
         # reached no checklist), and a metric that vanishes at a deploy reads as traffic
@@ -469,28 +435,71 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
 # ---------------------------------------------------------------------------
 
 
+#: The ONE path this seller reads a counterparty's keys from, at the agent's own origin.
+WELL_KNOWN_JWKS_PATH = "/.well-known/jwks.json"
+
+
 def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResolution:
     """The :class:`AgentResolution` a configured counterparty registry entry projects to.
 
-    Same shape the brand.json walk produces — ``jwks_uri`` and ``key_origins`` consistent with
-    each other — so :func:`_jwks_resolver` marks it ``brand_json`` and the spec's step-7
-    key-origin consistency check stays engaged for a registry-resolved counterparty exactly as
-    it is for a walked one. The four subscripts cannot raise ``KeyError``:
+    The two subscripts cannot raise ``KeyError``:
     :class:`~src.core.config.CounterpartyRegistryEntry` is the setting's type, so an entry
     missing one is refused at config load, where an operator sees it.
+
+    Both document locations are DERIVED from the agent URL rather than declared beside it.
+    That is what makes this path answer the same question as the walk: a registry entry
+    cannot name a JWKS location :func:`_jwks_is_well_known` would refuse, because it names
+    no location at all.
     """
     agent_url = entry["agent_url"]
-    jwks_uri = entry["jwks_uri"]
-    key_origin = entry["key_origin"]
+    origin = origin_of(agent_url)
+    jwks_uri = f"{origin}{WELL_KNOWN_JWKS_PATH}"
     return AgentResolution(
         agent_url=agent_url,
-        brand_json_url=f"{key_origin}/.well-known/brand.json",
+        brand_json_url=f"{origin}/.well-known/brand.json",
         agent_entry={"type": "sales", "url": agent_url, "jwks_uri": jwks_uri},
         jwks_uri=jwks_uri,
         jwks=entry["jwks"],
         fetched_at=time.time(),
-        key_origins={_SIGNING_PURPOSE: key_origin},
     )
+
+
+def _jwks_is_well_known(resolution: AgentResolution) -> bool:
+    """Is the resolved JWKS at the ONE place this seller accepts keys from?
+
+    ``<agent origin>/.well-known/jwks.json``, and nowhere else. security.mdx @ v3.1.1
+    step 6 makes that the DEFAULT — "defaulting to ``/.well-known/jwks.json`` at the
+    origin of ``A`` when absent" — and permits ``agents[].jwks_uri`` to name somewhere
+    else instead. This seller declines the second half, so key discovery is a pure
+    function of the agent URL.
+
+    WHY A SUBSET. Key location coming from a mutable document makes discovery depend on
+    that document's freshness: the spec has to couple two cache TTLs to stop a stale
+    brand.json masking a rotation (step 4), and still says nothing about a cached JWKS
+    when brand.json later names a different URI. A fixed location has no second document
+    and no coupling. The indirection buys per-purpose origin separation, which is a
+    SHOULD (:1084) and is already expressible in key metadata via ``adcp_use``.
+
+    WHAT IT COSTS, measured rather than assumed: the graded corpus never exercises it.
+    ``compliance/universal/signed-requests.yaml`` at 3.1.1 contains zero occurrences of
+    ``jwks_uri`` and zero of ``key_origins`` across its 12 positive and 28 negative
+    vectors, so ``request_signature_key_origin_mismatch`` and ``_missing`` are mandated
+    by the prose and checked by nothing. A counterparty that does point elsewhere is
+    refused with ``jwks_untrusted``, naming the location we looked at -- a diagnosable
+    refusal rather than a silent origin mismatch.
+
+    THIS GATE IS THE LOAD-BEARING HALF of the narrowing, not its cost. Dropping the
+    key-origin pin while still reading a location out of a counterparty-controlled
+    document would lose the shared-tenancy defence with nothing replacing it; fixing the
+    location is what makes dropping the pin safe.
+
+    So nothing here reads ``identity.key_origins``. With one possible location there is
+    no origin to pin: the map's whole purpose is to declare where keys live when that can
+    vary. The full statement of the subset, and the two narrowings that did NOT land, are
+    in ``docs/design/request-signing-subset.md``.
+    """
+    origin = origin_of(resolution.agent_url)
+    return bool(origin) and resolution.jwks_uri == f"{origin}{WELL_KNOWN_JWKS_PATH}"
 
 
 def _parse_keyid(headers: Mapping[str, str]) -> str | None:
@@ -571,6 +580,19 @@ def _resolution_for(
         logger.warning("Could not resolve signing keys for counterparty %r (%s): %s", agent_url, exc.code, exc)
         return _CounterpartyResolution(cached, source="walk")
 
+    if not _jwks_is_well_known(resolution):
+        # The counterparty's brand.json pointed its keys somewhere other than the one
+        # location this seller reads. Recorded as a resolution failure so the cooldown
+        # applies and the refusal is the same on every request, rather than re-walking.
+        _RESOLUTION_FAILURES[agent_url] = _ResolutionFailure(at=now, code=REQUEST_SIGNATURE_JWKS_UNTRUSTED)
+        logger.warning(
+            "Counterparty %r publishes its JWKS at %r; this seller reads keys only from %s at the agent's own origin",
+            agent_url,
+            resolution.jwks_uri,
+            WELL_KNOWN_JWKS_PATH,
+        )
+        return _CounterpartyResolution(cached, source="walk")
+
     AGENT_RESOLUTION_CACHE[agent_url] = resolution
     _RESOLUTION_FAILURES.pop(agent_url, None)
     return _CounterpartyResolution(resolution, source="walk")
@@ -629,15 +651,14 @@ def _map_brand_json_resolver_error(cause: BaseException | None) -> str:
 def _jwks_resolver(resolution: AgentResolution | None, *, agent_url: str | None = None) -> Any:
     """The resolver handed to the checklist.
 
-    With a resolution: a brand-json-marked resolver, which is what engages the step-7
-    key-origin check. Without one: if a walk was attempted for *agent_url* and failed, a
-    resolver that raises the mapped discovery code from its own ``__call__``; otherwise a plain
-    empty resolver, so the checklist answers ``request_signature_key_unknown`` at step 7 on its
-    own. Marking the empty resolver ``brand_json`` would instead make the SDK warn about a
-    missing ``expected_key_origins`` map that by definition cannot exist.
+    With a resolution: the keys it carries, which :func:`_resolution_for` has already
+    admitted as coming from the one location this seller reads. Without one: if a walk was
+    attempted for *agent_url* and failed, a resolver that raises the mapped discovery code
+    from its own ``__call__``; otherwise a plain empty resolver, so the checklist answers
+    ``request_signature_key_unknown`` at step 7 on its own.
     """
     if resolution is not None:
-        return _BrandJsonJwksResolver(resolution.jwks, jwks_uri=resolution.jwks_uri)
+        return StaticJwksResolver(resolution.jwks)
     if agent_url is not None:
         failure = _RESOLUTION_FAILURES.get(agent_url)
         if failure is not None:
@@ -669,14 +690,9 @@ def _run_verifier(
     call order is what keeps the two spec ordering invariants — capacity before crypto verify,
     replay claim after it — and this function preserves them by not reordering anything.
 
-    All four key-origin fields are passed: ``expected_key_origins``, ``agent_url``,
-    ``signing_purpose`` and ``posture``. Omitting the first turns a mandatory check into a
-    ``UserWarning``. ``expected_key_origins`` is ``resolution.key_origins or {}`` rather than
-    the map itself: passing ``None`` (what a counterparty advertising no ``identity.key_origins``
-    map produces) tells the SDK the ADOPTER never threaded the map through and makes it
-    silently SKIP the check with a warning — the shared-tenancy defense the check exists for
-    then ships silently off. An empty dict is what makes the SDK run the check and correctly
-    refuse with ``request_signature_key_origin_missing``.
+    ``expected_key_origins`` is NOT passed, and its absence is not an oversight. That check
+    exists to pin a JWKS whose location can vary; this seller reads keys from one location
+    only (:func:`_jwks_is_well_known`), so there is no origin to pin and no map to consult.
 
     Called with method/url/headers/body rather than through ``verify_starlette_request``,
     because that wrapper derives the URL from the scope and would discard the explicit
@@ -698,7 +714,6 @@ def _run_verifier(
             max_skew_seconds=config.max_skew_seconds,
             max_window_seconds=config.max_window_seconds,
             agent_url=resolution.agent_url if resolution is not None else None,
-            expected_key_origins=(resolution.key_origins or {}) if resolution is not None else None,
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
             revocation_checker=revocation_checker,

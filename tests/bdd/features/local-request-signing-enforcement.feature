@@ -16,11 +16,10 @@
 # variable, and all of them run on the same operation through the same env, so a
 # difference in outcome is attributable to the variable and not to the setup.
 #
-# The last three add the BUCKET as that variable (salesagent-nx8jp.10). `warn_for` is
-# this repo's extension — the SDK's VerifierCapability drops it, and the string appears
-# zero times in the 40 conformance vectors — so the one rule that separates a pre-check
-# failure (refused in EVERY bucket, warn included) from a checklist failure (suppressed
-# by warn alone) is reachable from no upstream artifact at all.
+# The last three add the BUCKET as that variable (salesagent-nx8jp.10): `supported` and
+# `required` are the two a tenant can declare, and the narrowed `none` bucket — a seller
+# that verifies, for no operation — is the third arm the credential escalation has to
+# override.
 #
 # Reconcile upstream in adcp-req (a "seller enforces inbound request signatures"
 # storyboard), then retire this file in favor of the regenerated one.
@@ -98,42 +97,37 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # security.mdx @ v3.1.1 :1226 — a verifier MUST NOT fall back to bearer-only auth when a
     # malformed signature is present, "even for operations not in `required_for`". That "even
     # for" is a QUANTIFIER OVER BUCKETS, and a quantifier graded at one bucket is not graded:
-    # the Examples table below is the quantifier, three rows on every wire transport.
+    # the Examples table below is the quantifier, on every wire transport.
     # The bucket is the ONLY variable between the rows — same operation, same key, same
     # malformed headers — so a row that answers differently is attributable to the bucket.
-    # The WARN row is the sentinel. `warn_for` suppresses a CHECKLIST failure (:1273) and
-    # must NOT suppress this one, which fails the pre-check at checklist step 1, above the
-    # bucket; `required` and `supported` refuse signed-but-invalid requests anyway, so they
-    # would keep answering this challenge even if the pre-check phase were removed.
+    # `supported` is the row that makes the pre-check claim non-trivial in the narrow sense
+    # the spec means: an operation NOT in `required_for` still refuses.
 
     Examples:
       | bucket    |
       | required  |
-      | warn      |
       | supported |
 
-  @T-UC-006-local-signing-warn-suppresses-checklist @request-signing @invariant
-  Scenario: a signed-but-invalid request completes under warn
+  @T-UC-006-local-signing-unbucketed-waves-through @request-signing @invariant
+  Scenario: a signed-but-invalid request completes when the seller grades no operation
     Given a creative with a known format_id
     And the Buyer Agent has published a signing key the seller can resolve
-    And the seller places "sync_creatives" in the "warn" request-signature bucket
+    And the seller verifies request signatures but grades the creative sync in no bucket
     And the Buyer Agent signs a different rendering of the request
     When the Buyer Agent syncs the creative
     Then the creative should be processed successfully
-    And the seller recorded exactly 1 suppressed "request_signature_digest_mismatch" signature failure
-    # security.mdx @ v3.1.1 :1273 scopes `warn_for` to signed-but-invalid requests — the
-    # verifier runs its checklist, FAILS, and serves the request anyway. "Signed-but-invalid"
-    # is a cryptographically REAL signature over a different rendering of the body, so the
-    # verifier gets past the pre-check on its merits and reaches the digest mismatch INSIDE
-    # the checklist, which is the arm `warn_for` governs.
-    # THE PAIR IS THE ORACLE, and neither half grades this alone. A completion alone is
-    # equally true of a middleware that never looked at the request; a recorded failure alone
-    # is equally true of the 401 the `supported` scenario below asserts. Together they say the
-    # middleware ran the checklist, recorded exactly one failure, and continued.
-    # Body replay is what /mcp and /a2a add here: the verifier consumed the request body to
-    # compute the digest, so a warn continuation has to hand the SAME bytes to the
-    # application. The REST shadow-mode ladder cannot reach that — it runs on a bodyless
-    # path — so this claim is graded on those two transports for the first time.
+    And the seller recorded exactly 0 "request_signature_digest_mismatch" signature failure
+    # The narrowed `none` bucket: this seller VERIFIES (`supported: true`) and grades this
+    # operation in no bucket, so a signature it would otherwise reject is ignored and the
+    # request is served on its bearer alone. security.mdx @ v3.1.1 :1226 binds the PRE-CHECK
+    # here — a malformed header still refuses, which the Outline above grades — and nothing
+    # else, so a cryptographically real signature over different bytes is waved through.
+    # THE PAIR IS THE ORACLE. The completion alone is equally true of a seller that never
+    # looked at the request; the zero count is what says no failure was INVENTED for it —
+    # the narrowed bucket verifies against an empty key resolver, so its step-7
+    # `key_unknown` is engineered by this seller and must not reach the series an operator
+    # reads for real refusals. Together they establish that the refusal below is
+    # attributable to the CREDENTIALS and not to the posture.
 
   @T-UC-006-local-signing-supported-refuses-checklist @request-signing @error-path @invariant
   Scenario: the same signed-but-invalid request is refused under supported
@@ -148,22 +142,21 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # something: without it, "the request completed" is equally explained by a verifier that
     # never rejects a digest mismatch at all, and the warn scenario would grade nothing.
 
-  @T-UC-006-local-signing-warn-credentials-escalate @request-signing @error-path @invariant @boundary
-  Scenario: a signed-but-invalid registration carrying credentials is refused under warn
+  @T-UC-006-local-signing-credentials-escalate-signed @request-signing @error-path @invariant @boundary
+  Scenario: a signed-but-invalid registration carrying credentials is refused where the same request without them completes
     Given a creative with a known format_id
     And the Buyer Agent has published a signing key the seller can resolve
-    And the seller places "sync_creatives" in the "warn" request-signature bucket
+    And the seller verifies request signatures but grades the creative sync in no bucket
     And the Buyer Agent signs a different rendering of the request
     And the request registers a webhook whose authentication carries credentials
     When the Buyer Agent syncs the creative
     Then the seller answers with the request-signature challenge "request_signature_digest_mismatch" and recovery "terminal"
-    # ONE variable apart from "a signed-but-invalid request completes under warn" above: the
-    # same operation, the same key, the same tampered bytes, the same bucket — the request
-    # now hands over webhook CREDENTIALS. That scenario COMPLETES and this one is REFUSED,
-    # and the flip is the whole claim: security.mdx @ v3.1.1 :1462-1465 makes the credentials
-    # force a signature and :1375 says the escalation fires "regardless of `required_for`
-    # membership", so `warn_for` must NOT suppress the checklist failure the way it does for
-    # the neighbour above. Same shape as the malformed row of the Outline, on the other trigger.
+    # ONE variable apart from "a signed-but-invalid request completes when the seller grades
+    # no operation" above: the same operation, the same key, the same tampered bytes, the same
+    # posture — the request now hands over webhook CREDENTIALS. That scenario COMPLETES and
+    # this one is REFUSED, and the flip is the whole claim: security.mdx @ v3.1.1 :1462-1465
+    # makes the credentials force a signature and :1375 says the escalation fires "regardless
+    # of `required_for` membership", so a bucket that grades nothing must still refuse here.
     # THE SIGNED PATH IS WHAT IS NEW. The credential escalation is graded elsewhere only on
     # UNSIGNED requests ("a registration carrying webhook authentication is refused unless
     # signed" above, and the five integration cases beside it), and the seller promotes the
@@ -172,7 +165,6 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # answers. A request that CARRIES signature headers reaches only the first, which is why
     # this scenario has to be signed: the escalation exists precisely so that ATTACHING a junk
     # Signature cannot buy what omitting one is refused.
-    # `warn` and not a narrowed `none`: `none` is the purer arm — no checklist runs there at
-    # all — but it has no one-variable neighbour in this file, and every scenario here differs
-    # from its neighbour by exactly one variable. The cost is recorded rather than hidden:
-    # this file grades the WEAKER of the two un-promoted arms.
+    # `none` is also the arm where the promotion does the MOST work: without it this request
+    # reaches no checklist at all, so the refusal cannot be explained by anything the posture
+    # says.

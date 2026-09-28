@@ -161,11 +161,11 @@ webhook_queue_size = Gauge(
 # ---------------------------------------------------------------------------
 # RFC 9421 inbound request-signature outcomes (#1291 B1)
 # ---------------------------------------------------------------------------
-# The verifier is the ONLY layer that sees its own outcome before it is swallowed
-# (``warn_for``) or raised as an identity refusal, so these three counters are the whole
-# evidence base for the shadow-mode promotion ladder (supported_for -> warn_for ->
-# required_for). No ``tenant_id`` label: the posture is per-tenant but the series count
-# must not grow with the tenant list.
+# The verifier is the ONLY layer that sees its own outcome before it is swallowed (the
+# narrowed ``none`` bucket) or raised as an identity refusal, so these three counters are
+# the whole evidence base for the promotion ladder (supported_for -> required_for). No
+# ``tenant_id`` label: the posture is per-tenant but the series count must not grow with
+# the tenant list.
 request_signature_verified_total = Counter(
     "adcp_request_signature_verified_total",
     "Inbound RFC 9421 request signatures that passed the verifier checklist",

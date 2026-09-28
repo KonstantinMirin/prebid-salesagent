@@ -82,10 +82,9 @@ reading the verifier's source.
 one present → ``_precheck_presence`` raises (``adcp/signing/verifier.py:389``);
 both present → verify.
 
-**Shadow-mode ladder.** ``supported_for`` / ``warn_for`` / ``required_for``
-differ on the WIRE (200 vs 401), not merely in a counter — status AND counter
-are asserted. (The refinement retires the research note's "invisible failure
-mode" framing for warn precisely because the difference IS on the wire.)
+**The bucket ladder.** ``supported_for`` / ``required_for``
+differ on the WIRE from the narrowed ``none`` bucket (401 vs 200), not merely in
+a counter — status AND counter are asserted.
 
 **B4 — the configured counterparty registry (``salesagent-z6nr.15``).** The
 second, config-sourced way a keyid resolves to key material, added because the
@@ -106,7 +105,7 @@ The seam is the tenant DECLARATION, never the verifier's decision function:
 the repository and lets production do the rest — ``CapabilityDeclarations
 .from_tenant`` parses it, ``posture_for_tenant`` reads it off the loaded
 ``TenantContext``, and the REAL ``RequestSigningPosture.bucket_for`` precedence
-(``required_for > warn_for > supported_for``) runs. #1291 D1 took
+(``required_for > supported_for``) runs. #1291 D1 took
 ``request_signing`` out of ``_UNBACKED_BLOCKS``
 (``src/core/schemas/capability_declarations.py``), which is what makes a stored
 declaration reachable at all; there is no ``patch`` of the posture left anywhere
@@ -168,8 +167,6 @@ from tests.helpers.signing import (
     LADDER_OPERATIONS,
     MALFORMED_SIGNATURE_HEADERS,
     REGISTRY_AGENT_URL,
-    REGISTRY_JWKS_URI,
-    REGISTRY_KEY_ORIGIN,
     REWRITTEN_ADCP_PATH,
     SIGNING_PRINCIPAL_ID,
     SIGNING_TENANT_ID,
@@ -232,10 +229,9 @@ from tests.helpers.signing import (
 #                                        module global — which is what
 #                                        ``_verifier_spy`` patches
 #     .AGENT_RESOLUTION_CACHE            process-level {agent_url: AgentResolution},
-#                                        cached WHOLE (jwks + jwks_uri +
-#                                        key_origins) so all four VerifyOptions
-#                                        key-origin fields can be passed and the
-#                                        check does not ship silently OFF. Seeded
+#                                        cached WHOLE because the JWKS LOCATION is
+#                                        checked against the agent's own origin
+#                                        before a resolution is admitted. Seeded
 #                                        by ``tests.helpers.signing.counterparty_key``
 #     ._resolution_for(agent_url, config, keyid=...)
 #                                        consults the registry ONLY when agent_url
@@ -246,10 +242,9 @@ from tests.helpers.signing import (
 #                                        with a keyid
 #     .build_registry_resolution         the ONE AgentResolution builder, shared by
 #                                        the registry path and the test kit. Its
-#                                        invariant: key_origins stays consistent
-#                                        with jwks_uri, so the SDK resolver is
-#                                        marked ``brand_json`` and step-7 origin
-#                                        checking stays engaged rather than vacuous
+#                                        invariant: the key location is DERIVED from
+#                                        agent_url, so a configured counterparty
+#                                        cannot name one the walk would refuse
 #
 #   src.core.signing.capture             (the middleware that decides nothing)
 #     .SignedExchangeCapture             records the exchange a signature covers —
@@ -309,10 +304,6 @@ from tests.helpers.signing import (
 #: never visited. Each row below names which point it is:
 #:
 #: * ``required``          — the point the un-parametrized test already stood on;
-#: * ``warn``              — :1273 scopes ``warn_for`` to "signed-but-invalid"
-#:   signatures, and a malformed HEADER has its own taxonomy row and its own code
-#:   (:1373-1377) distinct from ``request_signature_invalid`` (:1388), so warn does
-#:   NOT suppress it;
 #: * ``narrowed-none``     — ``supported: true`` and the operation in no list. This is
 #:   the population :1226's "even for operations not in required_for" names most
 #:   directly;
@@ -328,12 +319,6 @@ _BUCKET_DIMENSION = pytest.mark.parametrize(
             401,
             REQUEST_SIGNATURE_HEADER_MALFORMED,
             id="required",
-        ),
-        pytest.param(
-            bucketed_declaration("warn", *LADDER_OPERATIONS),
-            401,
-            REQUEST_SIGNATURE_HEADER_MALFORMED,
-            id="warn",
         ),
         pytest.param(narrowed_none(), 401, REQUEST_SIGNATURE_HEADER_MALFORMED, id="narrowed-none"),
         pytest.param(unsupported(), 200, None, id="unsupported-none"),
@@ -476,16 +461,17 @@ _OVERLONG_KEYID = "k" * (_SDK_MAX_PARAM_LEN + 1)
 
 
 @pytest.mark.requires_db
-class TestWarnStillSuppressesANonStepOneMalformation:
+class TestAnUnbucketedRequestStillPassesANonStepOneMalformation:
     """``request_signature_header_malformed`` is ELEVEN raise sites across FIVE steps,
     and only step 1 is the spec's pre-check.
 
     :data:`_BUCKET_DIMENSION` grades the direction in which the malformed rule can be
-    under-applied — warn swallowing a step-1 header malformation. This class grades the
+    under-applied — the narrowed ``none`` bucket swallowing a step-1 header malformation,
+    which :1226 binds "even for operations not in ``required_for``". This class grades the
     direction in which it can be OVER-applied: a predicate widened from
     ``(code, step == 1)`` to the bare code would also route steps 2, 5, 6 and 8 to a
-    rejection, and those are checklist failures on a WELL-FORMED header, which
-    security.mdx :1273 keeps inside ``warn_for``'s "signed-but-invalid" scope.
+    rejection, and those are checklist failures on a WELL-FORMED header, which the
+    pre-check does not own.
 
     Measured against ``adcp==6.6.0``: step 2 is ``verifier.py`` :245/:251/:407/:414, of
     which :245 is the over-long ``keyid`` this row drives. Everything ahead of it —
@@ -494,13 +480,13 @@ class TestWarnStillSuppressesANonStepOneMalformation:
     real with the counterparty's key over the real wire bytes.
     """
 
-    def test_an_overlong_keyid_fails_at_step_2_and_still_completes_under_warn(
+    def test_an_overlong_keyid_fails_at_step_2_and_still_completes_unbucketed(
         self, integration_db, counterparty_keypair
     ):
         """Four assertions, and the first two are what make the last two mean anything.
 
         "It completed" on its own is equally true of a request that never failed at all,
-        and equally true of a step-7 ``key_unknown`` — both answer 200 under warn. So
+        and equally true of a step-7 ``key_unknown`` — both answer 200 in this bucket. So
         the ``(code, step)`` PAIR is witnessed off the exception the SDK actually raised
         (``VERIFIER_ERROR``), not off ``adcp_request_signature_failed_total``, whose
         ``code`` label cannot distinguish step 2 from step 1: they carry the SAME code.
@@ -518,19 +504,19 @@ class TestWarnStillSuppressesANonStepOneMalformation:
                 private_key,
                 token,
                 key_id=_OVERLONG_KEYID,
-                request_id="overlong-keyid-completes-under-warn",
+                request_id="overlong-keyid-completes-unbucketed",
             )
 
             with (
-                _declared_posture(**bucketed_declaration("warn", *LADDER_OPERATIONS)),
+                _declared_posture(**narrowed_none()),
                 counterparty_key(jwks),
                 _verifier_spy() as calls,
             ):
                 response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
             assert len(calls) == 1, (
-                "the warn bucket must still run the SDK checklist exactly once — warn is "
-                f"'call, catch, log, continue', not 'skip'; it ran {len(calls)} time(s)"
+                "the narrowed none bucket must still run the SDK pre-check exactly once — it is "
+                f"'call, catch, continue', not 'skip'; it ran {len(calls)} time(s)"
             )
             raised = calls[0].get(VERIFIER_ERROR)
             assert (getattr(raised, "code", None), getattr(raised, "step", None)) == (
@@ -544,8 +530,8 @@ class TestWarnStillSuppressesANonStepOneMalformation:
                 "the widened-predicate mutation it exists to catch would go unnoticed"
             )
             assert response.status_code == 200, (
-                "a step-2 malformation is a checklist failure on a well-formed header, which "
-                "security.mdx :1273 leaves inside warn_for's 'signed-but-invalid' scope. "
+                "a step-2 malformation is a checklist failure on a well-formed header, which the "
+                "step-1 pre-check does not own, so this bucket serves the request. "
                 f"Got {response.status_code}: {response.text[:300]}. A 401 here is a predicate "
                 "widened from (code, step == 1) to the bare code"
             )
@@ -1054,26 +1040,23 @@ class TestANarrowedNoneRequestThatNeverFinishesArriving:
 
 
 @pytest.mark.requires_db
-class TestShadowModeLadder:
-    """``supported_for`` / ``warn_for`` / ``required_for`` differ on the WIRE.
+class TestTheBucketDecidesASignedInvalidRequest:
+    """The two declarable buckets refuse a signed-but-invalid request; ``none`` serves it.
 
-    ``VerifierCapability`` (``adcp/signing/verifier.py:88``) carries only 4 of
-    ``request_signing``'s 8 properties and only 2 of its 6 operation buckets, so
-    ``warn_for`` is SILENTLY DROPPED if it is passed to the SDK and expected to
-    do something. Warn must therefore be implemented by us: call the verifier,
-    catch ``SignatureVerificationError``, emit the metric and CONTINUE. Each
-    test below asserts BOTH the status and the counter, so the test fails if
-    warn degrades to plain ``supported_for`` (status) and fails if the metric is
-    dropped (counter).
+    Both halves are the WIRE, and both are needed. A seller that refused every signature
+    would pass the first and fail the second; a seller that graded nothing would pass the
+    second and fail the first. Each test below also asserts the COUNTER, so a refusal that
+    stopped being counted (the promotion evidence an operator reads) fails even while the
+    status stays right.
 
-    The signature used is WELL-FORMED and cryptographically real — signed with
-    the counterparty's actual key, then the body is mutated in flight
-    (:func:`~tests.helpers.signing.tampered_signing_body`, this class's own
-    realization since promoted and generalized to any body, salesagent-nx8jp.9), so
-    the verifier reaches ``request_signature_digest_mismatch`` on its merits rather
-    than short-circuiting at the header parse. The harness reaches the same
-    realization as ``call_via(..., signed="tampered")``, over the same helper, so a
-    scenario and this ladder cannot drift on what "tampered" means.
+    The signature used is WELL-FORMED and cryptographically real — signed with the
+    counterparty's actual key, then the body is mutated in flight
+    (:func:`~tests.helpers.signing.tampered_signing_body`, this class's own realization
+    since promoted and generalized to any body, salesagent-nx8jp.9), so the verifier
+    reaches ``request_signature_digest_mismatch`` on its merits rather than
+    short-circuiting at the header parse. The harness reaches the same realization as
+    ``call_via(..., signed="tampered")``, over the same helper, so a scenario and this
+    ladder cannot drift on what "tampered" means.
     """
 
     @staticmethod
@@ -1097,17 +1080,9 @@ class TestShadowModeLadder:
         )
         return headers, sent_body
 
-    @pytest.mark.parametrize(
-        ("bucket", "expected_status"),
-        [("supported", 401), ("warn", 200), ("required", 401)],
-    )
-    def test_invalid_signature_outcome_differs_per_bucket(
-        self, integration_db, counterparty_keypair, bucket, expected_status
-    ):
-        """A signed-but-invalid request: ``warn_for`` logs and continues (200),
-        ``supported_for`` and ``required_for`` reject (401). Every bucket
-        increments ``adcp_request_signature_failed_total`` with the spec code.
-        """
+    @pytest.mark.parametrize("bucket", ["supported", "required"])
+    def test_a_declared_bucket_refuses_and_counts_it(self, integration_db, counterparty_keypair, bucket):
+        """Every bucket a tenant can declare refuses, and counts the failure exactly once."""
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
             token = seed_principal(env)
@@ -1119,16 +1094,16 @@ class TestShadowModeLadder:
                     FAILED_METRIC,
                     1,
                     why=f"bucket {bucket!r} must count the failure exactly once — it is the promotion "
-                    "evidence the shadow-mode ladder runs on",
+                    "evidence the ladder runs on",
                 ),
                 _declared_posture(**bucketed_declaration(bucket, *LADDER_OPERATIONS)),
                 counterparty_key(jwks),
             ):
                 response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
 
-            assert response.status_code == expected_status, (
-                f"bucket {bucket!r} must answer {expected_status} on the wire for a "
-                f"signed-but-invalid request, got {response.status_code}: {response.text}"
+            assert response.status_code == 401, (
+                f"bucket {bucket!r} must answer 401 on the wire for a signed-but-invalid request, "
+                f"got {response.status_code}: {response.text}"
             )
             assert _samples_with(FAILED_METRIC, code=REQUEST_SIGNATURE_DIGEST_MISMATCH), (
                 f"the failure must be labelled with the spec code "
@@ -1136,10 +1111,14 @@ class TestShadowModeLadder:
                 f"{sorted(_counter_samples(FAILED_METRIC))}"
             )
 
-    def test_warn_does_not_degrade_to_supported(self, integration_db, counterparty_keypair):
-        """The two-bucket contrast stated as one assertion: byte-identical
-        request, ``warn_for`` vs ``supported_for``, different wire answers. If
-        warn degrades to supported both are 401 and this fails.
+    def test_the_narrowed_none_bucket_does_not_degrade_to_supported(self, integration_db, counterparty_keypair):
+        """The two-bucket contrast stated as one assertion: byte-identical request, the
+        narrowed ``none`` bucket vs ``supported_for``, different wire answers.
+
+        ``none`` here is ``supported: true`` with this operation in no list, so the seller
+        VERIFIES and grades nothing about this request: it reaches no checklist and is
+        served on its bearer. If it degraded to ``supported`` both would be 401 and this
+        fails; if ``supported`` degraded to ``none`` both would be 200 and it fails too.
         """
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
@@ -1148,14 +1127,14 @@ class TestShadowModeLadder:
             headers, sent_body = self._tampered_signed_request(private_key, token)
 
             with counterparty_key(jwks):
-                with _declared_posture(**bucketed_declaration("warn", *LADDER_OPERATIONS)):
-                    warn_response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
+                with _declared_posture(**narrowed_none()):
+                    none_response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
                 with _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)):
                     supported_response = client.post(CAPABILITIES_ADCP_PATH, content=sent_body, headers=headers)
 
-            assert (warn_response.status_code, supported_response.status_code) == (200, 401), (
-                "warn_for and supported_for must differ on the WIRE for the same "
-                f"signed-but-invalid request; got warn={warn_response.status_code}, "
+            assert (none_response.status_code, supported_response.status_code) == (200, 401), (
+                "the narrowed none bucket and supported_for must differ on the WIRE for the same "
+                f"signed-but-invalid request; got none={none_response.status_code}, "
                 f"supported={supported_response.status_code}"
             )
 
@@ -1273,10 +1252,10 @@ class TestTheVerifierIsHandedTheWireBytes:
             )
 
     def test_verified_signature_increments_the_verified_counter(self, integration_db, counterparty_keypair):
-        """The success side of the shadow-mode ladder's promotion evidence.
+        """The success side of the ladder's promotion evidence.
 
         The verifier is the only layer that sees the outcome before it is swallowed by
-        the warn arm or turned into a 401, so the counter is emitted there
+        the narrowed ``none`` bucket or turned into a 401, so the counter is emitted there
         (``record_signature_verified``, ``src/core/signing/verifier.py``) and this is
         where it can be read end to end.
         """
@@ -1365,11 +1344,9 @@ class TestRegistryResolvesACounterpartyWithNoAgentUrl:
         2. the resolution handed to the verifier is the REGISTRY's, named by its own
            ``agent_url``. Without this the test would also pass on a stray
            ``AGENT_RESOLUTION_CACHE`` entry left by another suite;
-        3. ``expected_key_origins`` is populated and the resolver declares
-           ``brand_json``. The SDK engages the spec's step-7 key-origin consistency
-           check ONLY for a resolver that declares its source, so a registry entry that
-           dropped ``key_origin`` would ship the check silently OFF — trusting a key
-           served from anywhere — while every other assertion here stayed green.
+        3. the resolver handed to the checklist carries the REGISTERED keyset, so the
+           verification was performed against the key config supplied rather than against
+           something another suite left in the cache.
         """
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
@@ -1398,18 +1375,9 @@ class TestRegistryResolvesACounterpartyWithNoAgentUrl:
                 "the resolution passed to the verifier must be the one built from the "
                 f"registry entry, named by its own agent_url; got {options.agent_url!r}"
             )
-            assert options.expected_key_origins == {"request_signing": REGISTRY_KEY_ORIGIN}, (
-                "a registry-built resolution must carry key_origins consistent with its "
-                "jwks_uri, or step-7 key-origin checking is vacuous for every registered "
-                f"counterparty; got {options.expected_key_origins!r}"
-            )
-            assert getattr(options.jwks_resolver, "jwks_source", None) == "brand_json", (
-                "the resolver must declare brand_json, which is what turns the step-7 "
-                "origin check ON; a plain StaticJwksResolver is treated as a "
-                "publisher-pinned tuple and skips it with a warning"
-            )
-            assert getattr(options.jwks_resolver, "jwks_uri", None) == REGISTRY_JWKS_URI, (
-                f"the declared jwks_uri must be the registered one; got {getattr(options.jwks_resolver, 'jwks_uri', None)!r}"
+            assert options.jwks_resolver(COUNTERPARTY_KID) is not None, (
+                "the checklist must be handed the registered keyset, or this request verified "
+                "against something the registry did not supply"
             )
 
 

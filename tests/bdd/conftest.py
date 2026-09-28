@@ -1255,22 +1255,20 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # unsupported posture) pass; "invalid" rows (requiring the builder to REJECT a
     # relation-violating/out-of-bounds posture with CONFIGURATION_ERROR) still fail — no
     # per-tenant signing-posture config surface exists to reject against.
-    # Graduated 2026-08-12 (#1291 D2): T-UC-010-v31-request-signing-monotonicity removed ENTIRELY
-    # (rows: required_for adds one operation not in supported_for; warn_for and required_for share
-    # exactly one operation; protocol_methods_required_for adds one method not in
-    # protocol_methods_supported_for). request_signing became declarable with the signing family,
-    # so CapabilityDeclarations._validate_bucket_monotonicity now has a posture to reject: each row
-    # raises AdCPConfigurationError naming capability_declarations.request_signing.<bucket>, graded
-    # on the wire as CONFIGURATION_ERROR / recovery terminal / message naming request_signing. The
-    # Given declares the concrete posture instead of recording the label, writing the narrowing
-    # bucket EXPLICITLY (the rule keys on model_fields_set, so an omitted superset would skip the
-    # check and the row would grade nothing). Inspected per xpass-graduation.md against feature
-    # :1438-1471; the three rejections were measured directly against production before the
-    # conversion. No assertion weakened. Serial in-process run 2026-08-12: uc010 slice 329 -> 338
-    # passed (+3 rows x 3 transports), 267 -> 258 xfailed, 0 failed, 0 xpassed. e2e_rest (not
-    # gated for these entries, so un-xfailed too) verified in-network: bdd_e2e run
-    # test-results/innet_120826_1403 has all SIX rows of the outline passing on e2e_rest,
-    # 534 passed / 0 failed.
+    # T-UC-010-v31-request-signing-monotonicity is not xfailed at all: request_signing is a
+    # real tenant declaration, so CapabilityDeclarations._validate_bucket_monotonicity has a
+    # posture to reject. The outline's invalid row raises AdCPConfigurationError naming
+    # capability_declarations.request_signing.required_for, graded on the wire as
+    # CONFIGURATION_ERROR / recovery terminal / field naming request_signing. Its Given
+    # declares the concrete posture rather than recording a label, writing the narrowing
+    # bucket EXPLICITLY -- the rule keys on model_fields_set, so an omitted superset would
+    # skip the check and the row would grade nothing.
+    #
+    # The outline carries TWO rows over one relation (required_for subset_of supported_for).
+    # It carried six over three until warn_for and the protocol-method buckets stopped being
+    # declarable: a declaration naming one is now refused for being undeclarable, which would
+    # have satisfied the invalid rows for the wrong reason and graded nothing on the valid
+    # ones (docs/design/request-signing-subset.md).
     # Graduated 2026-08-12 (#1291 D2), PARTIALLY: reporting_delivery_methods=['webhook'],
     # supported=false removed — a KEYLESS tenant declaring webhook report delivery is the one
     # reachable violation of must_equal_when, and validate_signing_platform_backing rule (d)
@@ -4801,16 +4799,15 @@ def _uc010_wired_tags() -> frozenset[str]:
             # served the normal response on every transport.
             "T-UC-010-ext-request-vendor-namespaced",
             # Batch 16 — the signing family's MAIN-FLOW scenarios (#1291 D1). These
-            # four were dormant TWICE over: their Givens had no step definition
-            # anywhere (which pytest_runtest_makereport converts to xfail) AND their
-            # tags were absent from this set (which xfails at fixture setup, before a
-            # single step runs). Both halves are fixed on this tree: the Givens are
-            # bound in tests/bdd/steps/domain/uc010_capabilities.py, `request_signing`
-            # is a real tenant declaration and `webhook_signing` is realized as
-            # platform state. They are correspondingly absent from
-            # _UC010_DORMANT_TRACKING, which is where they used to be cited.
+            # were dormant TWICE over: their Givens had no step definition anywhere
+            # (which pytest_runtest_makereport converts to xfail) AND their tags were
+            # absent from this set (which xfails at fixture setup, before a single step
+            # runs). Both halves are fixed on this tree: the Givens are bound in
+            # tests/bdd/steps/domain/uc010_capabilities.py, `request_signing` is a real
+            # tenant declaration and `webhook_signing` is realized as platform state.
+            # They are correspondingly absent from _UC010_DORMANT_TRACKING, which is
+            # where they used to be cited.
             "T-UC-010-v31-request-signing-posture",
-            "T-UC-010-v31-request-signing-namespace-split",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
         }

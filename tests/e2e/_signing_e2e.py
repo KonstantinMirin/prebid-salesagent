@@ -59,9 +59,9 @@ E2E_ADMIN_PASSWORD = "test123"
 _ADMIN_PREFIX = "/admin"
 
 #: What the create route FLASHES on success (src/admin/blueprints/signing_keys.py).
-#: The flash carries ``provisioned.row.kid`` from the provisioning call itself, so
-#: it is what the ROUTE reported; the list table's ``kid`` is a subsequent DB
-#: re-read wearing the route's clothes.
+#: The flash carries the ``kid`` ``provision_signing_key`` RETURNED, so it is what
+#: the ROUTE reported; the list table's ``kid`` is a subsequent DB re-read wearing
+#: the route's clothes.
 _SUCCESS_FLASH = re.compile(r"Signing key ([A-Za-z0-9._:-]+) provisioned and published\.")
 
 #: What the revoke route FLASHES on success (src/admin/blueprints/signing_keys.py
@@ -863,7 +863,7 @@ def signing_declarations(operation: str, *more: str, bucket: str = "supported") 
     """A ``declarations_from_tenant`` callback declaring *operation* in *bucket*.
 
     Delegates TWICE rather than building a document: ``bucketed_declaration`` owns the
-    ``required_for > warn_for > supported_for`` precedence and the "required implies
+    ``required_for > supported_for`` precedence and the "required implies
     supported" relation, and ``posture_declaration_document`` owns the document shape.
     Its docstring says why that matters — "One document shape, two writers — never two
     shapes" — and this callback is the second writer it names.

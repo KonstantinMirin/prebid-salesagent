@@ -2,20 +2,21 @@
 
 Per-tenant RFC 9421 signing key material (#1291 A2, salesagent-z6nr.8).
 
-One row binds a unique ``kid`` to the public JWK we publish and to a
-scheme-prefixed REFERENCE (``db:<kid>`` / ``env:NAME`` / ``file:/abs/path``) the
-process resolves for the private half.
+One row binds a unique ``kid`` to BOTH halves of the key: the public JWK we
+publish, and the private half as the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+the SDK returned, encrypted under the deployment KEK.
 
-For the ``db:`` scheme — the only one this agent MINTS (salesagent-7x8t) —
-``private_key_pem_encrypted`` holds that private half as the PKCS#8
-``BEGIN ENCRYPTED PRIVATE KEY`` PEM the SDK returned, encrypted under the
-deployment KEK. The application writes key material to no filesystem, so the row
-is the only place it can live; provisioning refuses ``db:`` when no KEK is
-configured, which is what keeps this column from ever holding plaintext. The
-column is folded into THIS migration rather than added by a second one: A2 is
-unmerged and no environment has applied it, so there is no deployed schema to
-preserve and a two-step migration would exist only to record a decision git
-already records.
+``private_key_pem_encrypted`` is NOT NULL because the database is the only place
+a private half ever lives. There is no locator column and no storage scheme: a
+row that exists has material, so a published key nothing can sign with is
+unrepresentable rather than merely unusual. Provisioning refuses when no KEK is
+configured, which is what keeps this column from ever holding plaintext.
+
+The table is defined in ONE revision rather than created here and amended later.
+This revision has never reached ``main``, so no environment has applied it and
+there is no deployed schema to preserve; a follow-up revision would exist only to
+record a decision git already records — the two-migrations-for-a-zero-migration-
+problem CLAUDE.md § Database migrations forbids.
 
 The two CHECK constraints are DERIVED from ``src.core.signing.algorithms`` and
 rendered by the same helper the ORM model uses, so the migration DDL and the ORM
@@ -62,9 +63,9 @@ def upgrade() -> None:
         sa.Column("alg", sa.String(50), nullable=False),
         sa.Column("purpose", sa.String(50), nullable=False),
         sa.Column("public_jwk", JSONType, nullable=False),
-        sa.Column("private_key_ref", sa.Text, nullable=False),
-        # NULL for env:/file: rows, whose material this process did not write.
-        sa.Column("private_key_pem_encrypted", sa.LargeBinary, nullable=True),
+        # NOT NULL: the row IS where the private half lives, so a row without one
+        # would be a published key nothing can sign with.
+        sa.Column("private_key_pem_encrypted", sa.LargeBinary, nullable=False),
         sa.Column("not_before", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         # NULL not_after means open-ended (+infinity) — the current key always is.
         sa.Column("not_after", sa.DateTime(timezone=True), nullable=True),

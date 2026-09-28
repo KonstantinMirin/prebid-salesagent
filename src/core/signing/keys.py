@@ -7,16 +7,17 @@ already byte-shape-identical to the publication shape the spec mandates. We
 assemble no JWK and touch no curve.
 
 What this module owns is the part the SDK deliberately leaves to the caller:
-where the private half goes, and how the row that references it is written.
+where the private half goes, and how the row that holds it is written.
 
-**The application writes key material to no filesystem.** The default scheme is
-``db:``: the private half is stored on the row as the PKCS#8
-``BEGIN ENCRYPTED PRIVATE KEY`` PEM ``generate_signing_keypair(passphrase=...)``
-already returns, encrypted under the deployment KEK. The ciphertext IS the PEM —
-there is no envelope format here and no encryption code of ours. ``env:`` is the
-single-tenant alternative, where the operator holds the PEM and this function
-hands it back exactly once. ``file:`` is READ-ONLY, for material an orchestrator
-mounted; it is not mintable.
+**The private half lives in the database, and nowhere else.** It is stored on the
+key's own row as the PKCS#8 ``BEGIN ENCRYPTED PRIVATE KEY`` PEM
+``generate_signing_keypair(passphrase=...)`` already returns, encrypted under the
+deployment KEK. The ciphertext IS the PEM — there is no envelope format here and
+no encryption code of ours.
+
+There is no storage choice to make, so there is no locator, no scheme and no
+setting: the application writes key material to no filesystem, reads none from
+the environment, and hands none back to a caller.
 
 This function is the ONE birth site for a ``signing_keys`` row, and it does not
 complete unless the private key behind the row resolves and round-trips to the
@@ -26,9 +27,7 @@ cannot sign with.
 
 from __future__ import annotations
 
-import re
 from datetime import UTC, datetime
-from typing import NamedTuple
 
 from adcp.signing import generate_signing_keypair
 
@@ -37,30 +36,7 @@ from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.errors.details import ConfigurationDetails
 from src.core.exceptions import AdCPConfigurationError
 from src.core.signing.algorithms import REQUEST_SIGNING, keygen_alg, mint_kid, narrow_alg, narrow_purpose
-from src.core.signing.provider import DB_SCHEME, assert_pem_publishes_jwk, assert_ref_scheme_allowed
-
-#: Schemes a key can be MINTED under. ``file:`` is absent on purpose: it names
-#: material someone else provisioned, so minting into it would mean writing a
-#: private key to a filesystem — the thing this module does not do.
-MINTABLE_REF_SCHEMES: tuple[str, ...] = (DB_SCHEME, "env")
-
-#: POSIX environment variable names. The ``env:`` locator is the caller's to
-#: supply because the operator has to export that exact name; this function never
-#: invents it, and a name the shell cannot export is a row that never resolves.
-_ENV_VAR_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
-
-
-class ProvisionedKey(NamedTuple):
-    """The persisted row, plus the PEM only an ``env:`` mint hands back.
-
-    ``private_key_pem`` is ``None`` for a ``db:`` mint — the ciphertext is on the
-    row and nothing needs to leave this call. For ``env:`` it is the one-time
-    handoff: the operator must export it under the name they chose, and this is
-    the only moment the material exists outside the process that made it.
-    """
-
-    row: SigningKey
-    private_key_pem: bytes | None
+from src.core.signing.provider import assert_pem_publishes_jwk
 
 
 def provision_signing_key(
@@ -70,10 +46,24 @@ def provision_signing_key(
     alg: str,
     kid: str | None = None,
     purpose: str = REQUEST_SIGNING,
-    ref_scheme: str = DB_SCHEME,
-    env_var_name: str | None = None,
-) -> ProvisionedKey:
-    """Mint a keypair for *tenant_id* and persist the row that publishes it.
+) -> str:
+    """Mint a keypair for *tenant_id*, persist the row that publishes it, return its ``kid``.
+
+    A ``str`` CANNOT carry private key material, and that is the whole point
+    (salesagent-9misv). It used to be a runtime property of which ``ref_scheme``
+    the caller passed — ``env:`` stored the private half nowhere and handed the PEM
+    back, and the admin route flashed it into Flask's client-side session cookie.
+    Returning the row instead would not have settled it: a ``SigningKey`` carries
+    ``private_key_pem_encrypted``, so "the return type has nowhere to put a PEM"
+    would have been a claim about which field callers happen to read rather than a
+    property of the type. A ``kid`` makes it true by construction.
+
+    It also keeps the row's lifetime out of the caller's hands. The row is an ORM
+    instance owned by *repo*'s session; handing it out makes every attribute read a
+    question about whether that session is still open, and a caller reading
+    ``.kid`` after the unit of work closes gets ``DetachedInstanceError`` rather
+    than an answer. A caller that wants the row reads it back — see
+    ``tests.helpers.signing.provision_key``, which does exactly that.
 
     Pass *kid* to name the key explicitly; otherwise
     :func:`~src.core.signing.algorithms.mint_kid` names it. Either way it is
@@ -88,15 +78,14 @@ def provision_signing_key(
 
     Order of operations, and every step is a precondition for the next:
 
-    1. the requested scheme is one this DEPLOYMENT will resolve — checked BEFORE
+    1. minting requires the KEK, so the stored PEM is ciphertext — checked BEFORE
        any key material exists, because ``publishable_at`` is resolvability-blind
-       and would publish a row the resolver later refuses;
-    2. a ``db:`` mint requires the KEK, so the stored PEM is ciphertext;
-    3. the keypair is minted;
-    4. the private half is loaded back and re-derives the public JWK about to be
-       stored (:func:`~src.core.signing.provider.assert_pem_publishes_jwk`) — for
-       ``db:`` this also proves the KEK round-trips;
-    5. only then is the row created.
+       and would otherwise publish a row nothing can open;
+    2. the keypair is minted;
+    3. the private half is loaded back and re-derives the public JWK about to be
+       stored (:func:`~src.core.signing.provider.assert_pem_publishes_jwk`), which
+       also proves the KEK round-trips;
+    4. only then is the row created.
 
     Every refusal below is an ``AdCPConfigurationError`` carrying a typed
     :class:`~src.core.errors.details.ConfigurationDetails`: ``capability`` names the
@@ -106,11 +95,16 @@ def provision_signing_key(
     surface that renders only ``str(exc)`` shows the generic sentence and must read
     these fields to name the knob.
 
+    Returns:
+        The ``kid`` of the minted key — server-side, and the same value whether
+        *kid* was supplied or :func:`~src.core.signing.algorithms.mint_kid` named
+        it. Read the row back through *repo* if you need it.
+
     Raises:
-        AdCPConfigurationError: *alg*/*purpose*/*ref_scheme* are outside the
-            profile, the deployment forbids the scheme, a ``db:`` mint has no KEK
-            configured, *tenant_id* does not match the repository's tenant scope,
-            or the minted key fails its own round-trip.
+        AdCPConfigurationError: *alg*/*purpose* are outside the profile, the
+            deployment forbids ``db:``, no KEK is configured, *tenant_id* does not
+            match the repository's tenant scope, or the minted key fails its own
+            round-trip.
     """
     if tenant_id != repo.tenant_id:
         raise AdCPConfigurationError(
@@ -131,20 +125,6 @@ def provision_signing_key(
     stored_alg = narrow_alg(alg)
     stored_purpose = narrow_purpose(purpose)
 
-    if ref_scheme not in MINTABLE_REF_SCHEMES:
-        raise AdCPConfigurationError(
-            details=ConfigurationDetails(
-                capability="private_key_ref",
-                rejected_value=ref_scheme,
-                accepted_values=sorted(MINTABLE_REF_SCHEMES),
-                tracked_by=(
-                    "'file' names material someone else provisioned, so it resolves but is never "
-                    "mintable — minting into it would write a private key to a filesystem."
-                ),
-            ),
-        )
-    assert_ref_scheme_allowed(ref_scheme)
-
     now = datetime.now(UTC)
     kid = kid or mint_kid(tenant_id, now)
     if not kid:
@@ -161,16 +141,15 @@ def provision_signing_key(
     from src.core.config import get_settings
 
     passphrase = get_settings().signing.key_passphrase
-    if ref_scheme == DB_SCHEME and passphrase is None:
+    if passphrase is None:
         raise AdCPConfigurationError(
             details=ConfigurationDetails(
-                capability="private_key_ref",
-                rejected_value=DB_SCHEME,
+                capability="signing_key",
                 # The knob name lives HERE and nowhere else a caller can reach: CODE_TABLE's
                 # sentence names no knob, so an admin surface rendering only str(exc) would
                 # leave the operator with nothing to set.
                 tracked_by=(
-                    "Refusing to mint a db: signing key with no key encryption key configured: set "
+                    "Refusing to mint a signing key with no key encryption key configured: set "
                     "key_passphrase_env (ADCP_SIGNING_KEY_PASSPHRASE_ENV) to the name of the "
                     "environment variable holding the passphrase. There is no plaintext fallback — "
                     "storing an unencrypted PEM would turn 'encrypted PEM in Postgres' into "
@@ -178,8 +157,6 @@ def provision_signing_key(
                 ),
             ),
         )
-
-    private_key_ref = _private_key_ref(ref_scheme, kid=kid, env_var_name=env_var_name)
 
     pem, public_jwk = generate_signing_keypair(
         alg=keygen_alg(stored_alg),
@@ -200,17 +177,17 @@ def provision_signing_key(
         passphrase=passphrase,
     )
 
-    row = repo.create_from_keypair(
+    repo.create_from_keypair(
         kid=kid,
         alg=stored_alg,
         purpose=stored_purpose,
         public_jwk=public_jwk,
-        private_key_ref=private_key_ref,
-        private_key_pem_encrypted=pem if ref_scheme == DB_SCHEME else None,
+        private_key_pem_encrypted=pem,
         not_before=now,
         not_after=None,
     )
-    return ProvisionedKey(row=row, private_key_pem=None if ref_scheme == DB_SCHEME else pem)
+    # The row is deliberately NOT returned: see the type's rationale above.
+    return kid
 
 
 def revoke_signing_key(
@@ -250,34 +227,3 @@ def revoke_signing_key(
         return None
     clear_signing_provider_cache()
     return revoked
-
-
-def _private_key_ref(ref_scheme: str, *, kid: str, env_var_name: str | None) -> str:
-    """The scheme-prefixed locator the row will carry.
-
-    A ``db:`` ref locates the row's own ciphertext by its ``kid``, which is what
-    makes a ref copied between rows detectable at resolve time.
-    """
-    if ref_scheme == DB_SCHEME:
-        if env_var_name is not None:
-            raise AdCPConfigurationError(
-                details=ConfigurationDetails(
-                    capability="private_key_ref",
-                    rejected_value=env_var_name,
-                    tracked_by="env_var_name is meaningless for a db: signing key — its material is the row.",
-                ),
-            )
-        return f"{DB_SCHEME}:{kid}"
-
-    if not env_var_name or not _ENV_VAR_NAME.match(env_var_name):
-        raise AdCPConfigurationError(
-            details=ConfigurationDetails(
-                capability="private_key_ref",
-                rejected_value=env_var_name,
-                tracked_by=(
-                    "An env: signing key needs the name of the environment variable the operator "
-                    f"will export, matching {_ENV_VAR_NAME.pattern!r}."
-                ),
-            ),
-        )
-    return f"env:{env_var_name}"

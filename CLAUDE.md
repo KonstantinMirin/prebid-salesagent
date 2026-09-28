@@ -644,6 +644,7 @@ Detailed documentation lives in `/docs`:
 - `security.md` — security guidelines
 - `security/outbound-egress.md` — outbound HTTP and SSRF
 - `design/error-architecture.md` — the one code table, the raised and advisory lanes, and why neither authors text
+- `design/request-signing-subset.md` — the RFC 9421 subset this seller implements: where a counterparty's keys may live, and the two narrowings a graded scenario refuses
 - `design/bdd-harness-architecture.md` — one scenario on every transport: what a scenario names and what the harness derives
 - `design/webhook-testing-architecture.md` — the local HTTP and MCP origins, the shared TLS material, the delivery envs, and the e2e capture service
 - `quickstart.md` — local run walkthrough

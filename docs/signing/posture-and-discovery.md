@@ -35,8 +35,13 @@ pointer whose document would answer `{"keys": []}`.
 |---|---|
 | not listed | Passes. The operation is outside the posture entirely. |
 | `supported_for` | Passes. We verify a signature if you send one, and we accept the request if you do not. |
-| `warn_for` | Passes, and we record it. Shadow mode — this is where an operation sits while both sides build confidence. |
 | `required_for` | Rejected. |
+
+Two buckets, and there is no third. The pinned schema also defines `warn_for`, which serves a
+signed-but-INVALID request as though it were fine; we do not implement it, and a declaration
+naming it is refused. It would tell you your signing works when it does not, and you could not
+tell the difference from the outside — so the only shadow mode we offer is `supported_for`,
+where a broken signature is refused and a missing one is not.
 
 Three more rules matter when you read a declaration:
 
@@ -47,19 +52,29 @@ Three more rules matter when you read a declaration:
 - **`supported: false` collapses every bucket to "none".** If we advertise that we do not
   verify signatures, no operation is required or warned regardless of what the other
   fields say. Check `supported` first.
-- **JSON-RPC methods are a separate namespace.** `protocol_methods_supported_for`,
-  `protocol_methods_warn_for` and `protocol_methods_required_for` grade wire methods such
-  as `tasks/cancel`. They are kept apart from AdCP tool names deliberately, so the two
-  can never collide as bare strings. A method is graded against the
-  `protocol_methods_*` trio when one is supplied, and against the tool-name trio
-  otherwise.
+- **JSON-RPC methods are not graded at all.** The pinned schema defines
+  `protocol_methods_supported_for` / `_warn_for` / `_required_for` for wire methods such as
+  `tasks/cancel`. We declare none of them and refuse a declaration that names one: those
+  methods are answered by the transport SDK below AdCP dispatch and never reach the verifier,
+  so a posture naming them would be a promise nothing keeps. The one such method worth
+  protecting — `tasks/pushNotificationConfig/set`, which registers a webhook and its
+  credentials — we decline outright; webhook configuration reaches us only as a field of an
+  AdCP request body, signed like any other body.
 
 ### `covers_content_digest`
 
 Declares whether our verifier requires the `content-digest` component to be covered by
-your signature. The default is `either`: we accept a signature that covers it and one
-that does not. If we advertise a stricter value, a signature that omits the component is
-rejected even though it is otherwise valid.
+your signature. We advertise `either`, the schema default: we accept a signature that covers
+it and one that does not.
+
+Cover it anyway. Every request you send us is a `POST` to one path, so `@method`,
+`@target-uri` and `@authority` are identical across all of them — a signature that omits
+`content-digest` proves you hold the key and says nothing about what you sent, and an on-path
+mutator can change the body without breaking it. The reason we advertise `either` rather than
+`required` is the conformance corpus, not a judgement about that risk: eleven of AdCP's twelve
+positive request-signing vectors sign without `content-digest`, so a verifier declaring
+`required` refuses the spec's own happy path. Recorded in
+[the subset design note](../design/request-signing-subset.md).
 
 ### Signature freshness
 
@@ -174,13 +189,20 @@ of the list, and distinguishable from a list that exists and names nothing.
 1. Publish your own trust root and tell us your agent URL. We resolve you by the same
    walk described above — your `brand_json_url`, your JWKS — so an agent that cannot be
    discovered cannot be enrolled.
+
+   **Serve your JWKS at `<your agent origin>/.well-known/jwks.json`.** We read keys from
+   that one location and nowhere else. The spec makes it the default and lets
+   `agents[].jwks_uri` name somewhere else instead; we decline that half, so a brand.json
+   pointing its keys at another origin or another path is refused with
+   `request_signature_jwks_untrusted` naming the location we looked at. One location means
+   your key location cannot go stale in a document we cached, which is the whole reason —
+   see [the subset design note](../design/request-signing-subset.md).
 2. We add your operations to `supported_for`. Send signed requests; unsigned ones still
-   pass. Nothing about your integration is at risk in this stage.
-3. We promote to `warn_for` (shadow mode) and watch the unsigned-request rate for your
-   operations. Signatures are graded but nothing is rejected.
-4. We promote to `required_for` once shadow mode is quiet. From this point unsigned
+   pass. A signature that fails is refused from this point, which is what makes the stage
+   worth running: you find out immediately, rather than being told everything is fine.
+3. We promote to `required_for` once your signed traffic is clean. From this point unsigned
    requests to those operations are rejected.
 
-Rollback from step 4 is a per-tenant configuration change on our side, not a deploy — see
+Rollback from step 3 is a per-tenant configuration change on our side, not a deploy — see
 the [runbook](../operations/signing-key-runbook.md#rollback). If your integration breaks
 after promotion, tell us; the fix does not require a release.

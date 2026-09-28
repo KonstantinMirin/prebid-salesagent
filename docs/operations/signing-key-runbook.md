@@ -173,16 +173,20 @@ list cannot be read, the fail-open path increments `request_revocation_unavailab
 
 Promote one operation at a time, per tenant.
 
-`supported_for` → `warn_for` → `required_for`
+`supported_for` → `required_for`
 
-- **`supported_for`** — we verify a signature if one arrives and accept the request if
-  none does. Nothing can break.
-- **`warn_for`** (shadow mode) — same acceptance, but the traffic is graded. Watch
-  `request_unsigned_total{operation,reason}`. `reason="absent"` means the request carried
-  no signature headers at all; `reason="ignored"` means headers were present but the
-  posture put the operation in the `none` bucket. Watch `request_signature_failed_total`
-  alongside it: a counterparty who is signing but signing *wrongly* shows up there, not
-  in the unsigned series, and promoting on the unsigned rate alone will break them.
+Two rungs, and the shadow-mode rung between them is deliberately absent: the schema's
+`warn_for` serves a signed-but-INVALID request as though it were fine, which tells a
+counterparty their signing works when it does not. A declaration naming it is refused
+(docs/design/request-signing-subset.md).
+
+- **`supported_for`** — we verify a signature if one arrives and accept the request if none
+  does. An unsigned counterparty cannot break; a counterparty who signs WRONGLY is refused
+  here, which is the point of the rung. Watch
+  `request_unsigned_total{operation,reason}`: `reason="absent"` means the request carried no
+  signature headers at all, `reason="ignored"` means headers were present but the posture put
+  the operation in the `none` bucket. Watch `request_signature_failed_total` alongside it —
+  promoting on the unsigned rate alone will break a counterparty who is signing wrongly.
 - **Promotion threshold** — `request_unsigned_total{reason="absent"}` at zero for the
   operation across a full traffic cycle for that counterparty (a week covers weekly
   batch integrations), **and** `request_signature_failed_total` flat. Both, not either.
@@ -199,8 +203,8 @@ the wrong one during an incident turns one tenant's rollback into everyone's.
 | **`verifier_enabled = false`** | The verifier itself is the problem | Every tenant, every operation |
 
 **Per-tenant** — the posture lives in the tenant's `capability_declarations`. Remove the
-operation from `required_for` (drop it to `warn_for` to keep grading it). This is a data
-change; it takes effect on the next request.
+operation from `required_for`, which drops it to `supported_for` and keeps grading the
+signatures that do arrive. This is a data change; it takes effect on the next request.
 
 **Deployment-wide** — `SigningSettings.verifier_enabled = false` makes every request
 resolve identity from its bearer token alone, exactly as it did before signing existed.

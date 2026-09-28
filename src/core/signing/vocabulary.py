@@ -32,19 +32,6 @@ from __future__ import annotations
 from functools import lru_cache
 
 
-def is_adcp_operation(name: str) -> bool:
-    """Whether *name* is an AdCP operation THIS seller implements.
-
-    Delegated to the registry, which owns the answer -- see
-    :func:`src.core.tools.registry.is_adcp_operation`. Present here so a reader of the
-    signing layer finds the predicate beside the vocabulary it bounds, and so nothing in
-    this layer decides tool-ness by looking for a ``/``.
-    """
-    from src.core.tools.registry import is_adcp_operation as _registry_predicate
-
-    return _registry_predicate(name)
-
-
 def sdk_operation_names() -> frozenset[str]:
     """The AdCP operation names the pinned SDK defines.
 

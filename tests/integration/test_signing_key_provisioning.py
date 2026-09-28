@@ -3,10 +3,10 @@
 Written TDD RED and now green: the first six groups grade the provisioning
 transports the ticket built -- the admin blueprint
 (``src/admin/blueprints/signing_keys.py``, design step 5), the scripted path
-(``scripts/ops/provision_signing_key.py``, step 6), the ``db:`` storage of
-``provision_signing_key`` plus the ``signing_keys.private_key_pem_encrypted``
-column (steps 1-3), and the KEK / ref-scheme gates (step 2). Each group names the
-production module it fails for, so a regression reports which one went away.
+(``scripts/ops/provision_signing_key.py``, step 6), the
+``signing_keys.private_key_pem_encrypted`` column that holds every minted private
+half (steps 1-3), and the KEK gate (step 2). Each group names the production
+module it fails for, so a regression reports which one went away.
 
 Core Invariant under test: every ``signing_keys`` row is born through exactly ONE
 function, which does not complete unless the private key behind the row resolves
@@ -48,12 +48,10 @@ What each group grades, and why it is written the way it is:
   writer" is not observable; a before/after snapshot of a sandboxed cwd + tempdir
   is.
 
-* **Both gates refuse BEFORE key material exists.** Minting with no KEK
+* **The KEK gate refuses BEFORE key material exists.** Minting with no KEK
   configured would silently degrade "encrypted PEM in Postgres" into "private
-  keys in the database"; minting a scheme this deployment forbids
-  (``SigningSettings.allowed_key_ref_schemes``, enforced at READ time only today)
-  persists and PUBLISHES a key the resolver will later refuse to load. Both must
-  leave no row -- and, through the admin surface, must be a flash error and never
+  keys in the database". It must leave no row -- and, through the admin surface,
+  must be a flash error and never
   a 5xx. A refusal carries no sentence of its own -- ``CODE_TABLE`` owns the
   buyer-facing text for ``CONFIGURATION_ERROR`` -- so the operator-actionable knob
   name travels in ``ConfigurationDetails.tracked_by`` and every assertion below
@@ -78,12 +76,13 @@ What each group grades, and why it is written the way it is:
   ``test_trust_root_documents.py`` and is not repeated here; what is graded here
   is the ROUTE causing it.
 
-* **The dev KEK ``docker compose`` supplies is all provisioning needs.**
-  ``db:`` minting refuses without a KEK, so a compose file that names no
-  passphrase variable gives an operator a signing-keys page that can only fail.
-  The two settings are read OUT of ``docker-compose.yml`` and then used as the
-  only signing configuration in the process, so removing or renaming them there
-  fails here rather than in someone's dev stack.
+* **The dev KEK a fresh checkout supplies is all provisioning needs.**
+  Minting refuses without a KEK, so a template that names no passphrase variable
+  gives an operator a signing-keys page that can only fail. The two settings are
+  read OUT of ``.env.template`` — the file ``cp .env.template .env`` produces and
+  compose loads through ``env_file:`` — and then used as the only signing
+  configuration in the process, so removing or renaming them there fails here
+  rather than in someone's dev stack.
 """
 
 from __future__ import annotations
@@ -100,7 +99,6 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
-import yaml
 from adcp.signing import alg_for_jwk, public_key_from_jwk, verify_signature
 
 from src.core.database.models import SigningKey
@@ -138,19 +136,17 @@ _PROVISION_URL = "/tenant/{tenant_id}/signing-keys/create"
 #: window close cannot retire a key, because the current key is open-ended.
 _REVOKE_URL = "/tenant/{tenant_id}/signing-keys/{kid}/revoke"
 
-#: The compose service that runs the admin UI and the FastAPI app, and therefore
-#: the one whose environment decides whether `docker compose up` can provision.
-_COMPOSE_SERVICE = "adcp-server"
+#: The file a fresh checkout copies to ``.env``, and the one place the KEK is defined.
+#: Compose loads it through ``env_file:`` and deliberately sets NO ``environment:`` entry
+#: for it: an entry there would shadow the .env value an operator edits, so the variable
+#: would have two definition sites and the one in git would win.
+_ENV_TEMPLATE = ".env.template"
 
 #: The SETTING that names the KEK variable. Pinned as a literal because it is
 #: ``SigningSettings.key_passphrase_env``'s env name and so is not compose's to
 #: rename; the variable it POINTS AT is read out of the file instead, so a
 #: deliberate consistent rename stays green while a broken pointer goes red.
 _KEK_POINTER_SETTING = "ADCP_SIGNING_KEY_PASSPHRASE_ENV"
-
-#: The scheme gate. ``db:`` is in the default, but several tests below narrow or
-#: widen it deliberately, so the ones that need the default spelled out say so.
-_SCHEMES_SETTING = "ADCP_SIGNING_ALLOWED_KEY_REF_SCHEMES"
 
 #: What ``generate_signing_keypair(passphrase=...)`` returns, verbatim. The
 #: ciphertext to store IS the PEM -- no envelope format, no encryption code.
@@ -216,20 +212,17 @@ def signing_tenant(integration_db, request) -> Any:
 
 @pytest.fixture
 def deployment_kek(monkeypatch) -> Iterator[None]:
-    """Configure the one deployment-wide KEK and allow the ``db:`` scheme.
+    """Configure the one deployment-wide KEK.
 
     The KEK half is DELEGATED to ``tests.helpers.signing.deployment_kek`` rather
     than re-spelled: every suite that provisions through production needs the same
     pointer-plus-variable pair, and a second copy is how one of them ends up
-    naming a passphrase variable nothing sets. Only the scheme gate is local,
-    because tests below narrow it on purpose.
 
     ``key_passphrase`` is resolved from the environment on EVERY use (deliberately
     uncached in production), but the ``Settings`` object that carries
     ``key_passphrase_env`` is a process global, so the cache is dropped here.
     """
     with _configure_deployment_kek(monkeypatch):
-        monkeypatch.setenv(_SCHEMES_SETTING, "db,env,file")
         _drop_cached_settings(monkeypatch)
         yield
 
@@ -410,11 +403,6 @@ class TestFullRoundTrip:
             "the stored bytes must be the ENCRYPTED PEM verbatim (no envelope format, no "
             f"hand-rolled encryption); got {bytes(ciphertext)[:40]!r}"
         )
-        assert row.private_key_ref == f"db:{kid}", (
-            "a db-scheme row is self-describing: the locator is the row's own kid, which is what "
-            f"makes a ref copied between rows detectable; got {row.private_key_ref!r}"
-        )
-
         served = _served_jwk(client, tenant, kid)
 
         provider = resolve_provider(
@@ -492,9 +480,9 @@ class TestNoKeyMaterialTouchesAFilesystem:
 
         rows = _rows(env, tenant.tenant_id)
         assert len(rows) == 2, f"both transports must have persisted a row; got {[row.kid for row in rows]}"
-        assert all(row.private_key_ref == f"db:{row.kid}" for row in rows), (
-            "every minted row references its own encrypted material in the database; got "
-            f"{[row.private_key_ref for row in rows]}"
+        assert all(row.private_key_pem_encrypted for row in rows), (
+            "every minted row carries its own encrypted material in the database; got "
+            f"{[(row.kid, bool(row.private_key_pem_encrypted)) for row in rows]}"
         )
 
         self._assert_the_route_audited_without_leaking_the_key(audit_dir, tenant.tenant_id, rows)
@@ -568,7 +556,6 @@ class TestMintingRefusesWithoutAKek:
         """
         env, tenant, client = signing_tenant
         monkeypatch.delenv(_KEK_POINTER_SETTING, raising=False)
-        monkeypatch.setenv(_SCHEMES_SETTING, "db,env,file")
         _drop_cached_settings(monkeypatch)
 
         response = _provision_via_admin_route(authenticated_admin_client, tenant.tenant_id)
@@ -589,33 +576,132 @@ class TestMintingRefusesWithoutAKek:
         )
 
 
-class TestForbiddenRefSchemeRefusesBeforeAnyKeyMaterialExists:
-    """The deployment's allowed-scheme gate must run at MINT time, not only at read."""
+class TestProvisioningHandsBackNoKeyMaterial:
+    """salesagent-9misv -- the provisioning response must carry no private half.
 
-    def test_no_row_when_the_deployment_forbids_the_requested_scheme(
-        self, signing_tenant, deployment_kek, authenticated_admin_client, monkeypatch
+    THE DEFECT THIS GRADES. ``env:`` is the one mintable scheme that stores the
+    private half nowhere, so its mint is the one that hands a PEM back to its
+    caller. The admin route then ``flash()``es that PEM, and ``flash()`` writes to
+    Flask's DEFAULT session store -- ``SecureCookieSessionInterface``, a
+    CLIENT-SIDE cookie that is SIGNED BUT NOT ENCRYPTED, so its contents are
+    readable by anyone holding the cookie. ``src/admin/app.py:128`` additionally
+    sets ``SESSION_COOKIE_HTTPONLY=False`` in production so JavaScript can read
+    it. The path an operator picks to keep private keys OUT of any store is the
+    path that writes one into a browser cookie.
+
+    The fix is not to stop flashing it. It is that provisioning has no private
+    half to hand back: one mintable scheme, material encrypted on the row, and a
+    return type with nowhere to put a PEM.
+    """
+
+    def test_no_key_material_in_the_response_body_or_its_cookies(
+        self, signing_tenant, deployment_kek, authenticated_admin_client
     ):
-        """A scheme this deployment will not resolve must not reach the database.
+        """POST the form TODAY'S page sends, and read every byte that comes back.
 
-        ``_resolve_key_ref`` enforces ``allowed_key_ref_schemes`` at READ time
-        only, so today a row can be persisted AND PUBLISHED whose private half the
-        resolver will refuse to load -- a published key with no signable private
-        half, detected only when signatures start being rejected. The gate belongs
-        before ``generate_signing_keypair``, so the failure leaves no row and
-        nothing published.
+        The form fields are spelled exactly as ``templates/signing_keys_list.html``
+        sends them, because the point is that the route stops honouring them while
+        an old page, a bookmarked form or a replayed request may still supply them.
+        After this change they are inert: the route mints a ``db:`` key whose
+        material stays on the row.
+
+        Three carriers are read, because the PEM reaches the browser by more than
+        one route and any one of them alone would let a fix that merely RELOCATES
+        the leak pass: the response body, the SESSION (where ``flash()`` puts it,
+        and which on Flask's default interface IS a client-side cookie), and the
+        rendered page ``get_flashed_messages`` writes it into.
+
+        The session is read THROUGH FLASK -- ``client.session_transaction()`` opens
+        the client's cookie jar with the app's own
+        ``SecureCookieSessionInterface`` and yields the dict. Nothing here parses a
+        cookie: an earlier revision hand-rolled the base64url + zlib decode and
+        silently skipped every compressed cookie, which is every cookie large
+        enough to hold a PEM, so the check could not fire. Flask's deserialiser
+        cannot disagree with Flask's serialiser; one I write can.
+
+        The session is read BEFORE the redirect is followed, because rendering the
+        flash consumes it. The redirect is followed by hand rather than through the
+        suite's ``_provision_via_admin_route`` helper, which returns only the final
+        page.
         """
-        env, tenant, client = signing_tenant
-        monkeypatch.setenv(_SCHEMES_SETTING, "env")
-        _drop_cached_settings(monkeypatch)
+        env, tenant, _client = signing_tenant
+        url = _PROVISION_URL.format(tenant_id=tenant.tenant_id)
 
-        _provision_via_admin_route(authenticated_admin_client, tenant.tenant_id, ref_scheme="db")
-
-        assert _rows(env, tenant.tenant_id) == [], (
-            "minting a ref scheme the deployment forbids must refuse BEFORE any key material "
-            f"exists -- no row; got {[row.private_key_ref for row in _rows(env, tenant.tenant_id)]}"
+        posted = authenticated_admin_client.post(
+            url,
+            data={
+                "alg": "ed25519",
+                "ref_scheme": "env",
+                "env_var_name": "ADCP_SIGNING_SOMETHING",
+            },
+            follow_redirects=False,
         )
-        assert _kids(_get_document(client, _JWKS_PATH, tenant)["keys"]) == set(), (
-            "and nothing may be published: publication must never outrun resolvability"
+        # The WHOLE session, not session["_flashes"]: material parked under any
+        # other key is the same defect, and naming one key would grade one route to
+        # the cookie rather than the cookie.
+        with authenticated_admin_client.session_transaction() as session:
+            session_contents = repr(dict(session))
+        followed = authenticated_admin_client.get(
+            posted.headers.get("Location", _PROVISION_URL.format(tenant_id=tenant.tenant_id)),
+        )
+
+        carriers = {
+            "POST body": posted.get_data(as_text=True),
+            "session (read through Flask)": session_contents,
+            "redirected body": followed.get_data(as_text=True),
+        }
+        leaked = {
+            where: needle for where, text in carriers.items() for needle in ("BEGIN", "PRIVATE KEY") if needle in text
+        }
+
+        assert not leaked, (
+            "a provisioning response that carries private key material IS the defect "
+            "(salesagent-9misv), and it must be unreachable rather than merely unused: "
+            f"found {sorted(leaked.items())}. flash() writes to Flask's default client-side "
+            "SecureCookieSessionInterface -- signed, NOT encrypted -- and src/admin/app.py:128 "
+            "sets SESSION_COOKIE_HTTPONLY=False in production, so a PEM flashed here is a PEM "
+            "any script on the page can read. Provisioning must have no private half to return."
+        )
+        assert len(_rows(env, tenant.tenant_id)) == 1, (
+            "and the mint must still SUCCEED -- this grades that no material comes back, not "
+            f"that provisioning stopped working; rows: {[row.kid for row in _rows(env, tenant.tenant_id)]}"
+        )
+
+    def test_a_minted_key_always_carries_its_material_on_the_row(self, signing_tenant, deployment_kek):
+        """Whatever is minted is resolvable, because the ciphertext is on the row.
+
+        ``provision_signing_key`` returns a ``kid`` and nothing else, so the row is
+        READ BACK through the repository rather than handed over. That is the
+        stronger assertion of the two available: it grades what the database holds,
+        not the instance the mint happened to construct, and a mint that reported a
+        kid the database does not hold fails here rather than passing on an
+        in-memory object.
+
+        The parameters that could once send the private half somewhere the row does
+        not carry it (``ref_scheme``/``env_var_name``) are gone, which is what makes
+        this invariant expressible at all.
+        """
+        from src.core.database.repositories.uow import SigningKeyUoW
+        from src.core.signing.keys import provision_signing_key
+
+        _env, tenant, _client = signing_tenant
+
+        with SigningKeyUoW(tenant.tenant_id) as uow:
+            assert uow.signing_keys is not None
+            kid = provision_signing_key(uow.signing_keys, tenant_id=tenant.tenant_id, alg="ed25519")
+            assert isinstance(kid, str) and kid, (
+                f"provisioning must report the kid as a plain string -- a str cannot carry a PEM; got {kid!r}"
+            )
+            row = uow.signing_keys.get_by_kid(kid)
+            assert row is not None, f"the mint reported kid {kid!r} that the repository cannot read back"
+            material = row.private_key_pem_encrypted
+
+        assert material, (
+            "a minted key with no material on the row is a published key nothing can sign with: "
+            f"private_key_pem_encrypted was {material!r}"
+        )
+        assert bytes(material).startswith(_ENCRYPTED_PEM_HEADER), (
+            f"and it must be the ENCRYPTED PEM -- there is no plaintext fallback; got {bytes(material)[:40]!r}"
         )
 
 
@@ -851,8 +937,20 @@ class TestRevokeThroughTheRoute:
         )
 
 
+def _env_template_values() -> dict[str, str]:
+    """``.env.template`` as ``NAME -> value``, comments and blanks dropped.
+
+    Parsed here rather than through a dotenv reader so nothing is interpolated: the test
+    needs the two literals the file DEFINES, not what they would expand to in a shell that
+    already had them set.
+    """
+    lines = (Path(__file__).resolve().parents[2] / _ENV_TEMPLATE).read_text().splitlines()
+    pairs = (line.split("=", 1) for line in lines if "=" in line and not line.lstrip().startswith("#"))
+    return {name.strip(): value.strip() for name, value in pairs}
+
+
 class TestComposeProvisionsWithNoOperatorAction:
-    """``docker compose up`` gives an operator a signing-keys page that works.
+    """``cp .env.template .env && docker compose up`` gives a signing-keys page that works.
 
     ``db:`` minting refuses without a KEK and there is no plaintext fallback, so
     the dev stack needs a passphrase variable or its provisioning surface can only
@@ -860,40 +958,32 @@ class TestComposeProvisionsWithNoOperatorAction:
     to provision.
     """
 
-    def test_the_dev_kek_docker_compose_supplies_is_all_provisioning_needs(self, signing_tenant, monkeypatch):
-        """Read the compose settings, then use ONLY them, through a real transport.
+    def test_the_dev_kek_a_fresh_checkout_supplies_is_all_provisioning_needs(self, signing_tenant, monkeypatch):
+        """Read the template's settings, then use ONLY them, through a real transport.
 
         Deliberately not built on ``deployment_kek``: this test's whole subject is
-        whether what the COMPOSE FILE sets is sufficient, so its configuration has
+        whether what a FRESH CHECKOUT sets is sufficient, so its configuration has
         to come out of that file and nothing else may be left set alongside it.
         """
         env, tenant, client = signing_tenant
         _assert_starts_keyless(client, tenant)
 
-        compose = yaml.safe_load((Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text())
-        service_env = compose["services"][_COMPOSE_SERVICE]["environment"]
+        template = _env_template_values()
 
-        assert _KEK_POINTER_SETTING in service_env, (
-            f"docker-compose.yml must set {_KEK_POINTER_SETTING} on the {_COMPOSE_SERVICE} service: "
-            "without it `docker compose up` yields a signing-keys page whose every provision "
+        assert _KEK_POINTER_SETTING in template, (
+            f"{_ENV_TEMPLATE} must set {_KEK_POINTER_SETTING}: without it `cp {_ENV_TEMPLATE} .env` "
+            "followed by `docker compose up` yields a signing-keys page whose every provision "
             "refuses for want of a key encryption key"
         )
-        kek_variable = service_env[_KEK_POINTER_SETTING]
-        assert service_env.get(kek_variable), (
-            f"{_KEK_POINTER_SETTING} names {kek_variable!r}, but the compose file gives that variable "
-            f"no value -- key_passphrase resolves to None and db: minting refuses. Renaming the KEK "
-            f"variable means renaming it in both places; got {sorted(service_env)}"
+        kek_variable = template[_KEK_POINTER_SETTING]
+        assert template.get(kek_variable), (
+            f"{_KEK_POINTER_SETTING} names {kek_variable!r}, but {_ENV_TEMPLATE} gives that variable "
+            f"no value -- key_passphrase resolves to None and minting refuses. Renaming the KEK "
+            f"variable means renaming it in both places; got {sorted(template)}"
         )
-        assert _SCHEMES_SETTING not in service_env, (
-            "compose sets no scheme override, so the dev stack depends on db: being in "
-            "SigningSettings.allowed_key_ref_schemes BY DEFAULT. If compose starts overriding it, "
-            "this test stops grading the default and must be rewritten rather than relaxed"
-        )
-
-        # Exactly the compose pair, and nothing this suite would otherwise leave behind.
-        monkeypatch.delenv(_SCHEMES_SETTING, raising=False)
+        # Exactly the template pair, and nothing this suite would otherwise leave behind.
         monkeypatch.setenv(_KEK_POINTER_SETTING, kek_variable)
-        monkeypatch.setenv(kek_variable, service_env[kek_variable])
+        monkeypatch.setenv(kek_variable, template[kek_variable])
         _drop_cached_settings(monkeypatch)
 
         _provision_via_ops_script(tenant.tenant_id)

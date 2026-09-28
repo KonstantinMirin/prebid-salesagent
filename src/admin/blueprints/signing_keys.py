@@ -36,7 +36,7 @@ from src.core.exceptions import AdCPConfigurationError
 # Dotted-path imports: ``src/core/signing/__init__.py`` re-exports nothing, so the
 # value-set leaf and the provisioning functions are named where they are defined.
 from src.core.signing.algorithms import SIGNING_ALG_VALUES
-from src.core.signing.keys import MINTABLE_REF_SCHEMES, provision_signing_key, revoke_signing_key
+from src.core.signing.keys import provision_signing_key, revoke_signing_key
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,6 @@ def list_signing_keys(tenant_id: str) -> ResponseReturnValue:
             keys=published,
             active_kid=active.kid if active else None,
             algorithms=SIGNING_ALG_VALUES,
-            ref_schemes=MINTABLE_REF_SCHEMES,
         )
 
 
@@ -79,21 +78,11 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
     JWKS, and an operator-typed value is a collision waiting for a rotation.
     """
     alg = request.form.get("alg", "").strip()
-    ref_scheme = request.form.get("ref_scheme", "").strip() or "db"
-    env_var_name = request.form.get("env_var_name", "").strip() or None
 
     try:
         with SigningKeyUoW(tenant_id) as uow:
             assert uow.signing_keys is not None
-            provisioned = provision_signing_key(
-                uow.signing_keys,
-                tenant_id=tenant_id,
-                alg=alg,
-                ref_scheme=ref_scheme,
-                env_var_name=env_var_name,
-            )
-            kid = provisioned.row.kid
-            handoff = provisioned.private_key_pem
+            kid = provision_signing_key(uow.signing_keys, tenant_id=tenant_id, alg=alg)
     except AdCPConfigurationError as exc:
         # ``str(exc)`` is CODE_TABLE's sentence for CONFIGURATION_ERROR, and that
         # sentence names no knob. The operator-actionable part — which setting to
@@ -107,17 +96,12 @@ def create_signing_key(tenant_id: str) -> ResponseReturnValue:
         )
         return redirect(url_for("signing_keys.list_signing_keys", tenant_id=tenant_id))
 
-    if handoff is not None:
-        # An env: key exists nowhere but here until the operator exports it. The
-        # PEM is flashed ONCE and never stored, logged or re-rendered.
-        flash(
-            f"Signing key {kid} provisioned. Export this PEM as {request.form.get('env_var_name')} "
-            f"before it signs anything — it is shown once and is not stored:\n"
-            f"{handoff.decode()}",
-            "warning",
-        )
-    else:
-        flash(f"Signing key {kid} provisioned and published.", "success")
+    # No key-material branch, and none is reachable: provisioning returns the ROW
+    # (salesagent-9misv). This used to flash an env: mint's PEM, and flash() writes
+    # to Flask's default client-side session cookie — signed, not encrypted, and
+    # readable by JavaScript under the production SESSION_COOKIE_HTTPONLY=False at
+    # src/admin/app.py:128.
+    flash(f"Signing key {kid} provisioned and published.", "success")
     return redirect(url_for("signing_keys.list_signing_keys", tenant_id=tenant_id))
 
 

@@ -1201,39 +1201,20 @@ Feature: BR-UC-010 Discover Seller Capabilities
       | signing_supported_either supported=true covers_content_digest=either          | supported=true covers_content_digest=either    | true      | equal to "either"                                        |
       | signing_required_covers_digest supported=true covers_content_digest=required  | supported=true covers_content_digest=required  | true      | equal to "required"                                      |
       | signing_forbidden_digest supported=true covers_content_digest=forbidden       | supported=true covers_content_digest=forbidden | true      | equal to "forbidden"                                     |
-      | signing_unsupported supported=false (no required_for, no protocol_methods_*)  | supported=false                                | false     | absent or one of "required", "forbidden", "either"       |
-
-  @T-UC-010-v31-request-signing-namespace-split @v31 @invariant @boundary
-  Scenario: request-signing-namespace-split — AdCP tool names vs JSON-RPC method names live in separate buckets
-    Given a tenant is resolvable from the request context
-    And the tenant declares request_signing.supported_for=["create_media_buy"] required_for=["create_media_buy"] protocol_methods_supported_for=["tasks/cancel"] protocol_methods_required_for=["tasks/cancel"]
-    When the Buyer Agent calls get_adcp_capabilities
-    Then the response is compliant with the get_adcp_capabilities spec
-    And request_signing.required_for should contain only AdCP tool names without "/"
-    And request_signing.protocol_methods_required_for should match pattern "^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$"
-    And request_signing.required_for should be a subset of request_signing.supported_for
-    And request_signing.protocol_methods_required_for should be a subset of request_signing.protocol_methods_supported_for
-    # Given fixed 2026-07-13: the former fixture declared required_for/protocol_methods_
-    # required_for WITHOUT their supersets — spec-invalid under the x-adcp-validation subset
-    # rules; a conformant seller must never emit that posture. The no-slash rule on
-    # required_for is description prose (test-layer encoding is fine); protocol_methods_*
-    # items carry the schema pattern.
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/required_for/x-adcp-validation
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/protocol_methods_required_for
+      | signing_unsupported supported=false (no required_for)                         | supported=false                                | false     | absent or one of "required", "forbidden", "either"       |
 
   @T-UC-010-v31-request-signing-subset @v31 @invariant @boundary
-  Scenario: request-signing-subset — required_for and warn_for must be subset of supported_for
+  Scenario: request-signing-subset — required_for must be a subset of supported_for
     Given a tenant is resolvable from the request context
-    And the tenant declares request_signing.supported_for=["create_media_buy", "update_media_buy"] required_for=["create_media_buy"] warn_for=["update_media_buy"]
+    And the tenant declares request_signing.supported_for=["create_media_buy", "update_media_buy"] required_for=["create_media_buy"]
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And request_signing.required_for should be a subset of request_signing.supported_for
-    And request_signing.warn_for should be a subset of request_signing.supported_for
-    And request_signing.warn_for should be disjoint from request_signing.required_for
-    # The three x-adcp-validation relations (test-layer constraints — JSON Schema cannot
-    # express them; a BDD assertion is precisely where the spec says enforcement lives).
+    # The x-adcp-validation relation (a test-layer constraint — JSON Schema cannot express
+    # it; a BDD assertion is precisely where the spec says enforcement lives). Over the two
+    # buckets this seller implements: `warn_for` and the protocol-method trio are
+    # undeclarable, so a declaration naming one is refused rather than related.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/required_for/x-adcp-validation
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/warn_for/x-adcp-validation
 
   @T-UC-010-v31-webhook-signing @v31 @main-flow @post-s24 @partition @boundary
   Scenario Outline: webhook-signing — RFC 9421 webhook signing posture
@@ -1576,35 +1557,24 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant declares request_signing posture sets for <boundary_point>
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
-    And request_signing should hold the subset and disjoint relations for a <expected> posture
-    # x-adcp-validation relations on request_signing: required_for subset_of supported_for;
-    # warn_for disjoint_with required_for and subset_of supported_for;
-    # protocol_methods_required_for subset_of protocol_methods_supported_for. These are
-    # test-layer/verifier constraints — the seller-gradable behavior for invalid rows is that
-    # the capabilities builder rejects/never emits the violating posture (response_schema
+    And request_signing should hold the subset relation for a <expected> posture
+    # x-adcp-validation on request_signing: required_for subset_of supported_for. A
+    # test-layer/verifier constraint — the seller-gradable behavior for the invalid row is
+    # that the capabilities builder rejects/never emits the violating posture (response_schema
     # grading alone would NOT catch it).
     # Hardened 2026-07-24 (salesagent-jd6a, triage :1248): the former single Then crammed a
     # wire assertion and an unobservable "refuse to emit" into valid/invalid column words. Now
-    # the <expected> column drives the graded observable: valid rows → a schema-valid success
-    # whose emitted request_signing satisfies every relation (required_for ⊆ supported_for;
-    # warn_for ∩ required_for = ∅ and warn_for ⊆ supported_for; protocol_methods_required_for ⊆
-    # protocol_methods_supported_for); invalid rows → the builder rejects the relation-violating
-    # config with CONFIGURATION_ERROR (seller-side deployment fault, recovery terminal) rather
-    # than emitting the violating posture. The capabilities builder emits no request_signing
-    # block today (#1291), so every row strict-xfails.
+    # the <expected> column drives the graded observable: the valid row → a schema-valid
+    # success whose emitted request_signing satisfies the relation; the invalid row → the
+    # builder rejects the relation-violating config with CONFIGURATION_ERROR (seller-side
+    # deployment fault, recovery terminal) rather than emitting the violating posture.
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/required_for/x-adcp-validation
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/warn_for/x-adcp-validation
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/protocol_methods_required_for/x-adcp-validation
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
 
     Examples:
-      | boundary_point                                                                      | expected |
-      | required_for = supported_for (full subset, equal sets)                              | valid    |
-      | required_for adds one operation not in supported_for                                | invalid  |
-      | warn_for and required_for share zero operations                                     | valid    |
-      | warn_for and required_for share exactly one operation                               | invalid  |
-      | protocol_methods_required_for ⊆ protocol_methods_supported_for, equal sets          | valid    |
-      | protocol_methods_required_for adds one method not in protocol_methods_supported_for | invalid  |
+      | boundary_point                                         | expected |
+      | required_for = supported_for (full subset, equal sets) | valid    |
+      | required_for adds one operation not in supported_for   | invalid  |
 
   @T-UC-010-v31-idempotency-ttl-bounds @v31 @boundary @partition @post-s15
   Scenario Outline: adcp.idempotency replay-ttl boundary - <boundary_point>

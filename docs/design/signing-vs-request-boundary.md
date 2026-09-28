@@ -9,7 +9,7 @@ the sections that follow describes the two branches as they stood when this was 
 where the landed code differs, a labeled note says so and names the file. The decisions
 themselves live at `src/core/signing/capture.py` (the capture), `src/core/resolved_identity.py`
 (verification inside the resolver), `src/core/auth_middleware.py` (the one renderer), and
-`src/core/schemas/capability_declarations.py` (the config-time namespace split).
+`src/core/schemas/capability_declarations.py` (the config-time declaration refusals).
 
 ## The collision, stated plainly
 
@@ -177,35 +177,33 @@ Contrast idempotency, where the same instinct was right to resist: the idempoten
 DECLARED DTO FIELD, already inside the validated request, so it never needed bytes. A signature
 is computed OVER the bytes. The two are not the same problem.
 
-## The namespace split has ONE home: the registry is the authority
+## The namespace split: there is no longer a split to home
 
-`security.mdx` @ v3.1.1 :1053 requires more than correct matching — it requires REFUSAL at config time:
+`security.mdx` @ v3.1.1 :1053 requires more than correct matching — it requires REFUSAL at
+config time:
 
 > AdCP tool names (no `/`) MUST NOT appear in any `protocol_methods_*` array, and JSON-RPC
 > method names (containing `/`) MUST NOT appear in `supported_for` / `warn_for` /
 > `required_for`. Verifiers MUST reject capability blocks that violate the namespace split
 > with a **configuration-time error** rather than silently coercing strings between the two.
 
-Two obligations, and they belong in different places — but the RULE is stated once:
+This section used to place that rule: the predicate belonged to the registry
+(`is_adcp_operation`), and the enforcement hung off the declaration validator, so a mixed-up
+declaration failed at config load rather than on a buyer's request. Both halves were built and
+both are gone.
 
-1. **The predicate belongs to the registry.** `src/core/tools/registry.py` is the authority on
-   what an AdCP tool name is; nothing else should decide it by looking for a `/`. It exposes
-   the question ("is this a registered AdCP operation?") and owns the answer.
-2. **The enforcement hangs off the existing declaration validator.** #1721 already validates
-   `tenants.capability_declarations` at config load — its own description calls it "a
-   config-time-validated STRICT declaration store — a declaration whose `required_tools` aren't
-   implemented is rejected at config load, not discovered on the wire". The namespace split is
-   the same KIND of check at the same moment, so it goes there and calls the registry predicate
-   rather than re-deriving membership.
+> **Landed, then superseded:** the `protocol_methods_*` buckets are UNDECLARABLE
+> (`docs/design/request-signing-subset.md` §2), so a stored declaration names ONE namespace and
+> there is nothing to coerce between. `_reject_undeclarable_posture_fields`
+> (`src/core/schemas/capability_declarations.py`) refuses a declaration naming any of the three
+> at config time, which satisfies the spec's "configuration-time error" for the only shape a
+> tenant here can write. The registry predicate went with the check that was its only caller.
 
-That keeps one rule in one place while letting both sides read it, and it means a mixed-up
-declaration fails at config load rather than at verification time on a buyer's request.
-
-**The matching-side trap to pin with a test.** `Verifiers MUST NOT cross-namespace match`: a
+**The matching-side trap.** `Verifiers MUST NOT cross-namespace match`: a
 `protocol_methods_required_for` membership must NOT be satisfied by a `tools/call` body even
-when `params.name` equals the listed string. This is why the verifier must match on the
-ENVELOPE's `method`, not on the resolved tool name — the resolved-tool-name shortcut looks
-correct, is simpler, and is a conformance failure.
+when `params.name` equals the listed string. `RequestSigningPosture.bucket_for` takes an AdCP
+operation and reads the AdCP buckets, so there is no second value to cross-match and no posture
+that could carry one — the trap is structurally unreachable rather than tested for.
 
 ## The protocol-method namespace: NOT a gap for this agent
 
@@ -220,12 +218,14 @@ sees them. That was written assuming the methods DO something here. Measured, th
 | any `tasks/*` as an AdCP operation | **zero rows** in `src/core/tools/registry.py` |
 
 So there is no credential registration to escalate through and no cross-request state to
-mutate. The namespace has no surface on this agent, and we declare nothing in
-`protocol_methods_*` — which is also what the SDK would allow, since
-`adcp.signing.verifier.VerifierCapability` carries only 4 of `request_signing`'s 8 properties
-and silently drops the rest (measured in `src/core/signing/posture.py:17` and
-`src/core/signing/verifier.py:408`). We neither verify them nor claim to, which is honest and
-conformant.
+mutate. The namespace has no surface on this agent, and nothing here CAN declare
+`protocol_methods_*` — the three buckets are undeclarable, which is also the only honest
+shape given `adcp.signing.verifier.VerifierCapability` carries none of them. We neither verify
+them nor claim to.
+
+> **Landed:** the `message/send` envelope's `configuration.task_push_notification_config` was
+> the fifth entry point to the same declined capability and is refused too
+> (`_refuse_envelope_push_config`), so the decline is wholesale rather than four-fifths.
 
 **Why it is empty is deliberate, and it is the answer to the layering question.** A2A task
 lifecycle is a concept from a different protocol, poorly mapped onto AdCP; this agent uses the
@@ -242,7 +242,7 @@ the spec's own disjoint-field split, not a retreat to the old ASGI middleware.
 
 The spec is silent on whether a signed body may carry batched JSON-RPC messages, and both
 readings are bad — signing a concatenation means the signature covers no single operation, and
-`protocol_methods_*` matching "the envelope's `method`" is undefined when there are several.
+matching "the envelope's `method`" is undefined when there are several.
 Owner decision: **we implement as though batching is forbidden — one request, one call.**
 #1721 already processes only one task from an A2A batch, so this is consistent. Anything else
 is an AdCP v4 design question, not a 3.1.1 clarification; file it upstream as such.

@@ -222,12 +222,11 @@ class TestEveryServedNameIsClassified:
 class TestNamespacesStayDisjoint:
     """AdCP operation names carry no ``/``; JSON-RPC protocol methods do.
 
-    That shape IS the separation (security.mdx @ v3.1.1 :1045-1059) — the two
-    buckets are plain string lists in the same declaration, so nothing but the
-    shape keeps ``tasks/cancel`` out of ``required_for``. Graded over the WHOLE
-    classified vocabulary, which is what ``required_for`` is validated against;
-    ``tests/unit/test_request_signing_namespace_split.py`` grades the refusal
-    that vocabulary feeds.
+    That shape IS the separation (security.mdx @ v3.1.1 :1045-1059), and it is what makes
+    the one remaining namespace safe: a tenant declares AdCP buckets only
+    (``docs/design/request-signing-subset.md``), so a name reaching ``required_for`` must
+    be one this vocabulary classifies. An operation name that grew a ``/`` would be a
+    protocol method wearing an AdCP bucket, with no second bucket left to reject it.
     """
 
     def test_no_classified_operation_name_contains_a_slash(self):

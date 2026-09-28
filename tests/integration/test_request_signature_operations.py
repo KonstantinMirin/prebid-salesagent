@@ -17,9 +17,9 @@ operation IS the registry key, on every transport, by construction. So:
   reconciliation to grade — MCP registration, the A2A agent card and the ``/api/v1`` router
   are all GENERATED from ``TOOLS`` — and it is observed end to end, on all three legs, by
   ``tests/integration/test_harness_signed_dispatch.py``;
-* the namespace split (``protocol_methods_*`` against the AdCP buckets) moved, whole, to
-  ``tests/unit/test_request_signing_namespace_split.py``, which grades it at config time AND
-  through ``verify_inbound_signature`` itself;
+* the namespace split is not a rule any more: the ``protocol_methods_*`` buckets are
+  UNDECLARABLE (``docs/design/request-signing-subset.md``), so there is no second namespace
+  a name could be coerced into and nothing to reject at config time;
 * "an anonymous body cannot mint a Prometheus series with ``params.name``" is
   unrepresentable: a name no registry serves never reaches the boundary at all. The bound is
   graded structurally by
@@ -284,8 +284,8 @@ def _assert_verifier_looked() -> Iterator[None]:
     """The verifier ACTUALLY RAN and reached a verdict for an unsigned request.
 
     Absence-of-rejection alone is worthless as an acceptance signal — it is byte-identical to
-    a verifier that never looked, which is true whenever the kill switch is off, the operation
-    is in the ``none`` bucket, or the posture is ``warn``. So the control cases assert a
+    a verifier that never looked, which is true whenever the kill switch is off or the
+    operation is in the ``none`` bucket. So the control cases assert a
     POSITIVE observable instead: ``verify_inbound_signature`` increments
     ``adcp_request_unsigned_total`` through ``record_request_unsigned`` on exactly the path
     that decides an unsigned request may proceed. A boundary that returned early emits nothing
@@ -301,8 +301,8 @@ def _assert_verifier_looked() -> Iterator[None]:
     assert after > before, (
         "the verifier never recorded a verdict for this request: "
         f"adcp_request_unsigned_total did not move ({before} -> {after}). A non-rejection is "
-        "equally true of a boundary that returned early — kill switch off, 'none' bucket, or "
-        "'warn' posture — so this control proves nothing without the counter."
+        "equally true of a boundary that returned early — kill switch off, or 'none' bucket "
+        "— so this control proves nothing without the counter."
     )
 
 
@@ -592,7 +592,7 @@ class TestWebhookCredentialsOutrankTheBucket:
                 "exactly as it does under an explicitly declared posture",
             )
 
-    def test_a_signed_but_invalid_registration_under_warn_is_still_refused(self, integration_db):
+    def test_a_signed_but_invalid_registration_in_no_bucket_is_still_refused(self, integration_db):
         """The SIGNED half — the half every unsigned test above is blind to.
 
         ":1375 regardless of ``required_for`` membership" promotes the REQUEST, not one branch
@@ -602,13 +602,13 @@ class TestWebhookCredentialsOutrankTheBucket:
         the honest unsigned registration and admit the same registration carrying a junk
         ``Signature`` header.
 
-        THE BUCKET IS THE VARIABLE, and it has to be ``warn``. Under ``supported`` a
-        signed-but-invalid request is refused on its own merits, promoted or not, so the
-        promotion would be a no-op and this case would pass with it deleted — the very defect
-        it exists to catch. Under ``warn`` the two arms differ: promoted to ``required``, the
-        checklist failure is a refusal; un-promoted, ``warn`` SUPPRESSES that same failure and
-        the registration completes with its credentials handed over unverified. Refusal
-        becomes completion, on one variable.
+        THE BUCKET IS THE VARIABLE, and it has to be the narrowed ``none``. Under
+        ``supported`` a signed-but-invalid request is refused on its own merits, promoted or
+        not, so the promotion would be a no-op and this case would pass with it deleted — the
+        very defect it exists to catch. Under ``none`` the two arms differ: promoted to
+        ``required``, the checklist failure is a refusal; un-promoted, the request reaches no
+        checklist at all and the registration completes with its credentials handed over
+        unverified. Refusal becomes completion, on one variable.
 
         THE ORACLE IS THE CHALLENGE, never the status: un-promoted, this request is waved past
         the verifier and then refused by the APPLICATION, so any "not 200" oracle passes for
@@ -642,7 +642,7 @@ class TestWebhookCredentialsOutrankTheBucket:
             before = digest_failures()
 
             with (
-                _declared_posture(**bucketed_declaration("warn", _SYNC_ACCOUNTS_OPERATION)),
+                _declared_posture(**narrowed_none()),
                 counterparty_key(jwks),
             ):
                 response = client.post(_SYNC_ACCOUNTS_PATH, content=sent_body, headers=headers)
@@ -651,7 +651,7 @@ class TestWebhookCredentialsOutrankTheBucket:
                 response,
                 "the payload registers webhook credentials, so :1465 promotes this request to "
                 "required 'regardless of required_for membership' (:1375) — and a promoted request "
-                "is REFUSED on the checklist failure the warn bucket would otherwise suppress",
+                "is REFUSED on a checklist failure an un-promoted one would never have reached",
                 code=REQUEST_SIGNATURE_DIGEST_MISMATCH,
             )
 

@@ -114,3 +114,33 @@ def test_resigned_rows_use_the_vectors_own_keyid(vector_id: str) -> None:
     assert plan.resigned == keyid, (
         f"{vector_id}: the plan re-signs with {plan.resigned!r} but the vector's Signature-Input names keyid {keyid!r}"
     )
+
+
+def test_the_protocol_method_vector_asserts_a_capability_this_seller_refuses() -> None:
+    """``negative/028`` is inapplicable BY CONSTRUCTION, and that is graded rather than noted.
+
+    The vector supplies its own ``verifier_capability`` declaring
+    ``protocol_methods_required_for``, and this seller refuses to store that field at all
+    (``docs/design/request-signing-subset.md``). So there is no posture under which the
+    vector's request could be graded here — and the storyboard runner reaches the same
+    conclusion from the other side, skipping it for an agent that declares no
+    protocol-method bucket (``capability_profile_mismatch``).
+
+    Asserted rather than left in a ``notes`` string, because "inapplicable" and "silently
+    ungraded" look identical in a report. If the field ever became declarable again, this
+    fails and asks for the enforcement the vector expects — which is the state #2280
+    described.
+    """
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.schemas.capability_declarations import CapabilityDeclarations
+
+    capability = load_signing_vectors()["negative/028-unsigned-protocol-method-required"]["verifier_capability"]
+    assert "protocol_methods_required_for" in capability, (
+        "the vector no longer declares a protocol-method bucket, so this seller's refusal is not "
+        "what makes it inapplicable and the row needs re-triaging"
+    )
+
+    with pytest.raises(AdCPConfigurationError) as caught:
+        CapabilityDeclarations.from_tenant({"request_signing": capability})
+
+    assert caught.value.field == "capability_declarations.request_signing"

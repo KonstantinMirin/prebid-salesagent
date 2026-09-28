@@ -144,9 +144,8 @@ _CAPABILITIES_PATH = CAPABILITIES_ADCP_PATH
 
 #: The MCP JSON-RPC envelope naming the required operation. ``tools/call`` itself
 #: is NOT the name the verifier grades: ``invoke_tool`` builds the
-#: ``SignatureSubject`` from the REGISTRY KEY it dispatched on, so the AdCP
-#: operation namespace is the only one consulted and the JSON-RPC method name can
-#: never route this into ``protocol_methods_*``.
+#: ``SignatureSubject`` from the REGISTRY KEY it dispatched on, so the JSON-RPC method
+#: name reaches no bucket.
 _MCP_TOOLS_CALL_BODY = {
     "jsonrpc": "2.0",
     "id": "reqsig-e2e-1",

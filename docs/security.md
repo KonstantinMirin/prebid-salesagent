@@ -102,9 +102,10 @@ It is documented in full elsewhere; this section exists so a reader arriving her
 "how do agents authenticate to each other" is not left at a dead end.
 
 - **[Signing posture and key discovery](signing/posture-and-discovery.md)** — what we
-  advertise, the `supported_for` / `warn_for` / `required_for` enforcement ladder, and the
-  brand.json walk a counterparty uses to find our public key. Includes the documented
-  trap: a bare `.well-known/jwks.json` lookup is **not** the discovery mechanism.
+  advertise, the `supported_for` / `required_for` enforcement ladder, and the brand.json walk
+  a counterparty uses to find our public key. Includes the documented trap: a bare
+  `.well-known/jwks.json` lookup is **not** how you discover OUR key — and the converse, that
+  it is exactly where we read YOURS.
 - **[Verifying our outbound webhooks](signing/verifying-our-webhooks.md)** — the profile
   tag, which document answers which question, and the deprecated HMAC-SHA256 path with its
   AdCP 4.0 removal.

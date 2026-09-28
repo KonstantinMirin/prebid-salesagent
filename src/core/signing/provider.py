@@ -14,8 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from datetime import datetime
-from pathlib import Path
-from typing import NamedTuple, NoReturn, Protocol
+from typing import NamedTuple, NoReturn
 
 from adcp.signing import InMemorySigningProvider, load_private_key_pem, pem_to_adcp_jwk
 from adcp.signing.autosign import SigningConfig
@@ -42,8 +41,8 @@ def _refuse(
     Two audiences, split deliberately. ``AdCPSalesAgentError`` takes no
     ``message`` (ADR-010): buyer-facing text is ``CODE_TABLE``'s, and this
     module's diagnostics name exactly the categories ``transport-errors.mdx``
-    § Security Considerations forbids on the wire — file paths, env var names,
-    ``private_key_ref`` locators, OpenSSL decryption text. Those are what an
+    § Security Considerations forbids on the wire — tenant and key identifiers,
+    OpenSSL decryption text. Those are what an
     operator needs and what a buyer must not receive, so they go to the server
     log, and the typed ``details`` carries only short, safe tokens: which block
     was being resolved (``capability``), which configured value was refused
@@ -97,144 +96,20 @@ class _CachedKey(NamedTuple):
 #
 # Revocation converges two ways: a revoked row is refused BEFORE the cache is
 # consulted (immediate, because the row is always freshly read), and the TTL
-# bounds the other drift this cache can hide — a PEM rotated behind an unchanged
-# ``private_key_ref``, which the tripwire only sees on a cache miss.
+# bounds the other drift this cache can hide — a row's PEM rotated under an
+# unchanged ``kid``, which the tripwire only sees on a cache miss.
 _CACHE_TTL_SECONDS = 60.0
 _provider_cache: dict[tuple[str, str], _CachedKey] = {}
 
 
-class _RefResolver(Protocol):
-    def __call__(self, locator: str) -> bytes: ...
-
-
-def _read_file_ref(locator: str) -> bytes:
-    path = Path(locator)
-    if not path.is_file():
-        _refuse(
-            f"Signing key file {locator!r} does not exist or is not a file",
-            details=ConfigurationDetails(capability="private_key_ref", rejected_value="file"),
-        )
-    return path.read_bytes()
-
-
-def _read_env_ref(locator: str) -> bytes:
-    """The PEM held in the environment variable *locator* names.
-
-    Read through ``SigningSettings.secret_from_env`` rather than ``os.getenv`` directly:
-    ``src/core/config.py`` is this process's one environment reader and
-    ``ruff-environment.toml`` enforces it with an exemption list of three files that is
-    explicitly not an allowlist. The variable's NAME is operator data off the key row, so it
-    cannot be a settings field — which is exactly the bend that helper exists for, and it is
-    the same one ``key_passphrase`` already uses for the PEM passphrase.
-    """
-    from src.core.config import get_settings
-
-    value = get_settings().signing.secret_from_env(locator)
-    if not value:
-        _refuse(
-            f"Signing key env var {locator!r} is unset or empty",
-            details=ConfigurationDetails(capability="private_key_ref", rejected_value="env"),
-        )
-    return value
-
-
-# Every EXTERNAL scheme this process knows how to resolve — locator in, bytes
-# out. ``db:`` is deliberately absent: its material lives on the row the caller
-# already holds, so a resolver for it would need the row and widening this
-# protocol for every scheme to carry one is the wrong trade. It is handled in
-# :func:`_row_private_key_pem` instead, leaving this contract untouched.
-#
-# Which schemes a DEPLOYMENT will actually resolve is the agent-level
-# ``SigningSettings.allowed_key_ref_schemes`` gate below (``ADCP_SIGNING_`` env
-# prefix), so production can forbid ``file:`` without touching tenant rows. Not
-# to be confused with the SDK's ``SigningConfig`` imported above, which is the
-# per-call auto-signing bundle.
-_REF_RESOLVERS: dict[str, _RefResolver] = {
-    "file": _read_file_ref,
-    "env": _read_env_ref,
-}
-
-#: The scheme this agent MINTS: the private half is the encrypted PEM on the row
-#: itself, under a locator that is the row's own ``kid``.
-DB_SCHEME = "db"
-
-
-def parse_key_ref(private_key_ref: str) -> tuple[str, str]:
-    """Split a scheme-prefixed reference into ``(scheme, locator)``."""
-    scheme, separator, locator = private_key_ref.partition(":")
-    if not separator or not locator:
-        # The ref itself stays off the wire: an unprefixed one is most often a
-        # bare filesystem path, which is one of the forbidden categories.
-        _refuse(
-            f"private_key_ref {private_key_ref!r} is not scheme-prefixed "
-            "(expected 'db:<kid>', 'env:NAME' or 'file:/path')",
-            details=ConfigurationDetails(capability="private_key_ref"),
-        )
-    return scheme, locator
-
-
-def assert_ref_scheme_allowed(scheme: str) -> None:
-    """Refuse a ``private_key_ref`` scheme this deployment will not resolve.
-
-    Called on BOTH sides of the key's life — before minting
-    (``src.core.signing.keys``) and before resolving (below). Read-time-only
-    enforcement is what let a deployment persist and PUBLISH a row whose private
-    half the resolver would later refuse to load: a published key nobody can sign
-    with, detected only once counterparties start rejecting signatures.
-    """
-    from src.core.config import get_settings
-
-    allowed = get_settings().signing.key_ref_scheme_list
-    if scheme not in allowed:
-        _refuse(
-            f"private_key_ref scheme {scheme!r} is not permitted by this deployment (allowed: {allowed})",
-            details=ConfigurationDetails(
-                capability="private_key_ref",
-                rejected_value=scheme,
-                accepted_values=sorted(allowed),
-            ),
-        )
-
-
 def _row_private_key_pem(row: SigningKey) -> bytes:
-    """The PEM bytes behind *row*'s ``private_key_ref``.
+    """The encrypted PEM *row* carries.
 
-    ``db:`` is served from the row's own ciphertext; every other scheme goes
-    through :data:`_REF_RESOLVERS`. The locator of a ``db:`` ref is asserted to be
-    the row's ``kid``: that is what makes the ref self-describing in a log line,
-    and a mismatch means a ref was copied from one row onto another.
+    The database is where a signing key's private half lives — there is no other
+    place and no locator to consult. ``private_key_pem_encrypted`` is NOT NULL, so
+    a row that exists has material and the column type is the check.
     """
-    scheme, locator = parse_key_ref(row.private_key_ref)
-    assert_ref_scheme_allowed(scheme)
-
-    if scheme == DB_SCHEME:
-        if locator != row.kid:
-            _refuse(
-                f"Signing key {row.kid!r} for tenant {row.tenant_id!r} carries private_key_ref "
-                f"{row.private_key_ref!r}, which locates another row's key material",
-                details=ConfigurationDetails(
-                    tenant_id=row.tenant_id, capability="private_key_ref", rejected_value=row.kid
-                ),
-            )
-        if not row.private_key_pem_encrypted:
-            _refuse(
-                f"Signing key {row.kid!r} for tenant {row.tenant_id!r} references its own encrypted "
-                "PEM but the row carries none — the private half of a published key is missing",
-                details=ConfigurationDetails(tenant_id=row.tenant_id, capability="signing_key", rejected_value=row.kid),
-            )
-        return bytes(row.private_key_pem_encrypted)
-
-    resolver = _REF_RESOLVERS.get(scheme)
-    if resolver is None:
-        _refuse(
-            f"private_key_ref scheme {scheme!r} has no resolver",
-            details=ConfigurationDetails(
-                capability="private_key_ref",
-                rejected_value=scheme,
-                accepted_values=sorted([*_REF_RESOLVERS, DB_SCHEME]),
-            ),
-        )
-    return resolver(locator)
+    return bytes(row.private_key_pem_encrypted)
 
 
 def assert_pem_publishes_jwk(
@@ -253,8 +128,8 @@ def assert_pem_publishes_jwk(
     hand-rolled copy is how the canonical check ends up bypassed on one of them.
 
     Re-deriving the public JWK from the private half and comparing it to what the
-    row publishes is what catches key material that changed behind an unchanged
-    ``private_key_ref``: signatures every counterparty rejects, with nothing
+    row publishes is what catches key material that changed under an unchanged
+    ``kid``: signatures every counterparty rejects, with nothing
     wrong locally to look at. At MINT time the same call proves the KEK
     round-trips before anything is published.
 
@@ -290,7 +165,7 @@ def assert_pem_publishes_jwk(
     if derived_jwk != public_jwk:
         _refuse(
             f"Signing key {kid!r} for tenant {tenant_id!r} does not match the public JWK it "
-            "publishes — the key material behind its private_key_ref has changed. Signatures made with "
+            "publishes — the row's key material has changed. Signatures made with "
             "it would be rejected by every counterparty.",
             details=ConfigurationDetails(tenant_id=tenant_id, capability="signing_key", rejected_value=kid),
         )
@@ -413,8 +288,8 @@ def _resolve_signing_provider(
     callable from an ``_impl`` without reaching for ``get_db_session()``.
 
     Raises:
-        AdCPConfigurationError: no key resolves, the key is revoked, its
-            reference scheme is forbidden, or the tripwire fires.
+        AdCPConfigurationError: no key resolves, the key is revoked, or the
+            tripwire fires.
     """
     return _resolve_cached(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid).provider
 
@@ -437,8 +312,8 @@ def resolve_signing_material(
     provider's private attribute.
 
     Raises:
-        AdCPConfigurationError: no key resolves, the key is revoked, its
-            reference scheme is forbidden, or the tripwire fires.
+        AdCPConfigurationError: no key resolves, the key is revoked, or the
+            tripwire fires.
     """
     return _resolve_cached(repo, tenant_id=tenant_id, purpose=purpose, now=now, kid=kid).material
 

@@ -391,34 +391,53 @@ _HTTP_STATUS: Final[Mapping[ErrorCode, int]] = MappingProxyType(
 
 
 def _build_code_table() -> dict[ErrorCodeT, CodeEntry]:
-    """Assemble the published codes and this platform's own into one table.
+    """Assemble the SDK's codes and this platform's own into one table.
 
-    A message comes from the first source that has one: authored here, then the
-    pinned schema's own prose. Every code resolves to text, so no code can reach
-    a buyer with an empty message. A status comes from ``_HTTP_STATUS`` or, for
-    the published codes this seller never raises, from ``_UNCLASSIFIED_STATUS``.
+    TWO SOURCES, not three. A code is either the SDK's or this application's, and the
+    signature family is the SDK's: :class:`SignatureErrorCode` is generated from
+    ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE``, not authored here.
+
+    What the signature family lacks is METADATA. ``enums/error-code.json`` carries
+    ``enumMetadata`` for the codes it publishes, and at AdCP 3.1.1 it publishes none of
+    the 28 (adcontextprotocol/adcp#7642), so their recovery/suggestion/message are
+    transcribed in :mod:`src.core.errors.signature_codes` from the spec's own prose.
+    That is a different SOURCE OF METADATA, not a different source of codes — so it is
+    a fallback inside this loop rather than a third pass after it.
+
+    Why that matters at the next pin bump: adcontextprotocol/adcp#7647 publishes the
+    vocabulary upstream. When a version carrying it is pinned, ``published`` starts
+    answering for these codes and the transcription stops being consulted — one
+    conditional flips, and ``_SIGNATURE_METADATA`` becomes deletable. Under the old
+    three-pass build the same bump produced two entries for one code and let write
+    order decide, silently.
+
+    A message comes from the first source that has one: authored here, then the pinned
+    schema's own prose. Every code resolves to text, so no code can reach a buyer with
+    an empty message. A status comes from ``_HTTP_STATUS`` or, for the published codes
+    this seller never raises, from ``_UNCLASSIFIED_STATUS``.
     """
     published = _load_published_codes()
     table: dict[ErrorCodeT, CodeEntry] = {}
 
-    for code in ErrorCode:
-        spec = published[code.value]
+    for code in (*ErrorCode, *SignatureErrorCode):
+        spec = published.get(code.value)
+        if spec is None:
+            # The pin publishes no metadata for this code, so the transcription answers.
+            # A code in neither is a KeyError here, which is the right failure: it means
+            # the SDK grew a code nothing describes.
+            table[code] = SIGNATURE_CODE_TABLE[code]
+            continue
         table[code] = CodeEntry(
             recovery=spec.recovery,
             suggestion=spec.suggestion,
             message=(_AUTHORED_SPEC_MESSAGES.get(code) or _message_from_prose(spec.description)),
             status=_HTTP_STATUS.get(code, _UNCLASSIFIED_STATUS),
+            group=SIGNATURE_CODE_TABLE[code].group if code in SIGNATURE_CODE_TABLE else CodeGroup.GENERAL,
         )
 
     # Each member carries its own entry, so there is nothing to reconcile: a code
     # without one cannot be declared.
     table.update({member: member.entry for member in AppErrorCode})
-
-    # The signature taxonomy, generated from the SDK's own request-family table rather
-    # than authored here -- see src/core/errors/signature_codes.py for why these codes
-    # travel in the envelope at all.
-    for signature_code, signature_entry in SIGNATURE_CODE_TABLE.items():
-        table[signature_code] = signature_entry
 
     return table
 

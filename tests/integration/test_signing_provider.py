@@ -183,9 +183,6 @@ class TestPrivateKeyStorage:
             repo = signing_key_repo(env, tenant_id)
             row = provision_key(repo, tenant_id, "adcp-mode-key")
 
-            assert row.private_key_ref == "db:adcp-mode-key"
-            assert "PRIVATE KEY" not in row.private_key_ref
-
             # Encrypted under the deployment KEK, verbatim as the SDK returned it.
             assert bytes(row.private_key_pem_encrypted).startswith(_ENCRYPTED_PEM_HEADER)
 
@@ -220,15 +217,15 @@ class TestPrivateKeyStorage:
 class TestInitTripwire:
     """security.mdx:951 — assert the public key at signer init, fail loudly on drift."""
 
-    def test_mismatched_pem_behind_an_unchanged_ref_raises(self, integration_db):
-        """The row's stored JWK and the PEM the ref resolves to must agree.
+    def test_mismatched_pem_behind_an_unchanged_kid_raises(self, integration_db):
+        """The row's stored JWK and its stored PEM must agree.
 
         This is the silent failure the tripwire exists for: change the key
-        material behind an unchanged ``private_key_ref`` and every signature is
-        rejected by every counterparty, with nothing wrong locally to look at.
-        The ``db:`` scheme narrows the ways that can happen but does not remove
-        them — the ciphertext and the ``public_jwk`` are two columns on one row,
-        and a rotation that writes one without the other lands exactly here.
+        material under an unchanged ``kid`` and every signature is rejected by
+        every counterparty, with nothing wrong locally to look at. Keeping both
+        halves on one row narrows the ways that can happen but does not remove
+        them — the ciphertext and the ``public_jwk`` are two columns, and a
+        rotation that writes one without the other lands exactly here.
         """
         from src.core.exceptions import AdCPConfigurationError
         from tests.factories import SigningKeyFactory, TenantFactory
@@ -242,15 +239,12 @@ class TestInitTripwire:
             row_b = provision_key(repo, tenant_id, "adcp-real-b")
 
             # A row holding A's key material while publishing B's public half —
-            # exactly the state a half-completed rotation leaves behind. The ref
-            # is the row's OWN kid, so this is a genuine material/JWK mismatch and
-            # not the copied-ref case the locator check catches earlier.
+            # exactly the state a half-completed rotation leaves behind.
             SigningKeyFactory(
                 tenant=tenant,
                 kid="adcp-drifted",
                 alg=row_b.alg,
                 public_jwk={**row_b.public_jwk, "kid": "adcp-drifted"},
-                private_key_ref="db:adcp-drifted",
                 private_key_pem_encrypted=row_a.private_key_pem_encrypted,
             )
             now = just_after_provisioning()

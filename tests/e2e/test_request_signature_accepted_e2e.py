@@ -21,7 +21,7 @@ and the operation already resolved. The refusal is a typed
 is unchanged by that move; only the citations below are.
 
 **The whole point, stated first.** On the wire a checklist PASS is byte-identical to
-a pass-through. Five different routes produce the same 2xx without the checklist
+a pass-through. Four different routes produce the same 2xx without the checklist
 passing:
 
 1. ``config.verifier_enabled == False`` — ``verify_inbound_signature`` returns at
@@ -32,14 +32,12 @@ passing:
    ``supported: true`` half runs ``_strict_header_precheck`` first and a malformed
    header REJECTS there (``_handle_rejection`` :395), so that route yields 2xx only
    for a well-formed signature;
-3. ``bucket == "warn"`` — ``_handle_rejection`` logs and continues, so even an
-   INVALID signature yields 2xx;
-4. the composition rule (``_refuse_unsigned_if_required`` :277-311, security.mdx @
+3. the composition rule (``_refuse_unsigned_if_required`` :277-311, security.mdx @
    v3.1.1 :1268-1271) ALLOWS an authenticated-but-unsigned request, so a bearer-authed
    2xx proves nothing on its own — and ``get_adcp_capabilities`` is a PUBLIC registry
    row (``ToolSpec.requires_credential()`` is False for it), so an unsigned request
    with no bearer at all is served 200 anonymously unless the verifier refuses it;
-5. NEW on this architecture: ``signature_subject is None``. The REST handler passes
+4. NEW on this architecture: ``signature_subject is None``. The REST handler passes
    ``captured_exchange(request.scope)`` into ``serve``, and a scope the
    ``SignedExchangeCapture`` middleware did not capture — a path
    ``src.core.signing.capture.is_adcp_surface`` does not claim, a middleware dropped
@@ -75,8 +73,8 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
   (ii)  signed but TAMPERED — one byte flipped INSIDE the ``Signature`` value, with
         ``Signature-Input`` left well-formed so it is not a step-1 header rejection
         -> 401 ``request_signature_invalid``
-        [closes ``bucket == "warn"``, and proves the signature BYTES were graded
-        rather than the mere presence of the headers]
+        [proves the signature BYTES were graded rather than the mere presence of the
+        headers]
   (iii) signed correctly         -> 2xx + the metric delta
   (iv)  signed correctly, by a counterparty whose capabilities point at a brand.json
         that does NOT list it -> 401 ``request_signature_agent_not_in_brand_json``
@@ -448,9 +446,7 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
             )
 
             # ── Control (ii): correctly signed, then one byte flipped. ───────
-            # Closes bucket == "warn" (which swallows an invalid signature and
-            # continues to a 2xx) and proves the BYTES were graded, not the presence
-            # of the headers.
+            # Proves the BYTES were graded, not the presence of the headers.
             tampered = await client.post(
                 _ADCP_PATH,
                 content=_REQUEST_BODY,

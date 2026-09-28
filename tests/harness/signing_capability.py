@@ -243,8 +243,13 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     published_kids = [
         key.get("kid") for key in _counterparty_request(config, "GET", agents[0]["jwks_uri"]).json()["keys"]
     ]
-    assert published_kids == [key_id], (
-        f"the JWKS this capability's brand.json points at must publish EXACTLY {key_id!r} — that is the "
+    # CONTAINS, not EQUALS. A well-known JWKS path is one per ORIGIN, and every slot agent
+    # on this counterparty shares one origin — so the document carries every installed
+    # slot's key and the verifier selects by ``kid``, which is what a JWKS is for. Asserting
+    # the whole list made this capability's success depend on no OTHER capability existing,
+    # which is not a property the server has or should have.
+    assert key_id in published_kids, (
+        f"the JWKS this capability's brand.json points at must publish {key_id!r} — that is the "
         f"keyid the verifier will look up when it walks this agent url; it publishes {published_kids!r}"
     )
 

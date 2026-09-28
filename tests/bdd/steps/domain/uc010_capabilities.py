@@ -2427,7 +2427,7 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 # ══════════════════════════════════════════════════════════════════════════
 # Batch 7 (salesagent-jd6a): bounds / monotonicity boundary outlines
 #
-# request_signing subset/disjoint relations, adcp.idempotency replay_ttl_seconds
+# the request_signing subset relation, adcp.idempotency replay_ttl_seconds
 # bounds, VERSION_UNSUPPORTED details supported_versions bound, and the
 # identity.brand_json_url required_when rule. Each <expected> column drives a
 # concrete graded observable — a schema-valid success whose emitted block satisfies
@@ -2445,7 +2445,7 @@ def then_success_envelope_no_adcp_error(ctx: dict) -> None:
 
 
 #: monotonicity boundary rows -> the concrete declaration they name. The narrowing bucket
-#: (``supported_for`` / ``protocol_methods_supported_for``) is ALWAYS written explicitly,
+#: (``supported_for``) is ALWAYS written explicitly,
 #: because the rule keys on ``model_fields_set``: an absent superset means "wherever a
 #: signature appears" and is skipped, so a row that omitted it would not reject at all and
 #: would grade nothing while looking like it graded the subset rule.
@@ -2465,28 +2465,6 @@ _MONOTONICITY_BOUNDARY_POSTURES: dict[str, dict[str, Any]] = {
         "supported": True,
         "supported_for": ["create_media_buy"],
         "required_for": ["create_media_buy", "update_media_buy"],
-    },
-    "warn_for and required_for share zero operations": {
-        "supported": True,
-        "supported_for": ["create_media_buy", "update_media_buy"],
-        "required_for": ["create_media_buy"],
-        "warn_for": ["update_media_buy"],
-    },
-    "warn_for and required_for share exactly one operation": {
-        "supported": True,
-        "supported_for": ["create_media_buy", "update_media_buy"],
-        "required_for": ["create_media_buy"],
-        "warn_for": ["create_media_buy"],
-    },
-    "protocol_methods_required_for ⊆ protocol_methods_supported_for, equal sets": {
-        "supported": True,
-        "protocol_methods_supported_for": ["tasks/cancel"],
-        "protocol_methods_required_for": ["tasks/cancel"],
-    },
-    "protocol_methods_required_for adds one method not in protocol_methods_supported_for": {
-        "supported": True,
-        "protocol_methods_supported_for": ["tasks/cancel"],
-        "protocol_methods_required_for": ["tasks/cancel", "tasks/get"],
     },
 }
 
@@ -2589,37 +2567,22 @@ def given_identity_signing_posture(ctx: dict, boundary_point: str) -> None:
     _declare_signing_identity(ctx, posture, identity_state)
 
 
-# ── Thens: request_signing subset/disjoint relations ─────────────────────
+# ── Thens: the request_signing subset relation ───────────────────────────
 
 
 def _assert_request_signing_relations(ctx: dict) -> None:
-    """The emitted request_signing posture MUST satisfy every x-adcp-validation relation:
-    required_for ⊆ supported_for; warn_for disjoint from required_for AND ⊆ supported_for;
-    protocol_methods_required_for ⊆ protocol_methods_supported_for."""
+    """The emitted posture MUST satisfy the x-adcp-validation relation it can carry:
+    ``required_for`` ⊆ ``supported_for``, over the two buckets this seller implements."""
     posture = wire_dict(ctx, "request_signing")
-
-    def _members(key: str) -> set:
-        return set(posture.get(key) or [])
-
-    supported = _members("supported_for")
-    required = _members("required_for")
-    warn = _members("warn_for")
-    pm_supported = _members("protocol_methods_supported_for")
-    pm_required = _members("protocol_methods_required_for")
+    supported = set(posture.get("supported_for") or [])
+    required = set(posture.get("required_for") or [])
     assert required <= supported, f"required_for {sorted(required)} ⊄ supported_for {sorted(supported)}"
-    assert warn.isdisjoint(required), (
-        f"warn_for {sorted(warn)} shares operations with required_for {sorted(required)} (must be disjoint)"
-    )
-    assert warn <= supported, f"warn_for {sorted(warn)} ⊄ supported_for {sorted(supported)}"
-    assert pm_required <= pm_supported, (
-        f"protocol_methods_required_for {sorted(pm_required)} ⊄ protocol_methods_supported_for {sorted(pm_supported)}"
-    )
 
 
-@then(parsers.parse("request_signing should hold the subset and disjoint relations for a {expected} posture"))
+@then(parsers.parse("request_signing should hold the subset relation for a {expected} posture"))
 def then_request_signing_relations(ctx: dict, expected: str) -> None:
-    """valid → schema-valid success whose request_signing satisfies every subset/disjoint
-    relation; invalid → the builder rejects the relation-violating config with
+    """valid → schema-valid success whose request_signing satisfies the subset relation;
+    invalid → the builder rejects the relation-violating config with
     CONFIGURATION_ERROR (recovery terminal) rather than emitting the violating posture.
 
     The invalid branch names ``request_signing`` in ``errors[0].field`` (#1291 D1). Without
@@ -2956,7 +2919,7 @@ def given_request_signing_buckets(ctx: dict, fragment: str) -> None:
     The ``request_signing.`` prefix is OPTIONAL per bucket, because the feature writes it
     on the first bucket only (``request_signing.supported_for=[…] required_for=[…]``). A
     prefix-requiring pattern silently kept just the first bucket and the declaration
-    reached the wire with empty ``required_for``/``warn_for`` — caught by the
+    reached the wire with an empty ``required_for`` — caught by the
     grades-nothing guards in the Thens below, which is what they are for.
     """
     ctx["env"].declare_signing(request_signing=_parse_request_signing_buckets(fragment))
@@ -3033,42 +2996,12 @@ def then_covers_content_digest(ctx: dict, expected: str) -> None:
     )
 
 
-@then('request_signing.required_for should contain only AdCP tool names without "/"')
-def then_required_for_has_no_protocol_methods(ctx: dict) -> None:
-    """The namespace split, on the wire.
-
-    security.mdx :1045-1059 — ``required_for`` carries AdCP operation names only; a name
-    containing ``/`` is a JSON-RPC protocol method and belongs in the
-    ``protocol_methods_*`` bucket, and the spec requires a CONFIGURATION-time rejection
-    rather than coercion. Non-vacuous because the Given declares both namespaces at once:
-    a builder that merged them would put ``tasks/cancel`` here.
-    """
-    _assert_capabilities_success(ctx)
-    required = _request_signing_bucket(ctx, "required_for")
-    assert required, "request_signing.required_for is empty, so the no-slash rule grades nothing"
-    slashed = sorted(name for name in required if "/" in name)
-    assert not slashed, (
-        f"request_signing.required_for names JSON-RPC protocol methods {slashed}; they belong in "
-        "protocol_methods_required_for (security.mdx :1045-1059)"
-    )
-
-
-@then(parsers.parse('request_signing.protocol_methods_required_for should match pattern "{pattern}"'))
-def then_protocol_methods_match_pattern(ctx: dict, pattern: str) -> None:
-    """Every emitted protocol method matches the schema's own item pattern."""
-    _assert_capabilities_success(ctx)
-    methods = sorted(_request_signing_bucket(ctx, "protocol_methods_required_for"))
-    assert methods, "request_signing.protocol_methods_required_for is empty, so the pattern grades nothing"
-    bad = [method for method in methods if not re.match(pattern, method)]
-    assert not bad, f"protocol_methods_required_for entries {bad} do not match {pattern!r}"
-
-
 @then(parsers.parse("request_signing.{subset_field} should be a subset of request_signing.{superset_field}"))
 def then_request_signing_bucket_subset(ctx: dict, subset_field: str, superset_field: str) -> None:
-    """``x-adcp-validation.subset_of`` on the EMITTED buckets, either namespace.
+    """``x-adcp-validation.subset_of`` on the EMITTED buckets.
 
-    One step for all four subset assertions in the two scenarios — they differ only in the
-    pair of bucket names, which is exactly what a parametrized step is for.
+    Parametrized on the pair of bucket names rather than written per relation, so the
+    assertion states which buckets it read.
     """
     _assert_capabilities_success(ctx)
     subset = _request_signing_bucket(ctx, subset_field)
@@ -3077,23 +3010,8 @@ def then_request_signing_bucket_subset(ctx: dict, subset_field: str, superset_fi
     extra = sorted(subset - superset)
     assert not extra, (
         f"request_signing.{subset_field} names {extra}, which request_signing.{superset_field} "
-        f"({sorted(superset)}) does not: an operation cannot be required or warned on without "
-        "being supported"
+        f"({sorted(superset)}) does not: an operation cannot be required without being supported"
     )
-
-
-@then("request_signing.warn_for should be disjoint from request_signing.required_for")
-def then_warn_disjoint_from_required(ctx: dict) -> None:
-    """An operation is graded in shadow mode or rejected outright, never both."""
-    _assert_capabilities_success(ctx)
-    warn = _request_signing_bucket(ctx, "warn_for")
-    required = _request_signing_bucket(ctx, "required_for")
-    assert warn and required, (
-        f"warn_for ({sorted(warn)}) and required_for ({sorted(required)}) must both be non-empty "
-        "for the disjointness relation to grade anything"
-    )
-    both = sorted(warn & required)
-    assert not both, f"request_signing.warn_for and required_for both name {both} (must be disjoint)"
 
 
 # ── Thens: the emitted webhook_signing block ──────────────────────────────

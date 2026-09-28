@@ -98,8 +98,8 @@ Why these tests are not vacuous
 
 Every wire test runs the REAL SDK checklist over a REAL Ed25519 signature and
 observes the REAL 401/200 plus ``WWW-Authenticate``; the bucket is pinned to
-``supported`` in every case, because a rejection inside ``warn_for`` is
-swallowed to a 200 by ``_handle_rejection`` and would grade nothing (R8). The
+``supported`` in every case, because a request in the narrowed ``none`` bucket
+reaches no checklist and would grade nothing (R8). The
 only thing ever substituted is the HTTP fetch of the counterparty's list —
 through the SDK's own documented ``fetcher=`` seam on a real
 ``CachingRevocationChecker``, or not at all (the SSRF tests dial for real).
@@ -377,10 +377,9 @@ def _caller(keypair: tuple[Any, dict[str, Any]]) -> Iterator[_SignedCaller]:
 def _step_nine(*, origin: str, jwks: dict[str, Any], **config: Any) -> Iterator[None]:
     """Everything step 9 is decided under: bucket, operator origin, posture.
 
-    The bucket is ``supported`` in every test and never ``warn``: a rejection in
-    a ``warn_for`` operation is swallowed to a 200 by ``_handle_rejection``
-    (``request_verifier_middleware.py:366-377``), so a revocation test declared
-    into the warn bucket would grade nothing at all (R8).
+    The bucket is ``supported`` in every test: a request in the narrowed ``none``
+    bucket never reaches step 9 at all — ``_verify_signed`` runs the pre-check and
+    stops — so a revocation test declared there would grade nothing (R8).
     """
     with (
         _declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),

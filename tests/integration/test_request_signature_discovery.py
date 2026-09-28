@@ -54,9 +54,9 @@ one (the entry exists and the brand did not delegate to it), and it is ungraded 
 Spec grounding
 --------------
 AdCP 3.1.1 via ``adcp==6.6.0``. Codes: ``adcp/signing/errors.py`` — the
-``# brand.json discovery chain (ADCP #3690)`` and ``# identity.key_origins consistency
-check (ADCP #3690)`` blocks. The step numbering is ``security.mdx`` @ v3.1.1
-"Verifier checklist (requests)".
+``# brand.json discovery chain (ADCP #3690)`` block. The step numbering is ``security.mdx``
+@ v3.1.1 "Verifier checklist (requests)", whose step 6 is where this seller's one key
+location comes from (``docs/design/request-signing-subset.md``).
 
 Covers: salesagent-hksr (the ordering invariant, and the discovery-code family reachable
 through our OWN resolution path).
@@ -67,14 +67,16 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
+from unittest.mock import patch
 
 import pytest
+from adcp.signing.agent_resolver import AgentResolution
 from adcp.signing.errors import (
     REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE,
     REQUEST_SIGNATURE_HEADER_MALFORMED,
-    REQUEST_SIGNATURE_KEY_ORIGIN_MISSING,
 )
 
+from src.core.signing import verifier
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.signing import (
     CAPABILITIES_ADCP_PATH,
@@ -86,7 +88,6 @@ from tests.helpers.signing import (
     SIGNING_TENANT_ID,
     UNRESOLVABLE_AGENT_URL,
     bucketed_declaration,
-    counterparty_key,
     declared_posture,
     keypair_for,
     rejection_code,
@@ -127,6 +128,33 @@ def _cold_discovery_state() -> Iterator[None]:
         yield
     finally:
         _clear()
+
+
+#: The counterparty's own origin, which is the ONE place its keys may live.
+_WELL_KNOWN_ORIGIN = "https://buyer.example.com"
+
+#: A location the spec's step 6 permits and this seller does not: same brand, same keys,
+#: a different origin. A ``keys.`` subdomain rather than a different path, because the rule
+#: is about the ORIGIN the keys were fetched from.
+_KEYS_ELSEWHERE = "https://keys.buyer.example.com"
+
+
+def _resolution_at(jwks: dict[str, Any], origin: str) -> AgentResolution:
+    """What ``resolve_agent`` returns for a counterparty publishing *jwks* at *origin*.
+
+    Everything except the location is held constant, so the two tests below differ in one
+    value: the keyset is the real one, the brand.json is the same document, and the agent is
+    :data:`COUNTERPARTY_AGENT_URL` either way.
+    """
+    jwks_uri = f"{origin}{verifier.WELL_KNOWN_JWKS_PATH}"
+    return AgentResolution(
+        agent_url=COUNTERPARTY_AGENT_URL,
+        brand_json_url=f"{_WELL_KNOWN_ORIGIN}/.well-known/brand.json",
+        agent_entry={"type": "buying", "url": COUNTERPARTY_AGENT_URL, "jwks_uri": jwks_uri},
+        jwks_uri=jwks_uri,
+        jwks=jwks,
+        fetched_at=0.0,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -217,42 +245,42 @@ class TestDiscoveryFailureDefersToTheChecklist:
 
 
 # --------------------------------------------------------------------------
-# 2. A second discovery branch, reached through our own resolution path
+# 2. The one key location, enforced on the resolution path
 # --------------------------------------------------------------------------
 
 
 @pytest.mark.requires_db
-class TestKeyOriginMissingIsGraded:
-    """A resolution advertising no ``key_origins`` must be REFUSED, not silently trusted."""
+class TestKeysAwayFromTheWellKnownLocationAreRefused:
+    """A counterparty that publishes its keys elsewhere is REFUSED, not verified.
 
-    def test_a_resolution_without_key_origins_is_rejected_rather_than_skipping_the_check(
+    This seller reads a counterparty's keys from ``<agent origin>/.well-known/jwks.json``
+    and nowhere else (``docs/design/request-signing-subset.md``). security.mdx @ v3.1.1
+    step 6 makes that the default and permits ``agents[].jwks_uri`` to name somewhere else;
+    declining the second half is what removes the need for the key-origin consistency check
+    the spec couples two cache TTLs to protect.
+
+    Which makes the gate load-bearing rather than cosmetic: with no origin pin, a
+    counterparty-chosen key location would be admitted on the counterparty's word alone.
+    """
+
+    def test_a_valid_signature_over_a_key_published_elsewhere_is_still_refused(
         self, integration_db, counterparty_keypair
     ):
-        """The ``or {}`` in ``verifier._run_verifier``'s ``VerifyOptions``, graded on the wire.
+        """The ONLY thing wrong is WHERE the keys live, and that alone is a 401.
 
-        ``VerifyOptions(expected_key_origins=None)`` does not mean "no declaration" to the
-        SDK — it means "the adopter did not thread the map through", and
-        ``_maybe_check_key_origin`` responds by emitting a ``UserWarning`` and RETURNING.
-        The spec's step-7 key-origin consistency check — the defense against the
-        shared-tenancy spoof where an attacker's brand.json lists a victim's ``jwks_uri``
-        while the victim's capabilities advertise a different origin — is then silently
-        OFF, and the request is ACCEPTED. The SDK says so in the warning itself: "pass an
-        empty dict if the operator advertises no map and you want the missing-declaration
-        rejection to fire."
+        The resolution carries the counterparty's REAL public JWKS, so every later checklist
+        step would pass: the signature verifies against exactly this key. What it does not
+        carry is the one location this seller reads — the keys sit on a ``keys.`` subdomain,
+        which is a different origin — so the resolution is never admitted and the request is
+        answered ``request_signature_jwks_untrusted``, naming the trust decision rather than
+        blaming the key.
 
-        So the counterparty here resolves fine, its signature verifies on its merits, and
-        the ONLY thing wrong is that its capabilities document declared no
-        ``identity.key_origins`` map. Correct behavior is a 401
-        ``request_signature_key_origin_missing``. The failure mode this guards is a 200
-        with a warning in a log nobody reads, which is a silent-acceptance bug and the
-        reason this is graded on the WIRE rather than on ``VerifyOptions`` alone.
-
-        Built with ``model_copy`` off the resolution the production constructor produced,
-        so everything except the one field under test is exactly what production builds.
-        (Dropping ``key_origin`` from the registry entry instead would not reach this:
-        ``build_registry_resolution`` requires the key and raises ``KeyError``.)
+        ``resolve_agent`` is the patch target, and it is the legitimate one: it dials three
+        HTTP hops at a counterparty that deliberately cannot resolve (RFC 6761 ``.test``).
+        Everything downstream of it — the gate, the failure cooldown, the deferred step-7
+        resolver, the wire rendering — is production.
         """
-        from src.core.signing import verifier
+        from adcp.signing.errors import REQUEST_SIGNATURE_JWKS_UNTRUSTED
 
         private_key, jwks = counterparty_keypair
         with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
@@ -260,28 +288,51 @@ class TestKeyOriginMissingIsGraded:
             client = env.get_rest_client()
             headers, body = signed_probe(private_key, token)
 
-            with _cold_discovery_state(), counterparty_key(jwks):
-                verifier.AGENT_RESOLUTION_CACHE[COUNTERPARTY_AGENT_URL] = verifier.AGENT_RESOLUTION_CACHE[
-                    COUNTERPARTY_AGENT_URL
-                ].model_copy(update={"key_origins": None})
+            with (
+                _cold_discovery_state(),
+                declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
+                patch.object(verifier, "resolve_agent", return_value=_resolution_at(jwks, _KEYS_ELSEWHERE)),
+            ):
+                response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
 
-                with (
-                    declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
-                    verifier_spy() as calls,
-                ):
-                    response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
-
-        assert rejection_code(response) == REQUEST_SIGNATURE_KEY_ORIGIN_MISSING, (
-            "a counterparty whose capabilities document declares no identity.key_origins map "
-            "must be refused with request_signature_key_origin_missing. Passing None to "
-            "VerifyOptions makes the SDK WARN and skip the spec's step-7 consistency check, so "
-            "the request is accepted with the shared-tenancy defense silently off; the map must "
-            f"be passed as an empty dict instead. Got status {response.status_code} with "
+        assert rejection_code(response) == REQUEST_SIGNATURE_JWKS_UNTRUSTED, (
+            "a counterparty whose brand.json points its JWKS away from "
+            f"<agent origin>{verifier.WELL_KNOWN_JWKS_PATH} must be refused with "
+            "request_signature_jwks_untrusted. The keyset here is the real one and the signature "
+            "over it is valid, so anything else means the location was taken on the counterparty's "
+            f"word. Got status {response.status_code} with "
             f"WWW-Authenticate={response.headers.get('WWW-Authenticate')!r}"
         )
+
+    def test_the_well_known_location_at_that_same_origin_is_accepted(self, integration_db, counterparty_keypair):
+        """The control: one variable apart, and it verifies.
+
+        Same counterparty, same keyset, same signature — the JWKS is at the well-known path
+        of the agent's own origin. Without this row the test above is equally explained by a
+        seller that refuses every walked counterparty, and the gate would be graded by
+        nothing.
+        """
+        private_key, jwks = counterparty_keypair
+        with BareIntegrationEnv(tenant_id=SIGNING_TENANT_ID, principal_id=SIGNING_PRINCIPAL_ID) as env:
+            token = seed_principal(env, agent_url=COUNTERPARTY_AGENT_URL)
+            client = env.get_rest_client()
+            headers, body = signed_probe(private_key, token)
+
+            with (
+                _cold_discovery_state(),
+                declared_posture(**bucketed_declaration("supported", *LADDER_OPERATIONS)),
+                patch.object(verifier, "resolve_agent", return_value=_resolution_at(jwks, _WELL_KNOWN_ORIGIN)),
+                verifier_spy() as calls,
+            ):
+                response = client.post(CAPABILITIES_ADCP_PATH, content=body, headers=headers)
+
+        assert rejection_code(response) is None, (
+            "the same signature over the same keyset, published at the one location this seller "
+            f"reads, must be accepted; got {rejection_code(response)!r} (status {response.status_code})"
+        )
         assert len(calls) == 1, f"the signed POST must reach the SDK verifier exactly once; it ran {len(calls)}x"
-        assert calls[0]["options"].expected_key_origins == {}, (
-            "the absent map must reach VerifyOptions as an EMPTY DICT, which is what makes the "
-            "check run and reject; None is what makes it skip with a warning. Got "
-            f"{calls[0]['options'].expected_key_origins!r}"
+        assert calls[0]["options"].expected_key_origins is None, (
+            "no key-origin map may reach VerifyOptions: with one possible key location there is no "
+            "origin to pin, and passing a map would put a counterparty document back in the "
+            f"decision. Got {calls[0]['options'].expected_key_origins!r}"
         )

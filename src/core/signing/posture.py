@@ -2,23 +2,20 @@
 
 #1291 B1, re-homed onto #1721's request boundary.
 
-``request_signing`` is a *behavioral* declaration: ``covers_content_digest`` and the six
+``request_signing`` is a *behavioral* declaration: ``covers_content_digest`` and the
 operation buckets are tenant-declared but they change what the VERIFIER does. So the
 block the agent advertises on ``get_adcp_capabilities`` and the capability the verifier
 enforces must come from one object; two sources is a correctness bug that advertises a
 posture we do not enforce (or vice versa).
 
-:class:`RequestSigningPosture` is that object. It extends the AdCP library type — all
-eight schema properties, no re-declaration (CLAUDE.md Pattern #1) — and adds the two
-derivations the verifier needs:
+:class:`RequestSigningPosture` is that object. It extends the AdCP library type — no
+re-declaration (CLAUDE.md Pattern #1) — and adds the two derivations the verifier needs:
 
-* :meth:`RequestSigningPosture.bucket_for` — the schema's precedence rule
-  ``required_for > warn_for > supported_for``, which is OURS to implement because
-  ``adcp.signing.verifier.VerifierCapability`` carries only 4 of the 8 properties and
-  only 2 of the 6 buckets: ``warn_for`` and all three ``protocol_methods_*`` are
-  SILENTLY DROPPED if handed to the SDK.
-* :meth:`RequestSigningPosture.to_verifier_capability` — the lossy projection onto the
-  4 fields the SDK does carry, kept in one place so the loss is explicit.
+* :meth:`RequestSigningPosture.bucket_for` — the schema's ``required_for >
+  supported_for`` precedence, over the TWO buckets a tenant can declare
+  (``docs/design/request-signing-subset.md``);
+* :meth:`RequestSigningPosture.to_verifier_capability` — the projection onto the 4 fields
+  ``VerifierCapability`` carries, kept in one place.
 
 :func:`posture_for_tenant` is the single READER of the tenant declaration, and it now
 takes the loaded :class:`~src.core.tenant_context.TenantContext` the resolver already
@@ -50,7 +47,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Ide
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import KeyOrigins
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
-from pydantic import AnyUrl, ConfigDict, RootModel, model_validator
+from pydantic import AnyUrl, ConfigDict, model_validator
 
 from src.core.enum_helpers import enum_value
 
@@ -62,47 +59,26 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, keeps this module free of D
 
 logger = logging.getLogger(__name__)
 
-#: The four outcomes the verifier branches on. ``none`` means "signatures are ignored
+#: The three outcomes the verifier branches on. ``none`` means "signatures are ignored
 #: (requests are bearer-authenticated only)" — the schema's own words for
 #: ``supported: false``.
-PostureBucket = Literal["required", "warn", "supported", "none"]
+PostureBucket = Literal["required", "supported", "none"]
 
 
-def _name(item: Any) -> str:
-    """The wire string a single declared bucket entry compares against.
-
-    The three ``protocol_methods_*`` buckets are typed as generated ``RootModel[str]``
-    wrappers (``ProtocolMethodsRequiredForItem`` and siblings, each carrying the
-    ``^[a-z][a-z0-9_]*/[a-z][a-z0-9_]*$`` pattern), while ``required_for`` / ``warn_for``
-    / ``supported_for`` are plain strings. The wrappers are NOT enums, so ``enum_value``
-    falls through to ``str(v)`` and yields ``"root='tasks/cancel'"`` — a frozenset that
-    matches no wire method, i.e. silently zero enforcement for any tenant declaring a
-    protocol-method bucket.
-
-    The unwrap is typed on :class:`pydantic.RootModel` rather than a defensive attribute
-    probe, which is both wrong (it would swallow a genuine shape change) and forbidden by
-    ``test_architecture_no_defensive_rootmodel``.
-    """
-    if isinstance(item, RootModel):
-        return str(item.root)
-    return enum_value(item)
-
-
-#: One declared bucket as it arrives off the wire. Named rather than left as ``Any`` so
-#: the call sites state what they accept — and the members are NOT uniform, which is
-#: exactly what :func:`_name` exists to flatten.
-type DeclaredBucket = Iterable[str | Enum | RootModel[str]] | None
+#: One declared bucket as it arrives off the wire, named rather than left as ``Any`` so
+#: the call sites state what they accept.
+type DeclaredBucket = Iterable[str | Enum] | None
 
 
 def bucket_names(items: DeclaredBucket) -> frozenset[str]:
     """Wire-format names from a declared bucket, ``None`` -> empty."""
     if not items:
         return frozenset()
-    return frozenset(_name(item) for item in items)
+    return frozenset(enum_value(item) for item in items)
 
 
-def _bucket_for(name: str, required: Any, warn: Any, supported: Any) -> PostureBucket:
-    """Apply the schema's ``required_for > warn_for > supported_for`` precedence.
+def _bucket_for(name: str, required: Any, supported: Any) -> PostureBucket:
+    """Apply the schema's ``required_for > supported_for`` precedence.
 
     ``supported_for`` defaulting to ``None`` (rather than ``[]``) is load-bearing and is
     NOT the same as an empty list: an agent that declares ``supported: true`` and nothing
@@ -113,8 +89,6 @@ def _bucket_for(name: str, required: Any, warn: Any, supported: Any) -> PostureB
     """
     if name in bucket_names(required):
         return "required"
-    if name in bucket_names(warn):
-        return "warn"
     if supported is None:
         return "supported"
     return "supported" if name in bucket_names(supported) else "none"
@@ -127,55 +101,36 @@ class RequestSigningPosture(LibraryRequestSigning):
     call and the outcome branch. A posture that could change between those reads would let
     a request be admitted under one rule and graded under another.
 
-    THE NAMESPACE SPLIT IS NOT ENFORCED HERE. It was, on the pre-merge branch, as a
-    ``model_validator`` testing every AdCP-bucket entry for a ``/``. Two things were wrong
-    with that. It decided tool-ness by looking for a slash, which is a second definition of
-    a question ``src.core.tools.registry`` owns; and a type-level validator cannot express
-    the other half of the rule (an AdCP tool name appearing in a ``protocol_methods_*``
-    bucket) in a way an operator can act on, because by the time a validator runs pydantic
-    has already refused the string with a regex message. Both halves now live in one place,
-    ``src.core.schemas.capability_declarations._reject_mixed_namespaces``, which runs on the
-    RAW declaration and is the config-time rejection security.mdx @ v3.1.1 :1053 requires.
+    FOUR of the library type's eight properties are UNDECLARABLE here, refused by
+    ``src.core.schemas.capability_declarations._reject_undeclarable_posture_fields``:
+    ``warn_for`` and the ``protocol_methods_*`` trio. They are inherited rather than
+    removed, because the parent is the pinned schema (CLAUDE.md Pattern #1) and a
+    redeclaration would be the drift that pattern exists to prevent -- so what stops them
+    reaching the wire is that no tenant can store one. See
+    ``docs/design/request-signing-subset.md`` for what each cost.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    def bucket_for(self, operation: str, protocol_method: str | None = None) -> PostureBucket:
-        """Which enforcement bucket *operation* (or *protocol_method*) falls in.
+    def bucket_for(self, operation: str) -> PostureBucket:
+        """Which enforcement bucket the AdCP *operation* this request invoked falls in.
 
-        THE cross-namespace rule, security.mdx @ v3.1.1 :1053:
-
-            Verifiers MUST NOT cross-namespace match: a ``protocol_methods_required_for``
-            membership MUST NOT be satisfied by a body whose JSON-RPC ``method`` is
-            ``tools/call`` (even if ``params.name`` happens to equal a listed method
-            string) ... The two buckets are matched against disjoint envelope fields.
-
-        Which is why the two arguments are mutually exclusive and the caller supplies the
-        ENVELOPE's method, never the resolved tool name. ``protocol_method=None`` says "the
-        envelope named an AdCP operation", and then the ``protocol_methods_*`` trio is not
-        consulted at all — so a tenant declaring ``protocol_methods_required_for:
-        ["tasks/cancel"]`` cannot have it satisfied by an operation that happens to carry
-        the same string. The shortcut of grading the resolved tool name against both tries
-        looks more informative and is a conformance failure.
+        ONE namespace and TWO buckets, which is every bucket a tenant can declare. The
+        cross-namespace rule (security.mdx @ v3.1.1 :1053 -- "Verifiers MUST NOT
+        cross-namespace match ... the two buckets are matched against disjoint envelope
+        fields") is therefore kept by there being no second namespace to cross into,
+        rather than by a check.
         """
         if not self.supported:
             return "none"
-        if protocol_method is not None:
-            return _bucket_for(
-                protocol_method,
-                self.protocol_methods_required_for,
-                self.protocol_methods_warn_for,
-                self.protocol_methods_supported_for,
-            )
-        return _bucket_for(operation, self.required_for, self.warn_for, self.supported_for)
+        return _bucket_for(operation, self.required_for, self.supported_for)
 
     def to_verifier_capability(self) -> VerifierCapability:
         """Project onto the 4 fields ``VerifierCapability`` carries.
 
-        Everything else — ``warn_for`` and the three ``protocol_methods_*`` buckets —
-        stays HERE, in :meth:`bucket_for`. The SDK reads only ``required_for`` (for its
-        absent-header pre-check) and ``covers_content_digest``; handing it the other
-        buckets would look like configuration and do nothing.
+        Nothing is lost in the projection now: the SDK reads ``required_for`` (for its
+        absent-header pre-check), ``supported_for`` and ``covers_content_digest``, and this
+        seller declares no bucket the SDK would drop.
         """
         return VerifierCapability(
             supported=self.supported,
@@ -276,50 +231,52 @@ def posture_for_tenant(tenant: TenantContext | None) -> RequestSigningPosture:
     try:
         declarations = CapabilityDeclarations.from_tenant(tenant.capability_declarations)
     except AdCPSalesAgentError as exc:
+        # ``exc.details``, NOT ``str(exc)``. After ADR-010 the message is CODE_TABLE's
+        # sentence for CONFIGURATION_ERROR -- "Configuration error" -- which names no block
+        # and no axis, so the one log line that reports a SILENTLY UNENFORCED posture said
+        # nothing an operator could act on. The typed details carry the block.
+        #
+        # It still fails open, and that is the narrower of two bad answers rather than a
+        # good one: promoting an unreadable declaration to ``required`` would turn a config
+        # typo into a 401 on every AdCP surface. The real fix is that an unreadable
+        # declaration should not be storable -- validate on write, so this parse cannot
+        # fail on the request path at all. Tracked separately; this line only makes the
+        # current behaviour diagnosable.
         logger.warning(
             "Tenant %r has an unreadable capability declaration, so its request_signing posture "
-            "cannot be resolved and nothing is enforced for it: %s",
+            "cannot be resolved and NOTHING IS ENFORCED for it: %s",
             tenant.tenant_id,
-            exc,
+            exc.details,
         )
         return UNSUPPORTED_POSTURE
     return posture_from_declarations(declarations)
 
 
 def request_signing_buckets_declared(posture: RequestSigningPosture) -> bool:
-    """Whether *posture* names any operation or protocol method in any bucket.
+    """Whether *posture* names any operation in either bucket.
 
     The pin's ``key_origins`` ``purpose_anchoring`` constraint and the
     ``identity.brand_json_url`` ``required_when`` trigger list: a declared bucket
     "requires non-empty ``request_signing.supported_for``/``required_for``/
-    ``protocol_methods_supported_for``/``protocol_methods_required_for``". ``warn_for`` is
-    deliberately NOT in that list — the pin's, not an omission here.
+    ``protocol_methods_supported_for``/``protocol_methods_required_for``". The last two
+    are undeclarable here, so the trigger reads the two that can carry a name.
     """
-    return any(
-        bucket_names(bucket)
-        for bucket in (
-            posture.supported_for,
-            posture.required_for,
-            posture.protocol_methods_supported_for,
-            posture.protocol_methods_required_for,
-        )
-    )
+    return any(bucket_names(bucket) for bucket in (posture.supported_for, posture.required_for))
 
 
 def requires_trust_root(posture: RequestSigningPosture, *, webhook_signing_supported: bool) -> bool:
     """Whether the pinned ``identity.brand_json_url`` ``required_when`` fires.
 
     ``#/properties/identity/properties/brand_json_url/x-adcp-validation.required_when``
-    lists SIX triggers: the four ``request_signing`` buckets of
-    :func:`request_signing_buckets_declared`, ``webhook_signing.supported === true``,
-    and any ``identity.key_origins`` subfield. The third is handled at its own layer —
-    we only ever emit ``key_origins`` where anchoring already holds, so it cannot
-    self-trigger.
+    lists SIX triggers: the four ``request_signing`` buckets, ``webhook_signing.supported
+    === true``, and any ``identity.key_origins`` subfield. Two of the buckets are
+    undeclarable here, so :func:`request_signing_buckets_declared` reads the other two;
+    the ``key_origins`` trigger is handled at its own layer — we only ever emit the map
+    where anchoring already holds, so it cannot self-trigger.
 
     What is NOT a trigger, and this is what makes the conservative default shippable:
-    ``request_signing.supported == true`` on its own, and ``warn_for`` in either
-    namespace. A keyless tenant with no trust root can therefore declare
-    ``supported: true`` with empty buckets and stay conformant.
+    ``request_signing.supported == true`` on its own. A keyless tenant with no trust root
+    can therefore declare ``supported: true`` with empty buckets and stay conformant.
     """
     return webhook_signing_supported or request_signing_buckets_declared(posture)
 
@@ -625,22 +582,14 @@ def _private_half_is_resolvable(repo: SigningKeyRepository, row: SigningKey, *, 
     (``_provider_cache``) — cache success, never errors, so a later-fixed KEK is retried
     on the next call rather than pinned as permanently unresolvable.
 
-    ``env:`` / ``file:`` refs are resolved by the process's own environment or mount at
-    use time and carry no KEK of ours, so their resolvability is not knowable here —
-    they are taken at face value, exactly as before.
-
-    Matched on the scheme PREFIX rather than through ``parse_key_ref``, which RAISES on a
-    malformed reference. This function answers "what may this tenant honestly declare",
-    and it is called on the capabilities read path and on the admin setup checklist:
-    turning a malformed row into an exception there would fail discovery for a fault that
-    belongs to resolution, which reports it loudly at the point of use.
+    Every row is checked, because every row's private half is the ciphertext on it:
+    there is no other place a key can live and so no row whose resolvability is
+    unknowable from here.
     """
     from src.core.config import get_settings
     from src.core.exceptions import AdCPConfigurationError
-    from src.core.signing.provider import DB_SCHEME, resolve_signing_material
+    from src.core.signing.provider import resolve_signing_material
 
-    if not (row.private_key_ref or "").startswith(f"{DB_SCHEME}:"):
-        return True
     if get_settings().signing.key_passphrase is None:
         logger.warning(
             "Tenant %s holds ACTIVE signing key %s whose private half is encrypted under the "

@@ -83,12 +83,15 @@ HEALTH_PATH = "/health"
 #: hence its own cache entry, hence no interference — across xdist workers, across
 #: suites, and with the fixed pair above.
 #:
-#: One JWKS store, keyed; one document shape, parametrized. The slot is opaque to
-#: this service: whoever PUTs a keyset at ``/_control/jwks/<slot>`` gets an agent
-#: at ``/agent/slot/<slot>`` whose published brand.json lists exactly that url.
+#: A slot is an AGENT, never a KEY LOCATION. The server reads a counterparty's keys
+#: from ``<agent origin>/.well-known/jwks.json`` and nowhere else
+#: (``docs/design/request-signing-subset.md``), and a well-known path is one per
+#: ORIGIN — so every slot's brand.json points at that one document and the keysets
+#: installed at each slot are served there together, selected by ``kid`` exactly as
+#: the SDK selects within any JWKS. What the slot still isolates is what it was for:
+#: the agent url, and therefore the cache entry.
 SLOT_AGENT_PREFIX = "/agent/slot/"
 SLOT_BRAND_PREFIX = "/.well-known/brand-slot/"
-SLOT_JWKS_PREFIX = "/.well-known/jwks-slot/"
 SLOT_CONTROL_PREFIX = "/_control/jwks/"
 
 
@@ -105,9 +108,10 @@ def slot_control_path(slot: str) -> str:
 class _JwksStore:
     """The keysets this origin publishes, installed at runtime and read concurrently.
 
-    Keyed by SLOT, with ``""`` the shared slot the fixed ``/agent/listed`` pair
-    serves. One store rather than two so an unknown slot is a MISS (404) rather
-    than the shared keyset wearing another caller's clothes.
+    Keyed by SLOT for BOOKKEEPING — ``has(slot)`` is how an agent document answers 404
+    for a slot nobody installed — while :meth:`published` is the single document every
+    walk fetches: the union of every installed keyset, because this origin serves one
+    JWKS at one well-known path and callers are told apart by ``kid``.
     """
 
     def __init__(self) -> None:
@@ -118,9 +122,19 @@ class _JwksStore:
         with self._lock:
             self._jwks[slot] = jwks
 
-    def get(self, slot: str = "") -> dict | None:
+    def has(self, slot: str) -> bool:
         with self._lock:
-            return self._jwks.get(slot)
+            return slot in self._jwks
+
+    def published(self) -> dict:
+        """Every installed key, in one keyset.
+
+        A caller's key is visible to any walk that happens after it installed, which is
+        the same guarantee the per-slot documents gave: the server's cache pins whatever
+        this answers at the moment that agent url is first walked.
+        """
+        with self._lock:
+            return {"keys": [key for jwks in self._jwks.values() for key in jwks.get("keys", [])]}
 
 
 def _capabilities(brand_json_url: str) -> dict:
@@ -131,20 +145,12 @@ def _capabilities(brand_json_url: str) -> dict:
     through an ``adagents.json``, which is a different mechanism the resolver
     does not consult here.
 
-    ``identity.key_origins`` is NOT optional for a counterparty that signs.
-    ``_extract_key_origins`` returns ``None`` when the map is absent, which is a
-    legitimate posture for a deployment that never signs — but the verifier then
-    refuses an actually-signed request with
-    ``request_signature_key_origin_missing`` at step 7. Learned in-network: the
-    first version of this origin published only ``brand_json_url``, and the
-    tampered-signature leg came back with that code instead of
-    ``request_signature_invalid``, i.e. the request never reached the signature
-    check at all. An origin that omits this is not "slightly incomplete" — it
-    cannot be a signing counterparty.
-
-    The value is the scheme+host+port the trust root is served from, keyed by
-    PURPOSE (``request_signing``); the verifier pins the resolved JWKS against it
-    so a key discovered from one origin cannot be swapped for one from another.
+    ``identity.key_origins`` is published because a conformant counterparty may, and
+    keeping it here is what makes the server's indifference to it observable: it reads
+    keys from ``<agent origin>/.well-known/jwks.json`` and consults no map
+    (``docs/design/request-signing-subset.md``). A run that started depending on this
+    field again would keep passing here and fail against a counterparty that omits it,
+    which is the regression the presence of an IGNORED value catches.
     """
     return {
         "adcp_version": "3.1.1",
@@ -155,25 +161,20 @@ def _capabilities(brand_json_url: str) -> dict:
     }
 
 
-def _brand_json(listed_agent_url: str | None, jwks_uri: str | None = None) -> dict:
+def _brand_json(listed_agent_url: str | None) -> dict:
     """A brand.json listing zero or one agent.
 
-    ``jwks_uri`` on the agent entry is what hop 3 fetches. When
-    *listed_agent_url* is ``None`` the document is well-formed and simply does
-    not list the caller — which is the point of the unlisted sibling: the refusal
+    ``jwks_uri`` on the agent entry is what hop 3 fetches, and it is the well-known
+    path at this origin for every agent here — the server reads keys from nowhere
+    else. When *listed_agent_url* is ``None`` the document is well-formed and simply
+    does not list the caller — which is the point of the unlisted sibling: the refusal
     must come from the AUTHORIZATION decision, not from a malformed or missing
     document (those would fail earlier, in a different hop, and prove something
     else).
     """
     agents = []
     if listed_agent_url is not None:
-        agents.append(
-            {
-                "url": listed_agent_url,
-                "jwks_uri": jwks_uri or f"{PUBLIC_ORIGIN}{JWKS_PATH}",
-                "type": "buying",
-            }
-        )
+        agents.append({"url": listed_agent_url, "jwks_uri": f"{PUBLIC_ORIGIN}{JWKS_PATH}", "type": "buying"})
     return {"agents": agents}
 
 
@@ -195,29 +196,29 @@ class _CounterpartyHandler(JsonRequestHandler):
         elif path == BRAND_UNLISTED_PATH:
             self._write_json(200, _brand_json(None))
         elif path == JWKS_PATH:
-            self._write_json(200, store.get() or {"keys": []})
+            self._write_json(200, store.published())
         elif path.startswith(SLOT_AGENT_PREFIX):
             slot = path[len(SLOT_AGENT_PREFIX) :]
-            self._write_json(200, _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json"))
+            self._slot_document(store, slot, _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json"))
         elif path.startswith(SLOT_BRAND_PREFIX) and path.endswith(".json"):
             slot = path[len(SLOT_BRAND_PREFIX) : -len(".json")]
-            self._write_json(
-                200,
-                _brand_json(slot_agent_url(slot), jwks_uri=f"{PUBLIC_ORIGIN}{SLOT_JWKS_PREFIX}{slot}.json"),
-            )
-        elif path.startswith(SLOT_JWKS_PREFIX) and path.endswith(".json"):
-            slot = path[len(SLOT_JWKS_PREFIX) : -len(".json")]
-            jwks = store.get(slot)
-            if jwks is None:
-                # 404 rather than an empty keyset: an empty ``{"keys": []}`` is a
-                # WELL-FORMED answer, so the walk would succeed and the signature
-                # would then fail as an unresolvable keyid — blaming the verifier
-                # for a caller that never installed anything at this slot.
-                self._write_json(404, {"error": f"no keyset installed for slot {slot!r}"})
-            else:
-                self._write_json(200, jwks)
+            self._slot_document(store, slot, _brand_json(slot_agent_url(slot)))
         else:
             self._write_json(404, {"error": f"no counterparty document at {self.path!r}"})
+
+    def _slot_document(self, store: _JwksStore, slot: str, document: dict) -> None:
+        """Answer one of a slot's two documents, or 404 if nothing is installed for it.
+
+        The 404 is where the per-slot JWKS used to answer it, and it is why the check is
+        worth keeping: an unknown slot answering a well-formed document would let the walk
+        SUCCEED and the signature then fail as an unresolvable keyid — blaming the verifier
+        for a caller that never installed anything. Refusing at hop 1 (and hop 2) names the
+        slot instead.
+        """
+        if not store.has(slot):
+            self._write_json(404, {"error": f"no keyset installed for slot {slot!r}"})
+            return
+        self._write_json(200, document)
 
     def do_PUT(self) -> None:  # noqa: N802 - stdlib handler name
         path = self.path.split("?", 1)[0].rstrip("/")

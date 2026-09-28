@@ -664,10 +664,12 @@ TRANSPLANT: dict[str, VectorPlan] = {
         credential=Credential.NONE,
         route_named=False,
         operation="",
-        notes="Runs VERBATIM — POST /mcp is inside ADCP_SURFACE_PREFIXES, so the capture runs. "
-        "JSON-RPC tasks/cancel names the PROTOCOL-METHOD namespace and is not a TOOLS key, so "
-        "invoke_tool never dispatches it and operation is ''. verify_inbound_signature asks "
-        "bucket_for for the AdCP-operation namespace ONLY and is never handed a protocol_method "
-        "(verifier.py:259-262), so protocol_methods_required_for is currently ungraded here.",
+        notes="INAPPLICABLE BY CONSTRUCTION, and graded as such by "
+        "tests/unit/test_signing_conformance_plan.py. The vector supplies its own "
+        "verifier_capability declaring protocol_methods_required_for, which this seller REFUSES to "
+        "store (docs/design/request-signing-subset.md) — so there is no posture under which this "
+        "request could be graded, and the storyboard runner skips the vector for an agent that "
+        "declares no protocol-method bucket. Also unroutable: JSON-RPC tasks/cancel is not a TOOLS "
+        "key, so invoke_tool never dispatches it and operation is ''.",
     ),
 }

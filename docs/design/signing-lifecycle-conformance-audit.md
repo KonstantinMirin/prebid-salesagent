@@ -2,8 +2,15 @@
 
 **Scope.** Does this tree's inbound request-signing implementation still satisfy the
 normative claims its own documentation makes? Worktree
-`/srv/ws/salesagent/a3-9421-on-1721`, branch `feat/rfc9421-on-1721`, at
-`64c2cfe13` plus the three uncommitted `tests/harness` files in the working tree.
+`/srv/ws/salesagent/a3-9421-on-1721`, branch `feat/rfc9421-on-1721`.
+
+**Kept current.** The verdicts were first driven at `64c2cfe13`, and every row below
+describes the tree as it stands: where a later change moved a subject, the row moved with it
+rather than being left pointing at code that no longer exists. The subset narrowings
+(`docs/design/request-signing-subset.md`) moved SD-8, SD-9 and the `protocol_methods_*` entry
+under "what I could not verify"; the paragraph on over-cap bodies moved with the `warn`
+bucket's deletion.
+
 Yardsticks, in the priority the audit was given: `docs/development/request-lifecycle.md`,
 then `docs/development/patterns-reference.md` / `structural-guards.md` /
 `docs/security/outbound-egress.md` / `engineering-standards.md`, then
@@ -171,9 +178,9 @@ document or commit that authorises it. An uncitable SUPERSEDED is reported as VI
 | SD-5 | ":115 the buffer must be lossless on **every** exit" | TRUE | P-CAPTURE(b) — six exits, two named mutations redden it |
 | SD-6 | ":120 the SPECIFIC signature code must survive byte-for-byte into the envelope and reach `_challenge_for_code`" | TRUE | P-CHALLENGE (2 codes × 3 transports) + mutation |
 | SD-7 | ":138 the `posture_for_tenant(None)` case "should become unreachable, since the resolver always has a tenant by then"" | **VIOLATED** | `resolved_identity.py:437` yields `None` for a Host naming no tenant; `posture.py:267-269` documents the case as reachable |
-| SD-8 | ":182 the namespace split has one home: the registry is the authority, enforced at config load | TRUE | `tests/unit/test_request_signing_namespace_split.py` — 11 passed |
-| SD-9 | ":204 a `protocol_methods_required_for` membership must not be satisfied by a `tools/call` body | TRUE | `verifier.py:256-274` never passes `protocol_method`; there is no value at that boundary that could be matched |
-| SD-10 | ":212 the protocol-method namespace is not a gap: all four `pushNotificationConfig` methods are declined | TRUE | P-BOUNDARY(2) region — `adcp_a2a_server.py:433,441,449,457` all `raise PushNotificationNotSupportedError()` |
+| SD-8 | ":182 the namespace split has one home | SUPERSEDED | there is no split to home: the `protocol_methods_*` buckets are undeclarable, so a stored declaration names one namespace. `capability_declarations._reject_undeclarable_posture_fields` refuses the other; `test_capability_declarations_signing_relations.py` grades the refusal |
+| SD-9 | ":204 a `protocol_methods_required_for` membership must not be satisfied by a `tools/call` body | TRUE, structurally | `RequestSigningPosture.bucket_for` takes an AdCP operation and reads the AdCP buckets; there is no protocol-method argument to cross-match, and no posture that could carry one |
+| SD-10 | ":212 the protocol-method namespace is not a gap: all four `pushNotificationConfig` methods are declined | TRUE | P-BOUNDARY(2) region — `adcp_a2a_server.py` `on_get_task_push_notification_config` / `on_create_task_push_notification_config` / `on_list_task_push_notification_configs` / `on_delete_task_push_notification_config` all `raise PushNotificationNotSupportedError()`, and `_refuse_envelope_push_config` refuses the `message/send` envelope field |
 | SD-11 | ":243 one request, one call — batching is refused | TRUE | `adcp_a2a_server.py:234-241` raises `InvalidRequestError` on a second skill |
 | SD-12 | Decision 3 — `CODE_TABLE` is the sole authority for buyer-facing text | TRUE | P-CHALLENGE bodies carry `CODE_TABLE` strings verbatim |
 | SD-13 | Decision 4 "Landed" — none of `Transport.IMPL`, `ImplDispatcher`, `synthesized_error_envelope` exists | TRUE | `grep -rn` → only comments recording the deletion |
@@ -637,13 +644,13 @@ next audit does not file it again; it is a real ordering divergence from the spe
 test artefact.
 
 **Over-cap bodies are refused as `request_signature_header_malformed` at step 1.**
-`src/core/signing/verifier.py:336-345`. Because step-1 refusals bypass the warn arm
-(`_handle_rejection`, `is_precheck`), a signed request whose body exceeds
-`max_signed_body_bytes` (default 10 MiB) is refused with 401 even in a `warn_for` bucket,
-where warn semantics say a signed-but-invalid request completes. The spec has no code for
-"body too large to digest", so some invention is unavoidable; the choice of a step-1 code
-carries the warn-bypass with it. Not filed as a defect — the cap is 10 MiB and the reasoning
-is written at the site — but worth a sentence there saying the warn bypass is intended.
+`_verify_signed`, `src/core/signing/verifier.py`. Because a step-1 refusal is the one outcome
+the narrowed `none` bucket does not wave through (`_handle_rejection`, `is_precheck`), a signed
+request whose body exceeds `max_signed_body_bytes` (default 10 MiB) is refused with 401 even
+for an operation the seller grades in no bucket. The spec has no code for "body too large to
+digest", so some invention is unavoidable; the choice of a step-1 code carries that
+pass-through bypass with it. Not filed as a defect — the cap is 10 MiB and the reasoning is
+written at the site.
 
 ## What I could not verify, and why
 
@@ -665,10 +672,12 @@ is written at the site — but worth a sentence there saying the warn bypass is 
 - **That the declined A2A push-config route stays declined.** Deleting the second credential
   location took the only dispatcher that could send `CreateTaskPushNotificationConfig` with
   it. The five declines are asserted by reading the code, not by driving the route.
-- **`protocol_methods_*` enforcement.** Ungraded by construction and already recorded as such
-  in `src/core/signing/verifier.py:37-59`. I confirmed the premise that makes it acceptable
-  (all four `pushNotificationConfig/*` handlers decline, the namespace has zero registry rows)
-  but did not attempt to reach `bucket_for` with a protocol method, because no code path does.
+- **`protocol_methods_*` enforcement.** Since this audit the buckets have become
+  UNDECLARABLE, so there is nothing left to enforce or to leave unenforced: the premise this
+  audit confirmed (all four `pushNotificationConfig/*` handlers decline, the namespace has zero
+  registry rows) is what made removing the declaration surface safe. See
+  `docs/design/request-signing-subset.md` §2 and `src/core/signing/verifier.py`'s
+  "What the boundary cannot see" section.
 - **Cryptographic correctness of the checklist itself.** Out of scope by Pattern #9 — the SDK
   owns it. I verified only that nothing under `src/core/signing/` re-derives address
   validation, IP pinning or signature verification, and that the one vendored component

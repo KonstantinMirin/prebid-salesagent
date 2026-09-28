@@ -77,13 +77,6 @@ REQUEST_SIGNING = "request-signing"
 #: middleware keys :data:`AGENT_RESOLUTION_CACHE` on exactly this value.
 COUNTERPARTY_AGENT_URL = "https://buyer.example.com/a2a"
 
-#: The origin the counterparty's ``brand.json`` is served from — what
-#: ``expected_key_origins`` is checked against at verifier step 7.
-COUNTERPARTY_KEY_ORIGIN = "https://buyer.example.com"
-
-#: Where that brand.json points for request-signing keys.
-COUNTERPARTY_JWKS_URI = "https://buyer.example.com/.well-known/jwks.json"
-
 #: The ``keyid`` the counterparty signs under.
 COUNTERPARTY_KID = "buyer-request-signing-1"
 
@@ -93,8 +86,6 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 #: resolution paths must be distinguishable at the assertion, so a test can say WHICH
 #: one supplied the key rather than only that some key was found.
 REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
-REGISTRY_KEY_ORIGIN = "https://test-kit.example.com"
-REGISTRY_JWKS_URI = "https://test-kit.example.com/.well-known/jwks.json"
 
 #: An ``agent_url`` whose brand.json walk FAILS, deterministically and with no network.
 #:
@@ -229,26 +220,43 @@ def provision_key(
 ) -> Any:
     """Mint a keypair through production and return the persisted SigningKey row.
 
-    Returns the ROW, not the whole ``ProvisionedKey``: a ``db:`` mint hands back no
-    PEM (the ciphertext is on the row), which is the only shape this helper is used
-    for.
+    ``provision_signing_key`` returns only the ``kid`` since salesagent-9misv — a
+    ``str`` cannot carry private key material, and it hands out no ORM row whose
+    lifetime the caller then has to reason about. This helper re-reads the row
+    through the repository, which is a STRONGER read than the old pass-through:
+    what callers assert on is what the database holds, not the instance the mint
+    happened to construct.
     """
     from src.core.signing.keys import provision_signing_key
 
-    return provision_signing_key(
+    minted_kid = provision_signing_key(
         repo,
         tenant_id=tenant_id,
         alg=alg,
         kid=kid,
         purpose=purpose,
-    ).row
+    )
+    row = repo.get_by_kid(minted_kid)
+    assert row is not None, (
+        f"provision_signing_key reported kid {minted_kid!r} but the repository cannot read it back -- "
+        "a mint that reports a key the database does not hold is the failure this helper must not hide"
+    )
+    return row
+
+
+#: The test deployment's KEK, and the ONE spelling of it. ``SigningKeyFactory``
+#: encrypts the PEM it stores under this same value, so a factory-built row and a
+#: production-minted row open under the same configured passphrase — a second copy
+#: of this literal is how those two drift into "resolvable" and "not".
+TEST_KEK_VARIABLE = "SALESAGENT_TEST_SIGNING_KEK"
+TEST_KEK_PASSPHRASE = b"correct-horse-battery-staple"
 
 
 @contextmanager
-def deployment_kek(monkeypatch: Any, name: str = "SALESAGENT_TEST_SIGNING_KEK") -> Iterator[None]:
+def deployment_kek(monkeypatch: Any, name: str = TEST_KEK_VARIABLE) -> Iterator[None]:
     """Configure the one deployment-wide KEK for the duration of a test.
 
-    ``db:`` minting REFUSES without it — there is no plaintext fallback — so every
+    Minting REFUSES without it — there is no plaintext fallback — so every
     suite that provisions a key through production needs this. ``key_passphrase``
     is resolved from the environment on every use
     (``SigningSettings.secret_from_env``, deliberately uncached), but the
@@ -263,7 +271,7 @@ def deployment_kek(monkeypatch: Any, name: str = "SALESAGENT_TEST_SIGNING_KEK") 
     rename to ``_settings``.
     """
     monkeypatch.setenv("ADCP_SIGNING_KEY_PASSPHRASE_ENV", name)
-    monkeypatch.setenv(name, "correct-horse-battery-staple")
+    monkeypatch.setenv(name, TEST_KEK_PASSPHRASE.decode())
     monkeypatch.setattr("src.core.config._settings", None)
     yield
 
@@ -434,8 +442,8 @@ def declared_posture(*, tenant_id: str = SIGNING_TENANT_ID, **declaration: Any) 
     """Store *declaration* as *tenant_id*'s REAL ``request_signing`` declaration.
 
     Takes the schema's own property names (``supported``,
-    ``covers_content_digest``, ``required_for``, ``warn_for``, ``supported_for``,
-    ``protocol_methods_*``) and writes them onto ``tenants.capability_declarations``
+    ``covers_content_digest``, ``required_for``, ``supported_for``) and writes them
+    onto ``tenants.capability_declarations``
     through the repository, exactly as an operator would. Production then does all
     the rest for real: ``CapabilityDeclarations.from_tenant`` parses and
     relation-checks the document, ``posture_for_tenant`` reads it,
@@ -716,23 +724,20 @@ def counterparty_key(
     jwks: dict[str, Any],
     *,
     agent_url: str = COUNTERPARTY_AGENT_URL,
-    jwks_uri: str = COUNTERPARTY_JWKS_URI,
-    key_origin: str = COUNTERPARTY_KEY_ORIGIN,
 ) -> Iterator[None]:
     """Seed the whole ``AgentResolution`` for *agent_url* into the middleware cache.
 
-    The three keyword arguments default to the shared counterparty
-    (:data:`COUNTERPARTY_AGENT_URL` and friends) that every signing suite signs
-    as; pass them only when a test needs a SECOND counterparty, which is the
-    thing the defaults make visible at the call site.
+    The keyword argument defaults to the shared counterparty
+    (:data:`COUNTERPARTY_AGENT_URL`) that every signing suite signs as; pass it only
+    when a test needs a SECOND counterparty, which is the thing the default makes
+    visible at the call site.
 
     The middleware keys its resolver registry on the counterparty's ``agent_url``
     (read from the Principal row — security.mdx forbids taking it from a header, a
-    body field or any self-assertion), and the cached object must carry ``jwks``
-    AND ``jwks_uri`` AND ``key_origins`` so ``expected_key_origins`` reaches
-    ``VerifyOptions`` and the step-7 key-origin check stays ON. Seeding the
-    resolution is what lets these tests run the REAL verifier against real keys
-    without a live counterparty — nothing about the outcome is faked.
+    body field or any self-assertion), and the cached object carries the ``jwks``
+    the checklist resolves keys from. Seeding the resolution is what lets these tests
+    run the REAL verifier against real keys without a live counterparty — nothing
+    about the outcome is faked.
 
     Built via ``build_registry_resolution`` (#1291 B4) — the SAME production
     constructor the configured counterparty registry uses — rather than a
@@ -754,9 +759,7 @@ def counterparty_key(
     """
     from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_registry_resolution
 
-    resolution = build_registry_resolution(
-        {"agent_url": agent_url, "jwks_uri": jwks_uri, "key_origin": key_origin, "jwks": jwks}
-    )
+    resolution = build_registry_resolution({"agent_url": agent_url, "jwks": jwks})
     with seeded_cache_entry(AGENT_RESOLUTION_CACHE, agent_url, resolution):
         yield
 
@@ -765,18 +768,16 @@ def registry_entry(
     jwks: dict[str, Any],
     *,
     agent_url: str = REGISTRY_AGENT_URL,
-    jwks_uri: str = REGISTRY_JWKS_URI,
-    key_origin: str = REGISTRY_KEY_ORIGIN,
 ) -> dict[str, Any]:
     """One entry of the configured counterparty registry (#1291 B4).
 
-    The same four values :func:`counterparty_key` seeds into the cache, because the
+    The same two values :func:`counterparty_key` seeds into the cache, because the
     registry's whole job is to produce the SAME ``AgentResolution`` shape from config
     instead of from the brand.json walk. Keeping one vocabulary for both is what lets
     a test swap the resolution SOURCE while changing nothing else — and what makes it
     visible if the two shapes ever drift apart.
     """
-    return {"agent_url": agent_url, "jwks_uri": jwks_uri, "key_origin": key_origin, "jwks": jwks}
+    return {"agent_url": agent_url, "jwks": jwks}
 
 
 @contextmanager
@@ -1185,8 +1186,7 @@ def bucketed_declaration(bucket: str, *operations: str) -> dict[str, Any]:
     (``get-adcp-capabilities-response.json`` x-adcp-validation: "an operation
     can't be required without being supported"), so the required declaration lists
     both — which is also what makes the precedence rule
-    ``required_for > warn_for > supported_for`` load-bearing rather than
-    decorative.
+    ``required_for > supported_for`` load-bearing rather than decorative.
 
     Naming the operations EXPLICITLY (rather than leaving a bucket unnarrowed) is
     what puts every other operation in the ``none`` bucket, and so what keeps the
@@ -1195,8 +1195,6 @@ def bucketed_declaration(bucket: str, *operations: str) -> dict[str, Any]:
     declaration: dict[str, Any] = {"supported": True, "supported_for": list(operations)}
     if bucket == "required":
         declaration["required_for"] = list(operations)
-    elif bucket == "warn":
-        declaration["warn_for"] = list(operations)
     elif bucket != "supported":
         raise ValueError(f"unknown bucket {bucket!r}")
     return declaration
@@ -1266,10 +1264,11 @@ MALFORMED_SIGNATURE_HEADERS = {
 #: between them (``_handle_rejection``, ``src/core/signing/verifier.py``):
 #:
 #: * ``"malformed"`` — :data:`MALFORMED_SIGNATURE_HEADERS`, a step-1 PRE-CHECK failure
-#:   that rejects in EVERY bucket, warn included (security.mdx :1226/:1271);
+#:   that rejects in EVERY bucket, the narrowed ``none`` included (security.mdx
+#:   :1226/:1271);
 #: * ``"tampered"`` — a cryptographically real signature over a DIFFERENT rendering of
 #:   the same request, so the verifier reaches ``request_signature_digest_mismatch`` on
-#:   its merits inside the checklist, where ``warn_for`` does suppress it (:1273).
+#:   its merits inside the checklist, which the narrowed ``none`` bucket waves through.
 #:
 #: Collapsing the two would make the (code, step) predicate lane .1 turns on
 #: unrepresentable from a scenario.
@@ -1317,8 +1316,8 @@ def tampered_signing_body(raw: bytes) -> bytes:
     the verifier gets past step 1 on its merits and fails at
     ``request_signature_digest_mismatch`` inside the checklist. That is what makes
     it a checklist failure rather than a header rejection — the distinction the
-    (code, step) predicate in ``_handle_rejection`` turns on, and the reason
-    ``warn_for`` suppresses this one and not ``"malformed"``.
+    (code, step) predicate in ``_handle_rejection`` turns on, and the reason the
+    narrowed ``none`` bucket waves this one through and not ``"malformed"``.
 
     A TRAILING SPACE rather than an edited field: ``content-digest`` covers the raw
     bytes, so any byte-level difference produces the mismatch, and appending one

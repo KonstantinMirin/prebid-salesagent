@@ -85,13 +85,11 @@ STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
 #:
 #: A name, not a destination. Nothing dials it — a registry entry short-circuits the
 #: three-hop walk and carries its JWKS inline (``build_registry_resolution``) — but it is
-#: what ``identity.key_origins.request_signing`` is byte-matched against at checklist step
-#: 7, and what ``get_principal_by_agent_url`` looks the established signer up by.
+#: what ``get_principal_by_agent_url`` looks the established signer up by, and the origin
+#: the key location is derived from.
 #:
 #: Under ``.test``, which RFC 6761 §6.2 reserves precisely so it can never resolve.
-COUNTERPARTY_KEY_ORIGIN = "https://runner.adcp-conformance.test"
-COUNTERPARTY_AGENT_URL = f"{COUNTERPARTY_KEY_ORIGIN}/a2a"
-COUNTERPARTY_JWKS_URI = f"{COUNTERPARTY_KEY_ORIGIN}/.well-known/jwks.json"
+COUNTERPARTY_AGENT_URL = "https://runner.adcp-conformance.test/a2a"
 
 #: The principal the runner's verified signature establishes. It holds a token because the
 #: schema requires one; nothing ever presents it, and it is deliberately NOT the CI token —
@@ -105,8 +103,9 @@ COUNTERPARTY_PRINCIPAL_TOKEN = "storyboard-conformance-runner-token-not-presente
 #: The corpus is uniform about this: 26 of the 28 negative vectors declare
 #: ``required_for: ["create_media_buy"]``. The two that do not are ``negative/027``
 #: (``required_for: []`` — it grades the webhook-credential escalation, which fires
-#: REGARDLESS of the bucket) and ``negative/028`` (the protocol-method namespace, which
-#: this agent declines; see docs/design/signing-vs-request-boundary.md). So a single-entry
+#: REGARDLESS of the bucket) and ``negative/028``, whose ``verifier_capability`` declares a
+#: protocol-method bucket this agent refuses to store at all, so the runner skips it as a
+#: capability-profile mismatch (docs/design/request-signing-subset.md). So a single-entry
 #: bucket grades everything a larger one would, and every operation added beyond it is a
 #: promise to buyers that nothing here checks.
 REQUIRED_FOR = ("create_media_buy",)
@@ -116,10 +115,21 @@ REQUIRED_FOR = ("create_media_buy",)
 #: refused), ``negative/018`` needs ``forbidden`` (one covering it must be refused), and
 #: every other vector is written against ``either``.
 #:
-#: ``either`` is the value that grades the most and mis-grades nothing: it costs vectors
-#: 007 and 018, while ``required`` would additionally fail the three positives that do not
-#: sign a digest and ``forbidden`` would fail ``positive/002``, which does. This is a
-#: property of the corpus, not a gap in this agent — reported with the fixture PR.
+#: ``either`` is the value that grades the most and mis-grades nothing, and the arithmetic
+#: was re-measured against the runner's own gate (``request-signing/grader.mjs``
+#: ``contentDigestDeclarationMismatch`` + ``contentDigestStructuralMismatch`` at
+#: @adcp/sdk 14.0.0-rc.42) rather than inferred from what each vector declares:
+#:
+#: * under ``either`` the runner skips 007 and 018 (their expected codes are the two
+#:   content-digest POLICY refusals) and grades 010, 023 and ``positive/002``;
+#: * ``required`` would NOT add 007 back — the structural rule skips a vector whose
+#:   Signature-Input omits content-digest, which is 007's whole shape — while removing
+#:   ELEVEN of the twelve positives, every one that signs without a digest;
+#: * ``forbidden`` would drop ``positive/002``, which covers one.
+#:
+#: So ``either`` is not a compromise between the vectors; it is the only value under which
+#: the happy path is graded at all. A property of the corpus, not a gap in this agent —
+#: reported with the fixture PR.
 COVERS_CONTENT_DIGEST = "either"
 
 #: Test-kit ``stateful_vector_contract.revocation.pre_revoked_keyid``.
@@ -197,12 +207,7 @@ def counterparty_registry() -> dict[str, dict[str, Any]]:
     the SDK selects within the JWKS by ``kid``.
     """
     jwks = counterparty_jwks()
-    entry = {
-        "agent_url": COUNTERPARTY_AGENT_URL,
-        "jwks_uri": COUNTERPARTY_JWKS_URI,
-        "key_origin": COUNTERPARTY_KEY_ORIGIN,
-        "jwks": jwks,
-    }
+    entry = {"agent_url": COUNTERPARTY_AGENT_URL, "jwks": jwks}
     return {key["kid"]: dict(entry) for key in jwks["keys"]}
 
 
@@ -527,7 +532,7 @@ def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
         print("   tenant signing key already present")
         return
     try:
-        provisioned = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
+        minted_kid = provision_signing_key(repo, tenant_id=tenant_id, alg="ed25519")
     except AdCPSalesAgentError as exc:
         # NON-FATAL, deliberately, and this is the difference between an enhancement and a
         # regression. `db:` minting refuses without a deployment KEK — correctly, since
@@ -540,7 +545,7 @@ def _mint_tenant_signing_key(session: Session, tenant_id: str) -> None:
         print(f"   tenant signing key NOT minted ({type(exc).__name__}); JWKS stays empty")
         return
     session.flush()
-    print(f"   tenant signing key minted: {provisioned.row.kid}")
+    print(f"   tenant signing key minted: {minted_kid}")
 
 
 def _assert_account_resolves(session: Session, tenant_id: str, *, grantees: list[str]) -> None:
