@@ -235,14 +235,18 @@ def build_e2e_signing_capability(env: Any) -> SigningCapability:
     brand_json_url = served["identity"]["brand_json_url"]
     agents = _counterparty_request(config, "GET", brand_json_url).json()["agents"]
     listed = [agent.get("url") for agent in agents]
-    assert listed == [agent_url], (
-        f"the counterparty origin must publish a brand.json listing EXACTLY {agent_url!r} for this "
+    # SELECTED BY URL, not indexed, and the entry's presence is what is asserted — for the
+    # reason its neighbour below gives. What the server needs is an agents[] entry for THIS
+    # url; how many other entries share the document is the fixture's layout, not a property
+    # of the system under test: a slot's success must not depend on how many other
+    # capabilities are installed on the same counterparty origin.
+    entry = next((agent for agent in agents if agent.get("url") == agent_url), None)
+    assert entry is not None, (
+        f"the counterparty origin must publish a brand.json listing {agent_url!r} for this "
         f"capability's slot, or the server's agents[] walk resolves no entry for it and the signature "
         f"it is about to make is refused with a discovery code at step 7; it lists {listed!r}"
     )
-    published_kids = [
-        key.get("kid") for key in _counterparty_request(config, "GET", agents[0]["jwks_uri"]).json()["keys"]
-    ]
+    published_kids = [key.get("kid") for key in _counterparty_request(config, "GET", entry["jwks_uri"]).json()["keys"]]
     # CONTAINS, not EQUALS. A well-known JWKS path is one per ORIGIN, and every slot agent
     # on this counterparty shares one origin — so the document carries every installed
     # slot's key and the verifier selects by ``kid``, which is what a JWKS is for. Asserting

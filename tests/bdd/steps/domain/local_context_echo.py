@@ -367,6 +367,23 @@ def then_packages_echo_context(ctx: dict) -> None:
         )
 
 
+@then("the response carries no packages array")
+def then_response_carries_no_packages(ctx: dict) -> None:
+    """The Submitted branch answers with no element to echo into.
+
+    ``create-media-buy-response.json``'s Submitted variant declares task_id and a
+    message; ``media_buy_id`` and ``packages`` land on the task's completion artifact.
+    Asserting the ABSENCE is what stops the element-echo scenario's twin from being
+    read as "this branch echoes too" -- there is nothing here to echo, and a seller that
+    started returning packages on this branch would owe the element echo and get graded
+    for it by the other scenario, not silently by this one.
+    """
+    envelope = wire_dict(ctx)
+    assert "packages" not in envelope, (
+        f"the submitted-for-approval response carried a packages array: {envelope['packages']!r}"
+    )
+
+
 @then("the error response carries no context object")
 def then_error_carries_no_context(ctx: dict) -> None:
     """The rejection went out WITHOUT the key: nothing echoed, nothing invented.

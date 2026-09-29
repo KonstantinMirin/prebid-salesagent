@@ -36,6 +36,7 @@ from a2a.types import (
     MethodNotFoundError,
     Part,
     PushNotificationNotSupportedError,
+    Role,
     SendMessageRequest,
     SubscribeToTaskRequest,
     Task,
@@ -68,6 +69,25 @@ def _dict_to_value(d: dict) -> struct_pb2.Value:
     val = struct_pb2.Value()
     json_format.Parse(json.dumps(d, default=str), val)
     return val
+
+
+def _result_parts(result: Mapping[str, Any]) -> list[Part]:
+    """The parts that carry one AdCP response, in the order A2A declares them.
+
+    Pinned L0/a2a-response-format.mdx: an optional TextPart ("Human-readable summary --
+    **recommended** but optional") then the required DataPart ("Structured AdCP response
+    payload -- **required**"). The text is READ from the payload, because ``message`` is a
+    declared envelope field serialized with the rest; nothing rebuilds an outbound payload
+    to recover it.
+
+    Stated once because two frames carry a payload and the spec gives them different
+    homes: a terminal status puts these parts in ``artifacts``, an interim one in
+    ``status.message.parts``. The parts themselves are the same, and a second copy of them
+    is how the two frames would come to disagree about what an AdCP response looks like.
+    """
+    parts = [Part(text=result["message"])] if result.get("message") else []
+    parts.append(Part(data=_dict_to_value(dict(result))))
+    return parts
 
 
 def _dict_to_struct(d: dict) -> struct_pb2.Struct:
@@ -285,19 +305,37 @@ class AdCPRequestHandler(RequestHandler):
             # on an error class.
             result = await self._dispatch_skill(skill, parameters, headers, exchange)
 
-            # Per AdCP spec, an async operation returns a Task with status=submitted and no
-            # artifacts. The SAME read the final state uses, so the two cannot disagree.
+            # An async operation returns a Task with status=submitted and NO artifacts. The
+            # SAME read the final state uses, so the two cannot disagree.
+            #
+            # The payload still travels, in ``status.message.parts``. Pinned
+            # L0/a2a-response-format.mdx puts submitted among the INTERIM statuses, whose
+            # data is "carried in `status.message.parts[]` (not in `artifacts`)" because
+            # "artifacts ... are read as the final deliverable once the task reaches a
+            # terminal state", and its quick-reference row for submitted returns
+            # ``{ status, taskId, message, data? }``. What travels there is the AdCP envelope
+            # the boundary built -- its ``task_id``, its ``message``, and the buyer's own
+            # ``context``, which core/context.json says the agent MUST preserve unchanged in
+            # the response.
             if LibraryTaskStatus(result["status"]) is LibraryTaskStatus.submitted:
-                task.status.CopyFrom(TaskStatus(state=TaskState.TASK_STATE_SUBMITTED))
+                task.status.CopyFrom(
+                    TaskStatus(
+                        state=TaskState.TASK_STATE_SUBMITTED,
+                        message=Message(
+                            message_id=f"msg_{uuid.uuid4().hex[:12]}",
+                            context_id=task.context_id,
+                            task_id=task_id,
+                            role=Role.ROLE_AGENT,
+                            parts=_result_parts(result),
+                        ),
+                    )
+                )
                 logger.info("Task %s requires manual approval, returning status=submitted with no artifacts", task_id)
                 return task
 
-            # Per A2A spec, an optional TextPart then the DataPart. The text is READ from the
-            # payload: ``message`` is a declared envelope field, serialized with the rest, and
-            # nothing rebuilds an outbound payload to recover it.
-            parts = [Part(text=result["message"])] if result.get("message") else []
-            parts.append(Part(data=_dict_to_value(result)))
-            task.artifacts.append(Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=parts))
+            task.artifacts.append(
+                Artifact(artifact_id="skill_result_1", name=f"{skill}_result", parts=_result_parts(result))
+            )
 
             # The Task state is the RESPONSE's own status, mapped once. ``status`` is required
             # on the response envelope and defaulted to ``completed``, so it is never absent;

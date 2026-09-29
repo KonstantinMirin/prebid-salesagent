@@ -1202,8 +1202,8 @@ def then_response_not_contain_field(ctx: dict, field_name: str) -> None:
     the REAL serialized wire — ``ctx["wire_response"]`` on success, the two-layer error
     envelope on failure — never ``model_dump()``: media_buy_id and implementation_date
     are not declared on UpdateMediaBuySubmitted, so a model-level check passes vacuously
-    and can never catch a wire regression (e.g. the A2A submitted reconstruction leaking
-    a field). Absent-or-null on the wire satisfies "does NOT contain" (a null field is
+    and can never catch a wire regression (e.g. the A2A submitted payload leaking a
+    field). Absent-or-null on the wire satisfies "does NOT contain" (a null field is
     not conveyed); a real value is a contract violation.
     """
     # Success-path response — assert against the buyer-facing serialized wire.

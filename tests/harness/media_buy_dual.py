@@ -7,7 +7,7 @@ a pre-seeded media buy to grade the manual-approval UpdateMediaBuySubmitted
 envelope cross-transport. This env extends MediaBuyCreateEnv with update-module
 patches and delegates update requests to the appropriate production code —
 A2A/MCP go through the real on_message_send / FastMCP Client pipelines so the
-serialized wire (and the A2A submitted reconstruction) are genuinely exercised.
+serialized wire (and the A2A submitted payload) are genuinely exercised.
 
 Introduced by PR #1567.
 """
@@ -246,10 +246,10 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         # the wire via update_media_buy_raw(...).model_dump(), which tracked the return
         # model rather than the assembled envelope — an update-envelope regression
         # would not be caught. A SUBMITTED update never carries an artifact body:
-        # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) and the
-        # base handler synthesizes the submitted wire from the Task (tests/harness/
-        # _base.py) — production has no A2A submitted reconstruction (PR #1567 round-2
-        # follow-up). Completed/error results DO carry an artifact, stashed as
+        # on_message_send early-returns a Task (state=SUBMITTED, no artifacts) whose
+        # payload rides in ``status.message.parts``, where L0/a2a-response-format.mdx puts
+        # an interim status's data, and the base handler reads it from there
+        # (tests/harness/_base.py). Completed/error results DO carry an artifact, stashed as
         # wire_response; _parse_update_rest_response recovers the union from the
         # flattened artifact (needs the top-level status the plain model drops).
         return self._run_a2a_handler(
@@ -359,9 +359,9 @@ class MediaBuyDualEnv(MediaBuyCreateEnv):
         envelope; under #1721 ``UpdateMediaBuyResult`` IS the union root its three
         branches inherit (``_BRANCH_ADAPTERS``, src/core/schemas/_base.py), so the
         wrapper has no ``response`` field to fill and the ladder has nothing left to
-        decide. This serves the REST wire and the harness-synthesized A2A submitted
-        dict alike — production A2A has NO submitted reconstruction (Task
-        early-return; PR #1567 round-2 follow-up).
+        decide. This serves the REST wire and the A2A submitted payload alike — the
+        latter read off ``status.message.parts``, which is where A2A puts an interim
+        status's data and where production writes it.
         """
         from src.core.schemas._base import UpdateMediaBuyResult
 

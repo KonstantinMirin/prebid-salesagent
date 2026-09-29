@@ -230,39 +230,23 @@ def _mcp_wire_error(exc: Exception, response: Any = None) -> Exception:
 
 
 def _wire_envelope(envelope: dict) -> dict | None:
-    """Normalise a captured error body into the two-layer envelope shape, or ``None``.
+    """The captured error body if it IS the two-layer envelope, else ``None``.
 
-    Accepts what ``to_wire(AdcpErrorResponse.of(exc))`` produces
-    (``{"adcp_error": {...}, "errors": [...]}``) and the legacy flat shape
-    (``{"error_code": ..., "recovery": ...}``), and RETURNS THE ENVELOPE.
+    Returns what production sent, unchanged, or nothing. It reshapes no body and fills no
+    layer: ``AdcpErrorResponse.of`` (``src/core/schemas/_base.py``) "Carries the SAME error
+    object at both levels the wire expects -- ``adcp_error`` on the envelope and
+    ``errors[0]``", so a real failure response always arrives with both, and a body missing
+    one did not come from the boundary and is reported as no envelope.
 
-    It used to return a reconstructed ``AdCPSalesAgentError`` built from those bytes, with a
-    hand-maintained code-to-class map. That map covered 20 of 43 classes and was
-    silent about the rest, so type identity was already lost for most codes; its own
-    docstring conceded the reconstruction was "lossy by construction"; and it was the
-    only place outside production that called an ``AdCPSalesAgentError`` constructor, which made
-    it the only place that could drift from a signature change -- and it did, twice,
-    the second time costing 469 tests.
-
-    Arming a fault still needs a real typed exception; the adapter genuinely raises
-    one. ASSERTING an outcome never does: the envelope IS what the buyer received.
+    Arming a fault needs a real typed exception; the adapter genuinely raises one. ASSERTING
+    an outcome never does: the envelope IS what the buyer received, so nothing here
+    reconstructs an exception from it.
     """
     if not isinstance(envelope, dict):
         return None
     if isinstance(envelope.get("errors"), list) and envelope["errors"]:
         return envelope
-    if isinstance(envelope.get("adcp_error"), dict):
-        entry = dict(envelope["adcp_error"])
-        return {**envelope, "errors": [entry]}
-    # Legacy flat shape from tests that predate the envelope.
-    code = envelope.get("error_code") or envelope.get("code")
-    if not code:
-        return None
-    entry = {"code": code}
-    for key in ("message", "recovery", "suggestion", "field", "details"):
-        if envelope.get(key) is not None:
-            entry[key] = envelope[key]
-    return {"adcp_error": dict(entry), "errors": [entry]}
+    return None
 
 
 def _a2a_wire_envelope(exc: Exception) -> dict | None:
@@ -831,8 +815,8 @@ class BaseTestEnv:
         self.clock = _TestClock()  # BDD steps may use env.clock for date tokens
         # Raw A2A Task returned by the last _run_a2a_handler call. The submitted
         # (manual-approval) contract lives on the Task itself — state=SUBMITTED
-        # with NO artifacts — and the synthesized submitted wire above cannot
-        # prove artifact absence, so guards assert on this captured Task.
+        # with NO artifacts, its payload in status.message.parts — and the parsed
+        # wire cannot prove artifact ABSENCE, so guards assert on this captured Task.
         self._last_a2a_task: Any = None
         # WHICH signature realization the dispatch currently in flight carries —
         # not whether it asked for one. It holds one of False / True /
@@ -1859,6 +1843,14 @@ class BaseTestEnv:
             status=task_result.status,
             task_id=task_result.id,
             artifact_data=(extract_data_from_artifact(task_result.artifacts[0]) if task_result.artifacts else None),
+            # An interim status carries its payload here rather than in artifacts. Read
+            # through the same extractor: ``Artifact`` and ``Message`` both expose ``parts``,
+            # so one reader covers both homes and cannot read them differently.
+            status_data=(
+                extract_data_from_artifact(task_result.status.message)
+                if task_result.status.HasField("message")
+                else None
+            ),
             response_cls=response_cls,
         )
 
@@ -1883,6 +1875,7 @@ class BaseTestEnv:
         status: Any,
         task_id: str,
         artifact_data: dict[str, Any] | None,
+        status_data: dict[str, Any] | None,
         response_cls: type,
         response: Any = None,
     ) -> Any:
@@ -1891,7 +1884,7 @@ class BaseTestEnv:
         Stated ONCE for both A2A legs. The in-process leg reads a protobuf
         ``Task``, the HTTP leg reads the v0.3 JSON the ``/a2a`` route serializes;
         the three OUTCOMES (failed → :class:`WireError` carrying the envelope the
-        buyer received, submitted → synthesized submitted wire, otherwise → the
+        buyer received, submitted → the status-message DataPart, otherwise → the
         stripped artifact DataPart) are the same contract, and a second copy of
         them is how the two legs would drift into grading different things.
 
@@ -1926,16 +1919,18 @@ class BaseTestEnv:
 
         if state == "submitted":
             # Async manual-approval path: the server returns a submitted Task with NO
-            # artifacts (adcp_a2a_server.py:683) — the submitted envelope is conveyed by
-            # the Task state + id, not an artifact union. Reconstruct the submitted wire
-            # (protocol status="submitted" + the task_id the buyer polls) so success-path
-            # grading sees the real A2A wire.
-            # ``task_id`` is the parameter, not ``task_result.id``: this helper is
-            # shared by BOTH A2A legs and the HTTP leg has no protobuf ``Task``
-            # object to read an id off — normalizing the id at the call site is
-            # what lets the two legs share one outcome contract.
-            submitted_wire = {"status": "submitted", "task_id": task_id}
-            return DeliverResult(payload=response_cls(**submitted_wire), wire_response=dict(submitted_wire))
+            # artifacts, because L0/a2a-response-format.mdx gives an INTERIM status its
+            # data in ``status.message.parts[]`` and reserves ``artifacts`` for the final
+            # deliverable. So the wire is READ from there: a wire the harness composed
+            # would grade the harness, leaving every field the server actually sent invisible
+            # -- including the envelope ``context`` the buyer is owed on every outcome.
+            if status_data is None:
+                raise ValueError(
+                    "a submitted A2A Task carried no data part in status.message.parts — "
+                    "the interim payload L0/a2a-response-format.mdx requires is missing, "
+                    f"so there is no wire to grade (task_id={task_id!r})"
+                )
+            return DeliverResult(payload=response_cls(**status_data), wire_response=dict(status_data))
 
         if artifact_data is None:
             raise ValueError(f"Task has no artifacts. Status: {status}")
@@ -2020,11 +2015,15 @@ class BaseTestEnv:
         task = result.get("task", result)
         artifacts = task.get("artifacts") or []
         artifact_data = _a2a_first_data_part(artifacts[0]) if artifacts else None
+        task_status = task.get("status") or {}
         return self._a2a_task_outcome(
-            state=_A2A_TASK_STATES.get((task.get("status") or {}).get("state", ""), ""),
+            state=_A2A_TASK_STATES.get(task_status.get("state", ""), ""),
             status=task.get("status"),
             task_id=task.get("id", ""),
             artifact_data=artifact_data,
+            # Same home as the in-process leg reads, in the JSON the ``/a2a`` route
+            # serializes: an interim status puts its payload in ``status.message.parts``.
+            status_data=_a2a_first_data_part(task_status.get("message") or {}),
             response_cls=response_cls,
             response=response,
         )

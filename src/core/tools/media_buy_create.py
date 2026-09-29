@@ -2760,76 +2760,26 @@ async def _create_media_buy_impl(
                 logger.warning(f"⚠️ Failed to send manual approval Slack notification: {e}")
 
             # Generate permanent package IDs (not dependent on media buy ID)
-            # These IDs will be used whether the media buy is pending or approved
-            pending_packages = []
+            # These IDs will be used whether the media buy is pending or approved.
+            #
+            # An ID is ALL this branch carries forward. It answers with
+            # `_submitted_approval_result` — a CreateMediaBuySubmitted whose only members
+            # are task_id and a message — so no package of this branch's making reaches a
+            # buyer, and everything else about a package is read off `req.packages` where
+            # the buyer wrote it.
             package_id_map: dict[int, str] = {}  # 0-based index → package_id
 
             # req.packages validated earlier in _create_media_buy_impl
             assert req.packages is not None, "packages required - validated earlier"
-            for idx, pkg in enumerate(req.packages, 1):
-                # Generate permanent package ID using product_id and index
-                # Format: pkg_{product_id}_{timestamp_part}_{idx}
-                package_id = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx}"
-
-                # Use product_id for package name since Package schema doesn't have 'name'
-                pkg_name = f"Package {idx}"
-                if pkg.product_id:
-                    pkg_name = f"{pkg.product_id} - Package {idx}"
-
-                # Build Package object with complete package data (matching auto-approval path)
-                # NOTE: Package schema does NOT have a 'status' field - workflow state is tracked in WorkflowStep
-                # (Package is imported at module level)
-
-                # Create Package object from request package, adding generated fields
-                # Maps PackageRequest fields to Package fields directly:
-                # - format_ids (request) → format_ids_to_provide (response)
-                # - creative_ids/creatives (request) → creative_assignments (response) [handled separately]
-                pending_packages.append(
-                    Package(
-                        package_id=package_id,
-                        paused=False,  # Initial state is not paused (AdCP 2.12.0)
-                        product_id=pkg.product_id,
-                        budget=pkg.budget,
-                        bid_price=pkg.bid_price,
-                        pricing_option_id=pkg.pricing_option_id,
-                        targeting_overlay=pkg.targeting_overlay,
-                        pacing=pkg.pacing,
-                        impressions=getattr(pkg, "impressions", None),
-                        # ELEMENT-LEVEL context, echoed from the request package.
-                        #
-                        # Not the envelope's: `_boundary._served` stamps THAT one onto the
-                        # response root and nothing else may write it. This is the same
-                        # opaque `ContextObject` re-declared on the package itself, which
-                        # the boundary never sees -- it reads the request's root context and
-                        # attaches the response's root context, and has no notion of
-                        # collections at all (`_boundary.py` mentions `packages` zero times).
-                        #
-                        # So the echo has to happen where the packages are built. AdCP 3.1.1
-                        # `media_buy_seller/inline_creatives_without_sync` sends
-                        # `packages[0].context.buyer_ref` and asserts it back at
-                        # `/packages/0/context/buyer_ref`; `buyer_ref` is not a declared field
-                        # anywhere -- it is an extra inside an `extra="allow"` object -- so
-                        # there is nothing to derive and nothing to validate. It is carried,
-                        # or it is lost.
-                        context=pkg.context,
-                        ext=pkg.ext,
-                        creative_assignments=pkg.creative_assignments,
-                        format_ids_to_provide=pkg.format_ids,
-                    )
-                )
-
-                # Track package_id for injection into serialized raw_request (0-based index)
-                package_id_map[idx - 1] = package_id
+            for idx, pkg in enumerate(req.packages):
+                # Format: pkg_{product_id}_{timestamp_part}_{1-based index}
+                package_id_map[idx] = f"pkg_{pkg.product_id}_{secrets.token_hex(4)}_{idx + 1}"
 
             # Remap package_pricing_info from index-based keys to actual package IDs
-            # Note: pending_packages loop used enumerate(req.packages, 1) but pricing used enumerate(req.packages) starting at 0
             package_pricing_info: dict[str, dict[str, Any]] = {}
-            # Map pricing info from package index to package_id
-            for pkg_idx, pkg_obj in enumerate(pending_packages):
+            for pkg_idx, mapped_package_id in package_id_map.items():
                 if pkg_idx in package_pricing_info_by_index:
-                    # Only add to dict if package_id is not None
-                    if pkg_obj.package_id is not None:
-                        package_pricing_info[pkg_obj.package_id] = package_pricing_info_by_index[pkg_idx]
+                    package_pricing_info[mapped_package_id] = package_pricing_info_by_index[pkg_idx]
                 else:
                     logger.warning(f"No pricing info found for package index {pkg_idx}")
             logger.debug(f"[PRICING] Mapped {len(package_pricing_info)} package pricing info")
@@ -2909,57 +2859,42 @@ async def _create_media_buy_impl(
                 # FIXME(#1788): package creation should use repository methods
                 assert pkg_uow.session is not None
                 session = pkg_uow.session
-                for pkg_obj in pending_packages:
-                    # Get paused state from package (adcp 2.12.0: replaced status enum with paused bool)
-                    paused = getattr(pkg_obj, "paused", False)  # Default to False (not paused) if not present
+                for idx, req_pkg in enumerate(req.packages):
+                    mapped_package_id = package_id_map[idx]
+                    pricing_info_for_package = package_pricing_info.get(mapped_package_id)
 
+                    # Serialize budget: normalize to object format for database storage
+                    # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
+                    budget_value: dict[str, Any] | None = None
+                    if req_pkg.budget is not None:
+                        if isinstance(req_pkg.budget, (int, float)):
+                            # ADCP 2.5.0 flat format: normalize to object with currency from pricing
+                            package_currency = request_currency  # Use request-level currency
+                            if pricing_info_for_package:
+                                package_currency = pricing_info_for_package.get("currency", request_currency)
+                            budget_value = {
+                                "total": float(req_pkg.budget),
+                                "currency": package_currency,
+                            }
+                        else:
+                            # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
+                            budget_value = req_pkg.budget
+
+                    # _pydantic_json_serializer on the engine handles Pydantic models,
+                    # AnyUrl, enums, and datetimes in JSONType columns automatically
                     package_config = {
-                        "package_id": pkg_obj.package_id,
-                        "name": getattr(pkg_obj, "name", None),
-                        "paused": paused,  # Store paused state (adcp 2.12.0)
+                        "package_id": mapped_package_id,
+                        # A newly created package is not paused (adcp 2.12.0 replaced the
+                        # status enum with this bool).
+                        "paused": False,
+                        "product_id": req_pkg.product_id,
+                        "budget": budget_value,
+                        "targeting_overlay": req_pkg.targeting_overlay,
+                        "creative_ids": _get_creative_ids(req_pkg),
+                        "format_ids": req_pkg.format_ids,
+                        "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
+                        "impressions": getattr(req_pkg, "impressions", None),  # legacy field, for display
                     }
-                    # Add full package data from raw_request
-                    assert req.packages is not None, "packages required - validated earlier"
-                    for idx, req_pkg in enumerate(req.packages):
-                        if idx == pending_packages.index(pkg_obj):
-                            # Get pricing info for this package if available
-                            pricing_info_for_package = (
-                                package_pricing_info.get(pkg_obj.package_id) if pkg_obj.package_id else None
-                            )
-
-                            # Serialize budget: normalize to object format for database storage
-                            # ADCP 2.5.0 sends flat numbers, but we normalize to object with currency for DB
-                            budget_value: dict[str, Any] | None = None
-                            if req_pkg.budget is not None:
-                                if isinstance(req_pkg.budget, (int, float)):
-                                    # ADCP 2.5.0 flat format: normalize to object with currency from pricing
-                                    package_currency = request_currency  # Use request-level currency
-                                    if pricing_info_for_package:
-                                        package_currency = pricing_info_for_package.get("currency", request_currency)
-                                    budget_value = {
-                                        "total": float(req_pkg.budget),
-                                        "currency": package_currency,
-                                    }
-                                else:
-                                    # ADCP 2.3 object format or other: _pydantic_json_serializer handles it
-                                    budget_value = req_pkg.budget
-
-                            # _pydantic_json_serializer on the engine handles Pydantic models,
-                            # AnyUrl, enums, and datetimes in JSONType columns automatically
-                            package_config.update(
-                                {
-                                    "product_id": req_pkg.product_id,
-                                    "budget": budget_value,
-                                    "targeting_overlay": req_pkg.targeting_overlay,
-                                    "creative_ids": _get_creative_ids(req_pkg),
-                                    "format_ids": req_pkg.format_ids,
-                                    "pricing_info": pricing_info_for_package,  # Store pricing info for UI display
-                                    "impressions": getattr(
-                                        req_pkg, "impressions", None
-                                    ),  # Store impressions for display (legacy field)
-                                }
-                            )
-                            break
 
                     # Extract pricing fields for dual-write
                     budget_total = None
@@ -2979,7 +2914,7 @@ async def _create_media_buy_impl(
                     # Create MediaPackage with dual-write: dedicated columns + JSON
                     db_package = DBMediaPackage(
                         media_buy_id=media_buy_id,
-                        package_id=pkg_obj.package_id,
+                        package_id=mapped_package_id,
                         package_config=package_config,
                         # Dual-write: populate dedicated columns
                         budget=Decimal(str(budget_total)) if budget_total is not None else None,
@@ -2989,7 +2924,7 @@ async def _create_media_buy_impl(
                     session.add(db_package)
 
                 # UoW auto-commits on clean exit
-                logger.info(f"✅ Created {len(pending_packages)} MediaPackage records")
+                logger.info(f"✅ Created {len(package_id_map)} MediaPackage records")
 
             # Link the workflow step to the media buy so the approval button shows in UI
             ctx_manager.link_workflow_to_object(
@@ -3034,8 +2969,8 @@ async def _create_media_buy_impl(
                     for i, package in enumerate(req.packages):
                         pkg_cids = _get_creative_ids(package)
                         if pkg_cids:
-                            # Get package_id from pending_packages (already generated)
-                            pkg_id: str | None = pending_packages[i].package_id if i < len(pending_packages) else None
+                            # The ID generated for this package above
+                            pkg_id: str | None = package_id_map.get(i)
                             if not pkg_id:
                                 logger.error(f"Cannot assign creatives: No package_id for package {i}")
                                 continue
@@ -3953,23 +3888,14 @@ async def _create_media_buy_impl(
                 else:
                     adapter_paused = bool(adapter_paused)
 
-            # Build Package response directly from request fields + adapter fields
+            # The buyer's fields arrive by construction, the same way as the pending arm
+            # above; the adapter decides the two below.
             response_packages.append(
-                Package(
+                Package.echoing(
+                    package,
                     package_id=adapter_package_id,
                     paused=adapter_paused,
-                    product_id=package.product_id,
-                    budget=package.budget,
-                    bid_price=package.bid_price,
-                    pricing_option_id=package.pricing_option_id,
-                    pacing=package.pacing,
-                    targeting_overlay=package.targeting_overlay,
-                    # Echoed for the same reason as the pending-packages arm above: the
-                    # boundary owns the ROOT context and cannot reach an array element.
-                    context=package.context,
-                    impressions=getattr(package, "impressions", None),
-                    creative_assignments=package.creative_assignments,
-                    format_ids_to_provide=getattr(package, "format_ids", None),
+                    format_ids_to_provide=package.format_ids,
                 )
             )
 

@@ -2231,6 +2231,47 @@ class Package(LibraryPackage):
 
     # Note: No need for validate_required hack - library Package already has package_id and status as required fields!
 
+    #: The fields this response and ``PackageRequest`` both declare that the SELLER decides,
+    #: so :meth:`echoing` leaves them to its caller. Everything else the two models share is
+    #: the BUYER's and is echoed. That default is the pin's, stated field by field in
+    #: core/package.json (AdCP 3.1.1): "Echoed from the buyer's request"
+    #: (``agency_estimate_number``, ``catalogs``), "Sellers SHOULD echo this field whenever
+    #: the request included it" (``format_ids``, ``format_kind``, ``format_option_refs``),
+    #: "echoed unchanged in responses" (``context``), "echoed from the create_media_buy
+    #: request" (``params``).
+    #:
+    #: Each member below is a field whose value the buyer does not get to assert:
+    #:
+    #: * ``paused`` -- the response reports the state the ad server created the line item
+    #:   in, which the request can ask for but not set.
+    #: * ``committed_metrics`` -- "Sellers stamp the day-1 set on the create_media_buy
+    #:   response". Echoing a buyer's proposal here would publish it as the seller's own
+    #:   binding reporting contract.
+    #: * ``measurement_terms`` -- "Reflects what was negotiated -- may differ from the
+    #:   buyer's proposal or the product's defaults".
+    #: * ``performance_standards`` -- "Agreed performance standards", negotiated the same way.
+    SELLER_DECIDED: ClassVar[frozenset[str]] = frozenset(
+        {"paused", "committed_metrics", "measurement_terms", "performance_standards"}
+    )
+
+    @classmethod
+    def echoing(cls, request_package: "PackageRequest", **decided: Any) -> "Package":
+        """Return the response package for *request_package*, carrying its fields by construction.
+
+        A field both models declare belongs to the buyer unless :data:`SELLER_DECIDED`
+        names it, and it reaches the response because this model carries it -- not because
+        a call site remembered to copy it. Pass the seller's own values as *decided*:
+        ``package_id`` and ``format_ids_to_provide`` are response-only, so they collide with
+        nothing, and a *decided* key that IS a shared buyer field raises rather than
+        silently winning.
+        """
+        echoed = {
+            name: getattr(request_package, name)
+            for name in cls.model_fields.keys() & type(request_package).model_fields.keys()
+            if name not in cls.SELLER_DECIDED
+        }
+        return cls(**echoed, **decided)
+
 
 # --- Media Buy Lifecycle ---
 class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
