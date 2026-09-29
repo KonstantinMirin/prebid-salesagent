@@ -19,18 +19,12 @@ import pytest
 from src.core.config import get_settings
 from src.services.setup_checklist_service import SetupChecklistService
 from tests.factories import TenantFactory
-from tests.harness._base import IntegrationEnv
+from tests.harness._base import BareIntegrationEnv
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 #: What the deployment declares about itself, and therefore what its bootstrapped tenant holds.
 DEPLOYMENT_HOST = "deployment-default.example.com"
-
-
-class _ChecklistEnv(IntegrationEnv):
-    """Bare integration env — the checklist service opens its own sessions."""
-
-    EXTERNAL_PATCHES: dict[str, str] = {}
 
 
 def _as_the_deployment_host(host: str | None):
@@ -62,7 +56,7 @@ def _cname_task(status: dict) -> dict:
 def test_the_checklist_grades_a_custom_domain_against_the_deployments_own_host(
     integration_db, virtual_host, is_complete
 ):
-    with _ChecklistEnv() as env:
+    with BareIntegrationEnv() as env:
         TenantFactory(tenant_id="cname-t", virtual_host=virtual_host)
         env._commit_factory_data()
         SetupChecklistService.clear_cache()
@@ -79,7 +73,7 @@ def test_the_checklist_grades_a_custom_domain_against_the_deployments_own_host(
 def test_a_deployment_declaring_no_host_of_its_own_has_no_default_to_compare_against(integration_db):
     """``deployment_virtual_host()`` is None on a production install declaring neither
     variable, and then no tenant is on a deployment default — every host was stated."""
-    with _ChecklistEnv() as env:
+    with BareIntegrationEnv() as env:
         TenantFactory(tenant_id="cname-none", virtual_host="stated.example.com")
         env._commit_factory_data()
         SetupChecklistService.clear_cache()
