@@ -437,8 +437,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         # different agents — never the bare host, which carries no scheme and may carry a
         # port and therefore matches no URI at all.
         #
-        # Ungraded through this tool today: the line below raises DetachedInstanceError on
-        # the rows the generator returns, so no variant reaches a response at all (#2291).
+        # Ungraded through this tool today: the conversion further down raises
+        # DetachedInstanceError on the rows the generator hands back, so no variant reaches a
+        # response at all (#2291).
         our_agent_url = tenant.agent_url
 
         dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
