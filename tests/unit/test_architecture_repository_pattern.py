@@ -928,8 +928,6 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/integration/test_gam_pricing_models_integration.py", "setup_gam_tenant_with_all_pricing_models"),
     ("tests/integration/test_gam_pricing_models_integration.py", "test_gam_auction_cpc_creates_price_priority"),
     ("tests/integration/test_gam_pricing_restriction.py", "setup_gam_tenant_with_non_cpm_product"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_gam_tenant_creation_with_network_code"),
-    ("tests/integration/test_gam_tenant_setup.py", "test_gam_tenant_creation_without_network_code"),
     ("tests/integration/test_generative_creatives.py", "test_generative_format_detection_calls_build_creative"),
     ("tests/integration/test_get_products_database_integration.py", "access_fields"),
     ("tests/integration/test_get_products_database_integration.py", "database_operation"),
