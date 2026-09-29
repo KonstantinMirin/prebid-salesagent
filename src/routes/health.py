@@ -181,7 +181,7 @@ async def debug_root(request: Request):
 
     if tenant_row:
         try:
-            html_content = generate_tenant_landing_page(tenant_row, virtual_host)
+            html_content = generate_tenant_landing_page(tenant_row)
             debug_info["landing_page_generated"] = True
             debug_info["landing_page_length"] = len(html_content)
         except Exception as e:
@@ -202,7 +202,7 @@ async def debug_landing(request: Request):
         tenant_row = get_tenant_by_virtual_host(virtual_host)
         if tenant_row:
             try:
-                html_content = generate_tenant_landing_page(tenant_row, virtual_host)
+                html_content = generate_tenant_landing_page(tenant_row)
                 return HTMLResponse(content=html_content)
             except Exception as e:
                 return JSONResponse({"error": f"Landing page generation failed: {e}"}, status_code=500)
@@ -237,7 +237,7 @@ async def debug_root_logic(request: Request):
             debug_info["tenant_name"] = tenant_row.get("name")
 
             try:
-                html_content = generate_tenant_landing_page(tenant_row, virtual_host)
+                html_content = generate_tenant_landing_page(tenant_row)
                 debug_info["step"] = "landing_page_success"
                 debug_info["landing_page_length"] = len(html_content)
                 debug_info["would_return"] = "HTMLResponse"

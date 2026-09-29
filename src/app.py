@@ -568,7 +568,7 @@ async def _handle_landing_page(request: Request):
 
     if result.type in ("custom_domain", "subdomain") and result.tenant:
         try:
-            html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant, result.effective_host)
+            html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant)
             return HTMLResponse(content=html_content)
         except Exception as e:
             logger.error(f"Error generating landing page: {e}", exc_info=True)

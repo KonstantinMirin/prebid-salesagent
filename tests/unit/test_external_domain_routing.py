@@ -97,11 +97,9 @@ class TestExternalDomainRouting:
                         # Should show agent landing page (200) with MCP/A2A endpoints
                         assert response.status_code == 200
                         assert b"Agent Landing Page" in response.data
-                        # Verify landing page was called with correct parameters
-                        mock_landing.assert_called_once()
-                        call_args = mock_landing.call_args
-                        assert call_args[0][0]["tenant_id"] == "accuweather"
-                        assert call_args[0][1] == "sales-agent.accuweather.com"
+                        # The page is generated for the tenant the host resolved, and from
+                        # that tenant's row alone — the request's host is not passed on.
+                        mock_landing.assert_called_once_with(tenant_dict)
 
     def test_index_route_external_domain_no_tenant(self):
         """Test that external domain without configured tenant shows signup landing page."""
@@ -145,7 +143,7 @@ class TestExternalDomainRouting:
                             "tenant_id": "accuweather",
                             "name": "AccuWeather",
                             "subdomain": "accuweather",
-                            "virtual_host": None,
+                            "virtual_host": "accuweather.sales-agent.example.com",
                         }
                         mock_route.return_value = RoutingResult(
                             "subdomain", tenant_dict, "accuweather.sales-agent.example.com"

@@ -211,21 +211,15 @@ def index():
         if tenant:
             from src.landing.landing_page import generate_tenant_landing_page
 
-            # Build effective host from request
-            effective_host = request.headers.get("X-Forwarded-Host", request.host)
-
-            # Use virtual_host if configured
-            if tenant.virtual_host:
-                effective_host = tenant.virtual_host
-
-            # Convert tenant to dict for landing page generator
+            # Convert tenant to dict for landing page generator. The page builds every URL
+            # from the stored ``virtual_host``, so no host is read off this request.
             tenant_dict = {
                 "tenant_id": tenant.tenant_id,
                 "name": tenant.name,
                 "subdomain": tenant.subdomain,
                 "virtual_host": tenant.virtual_host,
             }
-            html_content = generate_tenant_landing_page(tenant_dict, effective_host)
+            html_content = generate_tenant_landing_page(tenant_dict)
             return Response(html_content, mimetype="text/html")
         # No default tenant yet - redirect to login to set up
         return redirect(url_for("auth.login"))
@@ -254,7 +248,7 @@ def index():
 
             # The condition above ensures tenant is not None
             assert result.tenant is not None, "Tenant must be present for custom_domain/subdomain routing"
-            html_content = generate_tenant_landing_page(result.tenant, result.effective_host)
+            html_content = generate_tenant_landing_page(result.tenant)
             return Response(html_content, mimetype="text/html")
 
         # No tenant found - show signup landing
