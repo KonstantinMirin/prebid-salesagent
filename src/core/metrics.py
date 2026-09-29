@@ -198,16 +198,14 @@ request_revocation_unavailable_total = Counter(
     ["reason"],
 )
 
-#: Every code this application can put on the wire, as a bounded metric label
-#: vocabulary. ``CODE_TABLE`` is the one place a code is declared, so a label series
-#: exists for exactly the codes that can be emitted and for no others.
+#: A code reaching a metric is a ``CODE_TABLE`` member already. It came from an
+#: exception class, which declares its code, and the one translation from an untyped
+#: exception refuses a code it cannot classify. So there is no vocabulary to bound a
+#: code against here and nothing to collapse: the label is written as it is raised.
 #:
-#: There is no signature-specific vocabulary here, and there was one. A signature
-#: refusal is an error like any other: it carries a code, and the code's own entry says
-#: what it means. What makes the family different is one FIELD on that entry —
-#: ``CodeEntry.group`` — which one reader consults to decide whether the refusal also
-#: owes a ``WWW-Authenticate`` header. Everything else, this counter included, treats
-#: every code the same way and needs to know nothing about families.
+#: Operations and reasons still collapse, because those are not codes. An operation name
+#: is a tool name the caller supplies, and a reason is a free string this module owns.
+
 
 #: ``keyid`` before the verifier resolved one (checklist step 7). Every rejection carries
 #: this: ``SignatureVerificationError`` does not expose the keyid, and a pre-resolution
@@ -220,13 +218,6 @@ UNSIGNED_REASONS = frozenset({"absent", "ignored"})
 #: Closed vocabulary for the revocation ``reason`` label — one member per member of the
 #: exception tuple in ``CounterpartyRevocationChecker.__call__``.
 REVOCATION_UNAVAILABLE_REASONS = frozenset({"fetch", "parse", "signature", "ssrf"})
-
-
-def sanitize_error_code(code: str | None) -> str:
-    """Return ``code`` when ``CODE_TABLE`` declares it, else :data:`OTHER_LABEL`."""
-    from src.core.errors.codes import CODE_BY_VALUE
-
-    return _bounded(code, CODE_BY_VALUE)
 
 
 def sanitize_operation(operation: str | None) -> str:
@@ -269,12 +260,17 @@ def record_signature_verified(operation: str, keyid: str) -> None:
     request_signature_verified_total.labels(operation=sanitize_operation(operation), keyid=keyid).inc()
 
 
-def record_signature_failed(operation: str, code: str | None) -> None:
-    """Increment :data:`request_signature_failed_total` with bounded labels."""
+def record_signature_failed(operation: str, code: str) -> None:
+    """Increment :data:`request_signature_failed_total` for a refused signature.
+
+    *code* is written as it is raised. Its caller reads it off a typed
+    ``AdCPSalesAgentError``, which declares its code, so the label is a ``CODE_TABLE``
+    member already and there is nothing to collapse.
+    """
     request_signature_failed_total.labels(
         operation=sanitize_operation(operation),
         keyid=UNRESOLVED_KEYID,
-        code=sanitize_error_code(code),
+        code=code,
     ).inc()
 
 

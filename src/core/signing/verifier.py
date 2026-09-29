@@ -390,7 +390,7 @@ def _handle_rejection(exc: SignatureVerificationError, operation: str, bucket: P
     # indistinguishable from a real key-resolution failure in the same series. A step-1
     # malformation there is genuine, so ``is_precheck`` keeps it.
     if bucket != "none" or is_precheck:
-        record_signature_failed(operation, exc.code)
+        record_signature_failed(operation, adcp_error_for(exc).error_code)
     if is_precheck:
         _refuse(exc, operation, recorded=True)
     if bucket == "none":
@@ -425,9 +425,14 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
     § Security Considerations forbids them reaching the buyer, and on #1721 there is nowhere
     for them to leak to — ``AdCPSalesAgentError`` has no ``message`` parameter at all.
     """
+    failure = adcp_error_for(exc)
     if not recorded:
-        record_signature_failed(operation, exc.code)
-    raise adcp_error_for(exc) from exc
+        # Recorded off the TYPED error, not off the SDK's raw string. ``adcp_error_for``
+        # resolves the code through a written-out table that KeyErrors on anything it
+        # does not classify, so ``failure.error_code`` is a ``CODE_TABLE`` member by
+        # construction and the metric label needs no bounding of its own.
+        record_signature_failed(operation, failure.error_code)
+    raise failure from exc
 
 
 # ---------------------------------------------------------------------------
