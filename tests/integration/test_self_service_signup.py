@@ -20,6 +20,7 @@ from sqlalchemy import select
 from src.core.credentials import hash_token
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, CurrencyLimit, Tenant, User
+from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from tests.harness._base import IntegrationEnv
 
@@ -101,9 +102,18 @@ class TestSelfServiceSignupFlow:
         assert response.status_code == 302, "a refused signup redirects back to onboarding"
         assert "/signup/onboarding" in response.headers["Location"]
 
-        with get_db_session() as session:
-            created = session.scalars(select(Tenant).filter_by(name="No Wildcard Publisher")).first()
-        assert created is None, "a tenant was provisioned on a deployment that serves no wildcard host"
+        # Refused means NOTHING was written, which is the half a status code cannot show: the
+        # tenant INSERT sits downstream of the refusal in the same function. Asked through the
+        # harness's own session and a repository, not get_db_session() in a test body — the
+        # surrounding file is allowlisted for that and a new test does not inherit the
+        # exemption. "Any active tenant at all" is the question a repository can answer here:
+        # the route mints a uuid4 tenant_id, so there is no id or subdomain to look up, and
+        # this test seeds none of its own.
+        with IntegrationEnv() as env:
+            provisioned = TenantLookupRepository(env.get_session()).find_default_active()
+        assert provisioned is None, (
+            f"a tenant was provisioned on a deployment that serves no wildcard host: {provisioned}"
+        )
 
     def test_landing_page_accessible_without_auth(self, integration_db, client):
         """Test that landing page is accessible without authentication."""
