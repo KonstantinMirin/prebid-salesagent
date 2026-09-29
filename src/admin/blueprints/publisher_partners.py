@@ -15,7 +15,6 @@ from flask import Blueprint, Response, jsonify, request
 from sqlalchemy import select
 
 from src.admin.utils.operator_errors import safe_error_message
-from src.core.agent_identity import canonical_agent_url
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -255,9 +254,9 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
 
                     discovery_service = get_property_discovery_service()
 
-                    # The one derivation, so this matches the URL the card publishes byte
+                    # The one accessor, so this matches the URL the card publishes byte
                     # for byte — a counterparty's adagents.json check compares the two.
-                    agent_url_for_sync: str = canonical_agent_url(tenant)
+                    agent_url_for_sync: str = tenant.agent_url
 
                     for domain in verified_domains:
                         # Try to fetch real properties from adagents.json
@@ -357,10 +356,10 @@ def sync_publisher_partners(tenant_id: str) -> Response | tuple[Response, int]:
                     }
                 )
 
-            # The one derivation, so this matches the URL the card publishes byte for byte —
+            # The one accessor, so this matches the URL the card publishes byte for byte —
             # a counterparty's adagents.json check compares the two. Always a string: the
             # column does not admit a tenant with no host.
-            agent_url: str = canonical_agent_url(tenant)
+            agent_url: str = tenant.agent_url
 
             # Fetch authorization for each publisher (real verification for non-mock tenants)
             logger.info(f"Fetching authorizations for {len(partners)} publishers")
@@ -518,10 +517,10 @@ def get_publisher_properties(tenant_id: str, partner_id: int) -> Response | tupl
             if not partner:
                 return jsonify({"error": "Publisher not found"}), 404
 
-            # The one derivation, so this matches the URL the card publishes byte for byte —
+            # The one accessor, so this matches the URL the card publishes byte for byte —
             # a counterparty's adagents.json check compares the two. Always a string: the
             # column does not admit a tenant with no host.
-            agent_url: str = canonical_agent_url(tenant)
+            agent_url: str = tenant.agent_url
 
             # Fetch fresh authorization context
             logger.info(f"Fetching properties for {partner.publisher_domain}")

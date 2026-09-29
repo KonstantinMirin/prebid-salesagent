@@ -75,6 +75,36 @@ class TenantContext(BaseModel):
         """
         return value.strip().lower()
 
+    @property
+    def agent_url(self) -> str:
+        """Where this tenant's agent is reachable: its canonical ORIGIN, scheme included.
+
+        The ONE accessor, same name the ORM row carries, so a caller holding either shape
+        reads the same thing and no caller anywhere puts a scheme in front of a host itself
+        (#1845). The derivation stays in
+        :func:`src.core.agent_identity.canonical_agent_url`: one place computes, one name
+        reads.
+
+        Always a string, and never a fallback — ``virtual_host`` is required on this model.
+        """
+        from src.core.agent_identity import canonical_agent_url
+
+        return canonical_agent_url(self)
+
+    @property
+    def primary_domain(self) -> str:
+        """The publisher domain this tenant is known by: a HOSTNAME, never an origin.
+
+        The same accessor the ORM row carries, over the same derivation
+        (:func:`src.core.http_utils.hostname_of`), because ``publisher_domain`` is
+        constrained by AdCP to a pattern admitting no colon while ``virtual_host`` carries
+        the port. A reader holding the projection asks for the fact by this name rather than
+        stripping the port itself.
+        """
+        from src.core.http_utils import hostname_of
+
+        return hostname_of(self.virtual_host)
+
     # --- Construction helpers ---
 
     @classmethod

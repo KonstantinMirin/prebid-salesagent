@@ -279,6 +279,24 @@ class Tenant(Base, JSONValidatorMixin):
         self._gemini_api_key = encrypt_api_key(value)
 
     @property
+    def agent_url(self) -> str:
+        """Where this tenant's agent is reachable: its canonical ORIGIN, scheme included.
+
+        The ONE accessor. A caller that wants an agent URL reads this name, so "put a scheme
+        in front of a host" has no spelling left anywhere — a hardcoded ``https://`` has
+        nothing to concatenate from, because nobody reaches for the column (#1845). The
+        derivation stays in :func:`src.core.agent_identity.canonical_agent_url`, which this
+        delegates to: one place computes, one name reads.
+
+        Always a string, and never a fallback: ``virtual_host`` is mandatory, so a tenant
+        always has a URL. A caller wanting one for a tenant it does not hold is a different
+        bug than a missing default here.
+        """
+        from src.core.agent_identity import canonical_agent_url
+
+        return canonical_agent_url(self)
+
+    @property
     def primary_domain(self) -> str:
         """The publisher domain this tenant is known by — a HOSTNAME, never an origin.
 

@@ -54,7 +54,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.adapters.base import TargetingCapabilities
-from src.core.agent_identity import AGENT_ENDPOINT_PATHS, canonical_agent_url
+from src.core.agent_identity import AGENT_ENDPOINT_PATHS
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
 from src.core.database.repositories.uow import TenantConfigUoW
 from src.core.errors.codes import ErrorCode
@@ -64,7 +64,6 @@ from src.core.helpers.adapter_helpers import (
     get_adapter_class_for_tenant,
 )
 from src.core.helpers.channel_helpers import effective_channel_names
-from src.core.http_utils import hostname_of
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import Error
 from src.core.schemas.capability_declarations import (
@@ -443,11 +442,11 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
 
     # With no publisher partners recorded, the seller's portfolio is its own inventory, so
     # the domain it names is the one it is served at — never a derived name, which reaches
-    # the buyer as the publisher's own domain while nobody owns it (#1845). hostname_of
-    # because AdCP's publisher_domain pattern admits no colon while virtual_host carries
-    # the port.
+    # the buyer as the publisher's own domain while nobody owns it (#1845). Through
+    # ``primary_domain``, the one accessor, because AdCP's publisher_domain pattern admits no
+    # colon while virtual_host carries the port.
     if not publisher_domains:
-        publisher_domains = [PublisherDomain(root=hostname_of(tenant.virtual_host))]
+        publisher_domains = [PublisherDomain(root=tenant.primary_domain)]
 
     # Get advertising policies from tenant config
     advertising_policies: str | None = None
@@ -573,7 +572,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     # tenant's STORED host, never from a request header: a tenant answering on several
     # hosts would otherwise publish several identities, and the card's URL must be the
     # byte-identical string brand.json's ``agents[].url`` carries.
-    agent_url = canonical_agent_url(tenant) + AGENT_ENDPOINT_PATHS["a2a"]
+    agent_url = tenant.agent_url + AGENT_ENDPOINT_PATHS["a2a"]
 
     # specialisms declaration activates the storyboard scenarios bundled under
     # `sales-non-guaranteed` (`inventory_list_targeting`, `inventory_list_no_match`,

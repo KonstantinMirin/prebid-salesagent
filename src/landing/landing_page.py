@@ -6,7 +6,7 @@ import os
 from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from src.core.agent_identity import AGENT_ENDPOINT_PATHS, canonical_agent_url
+from src.core.agent_identity import AGENT_ENDPOINT_PATHS
 from src.core.tenant_context import TenantContext
 from src.core.version import get_version
 
@@ -26,8 +26,8 @@ def _get_jinja_env() -> Environment:
 def _tenant_base_url(tenant_row: dict) -> str:
     """The origin every URL on this page is built from: the tenant's STORED one.
 
-    The same string the agent card publishes, from the same derivation
-    (:func:`canonical_agent_url` over the host the tenant declares), so the page and the
+    The same string the agent card publishes, through the same accessor
+    (``tenant.agent_url`` over the host the tenant declares), so the page and the
     card cannot name different origins for one tenant. Reading the request's ``Host`` here
     would publish whatever spelling the caller sent: a request resolves with or without the
     port, so a tenant stored at ``host:8443`` would be advertised as ``https://host`` by the
@@ -41,7 +41,7 @@ def _tenant_base_url(tenant_row: dict) -> str:
     """
     # Through the projection, not the raw column: it folds the host to lowercase, which is
     # what the card's own reader does, so both sides publish the byte-identical string.
-    return canonical_agent_url(TenantContext.from_dict(tenant_row))
+    return TenantContext.from_dict(tenant_row).agent_url
 
 
 def _extract_tenant_subdomain(tenant_row: dict) -> str | None:

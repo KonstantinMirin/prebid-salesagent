@@ -14,7 +14,6 @@ from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
-from src.core.agent_identity import canonical_agent_url
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
@@ -434,10 +433,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         # A signals agent records its deployments against a ``destination.agent_url``, which
         # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
         # ``extract_activation_key`` picks ours by comparing that string to this one. So it
-        # is the URL the agent card publishes — the same derivation, so the two cannot name
+        # is the URL the agent card publishes — the one accessor, so the two cannot name
         # different agents — never the bare host, which carries no scheme and may carry a
         # port and therefore matches no URI at all.
-        our_agent_url = canonical_agent_url(tenant)
+        #
+        # Ungraded through this tool today: the line below raises DetachedInstanceError on
+        # the rows the generator returns, so no variant reaches a response at all (#2291).
+        our_agent_url = tenant.agent_url
 
         dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
         if dynamic_variants:
