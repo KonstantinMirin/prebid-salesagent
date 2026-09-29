@@ -560,7 +560,7 @@ async def _handle_landing_page(request: Request):
     if result.type == "admin":
         return RedirectResponse(url="/admin/login", status_code=302)
 
-    if result.type in ("custom_domain", "subdomain") and result.tenant:
+    if result.type == "custom_domain" and result.tenant:
         try:
             html_content = await asyncio.to_thread(generate_tenant_landing_page, result.tenant)
             return HTMLResponse(content=html_content)

@@ -9,6 +9,12 @@ Subdomain routing is GONE. A deployment serving a tenant at
 lookup here; the second derivation it replaced needed a ``SALES_AGENT_DOMAIN``
 setting and disagreed with the first often enough to publish an agent card naming
 a host nothing served.
+
+This function is the ONE answer for everything outside the tool boundary: the root route
+serves what it decides, and the ``/debug/*`` reports in :mod:`src.routes.health` report what
+it decided rather than repeating the lookup — a debug endpoint naming a detection the
+deployment does not have is worse than no endpoint. A tool never comes here; its tenant is
+resolved once by the boundary and carried on the identity.
 """
 
 from dataclasses import dataclass

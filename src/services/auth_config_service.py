@@ -8,11 +8,9 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
-from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import Tenant, TenantAuthConfig
-from src.core.domain_config import get_sales_agent_url
 
 logger = logging.getLogger(__name__)
 
@@ -235,32 +233,18 @@ def mark_oidc_verified(tenant_id: str, redirect_uri: str) -> None:
 
 
 def get_tenant_redirect_uri(tenant: Tenant) -> str:
-    """Get the OAuth redirect URI for a tenant.
+    """The OAuth redirect URI for *tenant*, on the origin the tenant is served at.
 
-    The redirect URI is based on the tenant's domain configuration.
+    ``tenant.agent_url`` is the whole answer: a redirect URI has to name a host the tenant is
+    actually reachable at, and the tenant declares exactly one. The accessor decides the
+    scheme too, so a developer's ``localhost`` install gets ``http`` rather than an ``https``
+    URI the provider then refuses.
 
-    Args:
-        tenant: The Tenant object
-
-    Returns:
-        Full redirect URI
+    There is no ladder beneath it. The deployment-wide answers this used to fall through to —
+    ``SALES_AGENT_DOMAIN``, the Fly app name, ``localhost`` — were reachable only for a tenant
+    that declared no host, and ``virtual_host`` is mandatory (#1845).
     """
-    if tenant.virtual_host:
-        # The host this tenant is served at, and the only per-tenant answer: a redirect URI
-        # has to be a host the tenant is actually reachable at, and only virtual_host says
-        # so. A tenant that declares none falls through to the deployment-wide answers.
-        base = f"https://{tenant.virtual_host}"
-    elif main_url := get_sales_agent_url():
-        # The deployment's own URL, for an install that serves one seller
-        base = main_url
-    elif fly_app := get_settings().runtime.fly_app_name:
-        # Single-tenant mode on Fly.io - use the app's URL
-        base = f"https://{fly_app}.fly.dev"
-    else:
-        # Local development fallback
-        base = get_settings().runtime.local_base_url
-
-    return f"{base}/admin/auth/oidc/callback"
+    return f"{tenant.agent_url}/admin/auth/oidc/callback"
 
 
 def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | None, tenant_id: str) -> bool:

@@ -12,7 +12,6 @@ from werkzeug.wrappers import Response
 
 from src.admin.utils import require_tenant_access
 from src.admin.utils.audit_decorator import log_admin_action
-from src.core.agent_identity import canonical_agent_url
 from src.core.config import get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
@@ -225,8 +224,8 @@ def _construct_agent_url(tenant_id: str) -> str:
 
     A counterparty fetches adagents.json and byte-matches the agent URL it finds there
     against the one the card published, and there is no diagnostic when the two disagree —
-    the check simply fails. So this asks :func:`canonical_agent_url`, the one derivation,
-    rather than deriving its own.
+    the check simply fails. So this reads ``tenant.agent_url``, the one accessor, rather
+    than deriving its own.
 
     Takes no ``request``: a tenant's published identity comes from its row, and a request
     parameter on a function deriving it is an invitation to read a header instead.
@@ -237,7 +236,7 @@ def _construct_agent_url(tenant_id: str) -> str:
         tenant = TenantLookupRepository(db_session).find_by_id(tenant_id)
         if not tenant:
             raise ValueError(f"Tenant {tenant_id} not found")
-        return canonical_agent_url(tenant)
+        return tenant.agent_url
 
 
 @authorized_properties_bp.route("/<tenant_id>/authorized-properties")
@@ -597,6 +596,11 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
             stmt = select(Tenant).where(Tenant.tenant_id == tenant_id)
             tenant = session.scalars(stmt).first()
 
+            # The URL this tenant publishes, read off the row while it is still attached.
+            # One accessor: a scheme written in here answers https for a deployment served
+            # over http and drifts from what the card published (#1845).
+            agent_url: str | None = tenant.agent_url if tenant else None
+
             if tenant and isinstance(tenant.metadata, dict):
                 last_sync = tenant.metadata.get("last_property_sync")
                 if last_sync:
@@ -614,12 +618,6 @@ def sync_properties_from_adagents(tenant_id: str) -> Response:
                                 tenant_id=tenant_id,
                             )
                         )
-
-        # The host the tenant declares, or nothing. A URL built from the subdomain and
-        # SALES_AGENT_DOMAIN went with the subdomain strategy: a
-        # tenant that declares no host has no agent URL, and inventing one names a host
-        # nothing serves.
-        agent_url: str | None = f"https://{tenant.virtual_host}" if tenant and tenant.virtual_host else None
 
         # Get optional domain filter from form
         publisher_domains_str = request.form.get("publisher_domains", "").strip()

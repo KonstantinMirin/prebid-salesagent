@@ -285,16 +285,22 @@ class TestOidcCallbackCompatibility:
     """OIDC config should keep the legacy public callback path."""
 
     def test_get_tenant_redirect_uri_uses_root_auth_callback(self):
+        """On the origin the tenant is served at, keeping the legacy callback path.
+
+        The scheme is decided by that origin rather than assumed: a local install gets
+        ``http``, so the provider is not handed an ``https`` URI for a server that does not
+        speak it. A real ``Tenant`` rather than a mock, because ``virtual_host`` is mandatory
+        and a mock answering ``None`` grades a state production cannot reach.
+        """
+        from src.core.database.models import Tenant
         from src.services.auth_config_service import get_tenant_redirect_uri
 
-        tenant = MagicMock()
-        tenant.virtual_host = None
-        tenant.subdomain = None
+        local = get_tenant_redirect_uri(Tenant(tenant_id="oidc-local", virtual_host="localhost:8080"))
+        served = get_tenant_redirect_uri(Tenant(tenant_id="oidc-served", virtual_host="sso.example.com"))
 
-        with patch.dict(os.environ, {"ADCP_SALES_PORT": "8080"}, clear=False):
-            redirect_uri = get_tenant_redirect_uri(tenant)
-
-        assert redirect_uri.endswith("/auth/oidc/callback")
+        assert local == "http://localhost:8080/admin/auth/oidc/callback"
+        assert served == "https://sso.example.com/admin/auth/oidc/callback"
+        assert local.endswith("/auth/oidc/callback")
 
 
 class TestA2ATrailingSlashCompatibility:

@@ -430,8 +430,17 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     try:
         from src.services.dynamic_products import generate_variants_for_brief
 
-        # Get our agent URL for deployment specification
-        our_agent_url = tenant.virtual_host  # Our sales agent URL (e.g., https://sales.example.com)
+        # A signals agent records its deployments against a ``destination.agent_url``, which
+        # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
+        # ``extract_activation_key`` picks ours by comparing that string to this one. So it
+        # is the URL the agent card publishes — the one accessor, so the two cannot name
+        # different agents — never the bare host, which carries no scheme and may carry a
+        # port and therefore matches no URI at all.
+        #
+        # Ungraded through this tool today: the conversion further down raises
+        # DetachedInstanceError on the rows the generator hands back, so no variant reaches a
+        # response at all (#2291).
+        our_agent_url = tenant.agent_url
 
         dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
         if dynamic_variants:
