@@ -16,8 +16,6 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
 
-from tests.factories.principal import PrincipalFactory
-
 if TYPE_CHECKING:
     from src.core.resolved_identity import PublicIdentity
 
@@ -139,12 +137,18 @@ class TestGetAdcpCapabilitiesImports:
 class TestGetAdcpCapabilitiesImpl:
     """Test the _get_adcp_capabilities_impl function."""
 
-    def test_impl_returns_response_without_context(self):
-        """Test that impl returns minimal response when no context is available."""
+    def test_impl_declares_the_pinned_versions_and_idempotency_posture(self):
+        """The envelope's version pins and idempotency posture, on the one path there is.
+
+        Was written against a no-tenant identity, which is no longer representable: a
+        request naming no seller is refused CONFIGURATION_ERROR before an identity exists
+        (BR-UC-010 T-UC-010-ext-a grades that). The assertions are tenant-independent
+        facts, so they move onto the tenant-resolved path rather than being dropped.
+        """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        # Call without context - should return minimal response
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
+        with _patch_capabilities_deps():
+            response = _get_adcp_capabilities_impl(None, _make_capabilities_identity(principal_id=None))
 
         assert isinstance(response, GetAdcpCapabilitiesResponse)
         assert response.adcp is not None
@@ -163,7 +167,8 @@ class TestGetAdcpCapabilitiesImpl:
         """Test that impl response can be serialized to valid JSON."""
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
+        with _patch_capabilities_deps():
+            response = _get_adcp_capabilities_impl(None, _make_capabilities_identity(principal_id=None))
 
         # Should be able to serialize - use mode="json" for JSON-compatible output
         data = response.model_dump(mode="json")
@@ -660,16 +665,11 @@ class TestResponseShapeCapabilities:
     # stronger: it asserts last_updated parses as an RFC 3339 date-time, where this asserted only
     # "is not None".
     #
-    # Its sibling test_last_updated_absent_without_tenant is DELIBERATELY KEPT: the no-tenant
-    # case belongs to @T-UC-010-ext-a ("no_tenant - tenant absent, minimal capabilities"), which
-    # is NOT COLLECTED at all, so nothing grades it.
-
-    def test_last_updated_absent_without_tenant(self):
-        """Response has no last_updated when no tenant context (minimal response)."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-        assert response.last_updated is None
+    # Its sibling test_last_updated_absent_without_tenant is REMOVED too: it graded the
+    # minimal no-tenant response, and there is no such response. A request naming no seller
+    # is refused CONFIGURATION_ERROR before an identity exists, which @T-UC-010-ext-a now
+    # grades ("no_tenant - a request naming no seller is refused"). The identity type makes
+    # the state unrepresentable, so there is nothing left to assert about it.
 
     def test_features_defaults_with_tenant(self):
         """Features defaults: inline_creative_management=True, property_list_filtering=False.
@@ -708,15 +708,8 @@ class TestResponseShapeCapabilities:
         assert "features" in data["media_buy"]
         assert "execution" in data["media_buy"]
 
-    def test_minimal_response_no_media_buy(self):
-        """Minimal response (no tenant) omits media_buy from serialized output."""
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-        assert response.media_buy is None
-        data = response.model_dump(mode="json")
-        # media_buy is excluded from serialization when None
-        assert "media_buy" not in data
+    # test_minimal_response_no_media_buy is REMOVED for the same reason: it asserted that the
+    # minimal no-tenant response omits media_buy, and no request produces one.
 
 
 class TestAccountBlockAndSigningDeclarations:
@@ -732,19 +725,20 @@ class TestAccountBlockAndSigningDeclarations:
     request_signing (salesagent-becl.15 implements this).
     """
 
-    def test_no_tenant_response_omits_account_but_declares_signing_false(self):
-        """No-tenant (minimal) path: account block absent, signing blocks present and False.
+    def test_signing_blocks_are_declared_and_false(self):
+        """Both signing blocks are present and declare supported=False.
 
-        webhook_signing/request_signing are agent-level facts (not tenant-dependent),
-        so they must appear on BOTH the no-tenant and tenant-resolved paths. account
-        stays absent on the no-tenant path (BR-RULE-052 / ext-a: no tenant to derive
-        billing/sandbox from).
+        They are AGENT-level facts, not tenant-dependent, which is why they are asserted
+        with no signing-related tenant config in play. This used to assert them on the
+        minimal no-tenant path as well; that path is gone (a request naming no seller is
+        refused CONFIGURATION_ERROR before an identity exists), and the claim it also made
+        there -- that the account block is absent with no tenant to derive billing from --
+        has no state left to hold in.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-
-        assert response.account is None
+        with _patch_capabilities_deps():
+            response = _get_adcp_capabilities_impl(None, _make_capabilities_identity(principal_id=None))
 
         assert response.webhook_signing is not None
         assert response.webhook_signing.supported is False

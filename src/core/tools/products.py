@@ -187,10 +187,9 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         raise AdCPValidationError()
 
     principal_id: str | None = identity.principal_id
+    # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
+    # resolver, so there is no empty-catalog answer for one.
     tenant = identity.tenant
-    if tenant is None:
-        # No seller is addressed: there is no catalog to list, and nothing to refuse.
-        return GetProductsResponse(products=[])
 
     # Extract offering text from brand (adcp 3.6.0: brand replaces brand_manifest).
     # req.brand is BrandReference | None (Pydantic model with .domain attribute).

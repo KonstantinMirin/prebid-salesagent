@@ -42,15 +42,22 @@ class TransportProtocol(StrEnum):
 
 
 class PublicIdentity(BaseModel):
-    """Whoever reached a PUBLIC tool: a resolved caller, or nobody.
+    """Whoever reached a PUBLIC tool: a resolved caller, or nobody. The TENANT is always there.
 
     The resolver builds one for a registry row that does not require a credential
     (``get_products``, ``list_creative_formats``, ``get_adcp_capabilities``). A presented
     credential that resolves fills ``principal``; an absent one leaves it ``None``, and the
     tool branches on that itself. A presented credential that does NOT resolve never reaches
     the tool: the resolver refuses it with AUTH_INVALID on every row, public or protected.
-    A protected tool never sees this type: it takes :class:`ResolvedIdentity`, whose fields
-    are not optional.
+    A protected tool never sees this type: it takes :class:`ResolvedIdentity`, whose
+    ``principal`` is not optional either.
+
+    Only the CALLER can be absent. ``tenant`` is required on this type, so no application
+    path holds an undefined tenant: a request naming no seller this deployment serves is
+    refused CONFIGURATION_ERROR before any identity is built (``_addressed_tenant``), and
+    ``identity_of`` refuses a stored id whose tenant does not load. That asymmetry is the
+    design: an anonymous buyer is a real caller of a public tool, a sellerless request is
+    not a request.
 
     Immutable after creation; the identity does not change during request processing.
     """
@@ -71,7 +78,14 @@ class PublicIdentity(BaseModel):
     # The tenant the request names, its row loaded by the resolver. ONE type, never a
     # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
     # (transitional)", and that union is how dict-shaped tenant handling spread.
-    tenant: InstanceOf[TenantContext] | None = None
+    #
+    # REQUIRED, and not optional as it once was. There is no path in the application with an
+    # undefined tenant: each of the three construction sites resolves one or raises
+    # CONFIGURATION_ERROR first (``_addressed_tenant`` for a request, the explicit refusal in
+    # ``identity_of`` for stored-id work). An optional here made every reader check for a
+    # ``None`` that cannot arrive, and deleting those checks while the type still permitted
+    # one only invited the next reader to add them back. Now mypy refuses the construction.
+    tenant: InstanceOf[TenantContext]
     # No ``protocol`` field: the transport is a label the boundary holds for its own
     # observability record (``invoke_tool``'s parameter), and nothing read it off the
     # identity. A field with no reader on an identity built for stored-id work
@@ -87,17 +101,18 @@ class PublicIdentity(BaseModel):
         return self.principal.principal_id if self.principal is not None else None
 
     @property
-    def tenant_id(self) -> str | None:
-        return self.tenant.tenant_id if self.tenant is not None else None
+    def tenant_id(self) -> str:
+        return self.tenant.tenant_id
 
     def replay_scope(self) -> tuple[str, str, str | None] | None:
         """``(tenant_id, principal_id, account_id)`` the idempotency cache keys on, or None.
 
-        A caller that resolved no tenant or no principal has no scope to be cached under.
+        An ANONYMOUS caller has no scope to be cached under. Only the principal can be
+        absent -- the tenant is always resolved -- so that is the one question asked.
         Polymorphic rather than an ``isinstance`` at the boundary: the type that knows what
         it carries answers.
         """
-        if self.tenant is None or self.principal is None:
+        if self.principal is None:
             return None
         return self.tenant.tenant_id, self.principal.principal_id, None
 
@@ -121,17 +136,14 @@ class ResolvedIdentity(PublicIdentity):
     :class:`AccountIdentity` instead and never sees the None.
     """
 
+    # ``tenant`` is not redeclared: it is already required on the parent, so a redeclaration
+    # would only restate it. ``principal`` is the one this type narrows.
     principal: InstanceOf[Principal]
-    tenant: InstanceOf[TenantContext]
     account: InstanceOf[Account] | None = None
 
     @property
     def principal_id(self) -> str:
         return self.principal.principal_id
-
-    @property
-    def tenant_id(self) -> str:
-        return self.tenant.tenant_id
 
     def replay_scope(self) -> tuple[str, str, str | None]:
         return self.tenant_id, self.principal_id, self.account.account_id if self.account is not None else None
@@ -191,11 +203,12 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     one asked. A proxy that has to rewrite the host does it BEFORE the app, so that what
     arrives here is the ``Host``.
 
-    ``None`` is a real answer, not a gap to fill. A protected tool then answers AUTH_MISSING
-    (no tenant means no principal lookup) and a public tool proceeds with no tenant, which
-    its implementation already branches on. This is what a multi-tenant front does with a
-    host it does not serve; answering with a tenant the request never named is worse than
-    answering with none.
+    ``None`` means the request names no seller, and nothing downstream carries that state:
+    the sole caller, ``_addressed_tenant``, turns it into CONFIGURATION_ERROR, which the
+    pinned enum classifies ``terminal`` (BR-UC-010 T-UC-010-ext-a grades it). A protected
+    tool presenting no credential is refused AUTH_MISSING one step earlier, before detection
+    runs at all. Identification is the whole job here; answering with a tenant the request
+    never named would be worse than refusing.
 
     Nothing in the pinned spec asks for any of this — a request is addressed to an agent's
     URL, and the mapping from that to a tenant is the seller's own business — so these two
@@ -358,22 +371,26 @@ def _resolve_identity(
     # Step 3: the seller this request addresses, identified from the host and loaded. The
     # tenant comes first because a principal is a row in a tenant: a credential is only
     # ever verified inside the tenant the request reached, never looked up across tenants.
+    #
+    # It RAISES rather than returning None -- a request naming no seller this deployment
+    # serves gets CONFIGURATION_ERROR -- so every step below has a tenant, and none of them
+    # checks for one.
     tenant = _addressed_tenant(headers)
 
     # Step 3b: the SELLER's policy. A public tool's row does not require a credential, but
     # the tenant it addresses may (brand_manifest_policy "require_auth" on get_products,
     # BR-UC-001 INV-1). The policy is seller data, so it can only be asked once the tenant
     # is loaded; the answer is the same AUTH_MISSING the row-level check mints above.
-    if not require_valid_token and tenant is not None and credential_required_for is not None:
+    if not require_valid_token and credential_required_for is not None:
         require_valid_token = credential_required_for(tenant)
         if require_valid_token and not auth_token:
             from src.core.exceptions import AdCPAuthRequiredError
 
             raise AdCPAuthRequiredError()
 
-    # Step 4: the token to its principal, inside that tenant. No tenant, no lookup.
+    # Step 4: the token to its principal, inside that tenant.
     principal: Principal | None = None
-    if auth_token and tenant is not None:
+    if auth_token:
         principal = get_principal_from_token(auth_token, tenant.tenant_id)
 
     # Presented, and not a principal of the tenant addressed: AUTH_INVALID, on EVERY row.
@@ -384,7 +401,7 @@ def _resolve_identity(
     # let through, and says nothing about a presented one. A public tool used to take a
     # rejected credential as absent and serve the caller anonymously; the storyboard's own
     # narrative calls an agent that 200s a bad credential one that "is ignoring credentials
-    # entirely". (No tenant means no lookup ran, which is the same outcome: nothing resolved.)
+    # entirely".
     if auth_token and principal is None:
         from src.core.exceptions import AdCPAuthenticationError
 
@@ -396,8 +413,9 @@ def _resolve_identity(
         return PublicIdentity(principal=principal, tenant=tenant)
 
     # A protected row: step 2 or 3b refused an absent credential and the check above refused
-    # a rejected one, so both rows resolved. The assert is the static narrowing of that.
-    assert tenant is not None and principal is not None
+    # a rejected one, so the principal resolved. The assert is the static narrowing of that;
+    # the tenant needs none, because step 3 raises rather than returning one.
+    assert principal is not None
 
     if account_ref is None:
         return ResolvedIdentity(principal=principal, tenant=tenant)

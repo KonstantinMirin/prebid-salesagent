@@ -21,16 +21,17 @@ from tests.factories.principal import PrincipalFactory
 logger = logging.getLogger(__name__)
 
 
-def _make_identity(principal_id=None, tenant=None):
+def _make_identity(principal_id, tenant):
     """The identity a get_products call arrives with.
 
     ``get_products`` is a PUBLIC tool, so it takes a ``PublicIdentity``: whoever reached
     it, or nobody. ``principal_id=None`` is the anonymous caller — a principal-less
-    identity, not a ``ResolvedIdentity`` whose id is None.
+    identity, not a ``ResolvedIdentity`` whose id is None. *tenant* has no default,
+    because the type has none: there is no tenant-less identity to build.
     """
     return PrincipalFactory.make_public_identity(
         principal_id=principal_id,
-        tenant_id=tenant.get("tenant_id") if tenant else None,
+        tenant_id=tenant["tenant_id"],
         tenant=tenant,
     )
 

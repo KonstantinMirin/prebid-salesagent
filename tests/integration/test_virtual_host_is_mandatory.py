@@ -177,6 +177,40 @@ def test_the_column_itself_refuses_a_tenant_with_no_host(integration_db):
 
 
 @pytest.mark.requires_db
+def test_the_settings_page_hands_the_operator_the_stored_origin(authenticated_admin_session, integration_db):
+    """The settings page's copy-paste MCP endpoint names the host the tenant declares.
+
+    It is a publisher of the agent URL like the card and the adagents.json verifier, and the
+    one an operator actually copies out of, so a wrong host here reaches a buyer by hand.
+    The page had no test of any kind, which is how its endpoint block kept a
+    ``http://localhost:<port>/mcp/`` arm two lines under one saying the domain was not
+    configured (#2191).
+
+    Asserts BOTH halves for the same tenant: the stored origin appears, and no localhost MCP
+    URL does. The absence half is what a fabricated or dev-default host would break; the
+    presence half is what an empty block would.
+    """
+    from src.core.tenant_context import TenantContext
+    from tests.factories import TenantFactory
+    from tests.harness import ProductEnv
+
+    _as_production_admin(authenticated_admin_session)
+
+    with ProductEnv(tenant_id="settings-origin-t", principal_id="settings-origin-p") as env:
+        TenantFactory(tenant_id="settings-origin-t", virtual_host=ORIGIN)
+        env._commit_factory_data()
+
+        assert TenantContext.load("settings-origin-t") is not None, "the tenant was not committed"
+
+        page = authenticated_admin_session.get("/tenant/settings-origin-t/settings/api")
+        assert page.status_code == 200, page.data[:500]
+        rendered = page.data.decode()
+
+    assert f"https://{ORIGIN}/mcp/" in rendered, "the settings page does not name the host the tenant declares"
+    assert "localhost" not in rendered, "the settings page hands the operator a localhost URL to copy"
+
+
+@pytest.mark.requires_db
 def test_every_publisher_of_this_tenants_agent_url_names_the_same_origin(monkeypatch, integration_db):
     """The adagents.json verifier and the card name ONE origin for one tenant.
 
