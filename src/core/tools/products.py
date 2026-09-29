@@ -14,6 +14,7 @@ from adcp import Product as LibraryProduct
 from adcp.types import PropertyListReference
 
 from src.adapters import get_adapter_default_channels
+from src.core.agent_identity import canonical_agent_url
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.details import PolicyViolationDetails
 from src.core.exceptions import (
@@ -430,8 +431,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
     try:
         from src.services.dynamic_products import generate_variants_for_brief
 
-        # Get our agent URL for deployment specification
-        our_agent_url = tenant.virtual_host  # Our sales agent URL (e.g., https://sales.example.com)
+        # A signals agent records its deployments against a ``destination.agent_url``, which
+        # AdCP 3.1.1 declares "format": "uri" (core/destination.json), and
+        # ``extract_activation_key`` picks ours by comparing that string to this one. So it
+        # is the URL the agent card publishes — the same derivation, so the two cannot name
+        # different agents — never the bare host, which carries no scheme and may carry a
+        # port and therefore matches no URI at all.
+        our_agent_url = canonical_agent_url(tenant)
 
         dynamic_variants = await generate_variants_for_brief(tenant.tenant_id, brief_text, our_agent_url)
         if dynamic_variants:
