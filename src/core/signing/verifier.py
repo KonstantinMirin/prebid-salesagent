@@ -104,6 +104,7 @@ from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.exceptions import adcp_error_for
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 from src.core.schemas import Principal
+from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
 from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
@@ -114,12 +115,6 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from src.core.tenant_context import TenantContext
 
 logger = logging.getLogger(__name__)
-
-#: Process-level ``{agent_url: AgentResolution}``. The WHOLE resolution is kept, not just
-#: the JWKS, because the JWKS LOCATION is checked against the agent's own origin before the
-#: resolution is admitted (:func:`_jwks_is_well_known`). Entries expire by
-#: ``agent_resolution_ttl_seconds`` against ``AgentResolution.fetched_at``.
-AGENT_RESOLUTION_CACHE: dict[str, AgentResolution] = {}
 
 #: The signing purpose this verifier reads keys for. Names the ``adcp_use`` a JWK must
 #: declare; it is NOT a lookup key into ``identity.key_origins``, which this seller does not

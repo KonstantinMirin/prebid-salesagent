@@ -49,6 +49,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Req
 from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
 from pydantic import AnyUrl, ConfigDict, model_validator
 
+from src.core.config import get_settings
 from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, keeps this module free of DB imports
@@ -153,6 +154,8 @@ def request_signing_is_declarable() -> bool:
     reads the SAME table ``from_tenant`` rejects against, re-adding the block to
     ``_UNBACKED_BLOCKS`` switches them off by itself with no second flag to keep in sync.
     """
+    # Imported here, not at module scope: ``capability_declarations`` imports the posture
+    # models FROM this module, so a module-level import back into it closes a cycle.
     from src.core.schemas.capability_declarations import is_block_declarable
 
     return is_block_declarable("request_signing")
@@ -173,8 +176,6 @@ def agent_level_posture() -> RequestSigningPosture:
       per-counterparty pilots". A non-empty default would reject every existing buyer at
       once.
     """
-    from src.core.config import get_settings
-
     return RequestSigningPosture(supported=get_settings().signing.verifier_enabled)
 
 

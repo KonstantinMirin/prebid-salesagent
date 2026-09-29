@@ -106,8 +106,12 @@ Because the location never varies, the seller consults no
 `identity.key_origins` map. That map exists to declare where keys live when the
 location can vary.
 
-`AGENT_RESOLUTION_CACHE` holds the whole resolution per agent URL, and entries
-expire against `SigningSettings.agent_resolution_ttl_seconds`. When a
+`AGENT_RESOLUTION_CACHE` in `src/core/signing/agent_cache.py` holds the whole
+resolution per agent URL, and entries expire against
+`SigningSettings.agent_resolution_ttl_seconds`. It sits in its own module because
+two readers need it: the verifier fills it from the discovery walk, and the
+revocation checker reads it to find the key a revocation list was signed with.
+When a
 counterparty's discovery walk fails, `_RESOLUTION_FAILURES` records the failure
 and its spec code, so a request arriving inside the refetch cooldown receives the
 same answer as the request that triggered the failure.

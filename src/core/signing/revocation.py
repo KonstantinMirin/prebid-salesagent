@@ -86,6 +86,7 @@ from adcp.signing.revocation_fetcher import (
 
 from src.core.config import SigningSettings
 from src.core.metrics import record_signature_revocation_unavailable
+from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
 from src.core.signing.canonical import origin_of
 
 logger = logging.getLogger(__name__)
@@ -161,16 +162,6 @@ class _ResolutionCacheJwksResolver:
         self._match_all = match_all
 
     def __call__(self, keyid: str) -> dict[str, Any] | None:
-        # Imported here rather than at module scope: the verifier imports `checker_for`
-        # from this module, so a top-level import back into it would be a cycle. The name is
-        # bound to the same dict object either way.
-        #
-        # The cache lives in `verifier.py`, beside the walk that fills it. A function-local
-        # import is invisible to every import-time check, so a name that drifts here fails
-        # nowhere at import and would surface only at checklist step 9 -- on a signed
-        # request from a counterparty publishing a revocation list, which no unit test reaches.
-        from src.core.signing.verifier import AGENT_RESOLUTION_CACHE
-
         for resolution in list(AGENT_RESOLUTION_CACHE.values()):
             if not self._match_all and origin_of(resolution.brand_json_url) != self._origin:
                 continue
