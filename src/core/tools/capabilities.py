@@ -43,8 +43,7 @@ def _get_adcp_capabilities_impl(
     none of them can forget to ask. It stays un-tenant-gated by construction: the
     boundary rejects before an identity is enriched, let alone a tenant read.
     """
-    if identity.tenant:
-        log_tool_activity(identity, "get_adcp_capabilities")
+    log_tool_activity(identity, "get_adcp_capabilities")
 
     seller = describe_seller(identity)
 
@@ -59,9 +58,7 @@ def _get_adcp_capabilities_impl(
         webhook_signing=seller.webhook_signing,
         request_signing=seller.request_signing,
         errors=seller.advisories or None,
-        # Absent on the minimal (no-tenant) description, where there is no stored
-        # state whose freshness the stamp would describe.
-        last_updated=datetime.now(UTC) if identity.tenant else None,
+        last_updated=datetime.now(UTC),
     )
 
     # Purely subtractive, and deliberately applied AFTER the derivation rather than

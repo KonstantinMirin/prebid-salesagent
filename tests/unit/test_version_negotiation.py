@@ -16,8 +16,10 @@ Pins the CORE behavior from the refined implementation plan, steps 1-4:
    speak. The wire-level grading across transports lives in
    ``tests/integration/test_version_negotiation_wire.py``.
 4. The DRY ``_build_adcp_block()`` helper derives ``supported_versions`` from
-   the single-sourced constant on BOTH the minimal (no-tenant) and full
-   (tenant-resolved) response paths -- no literal duplication.
+   the single-sourced constant -- no literal duplication. There is one response
+   path: a request naming no seller is refused CONFIGURATION_ERROR before an
+   identity exists, so the "minimal (no-tenant) response" it once also covered
+   does not occur.
 
 Does NOT cover plan step 5 (harness override seam) or step 6 (BDD step
 authoring) -- that is separate implementation-atom scope.
@@ -30,7 +32,6 @@ import re
 import pytest
 
 from src.core.schemas import GetAdcpCapabilitiesRequest
-from tests.factories.principal import PrincipalFactory
 
 
 class TestSupportedAdcpVersionsDerivation:
@@ -169,29 +170,29 @@ class TestBoundaryNegotiatesForEveryTool:
         Two negotiators would drift, and the boundary's is the one every tool crosses.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
+        from tests.unit.test_get_adcp_capabilities import (
+            _make_capabilities_identity,
+            _patch_capabilities_deps,
+        )
 
         req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
 
-        # Reached directly, past the boundary, the implementation just answers. The
-        # caller is anonymous and names no seller: a PublicIdentity with neither.
-        response = _get_adcp_capabilities_impl(req, PrincipalFactory.make_public_identity(tenant=None))
+        # Reached directly, past the boundary, the implementation just answers rather than
+        # refusing the unsupported pin. The caller is ANONYMOUS -- a PublicIdentity with no
+        # principal; the tenant is always resolved, so there is no sellerless identity to
+        # arrive with.
+        with _patch_capabilities_deps():
+            response = _get_adcp_capabilities_impl(req, _make_capabilities_identity(principal_id=None))
         assert response.adcp.supported_versions is not None
 
 
 class TestBuildAdcpBlockDry:
-    """Plan step 3-4: _build_adcp_block() single-sources supported_versions
-    across BOTH the no-tenant minimal response and the tenant-resolved full
-    response -- no literal Adcp(...) duplication.
+    """_build_adcp_block() DERIVES supported_versions -- no literal Adcp(...) in the tool.
+
+    Its sibling test over the "no-tenant minimal response" is removed: there is one response
+    path, because a request naming no seller is refused CONFIGURATION_ERROR before an
+    identity exists, so there is no second declaration site to compare against.
     """
-
-    def test_minimal_no_tenant_response_declares_derived_supported_versions(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
-
-        response = _get_adcp_capabilities_impl(None, PrincipalFactory.make_public_identity(tenant=None))
-
-        assert response.adcp.supported_versions is not None
-        assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS
 
     def test_full_tenant_response_declares_same_derived_supported_versions(self):
         from src.core.tools.capabilities import _get_adcp_capabilities_impl

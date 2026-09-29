@@ -158,8 +158,10 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
         """The caller of a PUBLIC tool, anonymous by default, without DB persistence.
 
         ``principal_id=None`` (the default) is the anonymous caller; a string is a caller
-        whose credential resolved on a public tool. ``tenant=None`` is a request that named
-        no seller. The same override rules as ``make_identity`` apply.
+        whose credential resolved on a public tool. The TENANT is always present -- the
+        identity type requires it, because a request naming no seller is refused
+        CONFIGURATION_ERROR before an identity is built -- so only the caller can be absent.
+        The same override rules as ``make_identity`` apply.
         """
         return PublicIdentity(
             principal=cls._principal_for(principal_id) if principal_id else None,

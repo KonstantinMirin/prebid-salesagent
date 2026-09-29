@@ -151,10 +151,9 @@ def _list_creative_formats_impl(
         req = ListCreativeFormatsRequest()
 
     principal_id = identity.principal_id
+    # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
+    # resolver, so there is no empty-format answer for one.
     tenant = identity.tenant
-    if tenant is None:
-        # No seller is addressed: there are no formats to list, and nothing to refuse.
-        return ListCreativeFormatsResponse(formats=[])
 
     # Get formats from all registered creative agents via registry
     from src.core.creative_agent_registry import FormatFetchResult, get_creative_agent_registry

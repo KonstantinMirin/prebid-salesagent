@@ -164,16 +164,14 @@ def _resolve_or_degrade[T](advisories: list[Error], what: str, resolve: Callable
         return default
 
 
-def _build_adcp_block(tenant: TenantContext | None) -> Adcp:
-    """Build the top-level adcp.* envelope -- single source for both the
-    no-tenant minimal response and the tenant-resolved full response, so the two
-    cannot state different versions or a different idempotency posture.
+def _build_adcp_block(tenant: TenantContext) -> Adcp:
+    """Build the top-level adcp.* envelope, so the tool and the agent card cannot state
+    different versions or a different idempotency posture.
 
     major_versions/supported_versions derive from SUPPORTED_ADCP_MAJORS/
     VERSIONS (src/core/version_negotiation.py), themselves derived from the
     pinned SDK spec version -- never a literal. idempotency derives from
-    get_idempotency_posture(tenant), the single source shared by both
-    response paths.
+    get_idempotency_posture(tenant), the one source every reader of that posture shares.
     """
     from src.core.idempotency_policy import get_idempotency_posture
     from src.core.version_negotiation import SUPPORTED_ADCP_MAJORS, SUPPORTED_ADCP_VERSIONS
@@ -343,20 +341,13 @@ class SellerCapabilities(BaseModel):
 def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     """This seller's capabilities for *identity*'s tenant.
 
-    Answers with the minimal description when no tenant resolved, which is what lets a
-    public tool serve an unrouted host at all.
+    There is always a tenant: a request naming no seller this deployment serves is refused
+    CONFIGURATION_ERROR before an identity exists (``_addressed_tenant``), so there is no
+    minimal "unrouted host" description to fall back to. BR-UC-010 T-UC-010-ext-a grades
+    that refusal, and the arm that once answered such a request minimally could not be
+    reached from either caller.
     """
     tenant = identity.tenant
-
-    if not tenant:
-        return SellerCapabilities(
-            adcp=_build_adcp_block(None),
-            supported_protocols=list(_DEFAULT_SUPPORTED_PROTOCOLS),
-            specialisms=list(_DEFAULT_SPECIALISMS),
-            webhook_signing=_WEBHOOK_SIGNING_UNSUPPORTED,
-            request_signing=_REQUEST_SIGNING_UNSUPPORTED,
-        )
-
     tenant_id = tenant.tenant_id
     tenant_name = tenant.name
 
