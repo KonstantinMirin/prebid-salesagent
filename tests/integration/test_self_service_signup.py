@@ -83,6 +83,11 @@ class TestSelfServiceSignupFlow:
         single-tenant install nginx is ``server_name _`` with no wildcard, so
         ``f"{subdomain}.{sales_agent_domain}"`` names nothing. Refusing is what keeps the
         derivation true by construction of the deployment that permits it.
+
+        The row assertion below reads "is there ANY active tenant", so it holds only while this
+        test seeds none of its own — which it does not. If a shared fixture ever seeds one, this
+        goes red without a tenant having been provisioned. That is the safe direction (a false
+        alarm, never a false pass), but it is the thing to check first if it ever fails.
         """
         from src.core.config import get_settings
 
