@@ -91,7 +91,7 @@ def test_a_ui_created_tenants_card_publishes_its_stored_origin(authenticated_adm
     urls = [interface["url"] for interface in interfaces]
     assert urls == [f"https://{ORIGIN}/a2a"], f"the card published {urls}, not the origin the operator stored"
 
-    # An URL nothing selects is as unreachable as a wrong one, so the binding is graded with
+    # A URL nothing selects is as unreachable as a wrong one, so the binding is graded with
     # it. An A2A 1.x client picks its interface with
     # `i.protocolBinding?.toUpperCase() === "JSONRPC"` (@a2a-js/sdk pick_interface.ts) --
     # uppercased there, so this mirrors the comparison the client makes rather than pinning a
@@ -109,7 +109,8 @@ def test_the_card_publishes_the_stored_origin_when_the_host_header_names_another
     the request, and every other card test sends ``Host: ORIGIN`` where ORIGIN is ALSO the
     stored ``virtual_host`` — so an echo of the header and a read of the column produce the
     same string, and all of them pass either way. Putting the echo back
-    (``agent_url=f"https://{request.headers['host']}/a2a"``) left 53 card tests green (#2191).
+    (``agent_url=f"https://{request.headers['host']}/a2a"``) left every card test green
+    (#2191), which is how the echo got written in the first place.
 
     Naming the tenant by ``x-adcp-tenant`` is what frees ``Host`` to carry something else:
     ``_detect_tenant`` tries the host against ``tenants.virtual_host`` first and falls through

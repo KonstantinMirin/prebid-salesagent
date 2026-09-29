@@ -13,11 +13,11 @@ So each location proxying to the upstream must do BOTH:
 * ``proxy_set_header Host $tenant_host;`` -- the folded host
 * ``proxy_set_header Apx-Incoming-Host "";`` -- and nothing downstream of the fold
 
-The file is exact today at 14 proxying locations. It got there through a defect worth
-encoding: ``location = /`` carried a pre-existing ``Apx-Incoming-Host`` passthrough BELOW
-the inserted strip, nginx applied the LAST directive, and so one location forwarded the
-header while the file read as though all 14 dropped it. Presence of the strip is therefore
-not the check -- the check is what the last directive for that header says.
+The file satisfies this today, and it got there through a defect worth encoding:
+``location = /`` carried a pre-existing ``Apx-Incoming-Host`` passthrough BELOW the inserted
+strip, nginx applied the LAST directive, and so one location forwarded the header while the
+file read as though every location dropped it. Presence of the strip is therefore not the
+check -- the check is what the last directive for that header says.
 
 WHICH FILES ARE GRADED IS DERIVED, not listed: a config is graded if it declares the fold.
 That is the only place the vendor header means anything, so a second config adopting the
