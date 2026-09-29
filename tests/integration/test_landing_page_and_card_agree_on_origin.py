@@ -40,6 +40,11 @@ _TENANT_ORIGINS = re.compile(r"https?://[^/\s\"'<]*probe\.adcp\.test[^/\s\"'<]*"
 
 
 @pytest.mark.requires_db
+def _endpoint_mentions(html: str, origin: str) -> str:
+    """Every URL on the page at *origin*, so a path mismatch prints what it found."""
+    return "\n".join(sorted(set(re.findall(rf"https://{re.escape(origin)}\S*?(?=[\"'<\s])", html))))
+
+
 def test_the_page_and_the_card_publish_the_stored_origin(integration_db):
     from src.app import app
     from tests.factories import AdapterConfigFactory, PrincipalFactory, TenantFactory
@@ -68,5 +73,16 @@ def test_the_page_and_the_card_publish_the_stored_origin(integration_db):
             f"the page published {sorted(set(_TENANT_ORIGINS.findall(html)))} for a tenant stored at "
             f"{ORIGIN!r}, so it and the card do not name the same agent"
         )
-        assert f"https://{ORIGIN}/mcp" in html, "the page named no MCP endpoint at the stored origin"
         assert f"https://{ORIGIN}/.well-known/agent.json" in html, "the page linked no card at the stored origin"
+
+        # The PATHS have to agree too, not only the origin. The page and the card are two
+        # publishers of one fact, and AGENT_ENDPOINT_PATHS is the fact -- it is also what
+        # src/app.py mounts, so a path the page invents is an address nothing answers.
+        from src.core.agent_identity import AGENT_ENDPOINT_PATHS
+
+        for protocol, path in AGENT_ENDPOINT_PATHS.items():
+            assert f"https://{ORIGIN}{path}" in html, (
+                f"the page named no reachable {protocol.upper()} endpoint: expected "
+                f"https://{ORIGIN}{path}, the path this deployment serves and the card "
+                f"publishes, in\n{_endpoint_mentions(html, ORIGIN)}"
+            )

@@ -6,7 +6,7 @@ import os
 from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from src.core.agent_identity import canonical_agent_url
+from src.core.agent_identity import AGENT_ENDPOINT_PATHS, canonical_agent_url
 from src.core.tenant_context import TenantContext
 from src.core.version import get_version
 
@@ -209,8 +209,12 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
     # Every endpoint, and the admin, on the one origin. A tenant is served at the host it
     # declares whether the deployment carries one tenant or many, so there is no second
     # origin for a deployment mode to choose between (#1845).
-    mcp_url = f"{base_url}/mcp"
-    a2a_url = base_url  # A2A endpoint is at the root, not /a2a
+    # The paths come from AGENT_ENDPOINT_PATHS, which is what src/app.py mounts and what the
+    # agent card publishes. A machine client reads the card, so a path spelled here is copy
+    # for a human -- and a human copying "/mcp" where FastMCP mounts "/mcp/", or the bare
+    # origin where A2A answers at "/a2a", gets sent somewhere that is not the endpoint.
+    mcp_url = f"{base_url}{AGENT_ENDPOINT_PATHS['mcp']}"
+    a2a_url = f"{base_url}{AGENT_ENDPOINT_PATHS['a2a']}"
     agent_card_url = f"{base_url}/.well-known/agent.json"
     admin_url = f"{base_url}/admin/"
 
