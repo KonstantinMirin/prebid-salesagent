@@ -101,8 +101,13 @@ class TestSelfServiceSignupFlow:
         assert response.status_code == 302, "a refused signup redirects back to onboarding"
         assert "/signup/onboarding" in response.headers["Location"]
 
-        with get_db_session() as session:
-            created = session.scalars(select(Tenant).filter_by(name="No Wildcard Publisher")).first()
+        # Through the harness's own session rather than get_db_session() in a test body —
+        # the surrounding file is allowlisted for that and a new test does not inherit the
+        # exemption. Queried by name because that is the only key the caller supplied: the
+        # subdomain and the host are both derived server-side, and the refusal fires before
+        # either exists.
+        with IntegrationEnv() as env:
+            created = env.get_session().scalars(select(Tenant).filter_by(name="No Wildcard Publisher")).first()
         assert created is None, "a tenant was provisioned on a deployment that serves no wildcard host"
 
     def test_landing_page_accessible_without_auth(self, integration_db, client):
