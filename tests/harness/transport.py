@@ -659,8 +659,7 @@ class TransportResult:
         * an unknown ``code`` is refused up front against the request-family
           vocabulary production itself reads
           (:func:`tests.helpers.signing.request_signature_codes`, derived from
-          ``adcp.signing.errors.REQUEST_TO_WEBHOOK_CODE`` exactly as
-          ``src/core/metrics.py`` derives ``SIGNATURE_ERROR_CODES``), so a typo or
+          ``SignatureErrorCode`` — the merged 28), so a typo or
           an invented code fails loudly instead of comparing equal to a ``None``
           that never arrives. That vocabulary is WIDER than a prefix scan of
           ``adcp.signing.errors``: the verifier also emits

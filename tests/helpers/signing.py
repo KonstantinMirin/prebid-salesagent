@@ -914,9 +914,10 @@ def request_signature_codes() -> frozenset[str]:
     taxonomy the boundary resolves a refusal through — never re-listed here: a local
     copy of the vocabulary cannot fail when the vocabulary changes, and a grader
     holding its own copy of the thing under test is the defect this epic already
-    found once. ``src/core/metrics.py`` derives ``SIGNATURE_ERROR_CODES`` from the
-    same table for the reason its own comment gives, and this is that reason applied
-    to the harness.
+    found once. This grader needs the request-family vocabulary because a
+    signature challenge names one of those codes specifically; nothing in ``src`` does,
+    because production treats every code alike and reads the family off
+    ``CodeEntry.group`` where it matters.
 
     That module is the merge-correct source, and it is STRICTLY better than the
     ``REQUEST_TO_WEBHOOK_CODE`` re-export this read before: production builds its

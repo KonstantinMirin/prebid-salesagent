@@ -19,7 +19,6 @@ Call sites must record AI-review metrics through :func:`record_ai_review` and
 
 from collections.abc import Container
 
-from adcp.signing.errors import REQUEST_TO_WEBHOOK_CODE
 from prometheus_client import REGISTRY, Counter, Gauge, Histogram, generate_latest
 
 from src.core.exceptions import (
@@ -199,11 +198,16 @@ request_revocation_unavailable_total = Counter(
     ["reason"],
 )
 
-#: The 27 request-family signature rejection codes, taken from the SDK's own
-#: request->webhook translation table rather than re-listed here. The spec grades these
-#: byte-for-byte, so a hand-maintained copy would be a second source that can drift from
-#: the one the verifier actually raises.
-SIGNATURE_ERROR_CODES = frozenset(REQUEST_TO_WEBHOOK_CODE)
+#: Every code this application can put on the wire, as a bounded metric label
+#: vocabulary. ``CODE_TABLE`` is the one place a code is declared, so a label series
+#: exists for exactly the codes that can be emitted and for no others.
+#:
+#: There is no signature-specific vocabulary here, and there was one. A signature
+#: refusal is an error like any other: it carries a code, and the code's own entry says
+#: what it means. What makes the family different is one FIELD on that entry —
+#: ``CodeEntry.group`` — which one reader consults to decide whether the refusal also
+#: owes a ``WWW-Authenticate`` header. Everything else, this counter included, treats
+#: every code the same way and needs to know nothing about families.
 
 #: ``keyid`` before the verifier resolved one (checklist step 7). Every rejection carries
 #: this: ``SignatureVerificationError`` does not expose the keyid, and a pre-resolution
@@ -218,9 +222,11 @@ UNSIGNED_REASONS = frozenset({"absent", "ignored"})
 REVOCATION_UNAVAILABLE_REASONS = frozenset({"fetch", "parse", "signature", "ssrf"})
 
 
-def sanitize_signature_code(code: str | None) -> str:
-    """Return ``code`` if it is a spec request-signature code, else ``"other"``."""
-    return _bounded(code, SIGNATURE_ERROR_CODES)
+def sanitize_error_code(code: str | None) -> str:
+    """Return ``code`` when ``CODE_TABLE`` declares it, else :data:`OTHER_LABEL`."""
+    from src.core.errors.codes import CODE_BY_VALUE
+
+    return _bounded(code, CODE_BY_VALUE)
 
 
 def sanitize_operation(operation: str | None) -> str:
@@ -268,7 +274,7 @@ def record_signature_failed(operation: str, code: str | None) -> None:
     request_signature_failed_total.labels(
         operation=sanitize_operation(operation),
         keyid=UNRESOLVED_KEYID,
-        code=sanitize_signature_code(code),
+        code=sanitize_error_code(code),
     ).inc()
 
 
