@@ -26,15 +26,13 @@ ROOT = Path(__file__).resolve().parents[2]
 # ---------------------------------------------------------------------------
 
 # Directories scanned by discovery glob (not a hand-maintained file list) for
-# _impl-adjacent get_db_session() calls. The hand-maintained list this replaced
-# omitted accounts.py (the largest new tools module) entirely and
-# never scanned helpers/ at all -- making a session-opening helper one call
-# frame from _impl invisible to this guard (the guard even taught the
-# workaround: adapter_helpers.py's _read_mock_test_behavior docstring used to
-# describe the loophole as the sanctioned seam). #1721 M2.
+# _impl-adjacent get_db_session() calls. A glob so that a new tools module is
+# covered the day it is added, and ``helpers/`` is in scope because a
+# session-opening helper one call frame from _impl is the same violation
+# (#1721 M2).
 _IMPL_DISCOVERY_DIRS = ("src/core/tools", "src/core/helpers")
 
-# Two files outside the discovery dirs were already in the pre-glob list.
+# Two files that fall outside the discovery dirs and must still be scanned.
 # Kept explicit so widening scan scope never NARROWS it for these.
 _IMPL_LEGACY_EXTRA_FILES = frozenset({"src/core/context_manager.py", "src/admin/blueprints/creatives.py"})
 
@@ -586,8 +584,7 @@ class TestImplNoDirectDbSession:
     def test_discovery_glob_catches_a_synthetic_new_file(self, tmp_path):
         """Guard self-test: the discovery glob picks up a file it has never seen
         before, proving it is a LIVE glob (re-evaluated every run) and not a
-        frozen snapshot masquerading as one -- the exact failure mode of the
-        hand-maintained list this replaced (#1721 M2)."""
+        frozen snapshot masquerading as one (#1721 M2)."""
         scan_dir = tmp_path / "src" / "core" / "tools"
         scan_dir.mkdir(parents=True)
         (scan_dir / "_never_seen_before.py").write_text("def f():\n    pass\n")
@@ -638,12 +635,11 @@ class TestIntegrationTestsNoInlineSessionAdd:
 # ─────────────────────────────────────────────────────────────────────────
 # Invariant 3: No get_db_session() in integration test bodies (#1417)
 # ─────────────────────────────────────────────────────────────────────────
-# Invariant 1 scans get_db_session() only in src/ (_impl) files, so a
-# get_db_session() opened in a NEW test function inside an EXISTING test file
-# slipped through (e.g. test_resolve_account.py's new natural-key test). This
-# invariant closes that gap: it scans the same test scope as Invariant 2 and
-# flags any get_db_session() in a test/fixture body outside the legacy
-# allowlist. DB access in tests belongs in factories / the harness UoW
+# Invariant 1 scans get_db_session() only in src/ (_impl) files, which leaves a
+# get_db_session() opened in a test body uncovered -- including one in a NEW test
+# function inside an EXISTING test file. This invariant covers it: it scans the same
+# test scope as Invariant 2 and flags any get_db_session() in a test/fixture body
+# outside the legacy allowlist. DB access in tests belongs in factories / the harness UoW
 # (e.g. `with AccountUoW(...) as uow: uow.accounts`), never a raw inline session.
 GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
     ("tests/admin/test_accounts_blueprint.py", "test_create_account_via_post"),
@@ -895,12 +891,9 @@ GET_DB_SESSION_IN_TESTS_ALLOWLIST: set[tuple[str, str]] = {
         "test_manual_approval_enriches_concept_and_is_filterable",
     ),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_multiple_packages_all_persisted"),
-    # Re-keyed, not added: this pre-existing violation was allowlisted as
-    # "test_no_platform_line_item_ids_attr" and the test was renamed to
-    # "test_omitted_platform_line_item_ids" (the attribute it named can no longer be
-    # absent — AdapterCreateResult declares platform_line_item_ids with
-    # default_factory=dict). Same violation, same count; this allowlist is keyed on the
-    # test NAME, so a rename has to re-point the entry in the same change.
+    # Re-keyed, not added: same pre-existing violation under the test's current name.
+    # This allowlist is keyed on the test NAME, so a rename has to re-point the entry in
+    # the same change or the stale-entry check fires.
     ("tests/integration/test_execute_approved_platform_ids.py", "test_omitted_platform_line_item_ids"),
     ("tests/integration/test_execute_approved_platform_ids.py", "test_platform_line_item_ids_persisted_after_approval"),
     ("tests/integration/test_format_conversion_approval.py", "create_media_package"),
@@ -1256,9 +1249,7 @@ class TestIntegrationTestsNoGetDbSession:
     Pattern #8 (tests/CLAUDE.md): DB access in tests goes through factories and
     the harness (AccountUoW / IntegrationEnv), not a session opened inline. The
     legacy allowlist captures pre-existing debt; a NEW test-body get_db_session()
-    fails immediately — including a new function in an EXISTING file, which is how
-    the #1417 test_resolve_account.py natural-key test slipped when this guard was
-    src-only.
+    fails immediately — including a new function in an EXISTING file.
     """
 
     @pytest.mark.arch_guard

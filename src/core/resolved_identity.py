@@ -68,26 +68,22 @@ class PublicIdentity(BaseModel):
 
     # Both fields are ``InstanceOf``: an identity is BUILT from the resolved types, never
     # from a dict. Pydantic would otherwise coerce ``{"tenant_id": "d"}`` into a
-    # TenantContext (``strict=True`` does not refuse a dict for a nested model), and that
-    # coercion is how test code kept constructing identities from dicts after the type was
-    # made one type. A dict now fails validation at construction.
+    # TenantContext -- ``strict=True`` does not refuse a dict for a nested model -- so
+    # ``InstanceOf`` is what makes a dict fail validation at construction.
     #
     # The principal the credential resolved to, built once from the row the lookup
     # selected. None for the anonymous caller.
     principal: InstanceOf[Principal] | None = None
-    # The tenant the request names, its row loaded by the resolver. ONE type, never a
-    # dict: the annotation used to be ``Any``, commented "TenantContext | dict | None
-    # (transitional)", and that union is how dict-shaped tenant handling spread.
+    # The tenant the request names, its row loaded by the resolver. ONE type, never a dict.
     #
-    # REQUIRED, and not optional as it once was. There is no path in the application with an
-    # undefined tenant: each of the three construction sites resolves one or raises
-    # CONFIGURATION_ERROR first (``_addressed_tenant`` for a request, the explicit refusal in
-    # ``identity_of`` for stored-id work). An optional here made every reader check for a
-    # ``None`` that cannot arrive, and deleting those checks while the type still permitted
-    # one only invited the next reader to add them back. Now mypy refuses the construction.
+    # REQUIRED. There is no path in the application with an undefined tenant: each of the
+    # three construction sites resolves one or raises CONFIGURATION_ERROR first
+    # (``_addressed_tenant`` for a request, the explicit refusal in ``identity_of`` for
+    # stored-id work). An optional here would make every reader check for a ``None`` that
+    # cannot arrive; mypy refuses the construction instead.
     tenant: InstanceOf[TenantContext]
     # No ``protocol`` field: the transport is a label the boundary holds for its own
-    # observability record (``invoke_tool``'s parameter), and nothing read it off the
+    # observability record (``invoke_tool``'s parameter), and nothing reads it off the
     # identity. A field with no reader on an identity built for stored-id work
     # (``identity_of``) could only claim a transport that never carried the request.
     #
@@ -167,7 +163,7 @@ from src.core.http_utils import get_header_case_insensitive as _get_header_case_
 def _extract_auth_token(headers: Mapping[str, str]) -> str | None:
     """The Bearer value in ``Authorization``, or None when nothing was presented.
 
-    ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is gone: pinned 3.1.1
+    ``Authorization: Bearer`` only. The ``x-adcp-auth`` alias is NOT accepted: pinned 3.1.1
     L2/authentication.mdx:71 says the credential MUST be carried in ``Authorization`` and
     that sellers MUST NOT require non-canonical aliases, and :153 says the alias is not
     recognized on the A2A surface at all. Accepting it was explicitly optional, so
@@ -301,9 +297,7 @@ def _resolve_identity(
 
     The leading underscore is the design, not a style choice. This is the ONE identity
     resolution in the tree and ``src/core/tools/_boundary.invoke_tool`` is its only caller;
-    a transport that wanted to resolve its own has no public name to reach for. Four of them
-    used to, and they disagreed twice -- A2A refusing a credential on a public task that MCP
-    and REST served, and REST's discovery dependency hardcoding require_valid_token=False.
+    a transport that wanted to resolve its own has no public name to reach for.
     ``ruff-boundary.toml`` bans importing it outside the boundary, so the privacy is enforced
     at lint time rather than by convention.
 
@@ -329,8 +323,7 @@ def _resolve_identity(
 
     POSTCONDITION, relied on by every caller: when ``require_valid_token`` is True this
     either returns an identity with a resolved ``principal_id`` or raises. Callers do not
-    need their own "no token" or "no principal" guards, and the ones that had them have
-    been removed -- they were three transports answering one question three ways.
+    need their own "no token" or "no principal" guards.
 
     Both errors are typed only. Rendering them as HTTP -- 401 and a ``WWW-Authenticate``
     challenge -- is the transport's job, in its own framework's terms.
@@ -348,21 +341,16 @@ def _resolve_identity(
     # AUTH_INVALID, raised in step 4.
     #
     # Before tenant detection, which is three DB lookups an anonymous caller has not earned.
-    # Both transports that had this check ran it in this order for that reason; it is here
-    # so that all of them get it, MCP included -- MCP had none, carried a principal-less
-    # identity into the tool, and _impl code grew its own AdCPAuthRequiredError raises to
-    # compensate.
     #
-    # ``require_valid_token`` is the TOOL's declaration (``ToolSpec.auth``) travelling down
-    # from the boundary, never a transport's own opinion. A discovery tool passes False and
-    # still resolves anonymously.
+    # ``require_valid_token`` is the TOOL's declaration
+    # (``ToolSpec.requires_credential()``) travelling down from the boundary, never a
+    # transport's own opinion. A discovery tool passes False and still resolves anonymously.
     #
     # This function raises TYPED errors and knows nothing about HTTP. Turning AUTH_MISSING
     # into a 401 with a challenge is each transport's own job, done with its framework's
     # mechanism -- see the REST exception handler, the A2A route wrapper and the MCP
-    # pre-dispatch gate. An earlier attempt had this function reach forward to the ASGI
-    # response instead; it could not work, because MCP sends its response status before the
-    # tool is ever dispatched.
+    # pre-dispatch gate. It cannot be done from here by reaching forward to the ASGI
+    # response: MCP sends its response status before the tool is ever dispatched.
     if require_valid_token and not auth_token:
         from src.core.exceptions import AdCPAuthRequiredError
 
@@ -398,10 +386,9 @@ def _resolve_identity(
     # "an `Authorization` header was present but verification failed" -- and names no task.
     # The public-task carve-out in compliance/3.1.1/universal/security.yaml is "return 200
     # WITHOUT credentials by design": it covers the absent credential, which step 2 already
-    # let through, and says nothing about a presented one. A public tool used to take a
-    # rejected credential as absent and serve the caller anonymously; the storyboard's own
-    # narrative calls an agent that 200s a bad credential one that "is ignoring credentials
-    # entirely".
+    # let through, and says nothing about a presented one. Serving a rejected credential
+    # anonymously is what the storyboard's own narrative calls an agent that "is ignoring
+    # credentials entirely".
     if auth_token and principal is None:
         from src.core.exceptions import AdCPAuthenticationError
 

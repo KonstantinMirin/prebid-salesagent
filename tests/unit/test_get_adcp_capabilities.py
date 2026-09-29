@@ -140,10 +140,10 @@ class TestGetAdcpCapabilitiesImpl:
     def test_impl_declares_the_pinned_versions_and_idempotency_posture(self):
         """The envelope's version pins and idempotency posture, on the one path there is.
 
-        Was written against a no-tenant identity, which is no longer representable: a
-        request naming no seller is refused CONFIGURATION_ERROR before an identity exists
-        (BR-UC-010 T-UC-010-ext-a grades that). The assertions are tenant-independent
-        facts, so they move onto the tenant-resolved path rather than being dropped.
+        A no-tenant identity is not representable: a request naming no seller is refused
+        CONFIGURATION_ERROR before an identity exists (BR-UC-010 T-UC-010-ext-a grades
+        that). These assertions are tenant-independent facts, graded on the
+        tenant-resolved path.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -188,7 +188,7 @@ class TestGetAdcpCapabilitiesWithTenant:
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
         # The tenant the request addressed. It reaches the implementation on the identity
-        # and nowhere else -- the ambient ContextVar this used to seed is deleted.
+        # and nowhere else: there is no ambient ContextVar to seed.
         mock_tenant = {
             "tenant_id": "test-tenant-123",
             "name": "Test Publisher",
@@ -368,7 +368,7 @@ def _patch_capabilities_deps(
     of whether the caller is authenticated. ``adapter=None`` here reproduces
     the "adapter unavailable" degradation path (production catches the
     exception and falls back to display-only channels / no targeting caps) —
-    not "no principal", which no longer affects adapter resolution at all.
+    not "no principal", which does not affect adapter resolution at all.
 
     Args:
         adapter: Mock adapter CLASS-equivalent to return from
@@ -539,11 +539,10 @@ class TestGracefulDegradation:
     def test_db_exception_falls_back_to_the_sellers_own_domain(self):
         """With the partner query down, the placeholder is the seller's OWN host.
 
-        This assertion is changed, and the old one is why the defect survived: it demanded
-        ``testpub.example.com``, derived from the SUBDOMAIN — a domain nobody owns on a
-        reserved TLD, handed to a buyer as the publisher's own (#1845). A placeholder is
-        still correct here (the partner list could not be read), but the honest one is the
-        domain this seller is actually served at, which the tenant already declares.
+        A placeholder is correct here — the partner list could not be read — but it must be
+        the domain this seller is actually served at, which the tenant already declares.
+        Deriving it from the SUBDOMAIN gives ``testpub.example.com``: a domain nobody owns
+        on a reserved TLD, handed to a buyer as the publisher's own (#1845).
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -658,18 +657,10 @@ class TestPublisherDomains:
 class TestResponseShapeCapabilities:
     """Test response structure and serialization for get_adcp_capabilities."""
 
-    # test_last_updated_present_with_tenant is REMOVED: already graded by
-    # BR-UC-010-discover-seller-capabilities.feature @T-UC-010-main-timestamp ("Capabilities
-    # response includes last_updated for cache invalidation"), MEASURED passed:3 in-process
-    # (a2a/mcp/rest) AND passed:1 in-network (e2e_rest) in the box run. The scenario is strictly
-    # stronger: it asserts last_updated parses as an RFC 3339 date-time, where this asserted only
-    # "is not None".
-    #
-    # Its sibling test_last_updated_absent_without_tenant is REMOVED too: it graded the
-    # minimal no-tenant response, and there is no such response. A request naming no seller
-    # is refused CONFIGURATION_ERROR before an identity exists, which @T-UC-010-ext-a now
-    # grades ("no_tenant - a request naming no seller is refused"). The identity type makes
-    # the state unrepresentable, so there is nothing left to assert about it.
+    # ``last_updated`` is graded on the wire, not here: BR-UC-010-discover-seller-
+    # capabilities.feature @T-UC-010-main-timestamp asserts it parses as an RFC 3339
+    # date-time. A request naming no seller never reaches a response at all — it is
+    # refused CONFIGURATION_ERROR before an identity exists (@T-UC-010-ext-a).
 
     def test_features_defaults_with_tenant(self):
         """Features defaults: inline_creative_management=True, property_list_filtering=False.
@@ -708,9 +699,6 @@ class TestResponseShapeCapabilities:
         assert "features" in data["media_buy"]
         assert "execution" in data["media_buy"]
 
-    # test_minimal_response_no_media_buy is REMOVED for the same reason: it asserted that the
-    # minimal no-tenant response omits media_buy, and no request produces one.
-
 
 class TestAccountBlockAndSigningDeclarations:
     """Pin the #1592 contract: account block + honest signing declarations.
@@ -720,20 +708,13 @@ class TestAccountBlockAndSigningDeclarations:
     (supported_billing via resolve_supported_billing, mirroring _check_billing_policy),
     or (b) a true constant of the current architecture (require_operator_auth=False,
     webhook_signing/request_signing supported=False) -- never fabricated.
-
-    These are RED until src/core/tools/capabilities.py emits account/webhook_signing/
-    request_signing (salesagent-becl.15 implements this).
     """
 
     def test_signing_blocks_are_declared_and_false(self):
         """Both signing blocks are present and declare supported=False.
 
         They are AGENT-level facts, not tenant-dependent, which is why they are asserted
-        with no signing-related tenant config in play. This used to assert them on the
-        minimal no-tenant path as well; that path is gone (a request naming no seller is
-        refused CONFIGURATION_ERROR before an identity exists), and the claim it also made
-        there -- that the account block is absent with no tenant to derive billing from --
-        has no state left to hold in.
+        with no signing-related tenant config in play.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 
@@ -828,21 +809,19 @@ class TestAccountBlockAndSigningDeclarations:
             "operator",
         ]
 
-    # test_account_sandbox_reflects_tenant_column is REMOVED: already graded by
-    # @T-UC-010-v31-account-sandbox ("sandbox flag boundary"), whose row "sandbox: false in
-    # response (explicit production) -> equal to false" is MEASURED passed on a2a, mcp and rest
-    # (and its "sandbox: true" row passes on all three too). Same outcome -- account.sandbox
-    # equals the tenant's configured value rather than a constant -- asserted on real wire bytes.
+    # ``account.sandbox`` is graded on the wire, not here: @T-UC-010-v31-account-sandbox
+    # ("sandbox flag boundary") asserts it equals the tenant's configured value rather than
+    # a constant, on real wire bytes, for both true and false.
     #
-    # Note for whoever reads this next: that scenario's THIRD row, "sandbox absent in response
-    # (production account)", is MEASURED xfailed on every transport. If a unit test for the
-    # ABSENT case is ever wanted, it would be the only coverage; this test was not it.
+    # That scenario's THIRD row, "sandbox absent in response (production account)", is
+    # xfailed on every transport. The ABSENT case therefore has no coverage anywhere; a
+    # unit test here would be the only one.
 
     def test_webhook_signing_and_request_signing_declared_false_with_tenant(self):
         """Tenant-resolved path also declares webhook_signing/request_signing supported=False.
 
-        Built once (DRY) and shared with the no-tenant path -- these are agent-level
-        facts, not tenant config.
+        These are agent-level facts, not tenant config, so no tenant's configuration moves
+        them.
         """
         from src.core.tools.capabilities import _get_adcp_capabilities_impl
 

@@ -344,8 +344,8 @@ class TestAddUserDuplicateEmail:
 
     ``uq_users_tenant_email`` is the authority, and the pre-check cannot see a
     concurrent transaction's uncommitted row. Winner and loser must therefore get
-    the SAME answer — the loser's used to be a 302 carrying raw psycopg2 text in
-    the flash, which a "not a 500" assertion would have called a pass.
+    the SAME answer, asserted as such: a loser answering 302 with raw psycopg2 text in
+    the flash passes a "not a 500" assertion.
 
     The loser runs FIRST so its pre-check is genuinely clean; the winner then
     re-posts against the row the race left behind, on the same tenant, so the two

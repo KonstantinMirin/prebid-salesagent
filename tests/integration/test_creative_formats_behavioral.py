@@ -1,10 +1,6 @@
 """Integration tests: list_creative_formats filtering, sort, auth.
 
 Behavioral tests using CreativeFormatsEnv + real PostgreSQL + factory_boy.
-Replaces mock-heavy unit tests from test_creative.py and
-test_creative_formats_behavioral.py with provable assertions.
-
-Covers:
 """
 
 from __future__ import annotations

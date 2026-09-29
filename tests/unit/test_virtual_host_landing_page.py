@@ -29,7 +29,7 @@ class TestVirtualHostLandingPage:
     """Test virtual host landing page functionality."""
 
     def test_landing_page_html_generation_with_new_module(self):
-        """Test HTML content generation using the new landing page module."""
+        """Test HTML content generation through the landing page module."""
         # Arrange
         tenant = {
             "tenant_id": "html-test",

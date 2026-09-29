@@ -622,13 +622,11 @@ def when_call_unauthenticated(ctx: dict) -> None:
 def when_invoke_capabilities(ctx: dict) -> None:
     """Auth-outline dispatch. Names NO transport, deliberately.
 
-    This used to match ``... via (MCP|A2A|REST)`` and assign ``ctx["transport"]`` from the
-    outline's own column, overriding the pytest-level parametrization -- its docstring
-    called that parametrization "redundant for this outline by design". It was not
-    redundant, it was the whole point: with the transport supplied as DATA, the Examples
-    table could grade A2A differently from MCP and REST, and it did. Taking the column away
-    hands the transport back to the shared parametrization, so one row runs on every
-    transport and a per-transport answer is unwritable here.
+    It must not match ``... via (MCP|A2A|REST)`` and assign ``ctx["transport"]`` from the
+    outline's own column: that overrides the pytest-level parametrization, and with the
+    transport supplied as DATA the Examples table can grade A2A differently from MCP and
+    REST. With no column, the transport comes from the shared parametrization, so one row
+    runs on every transport and a per-transport answer is unwritable here.
     """
     credential = _credential_for_token_state(ctx)
     if credential is _DEFAULT:

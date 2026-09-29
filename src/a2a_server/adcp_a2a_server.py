@@ -342,18 +342,16 @@ class AdCPRequestHandler(RequestHandler):
         raising it is the correct thing to do here and is what an A2A client
         should be able to react to precisely.
 
-        A client sees the spec's ``-32001``. It saw ``-32603`` for as long as the routes
-        carried ``enable_v0_3_compat=True``: requests dispatched through
-        ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request`` ended in a bare
-        ``except Exception -> CoreInternalError`` with no ``A2AError -> code`` mapping —
-        the mapping the SDK's own dispatcher performs. That adapter is gone (#1670), so
-        raising the right type now surfaces the right code, and the live-server test that
-        pinned ``-32603`` under a strict xfail has graduated.
+        A client sees the spec's ``-32001``, because the SDK's own dispatcher maps
+        ``A2AError -> code``. The routes must not carry ``enable_v0_3_compat=True``: that
+        dispatches through ``a2a.compat.v0_3.jsonrpc_adapter``, whose ``handle_request``
+        ends in a bare ``except Exception -> CoreInternalError`` with no such mapping, so
+        every raise here would reach the client as ``-32603`` (#1670).
 
         The requested id rides both the message and structured ``data``, and both reach a
-        client for the same reason: the compat adapter that rebuilt the error as
-        ``CoreInternalError(message=str(e))`` — dropping ``data`` and returning
-        ``data: null`` on the real route — is no longer in the path.
+        client. The same compat adapter would rebuild the error as
+        ``CoreInternalError(message=str(e))``, dropping ``data`` and returning
+        ``data: null`` on the real route.
 
         Shared by ``on_get_task`` and ``on_cancel_task`` so both surface the
         same error.

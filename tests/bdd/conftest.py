@@ -250,8 +250,8 @@ def _record_dormancy(item: pytest.Item, report: pytest.TestReport) -> bool:
         # UC-006 scenarios to "wired"; the detail is appended AFTER the prefix so the
         # reason can stay honest without being the machine-readable channel.
         #
-        # It is no longer the ONLY channel either -- the user_property above and
-        # scenario_liveness's typed classification both carry it now, so losing this
+        # It is not the ONLY channel either -- the user_property above and
+        # scenario_liveness's typed classification both carry it, so losing this
         # prefix costs a worse message rather than a wrong measurement.
         report.wasxfail = (
             f"Step definition not found: DORMANT (test-wiring) — no step definition for "
@@ -3996,15 +3996,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # a2a-strict-marker check below for the correctness half).
         #
         # An opted-in scenario keeps ALL of its mcp/rest siblings, not one of
-        # them. It used to keep the first one walked, and `items` order is
+        # them. Keeping the first one walked makes WHICH transport the scenario
+        # grades change run to run with no code change, because `items` order is
         # shuffled by pytest-randomly with a fresh seed every run (bdd_inprocess
-        # does not pass -p no:randomly), so WHICH transport the scenario graded
-        # changed run to run with no code change: measured over the UC-010
-        # module, a2a 196 on every seed but mcp/rest 183/166, 171/178, 174/175
-        # on seeds 1/2/3. The skipped transport was ungraded
-        # and the skip was invisible — it presents as ~19 removed / ~19 added
-        # nodeids, the shape scripts/audit/compare_runs.py documents as benign
-        # transport-parameter noise, so every nodeid-set diff read CLEAN.
+        # does not pass -p no:randomly). The skipped transport is ungraded
+        # and the skip is invisible — it presents as removed/added
+        # nodeids in equal number, the shape scripts/audit/compare_runs.py documents as
+        # benign transport-parameter noise, so a nodeid-set diff reads CLEAN.
         # A stable pick would only make the omission reproducible; all-or-none
         # leaves no sibling to pick between. Pinned by
         # tests/unit/test_bdd_transport_collection_is_seed_independent.py and by
@@ -4115,16 +4113,12 @@ _TRANSPORT_SPECIFIC_TAGS = {"rest", "mcp", "a2a"}
 # surfaces — the ``message/send`` push config — which has no counterpart on MCP
 # or REST at all. That, and only that, is what makes them single-transport.
 #
-# It used to carry three tool-surface scenarios as well, on the stated grounds
-# that MCP and REST refuse the invalid document above the ingest gate "with a
-# field path relative to the sub-model they validated", so grading them would
-# grade the request model rather than the gate. MEASURED, that was false: every
-# transport reports the ABSOLUTE path
-# ``push_notification_config.authentication.credentials``, which is the literal
-# the scenarios assert. The three now run on all four transports, so the
-# agreement is a standing executable proof rather than a claim in a comment.
+# A tool-surface scenario does NOT belong here. Every transport reports the ABSOLUTE field
+# path (e.g. ``push_notification_config.authentication.credentials``), not one relative to
+# the sub-model it validated, so a tool-surface scenario runs on all four transports and
+# their agreement is standing executable proof rather than a claim in a comment.
 #
-# The tag NAME is now a misnomer — neither survivor is an untyped ingest. It is
+# The tag NAME is a misnomer — neither scenario is an untyped ingest. It is
 # left for the rename that owns the registry.
 #
 # PARAMETRIZED on that one transport rather than dropped from parametrization:
@@ -4141,9 +4135,8 @@ _SINGLE_TRANSPORT_TAGS = {
 }
 
 # UC + tag combinations that should run IMPL-only (no 4-way parametrization).
-# (UC-002 @account used to live here when it ran resolve_account() via IMPL on
-# MediaBuyAccountEnv; #1417 routed those scenarios through a full
-# create_media_buy on the wire, so they now parametrize across a2a/mcp/rest.)
+# EMPTY, and it stays empty: BDD grades the wire, so every scenario parametrizes across
+# a2a/mcp/rest (#1417).
 _IMPL_ONLY: set[tuple[str, str]] = set()
 
 # UC-002 idempotency scenarios wired to MediaBuyCreateEnv (run a real
@@ -4442,7 +4435,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     The IMPL transport was dropped from the BDD default parametrization
     (#1417): BDD asserts AdCP *wire* conformance only. IMPL/call_impl
     remain available for unit/integration tests via the harness; they are simply
-    no longer auto-parametrized here.
+    not auto-parametrized here.
 
     Scenarios tagged with @rest, @mcp, or @a2a are transport-specific
     and skip parametrization — they already dispatch through their
@@ -4494,9 +4487,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     transports = [Transport.A2A, Transport.MCP, Transport.REST]
 
     # EVERY tool is reachable on EVERY transport, so no scenario is withheld from one.
-    # There used to be a per-UC exclusion here for tools with no REST route, driven by a
-    # hand-maintained tag-prefix tuple. It is gone, and re-adding it would be a mistake in
-    # two ways at once.
+    # A per-UC exclusion for tools with no REST route, driven by a hand-maintained
+    # tag-prefix tuple, would be a mistake in two ways at once.
     #
     # It cannot fire. A tool's reachability is the registry's answer, not a tag's: MCP
     # registration, the A2A card and the REST route are all generated from the ToolSpec
@@ -4818,11 +4810,10 @@ class EnvRoute:
 
     ``when``, when set, is the row's ROUTING PREDICATE over the scenario's
     marker-name set. Rows carrying one are tried before the coarse ``uc``
-    buckets. These predicates used to live as a hardcoded ``elif`` chain inside
-    ``_harness_env``, invisible to ``scripts/audit``'s join — which knew only
-    about the buckets and therefore reported every predicate-routed scenario as
-    dormant. Moving them into rows is what lets ONE resolver answer for both
-    sides.
+    buckets. They live in rows, not as a hardcoded ``elif`` chain inside
+    ``_harness_env``: such a chain is invisible to ``scripts/audit``'s join, which knows
+    only about the buckets and would report every predicate-routed scenario as dormant.
+    Rows are what let ONE resolver answer for both sides.
 
     ``uc`` is the coarse bucket this row serves, matched against
     ``storyboard_spec.detect_uc``. A row sets ``when`` or ``uc``, not both.
@@ -5120,10 +5111,10 @@ def _run_env_route(
         pytest.xfail(route.xfail_reason)
     with _db_scope_for(request, e2e_config), route.env_builder(e2e_config) as env:
         ctx["env"] = env
-        # Build the client ONCE, here, for every row — it used to be constructed
-        # inside a single hand-wired seed callback, so only that one row could
-        # dispatch via the client and any new row wanting it had to remember to
-        # repeat the line. Construction is cheap and
+        # Build the client ONCE, here, for every row. Constructing it inside a
+        # hand-wired seed callback lets only that one row dispatch via the client,
+        # and any new row wanting it has to remember to repeat the line.
+        # Construction is cheap and
         # side-effect-free; a row that never dispatches via the client simply
         # does not read the key.
         ctx["client"] = AdCPTestClient(env)

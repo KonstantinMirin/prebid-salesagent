@@ -2,7 +2,7 @@
 
 Covers:
 - UC-005-MAIN-MCP-02: Authentication optional for discovery
-- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_REQUIRED error
+- UC-005-EXT-A-01: Tenant resolution failure returns CONFIGURATION_ERROR
 
 The list_creative_formats endpoint is a discovery/catalog endpoint.
 While tenant context is required to resolve the format catalog, an

@@ -55,16 +55,14 @@ class DomainNotOwned(Exception):
 class OwnedDomain:
     """A domain PROVEN to belong to the tenant acting on it.
 
-    The ownership rule used to live inside one of the three Flask handlers that
-    dial Approximated, so the other two omitted it -- and did, for as long as
-    all three have existed. Copying the ``if`` into the siblings would have made
-    the fourth route omit it in turn.
+    The ownership rule does not live inside the Flask handlers that dial
+    Approximated. An ``if`` in one handler is an ``if`` the siblings can omit, and
+    copying it into each of them only moves the omission to the next route added.
 
     This type is what stops that, and the property it buys is precise: a route
     cannot reach a dial without PRODUCING an ``OwnedDomain``, and the sanctioned
-    producer is :func:`tenant_owns_domain`. Omission -- the actual defect, and
-    the one that held for as long as these routes have existed -- becomes
-    impossible: there is no argument to pass. What remains possible is a
+    producer is :func:`tenant_owns_domain`. Omission -- the defect this exists to
+    rule out -- becomes impossible: there is no argument to pass. What remains possible is a
     deliberate forgery, ``OwnedDomain(domain)`` written by hand, because this is
     an ordinary frozen dataclass and the Flask handlers are untyped
     (``check_untyped_defs = False``), so mypy does not grade them. That is a

@@ -91,12 +91,8 @@ logger = logging.getLogger(__name__)
 # (get_adcp_signed_headers_for_webhook, src/services/protocol_webhook_service.py).
 # But webhook_signing means RFC 9421 specifically, which is genuinely unimplemented
 # (#1291). So declaring reporting_delivery_methods: ["webhook"] would be
-# SPEC-FORBIDDEN while signing is off -- omitting it is the mandatory-honest choice,
-# and this block is already correct. #1592's final field closes when #1291 lands: a
-# real spec dependency, not a gap in this implementation.
-#
-# Whether HMAC-only delivery should be gated off pending RFC 9421 is the signing
-# PR's decision, not this one's.
+# SPEC-FORBIDDEN while signing is off -- omitting it is the mandatory-honest choice.
+# The last #1592 field can only be declared once #1291 lands.
 _WEBHOOK_SIGNING_UNSUPPORTED = WebhookSigning(supported=False)
 _REQUEST_SIGNING_UNSUPPORTED = RequestSigning(supported=False)
 
@@ -251,9 +247,8 @@ CHANNEL_MAPPING: dict[str, MediaChannel] = {
 # TargetingCapabilities boolean field name -> (native country key, native
 # system value), per core/postal-area-support.json's native country-keyed map.
 # Single shared table drives BOTH the presence guard and the PostalAreaSupport
-# construction (DRY -- salesagent-y9ld R4; the old code had 9 field-by-field
-# kwargs plus a hand-enumerated `any([...])` guard, two sites that could omit a
-# field independently). Keyed by field-name STRING (not a getter) deliberately:
+# construction, so neither can omit a field the other declares (DRY). Keyed by
+# field-name STRING (not a getter) deliberately:
 # tests/bdd/steps/domain/uc010_capabilities.py reads this same table to invert
 # (country, system) -> field name, the harness's own single-source-of-truth
 # reuse of the production table -- a getter-keyed table would break that.
@@ -344,8 +339,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     There is always a tenant: a request naming no seller this deployment serves is refused
     CONFIGURATION_ERROR before an identity exists (``_addressed_tenant``), so there is no
     minimal "unrouted host" description to fall back to. BR-UC-010 T-UC-010-ext-a grades
-    that refusal, and the arm that once answered such a request minimally could not be
-    reached from either caller.
+    that refusal.
     """
     tenant = identity.tenant
     tenant_id = tenant.tenant_id

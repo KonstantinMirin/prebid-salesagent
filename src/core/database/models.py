@@ -165,18 +165,18 @@ class Tenant(Base, JSONValidatorMixin):
 
     # Relationships
     products = relationship("Product", back_populates="tenant", cascade="all, delete-orphan")
-    # No `principals` collection. It had no reader, and a relationship traversal is the
+    # No `principals` collection. It has no reader, and a relationship traversal is the
     # one way to reach Principal rows without importing the class — which is what the
     # TID251 ban on `src.core.database.models.Principal` outside the four repository
     # modules exists to prevent. Deleting a tenant still deletes its principals: the
     # DATABASE does it, because alembic revision 390461e816ea sets the
-    # principals.tenant_id foreign key to ON DELETE CASCADE. Before that revision the
-    # migrated schema had NO ACTION — the `ondelete="CASCADE"` declared on the mapped
-    # column never altered the constraint `initial_schema` had already created — and this
-    # collection's `cascade="all, delete-orphan"` was the only thing deleting them, which
-    # is why the constraint had to change when the collection went. The hard-delete path
-    # in src/admin/tenant_management_api.py also deletes principals explicitly through
-    # PrincipalRepository.delete_all; that is now belt-and-braces, not the guarantee.
+    # principals.tenant_id foreign key to ON DELETE CASCADE. That revision is the
+    # guarantee, not the `ondelete="CASCADE"` on the mapped column — a declared ondelete
+    # does not alter a constraint an earlier migration already created, so the schema
+    # keeps whatever the creating revision wrote until a revision alters it. The
+    # hard-delete path in src/admin/tenant_management_api.py also deletes principals
+    # explicitly through PrincipalRepository.delete_all; that is belt-and-braces, not the
+    # guarantee.
     # Principal.tenant survives: the other direction yields a tenant, not a principal.
     users = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     accounts = relationship("Account", back_populates="tenant", cascade="all, delete-orphan")
@@ -322,9 +322,8 @@ class Tenant(Base, JSONValidatorMixin):
         return False
 
 
-# CreativeFormat model removed - table dropped in migration f2addf453200 (Oct 13, 2025)
-# Creative formats are now fetched from creative agents via AdCP protocol
-# Historical note: Previously stored format definitions locally, now use AdCP list_creative_formats
+# There is no CreativeFormat model and no formats table: creative formats are fetched from
+# creative agents over AdCP (list_creative_formats), never stored locally.
 
 
 class Product(Base, JSONValidatorMixin):
@@ -718,8 +717,8 @@ class Principal(Base, JSONValidatorMixin):
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
     )
 
-    # Relationships. `tenant` has no back_populates any more: the collection it paired
-    # with, Tenant.principals, is deleted (salesagent-3cs7o.26). This direction stays —
+    # Relationships. `tenant` has no back_populates: Tenant declares no `principals`
+    # collection to pair with. This direction stays —
     # it yields a TENANT row from a principal, which is not the traversal the ban on
     # importing this class is about, and every ORM factory in tests/factories builds its
     # parent row through exactly this attribute.
@@ -1335,10 +1334,10 @@ class MediaBuy(Base):
 
         A row built with ``confirmed_at`` already set never passed
         ``_stamp_confirmation_if_needed``, and one built with a chosen ``revision``
-        never took part in the concurrency protocol the token exists for. Both were
-        previously reachable and only *detected*, by an AST fixture that had to know
-        every spelling of a constructor call; a spelling it did not know was a silent
-        hole, and ``MediaBuy(**kwargs)`` was one, because a double-star call carries a
+        never took part in the concurrency protocol the token exists for. Neither can be
+        caught by *detecting* the shape instead: an AST fixture has to know every spelling
+        of a constructor call, and a spelling it does not know is a silent hole.
+        ``MediaBuy(**kwargs)`` is one of those, because a double-star call carries a
         single keyword whose ``arg`` is ``None``.
 
         Raising here removes the shape instead of recognising it, so no spelling has to
@@ -1420,8 +1419,8 @@ class MediaBuy(Base):
     #: the advertiser's display name and joinedloads this through MediaBuyRepository. A
     #: tool must not traverse it — a tool reads `identity.principal`, and reaching a
     #: Principal row off a media buy is the traversal the TID251 ban on the ORM class
-    #: cannot see. Tenant.principals was deleted for that reason (salesagent-3cs7o.26);
-    #: this one survives because the admin UI genuinely reads it.
+    #: cannot see. This relationship exists only because the admin UI genuinely reads it;
+    #: ``Tenant`` declares no ``principals`` relationship for the same reason.
     principal = relationship(
         "Principal",
         foreign_keys=[tenant_id, principal_id],

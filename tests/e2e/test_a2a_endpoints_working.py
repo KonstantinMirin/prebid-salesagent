@@ -336,12 +336,10 @@ class TestA2ARequestHandler:
     def test_core_skills_are_dispatchable_over_a2a(self):
         """The core skills are dispatchable over A2A, per the registry.
 
-        This used to assert one ``_handle_<tool>_skill`` method per tool. Those eleven
-        methods are deleted: A2A dispatch is the single derived ``_dispatch_skill``,
-        and a row is dispatchable because ``TOOLS[name].a2a`` is True. The old
-        ``hasattr``-based selection was the defect it appeared to guard — it
-        overrode the registry, advertising ``list_tasks``, ``get_task_status`` and
-        ``complete_task`` on the agent card while answering MethodNotFoundError.
+        Dispatch is the single derived ``_dispatch_skill``, and a row is dispatchable
+        because ``TOOLS[name].a2a`` is True — not because a ``_handle_<tool>_skill`` method
+        exists. ``hasattr``-based selection overrides the registry, which is how a card
+        comes to advertise a skill that answers MethodNotFoundError.
         """
         assert callable(self.handler._dispatch_skill), "A2A's one dispatch method is missing"
 

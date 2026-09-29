@@ -41,7 +41,7 @@ class PrincipalFactory(factory.alchemy.SQLAlchemyModelFactory):
     name = LazyAttribute(lambda o: f"Test Advertiser {o.principal_id}")
     # The row stores only the hash. The plaintext a test PRESENTS is derived from the
     # principal id by ``plaintext_token_for`` -- the harness computes the same value, so a
-    # credential never has to be read back out of a table that no longer holds it.
+    # credential never has to be read back out of a table that does not hold it.
     token_hash = LazyAttribute(lambda o: hash_token(plaintext_token_for(o.principal_id)))
     token_prefix = LazyAttribute(lambda o: token_prefix(plaintext_token_for(o.principal_id)))
     platform_mappings = factory.LazyFunction(lambda: {"mock": {"advertiser_id": "test_adv"}})

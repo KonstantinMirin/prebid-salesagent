@@ -303,9 +303,8 @@ def tenant_settings(tenant_id, section=None):
             active_products = product_count  # All products are considered active
             draft_products = 0  # No draft status tracking
 
-            # Creative formats removed - table dropped in migration f2addf453200
-            # Formats are now fetched from creative agents via AdCP (not stored in DB)
-            # Template section also removed - no longer passed to template
+            # No creative-format count: formats are fetched from creative agents over AdCP,
+            # not stored in this database, so the template has no section to fill.
 
             # Get inventory counts
             from src.core.database.models import GAMInventory
@@ -480,14 +479,12 @@ def test_slack(tenant_id):
             if not tenant.slack_webhook_url:
                 return jsonify({"success": False, "error": "No Slack webhook configured"}), 400
 
-            # One Block Kit owner. This route used to assemble its own blocks and
-            # dial the raw egress seam, duplicating what slack_notifier already does
-            # — and skipping its retry/record bookkeeping in the process.
+            # One Block Kit owner: the route does not assemble its own blocks or dial the
+            # egress seam itself, because that duplicates slack_notifier and skips its
+            # retry/record bookkeeping.
             #
-            # max_retries=1 is preserved deliberately: a test notification that
-            # silently sends three times is worse than one that fails visibly. That
-            # decision predates this change and survives it; the notifier grew a
-            # passthrough rather than the route keeping its own dialer.
+            # max_retries=1 is deliberate: a test notification that silently sends three
+            # times is worse than one that fails visibly.
             sent = SlackNotifier(webhook_url=tenant.slack_webhook_url).send_message(
                 text=f"🎉 Test message from Prebid Sales Agent for {tenant.name}",
                 blocks=[
@@ -516,8 +513,7 @@ def test_slack(tenant_id):
             )
 
             if not sent:
-                # Same contract the OutboundError branch used to serve: 400 with an
-                # opaque message. Slack's own response body is a counterparty
+                # 400 with an opaque message. Slack's own response body is a counterparty
                 # response and is never echoed back to the operator.
                 return jsonify({"success": False, "error": "Slack webhook delivery failed"}), 400
 

@@ -282,7 +282,7 @@ def test_detector_catches_a_fifteenth_location_added_without_the_pair(tmp_path: 
 
 
 def test_detector_catches_a_passthrough_below_the_strip(tmp_path: Path) -> None:
-    """The historical defect: the strip is present, and a later directive undoes it."""
+    """The strip is present, and a later directive undoes it."""
     overridden = """
         location = / {
             proxy_pass http://mcp_server/;

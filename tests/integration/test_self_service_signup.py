@@ -57,16 +57,15 @@ class TestSelfServiceSignupFlow:
         ``config/nginx/nginx-multi-tenant.conf`` serves ``*.${SALES_AGENT_DOMAIN}`` and lets the
         app pick the tenant from the ``Host``. Those two settings together are what make the
         derived name a host something actually serves; without them the route refuses, because
-        deriving anyway is what published an unreachable agent URL (#1845).
+        deriving anyway publishes an unreachable agent URL (#1845).
 
-        So these cases have to declare the deployment they are testing. Two traps, both
-        measured rather than guessed:
+        So these cases have to declare the deployment they are testing. Two traps:
 
         * Set on the settings OBJECT, not the environment. Settings are built once and an env
           write lands only before the first read, so ``monkeypatch.setenv`` is silently ignored.
         * Takes ``client`` so it runs AFTER it. ``create_app`` calls ``load_settings()``
           (``src/admin/app.py``), which REBUILDS the global settings — patching first and
-          building the client second throws the patch away, and the route kept refusing with
+          building the client second throws the patch away, and the route then refuses with
           the fields apparently set.
         """
         from src.core.config import get_settings

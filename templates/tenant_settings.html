@@ -425,7 +425,6 @@
         }
     }
 
-    /* Virtual Host now uses simple text input - complex widget styling removed */
 </style>
 
 <!-- Header -->
@@ -2059,8 +2058,8 @@ Exclude any products that don't match the brand's tone.</pre>
 
         </div>
 
-        <!-- Creative Formats section removed - table dropped in migration f2addf453200 -->
-        <!-- Formats are now fetched from creative agents via AdCP, not stored in local DB -->
+        <!-- No Creative Formats section: formats are fetched from creative agents over
+             AdCP, never stored in this database, so there is nothing here to configure. -->
 
         <!-- Advertisers Settings -->
         <div id="advertisers" class="settings-section">

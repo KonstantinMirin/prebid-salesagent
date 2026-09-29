@@ -135,10 +135,9 @@ async def debug_tenant(request: Request):
 
     if host_header:
         # The Host, against virtual_host — the same lookup the resolver does, and the only
-        # one. Other detection methods have been reported here and then deleted, most
-        # recently "host-subdomain", which guessed the tenant_id from the host's first
-        # label without consulting any row. A debug endpoint claiming a detection method
-        # production does not have is worse than no endpoint.
+        # host-based one. Nothing here may guess a tenant_id from the host without
+        # consulting a row: a debug endpoint claiming a detection method production does
+        # not have is worse than no endpoint.
         tenant_row = get_tenant_by_virtual_host(host_header)
         if tenant_row:
             tenant_id = tenant_row.get("tenant_id")
