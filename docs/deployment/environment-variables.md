@@ -163,7 +163,7 @@ For GAM adapter integration:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode with subdomain routing |
+| `ADCP_MULTI_TENANT` | `false` | Enable multi-tenant mode, where the `Host` selects the tenant |
 | `SALES_AGENT_DOMAIN` | - | Base domain for tenant subdomains (for example, `sales-agent.example.com`). Also scopes session cookies across subdomains. |
 | `ADMIN_DOMAIN` | - | Domain where the Admin UI is accessible (for example, `admin.sales-agent.example.com`) |
 | `SUPER_ADMIN_DOMAIN` | - | Email domain whose users get super admin access |
@@ -281,6 +281,6 @@ You usually don't need to set the following variables:
 ## Related documentation
 
 - [Single-tenant deployment](single-tenant.md) - the default deployment mode
-- [Multi-tenant setup](multi-tenant.md) - subdomain routing and per-tenant domains
+- [Multi-tenant setup](multi-tenant.md) - host-based tenant routing and per-tenant domains
 - [Security and authentication](../security.md) - how secrets and sessions are handled
 - [Architecture guide](../development/architecture.md) - deployment topology and component map

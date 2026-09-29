@@ -8,9 +8,23 @@ This guide covers setting up the Prebid Sales Agent in multi-tenant mode, where 
 
 **Single-tenant (default):** One publisher per deployment. Simple path-based routing (`/admin`, `/mcp`, `/a2a`). Most publishers should use this.
 
-**Multi-tenant:** Multiple publishers on one deployment. Subdomain-based routing (`publisher1.yourdomain.com`, `publisher2.yourdomain.com`). For platforms hosting multiple publishers.
+**Multi-tenant:** Multiple publishers on one deployment. Each publisher declares the host it is
+served at, and the `Host` header selects the tenant. For platforms hosting multiple publishers.
 
-The following diagram shows the difference: in single-tenant mode every request lands on the one deployment tenant, while in multi-tenant mode the request's headers select the tenant.
+A request names its tenant in one of two ways:
+
+1. The `Host` header, matched against the `virtual_host` that the tenant declares. Every tenant
+   declares one, and the column refuses `NULL`. The comparison ignores the port and the letter case,
+   so `acme.example.com`, `ACME.example.com`, and `acme.example.com:8443` all reach the same tenant.
+2. An `x-adcp-tenant` header carrying the tenant id, for a caller that addresses a tenant directly
+   rather than through the host it is served at. The test suites and the CLI use it.
+
+The application refuses a request that names neither, with `CONFIGURATION_ERROR` and recovery
+`terminal`. The deployment cannot tell which seller the request is for, so it answers instead of
+guessing. No code derives a host from a subdomain: a derived name is a host that nothing serves, and
+publishing one on an agent card sends every client that reads it to an address that does not answer.
+
+The following diagram shows the difference between the two modes.
 
 ```mermaid
 flowchart TD
@@ -19,13 +33,11 @@ flowchart TD
     end
 
     subgraph Multi["Multi-tenant mode"]
-        MReq["Incoming request"] --> VH{"Host header matches a tenant's custom domain?"}
+        MReq["Incoming request"] --> VH{"Host matches a tenant's virtual_host?"}
         VH -- yes --> Ten["Tenant resolved"]
-        VH -- no --> SD{"Subdomain matches a tenant?"}
-        SD -- yes --> Ten
-        SD -- no --> XH{"x-adcp-tenant header set?"}
+        VH -- no --> XH{"x-adcp-tenant header set?"}
         XH -- yes --> Ten
-        XH -- no --> Err["No tenant context error"]
+        XH -- no --> Err["CONFIGURATION_ERROR, recovery terminal"]
     end
 ```
 
@@ -157,22 +169,30 @@ backend's tenant or none.
 2. Click **Create New Account**.
 3. Enter:
    - **Name**: Publisher display name
-   - **Subdomain**: for example, `acme` → `acme.sales-agent.yourdomain.com`
-   - **Custom Domain** (optional): a domain like `sales.acmepublisher.com`
+   - **Subdomain**: a label for the tenant, for example `acme`
+   - **Custom Domain**: the host this tenant is served at, for example
+     `acme.sales-agent.yourdomain.com` or `sales.acmepublisher.com`. The form requires it, because
+     the `Host` header is how a request reaches this tenant. Include the port when the deployment
+     does not answer on the scheme's default port, as in `acme.example.com:8443`: the agent card
+     publishes this string, and a client connects to what the card says.
 4. Configure the ad server adapter (Mock or GAM).
 
 ### Via script
+
+The script requires `--virtual-host`, because a tenant is reached at the host it declares:
 
 ```bash
 # Docker
 docker compose exec adcp-server python -m scripts.setup.setup_tenant \
   "Acme Publisher" \
   --subdomain acme \
+  --virtual-host acme.sales-agent.yourdomain.com \
   --adapter mock
 
 # Fly.io
 fly ssh console -C "python -m scripts.setup.setup_tenant 'Acme Publisher' \
   --subdomain acme \
+  --virtual-host acme.sales-agent.yourdomain.com \
   --adapter mock"
 ```
 
