@@ -170,12 +170,11 @@ class TestA2AEndpointsActual:
         # The tenant declares the front this request names, because a card fetch carries
         # no tenant header — a request naming a host no tenant declares is refused before
         # the route's OPTIONS handling is ever reached.
-        declare_tenant_front(live_server, card_origin(live_server))
-
-        # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-        response = requests.options(
-            f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
-        )
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
+            response = requests.options(
+                f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
+            )
 
         # Should handle OPTIONS requests
         assert response.status_code in [200, 204], "OPTIONS request should be handled"
@@ -200,8 +199,13 @@ class TestAgentCardDiscoveryPathsLive:
 
     @pytest.fixture(autouse=True)
     def _front_declared(self, live_server):
-        """This stack's tenant declares the host these tests fetch the card from."""
-        declare_tenant_front(live_server, card_origin(live_server))
+        """This stack's tenant declares the host these tests fetch the card from.
+
+        Released afterwards: there is one TLS origin and ``virtual_host`` is unique, so
+        holding it past these tests takes it from the signing suite.
+        """
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            yield
 
     @pytest.mark.integration
     @pytest.mark.parametrize("path", AGENT_CARD_PATHS)

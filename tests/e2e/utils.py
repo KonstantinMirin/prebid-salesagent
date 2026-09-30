@@ -164,7 +164,8 @@ def set_live_adapter_behavior(live_server: dict, *, tenant_id: str = CI_TEST_TEN
         return set_adapter_test_behavior(env, tenant.tenant_id, **behavior)
 
 
-def declare_tenant_front(live_server: dict, origin: str, *, tenant_id: str = CI_TEST_TENANT_ID) -> str:
+@contextmanager
+def declare_tenant_front(live_server: dict, origin: str, *, tenant_id: str = CI_TEST_TENANT_ID):
     """Point *tenant_id*'s ``virtual_host`` at *origin*, and return the host it stored.
 
     A card fetch is DISCOVERY: the client has a hostname and nothing else, so the tenant
@@ -173,8 +174,15 @@ def declare_tenant_front(live_server: dict, origin: str, *, tenant_id: str = CI_
     service name, on the host path a dynamically allocated TLS port — so it cannot be a
     literal in a seeder. The test knows it, from ``live_server``, and states it here.
 
-    Idempotent, and scoped to this stack's own database through the same ``live_db_env``
-    every other e2e mutation goes through.
+    RESTORES the previous host on exit, and that is why this is a context manager rather
+    than a call. ``virtual_host`` is UNIQUE and there is ONE origin this stack serves TLS
+    on, so a permanent claim is a claim for the whole session: the signing e2e modules
+    provision their own tenant at that same origin, and whichever suite ran first simply
+    kept it. Before the unique index the two coexisted and ``get_tenant_by_virtual_host``
+    picked one of them, which is worse than the failure.
+
+    Scoped to this stack's own database through the same ``live_db_env`` every other e2e
+    mutation goes through.
     """
     from urllib.parse import urlsplit
 
@@ -190,9 +198,18 @@ def declare_tenant_front(live_server: dict, origin: str, *, tenant_id: str = CI_
             raise RuntimeError(
                 f"Tenant {tenant_id!r} not found in the live e2e DB — did the stack's init_database_ci.py seed run?"
             )
+        previous = tenant.virtual_host
         tenant.virtual_host = front
         session.commit()
-    return front
+    try:
+        yield front
+    finally:
+        with live_db_env(live_server) as env:
+            session = env.get_session()
+            tenant = session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
+            if tenant is not None:
+                tenant.virtual_host = previous
+                session.commit()
 
 
 def wait_until(predicate, timeout_seconds: float, poll_interval: float = 0.5) -> bool:
