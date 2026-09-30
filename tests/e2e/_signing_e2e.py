@@ -250,9 +250,20 @@ def free_host(live_server: dict, host: str) -> None:
 
     with live_db_env(live_server) as env:
         occupant = env.get_session().scalars(select(Tenant).filter_by(virtual_host=host)).first()
-        occupant_id = occupant.tenant_id if occupant is not None else None
-    if occupant_id is not None:
-        drop_tenant(live_server, occupant_id)
+        if occupant is None:
+            return
+        occupant_id = occupant.tenant_id
+    # Only this suite's OWN rows: every module here names its tenant ``<module>_e2e``.
+    # Anything else at this host belongs to the deployment or another suite — the stack's
+    # bootstrap tenant answers at ``localhost:<port>``, which is a host a caller here
+    # legitimately passes. Deleting that would take the seller every other e2e module
+    # resolves against, so a foreign occupant SURFACES rather than being cleared.
+    assert occupant_id.endswith("_e2e"), (
+        f"tenant {occupant_id!r} already answers at {host!r} and this suite did not create it. "
+        "Freeing the host would delete a tenant another suite depends on; point this fixture at a "
+        "host of its own, or remove the foreign row deliberately."
+    )
+    drop_tenant(live_server, occupant_id)
 
 
 def drop_tenant(live_server: dict, tenant_id: str) -> None:

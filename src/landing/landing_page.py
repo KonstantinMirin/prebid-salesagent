@@ -44,26 +44,6 @@ def _tenant_base_url(tenant_row: dict) -> str:
     return TenantContext.from_dict(tenant_row).agent_url
 
 
-def _extract_tenant_subdomain(tenant_row: dict) -> str | None:
-    """Extract tenant subdomain from tenant data.
-
-    Args:
-        tenant_row: Tenant data from database, as ``serialize_tenant_to_dict`` shapes it
-
-    Returns:
-        Tenant subdomain if determinable
-    """
-    # The tenant's own slug, which is what this is FOR: a label to show and to build a
-    # display URL from. It comes off the row and never off the request's host — a label
-    # parsed out of whichever host the reader arrived on can name the tenant something
-    # the tenant never called itself.
-    if tenant_row.get("subdomain"):
-        return tenant_row["subdomain"]
-
-    # Fallback to tenant_id
-    return tenant_row.get("tenant_id")
-
-
 def _generate_pending_configuration_page(tenant_row: dict) -> str:
     """Generate pending configuration page for unconfigured tenants.
 
@@ -185,7 +165,7 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
     is what the agent card publishes too, so a buyer reading both is told one thing.
 
     Args:
-        tenant_row: Tenant data from database (``serialize_tenant_to_dict``): name, subdomain, etc.
+        tenant_row: Tenant data from database (``serialize_tenant_to_dict``): name, virtual_host, etc.
 
     Returns:
         Complete HTML page as string
@@ -204,7 +184,6 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
         return _generate_pending_configuration_page(tenant_row)
 
     base_url = _tenant_base_url(tenant_row)
-    tenant_subdomain = _extract_tenant_subdomain(tenant_row)
 
     # Every endpoint, and the admin, on the one origin. A tenant is served at the host it
     # declares whether the deployment carries one tenant or many, so there is no second
@@ -222,7 +201,6 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
     template_context = {
         # Tenant information (escaped by Jinja2 auto-escape)
         "tenant_name": tenant_row.get("name", "Unknown Publisher"),
-        "tenant_subdomain": tenant_subdomain,
         # URLs
         "mcp_url": mcp_url,
         "a2a_url": a2a_url,

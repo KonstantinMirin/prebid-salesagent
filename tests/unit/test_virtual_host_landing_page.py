@@ -223,20 +223,6 @@ class TestVirtualHostLandingPage:
 
         assert "https://custom.example.com" in html_content
 
-    def test_landing_page_tenant_subdomain_extraction(self):
-        """Test tenant subdomain extraction from the tenant row."""
-        tenant = {
-            "name": "Subdomain Test",
-            "tenant_id": "subdomain-test",
-            "virtual_host": "scribd.sales-agent.example.com",
-        }
-
-        html_content = generate_tenant_landing_page(tenant)
-
-        # No subdomain column, so the tenant_id labels the tenant; the URLs name its host.
-        assert "subdomain-test" in html_content
-        assert "https://scribd.sales-agent.example.com" in html_content
-
     def test_landing_page_template_errors_handled(self):
         """Test that template errors are handled gracefully."""
         # Minimal tenant data: the two fields a row always carries, plus a name

@@ -53,20 +53,14 @@ def get_or_create(env: Any, model: type, filters: dict[str, Any], create: Any):
 
 
 def tenant_subdomain(tenant_id: str) -> str:
-    """Derive a tenant's subdomain from its tenant_id.
+    """A DNS-legal label for the ``Tenant.subdomain`` column.
 
-    Single source of truth for subdomain derivation (#1418). DNS labels cannot
-    contain underscores, so tenant_id underscores map to hyphens; the
-    normalization is also required because subdomains feed publisher_domain
-    (``f"{subdomain}.example.com"``) and the AdCP domain regex rejects
-    underscores. This MUST be the only derivation: the persisted
-    ``Tenant.subdomain`` (ORM factory) and the ``ResolvedIdentity`` tenant dict
-    (``make_tenant``) have to agree, because the e2e_rest transport
-    authenticates by sending this subdomain as the ``x-adcp-tenant`` header and
-    the live server resolves the tenant from it. A mismatch (underscore in the
-    DB row vs hyphen on the wire) makes the server fail to resolve the tenant
-    and return 401 — which silently parked every e2e_rest delivery scenario on
-    the known-failures ledger.
+    The column is NOT NULL and UNIQUE, so every seeded tenant needs a value, and DNS
+    labels carry no underscores — so a tenant_id's underscores map to hyphens.
+
+    NOTHING ROUTES BY IT. A request names its tenant by ``Host``, matched against
+    ``tenants.virtual_host``, or by ``x-adcp-tenant`` carrying the tenant id verbatim.
+    The admin UI is the only reader left.
     """
     return f"pub-{tenant_id}".replace("_", "-")
 
@@ -123,7 +117,7 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
         Pass **overrides for domain fields (approval_mode, gemini_api_key, etc).
         """
         # Overrides win over the defaults rather than colliding with them. Spelling the
-        # defaults as keyword arguments meant passing name=, subdomain= or ad_server=
+        # defaults as keyword arguments meant passing name= or ad_server=
         # raised "got multiple values for keyword argument", so a caller holding a whole
         # tenant dict could not hand it over — which is what made ``tenant={...}`` a dead
         # end at every call site.
@@ -131,7 +125,6 @@ class TenantFactory(factory.alchemy.SQLAlchemyModelFactory):
             **{
                 "tenant_id": tenant_id,
                 "name": f"Test Publisher {tenant_id}",
-                "subdomain": tenant_subdomain(tenant_id),
                 # A tenant always declares a host, so the projection requires one. Derived
                 # from the tenant_id here so two contexts built in one test differ, the way
                 # the ORM factory's Sequence does.

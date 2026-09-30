@@ -34,7 +34,6 @@ class TenantContext(BaseModel):
 
     tenant_id: str
     name: str = ""
-    subdomain: str = ""
     virtual_host: str
     ad_server: str | None = None
     enable_axe_signals: bool = True
@@ -130,7 +129,6 @@ class TenantContext(BaseModel):
         return cls(
             tenant_id=tenant.tenant_id,
             name=tenant.name or "",
-            subdomain=tenant.subdomain or "",
             virtual_host=tenant.virtual_host,
             ad_server=tenant.ad_server,
             enable_axe_signals=tenant.enable_axe_signals if tenant.enable_axe_signals is not None else True,

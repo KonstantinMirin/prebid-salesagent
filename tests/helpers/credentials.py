@@ -37,11 +37,11 @@ def credential_headers(
     dispatches unauthenticated, so the resolver returns the real AUTH_MISSING rejection
     instead of one for a malformed credential.
 
-    ``tenant`` is the ``x-adcp-tenant`` value: the tenant_id on every leg. ``_detect_tenant``
-    (``src/core/resolved_identity.py``) tries it as a subdomain first and then takes it
-    as the literal id, so the id resolves whether or not a subdomain row matches it.
-    ``BaseTestEnv.credential`` (``tests/harness/_base.py``) is the harness's call of this
-    function; a test outside the harness calls it directly.
+    ``tenant`` is the ``x-adcp-tenant`` value: the tenant_id on every leg, taken verbatim
+    as the literal id by ``_detect_tenant`` (``src/core/resolved_identity.py``). No
+    subdomain is involved — a request names its tenant by ``Host`` or by this header, and
+    by nothing else. ``BaseTestEnv.credential`` (``tests/harness/_base.py``) is the
+    harness's call of this function; a test outside the harness calls it directly.
     """
     headers: dict[str, str] = {}
     if token is not None:
