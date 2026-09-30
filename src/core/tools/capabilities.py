@@ -57,6 +57,7 @@ def _get_adcp_capabilities_impl(
         account=seller.account,
         webhook_signing=seller.webhook_signing,
         request_signing=seller.request_signing,
+        identity=seller.identity,
         errors=seller.advisories or None,
         last_updated=datetime.now(UTC),
     )

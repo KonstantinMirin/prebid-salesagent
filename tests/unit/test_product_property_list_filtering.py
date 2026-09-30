@@ -24,6 +24,7 @@ from adcp.types.generated_poc.core.publisher_property_selector import (  # TODO:
 )
 
 from src.core.schemas import GetProductsRequest
+from tests.harness import make_mock_uow
 
 
 def _make_selector_all(domain: str = "example.com") -> PublisherPropertySelector:
@@ -325,17 +326,14 @@ class TestCapabilitiesPropertyListFiltering:
 
         mock_repo = MagicMock()
         mock_repo.list_publisher_partners.return_value = []
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.tenant_config = mock_repo
+        uow_cls, _ = make_mock_uow(repos={"tenant_config": mock_repo})
 
         with (
             patch(
                 "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("adapter unavailable (test)"),
             ),
-            patch("src.services.seller_capabilities.TenantConfigUoW", return_value=mock_uow),
+            patch("src.services.seller_capabilities.CapabilitiesUoW", uow_cls),
         ):
             response = _get_adcp_capabilities_impl(None, identity)
 

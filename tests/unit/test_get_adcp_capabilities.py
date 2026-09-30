@@ -16,6 +16,8 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     SupportedProtocol,
 )
 
+from tests.harness import make_mock_uow
+
 if TYPE_CHECKING:
     from src.core.resolved_identity import PublicIdentity
 
@@ -201,17 +203,10 @@ class TestGetAdcpCapabilitiesWithTenant:
         # is covered by TestPublisherDomains directly.
         mock_repo = MagicMock()
         mock_repo.list_publisher_partners.return_value = []
-        # No ORM tenant row: this test drives the impl from a tenant DICT, so the
-        # keyless "tenant the tenants table does not carry" branch is the honest one
-        # rather than letting a MagicMock fabricate a host and a key.
-        mock_repo.get_tenant.return_value = None
-        mock_uow = MagicMock()
-        mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-        mock_uow.__exit__ = MagicMock(return_value=False)
-        mock_uow.tenant_config = mock_repo
+        uow_cls, _ = make_mock_uow(repos={"tenant_config": mock_repo})
 
         with (
-            patch("src.services.seller_capabilities.CapabilitiesUoW", return_value=mock_uow),
+            patch("src.services.seller_capabilities.CapabilitiesUoW", uow_cls),
             patch(
                 "src.services.seller_capabilities.get_adapter_class_for_tenant",
                 side_effect=Exception("adapter unavailable (test)"),
@@ -278,7 +273,6 @@ class TestGetAdcpCapabilitiesWithTenant:
 
         mock_repo = MagicMock()
         mock_repo.list_publisher_partners.return_value = []
-        mock_repo.get_tenant.return_value = None
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
@@ -397,11 +391,6 @@ def _patch_capabilities_deps(
     # publisher-partner, signing-key and tenant-host reads all share it.
     mock_repo = MagicMock()
     mock_repo.list_publisher_partners.return_value = db_partners or []
-    # No ORM tenant row: these unit tests drive the impl from a tenant DICT, and the
-    # identity block is derived from the ROW. Returning None takes the documented
-    # "resolved a tenant the tenants table does not carry" branch — keyless, no trust
-    # root — rather than letting a MagicMock fabricate a host and a key.
-    mock_repo.get_tenant.return_value = None
     mock_uow = MagicMock()
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
@@ -531,11 +520,6 @@ class TestGracefulDegradation:
 
         mock_repo = MagicMock()
         mock_repo.list_publisher_partners.return_value = []
-        # No ORM tenant row, for the same reason the other three mock sites pin it:
-        # the signing blocks read get_tenant() and, given a MagicMock, would derive an
-        # agent origin and key backing from a fabricated host -- turning a
-        # channel-fallback test into a swallowed "signing key backing" degradation.
-        mock_repo.get_tenant.return_value = None
         mock_uow = MagicMock()
         mock_uow.__enter__ = MagicMock(return_value=mock_uow)
         mock_uow.__exit__ = MagicMock(return_value=False)
