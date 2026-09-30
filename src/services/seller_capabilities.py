@@ -94,10 +94,9 @@ logger = logging.getLogger(__name__)
 # `tests/unit/test_architecture_signing_block_construction.py` holds that shape.
 #
 # The baseline protocol/specialism sets every response advertises before any tenant
-# declaration is applied. ONE source consumed by both the no-tenant minimal response
-# and the tenant-resolved response, so neither can advertise a set the other does not.
-# A literal in each is the drift class _build_adcp_block exists to prevent. They live
-# in the declarations schema,
+# declaration is applied. ONE source, so the baseline and the declaration-union cannot
+# disagree about what this seller advertises; a literal in each is the drift class
+# _build_adcp_block exists to prevent. They live in the declarations schema,
 # because validate_backing() has to reason about the EMITTED set (defaults unioned with
 # the declaration) to check specialism roll-up.
 _DEFAULT_SUPPORTED_PROTOCOLS = DEFAULT_SUPPORTED_PROTOCOLS
@@ -421,13 +420,6 @@ class SellerCapabilities(BaseModel):
     is the other. ``agent_url`` lives here because where a seller is reachable is a
     fact about the seller, not about the request that asked — and it is the one field
     the card needs that the capabilities response has no home for.
-
-    ``agent_url`` is ``None`` exactly when no tenant resolved, which only the
-    ``get_adcp_capabilities`` TOOL can reach — a public tool answers an unrouted host with
-    the minimal description. The agent card cannot reach it: ``public_identity_for`` refuses
-    an unresolved tenant before the card handler runs, and a resolved tenant always declares
-    the host it is served at, so the card's ``url`` is always statable. The clause that used
-    to stand here said the card "answers 404" for this case; no card request ever gets here.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -443,7 +435,7 @@ class SellerCapabilities(BaseModel):
     #: The trust-root pointer, ``None`` when this seller owes none — no posture to anchor
     #: and no key to publish. Omission there is not silence about a fact; there is no fact.
     identity: IdentityDeclaration | None = None
-    agent_url: str | None = None
+    agent_url: str
     measurement: Any | None = None
     experimental_features: Any | None = None
     media_buy: MediaBuy | None = None
