@@ -30,6 +30,8 @@ no caller.
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -41,6 +43,20 @@ from src.core.domain_config import _get_protocol_for_domain
 # ``/mcp`` 307s to ``/mcp/``, ``/a2a`` does not redirect. This table is what stops
 # the URL we publish drifting from the mount the app actually serves.
 AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp/", "a2a": "/a2a"}
+
+BRAND_JSON_PATH = "/.well-known/brand.json"
+ADAGENTS_JSON_PATH = "/.well-known/adagents.json"
+JWKS_PATH = "/.well-known/jwks.json"
+#: The combined revocation list this seller PUBLISHES as a signer (security.mdx :1543). The
+#: literal matches the URI ``CachingRevocationChecker.from_issuer_origin`` derives
+#: (``adcp/signing/revocation_fetcher.py``) — a parity test pins this against that private
+#: derivation, since unlike the three paths above the SDK exposes no path CONSTANT to import.
+GOVERNANCE_REVOCATIONS_PATH = "/.well-known/governance-revocations.json"
+
+# ``brand_agent_entry.id`` is ``^[a-z0-9_]+$``, maxLength 100. Tenant ids and hosts
+# routinely carry hyphens, which are ILLEGAL there.
+_ID_ILLEGAL = re.compile(r"[^a-z0-9]+")
+_AGENT_ENTRY_ID_MAX_LENGTH = 100
 
 
 class DeclaresHost(Protocol):
@@ -54,6 +70,17 @@ class DeclaresHost(Protocol):
 
     @property
     def virtual_host(self) -> str: ...
+
+
+class DeclaresIdentity(DeclaresHost, Protocol):
+    """A tenant that also names itself — what an entry id is built from.
+
+    Named as an attribute rather than as the ORM class for the same reason
+    :class:`DeclaresHost` is: both shapes a caller already holds satisfy it.
+    """
+
+    @property
+    def tenant_id(self) -> str: ...
 
 
 def canonical_agent_url(tenant: DeclaresHost) -> str:
@@ -72,6 +99,84 @@ def canonical_agent_url(tenant: DeclaresHost) -> str:
     read of one column: nothing here opens a session.
     """
     return f"{_get_protocol_for_domain(tenant.virtual_host)}://{tenant.virtual_host}"
+
+
+def agent_endpoint_urls(tenant: DeclaresHost) -> dict[str, str]:
+    """The URLs a counterparty invokes this tenant at, keyed by transport.
+
+    One entry per endpoint this agent actually serves. brand.json publishes one
+    ``agents[]`` entry per member of this mapping, so the byte-equal match at
+    ``security.mdx`` step 5 succeeds for a caller of either transport.
+    """
+    origin = canonical_agent_url(tenant)
+    return {transport: origin + path for transport, path in AGENT_ENDPOINT_PATHS.items()}
+
+
+def agent_entry_id(tenant: DeclaresIdentity, transport: str) -> str:
+    """The ``brand_agent_entry.id`` for this tenant's *transport* endpoint.
+
+    Distinct per endpoint because the SDK's ``_pick_agent`` disambiguates same-type
+    entries by ``id`` alone. Slugged to ``^[a-z0-9_]+$`` because the schema rejects the
+    hyphens tenant ids routinely carry, and stable across deployments, because
+    counterparties may pin it.
+    """
+    slug = _ID_ILLEGAL.sub("_", f"{tenant.tenant_id}_{transport}".lower()).strip("_")
+    return slug[:_AGENT_ENTRY_ID_MAX_LENGTH]
+
+
+@dataclass(frozen=True, slots=True)
+class AgentIdentity:
+    """One tenant's published identity: the origin, and the endpoints under it.
+
+    Two facts about one identity. Callers want different ones — the admin
+    authorized-properties view wants the ORIGIN, the agent card wants the A2A
+    ENDPOINT — so this surface exposes both rather than a single "identity URL" that
+    has to pick one and lose the distinction.
+    """
+
+    origin: str
+    endpoints: dict[str, str]
+
+
+def agent_identity_for_tenant(tenant: DeclaresHost) -> AgentIdentity:
+    """*tenant*'s published identity. PURE: it reads no session.
+
+    Takes an already-loaded row deliberately. A caller holding its own session must be
+    able to derive identity INSIDE its own transaction — ``SigningKeyRepository.
+    canonical_origin`` resolves the origin in the same transaction that produced the key
+    row it is about to sign with, and an identity helper that opened a unit of work of
+    its own silently breaks that (the flush-visibility test in
+    ``tests/integration/test_signing_key_repository.py`` grades it).
+    """
+    return AgentIdentity(origin=canonical_agent_url(tenant), endpoints=agent_endpoint_urls(tenant))
+
+
+def brand_json_url(tenant: DeclaresHost) -> str:
+    """Where this tenant's brand.json is served, published as ``identity.brand_json_url``."""
+    return canonical_agent_url(tenant) + BRAND_JSON_PATH
+
+
+def adagents_json_url(tenant: DeclaresHost) -> str:
+    """Where this tenant's adagents.json is served."""
+    return canonical_agent_url(tenant) + ADAGENTS_JSON_PATH
+
+
+def jwks_uri(tenant: DeclaresHost) -> str:
+    """Where this tenant's JWKS is served.
+
+    Emitted EXPLICITLY on every ``agents[]`` entry rather than relying on the verifier's
+    documented default, so a verifier never has to reconstruct it.
+    """
+    return canonical_agent_url(tenant) + JWKS_PATH
+
+
+def jwks_origin(tenant: DeclaresHost) -> str:
+    """The origin the JWKS resolves at — ``identity.key_origins.request_signing``.
+
+    Read from one place rather than re-literalled: a second spelling is a
+    ``request_signature_key_origin_mismatch`` waiting to happen.
+    """
+    return canonical_agent_url(tenant)
 
 
 def deployment_virtual_host() -> str | None:

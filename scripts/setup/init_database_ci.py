@@ -37,7 +37,7 @@ ISO_TEST_VIRTUAL_HOST = "iso-test.adcp.test"
 
 
 #: The credential presented to that tenant: the plaintext token this script hashes into
-#: the CI principal's row. Owned here for the same reason as the subdomain above -- this
+#: the CI principal's row. Owned here for the same reason as the host above -- this
 #: script is what makes it resolvable -- and read by tests/integration/conftest_ci_seed.py
 #: and the e2e clients.
 #:
@@ -331,8 +331,8 @@ def init_db_ci():
                         account_id=CI_TEST_ACCOUNT_ID,
                         name="CI Test Account",
                         status="active",
-                        operator="testbrand.com",
-                        brand=BrandReference(domain="testbrand.com"),
+                        operator="testbrand.example",
+                        brand=BrandReference(domain="testbrand.example"),
                     )
                 )
                 # Both parents must be ON the database before the association row: its FKs

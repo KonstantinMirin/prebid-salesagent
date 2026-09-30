@@ -79,7 +79,7 @@ def test_provisioning_is_not_a_test_flag() -> None:
 
 # There is no test asserting that each field carries a reason. The one written here checked
 # that every field NAME appeared twice in this module, which grades text repetition rather
-# than substance -- padding the file would satisfy it, and grouping six credentials under one
-# honest comment failed it. Whether an entry's reason is any good is a review property, not a
-# machine-checkable one, and a guard that grades the spelling of a comment is the shape this
-# repo already has notes about avoiding.
+# than substance -- padding the file would satisfy it, and one honest comment covering a
+# group of related fields failed it. Whether an entry's reason is any good is a review
+# property, not a machine-checkable one, and a guard that grades the spelling of a comment is
+# the shape this repo already has notes about avoiding.

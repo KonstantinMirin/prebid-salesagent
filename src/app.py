@@ -27,15 +27,18 @@ from src.a2a_server.adcp_a2a_server import (
     render_agent_card,
     restore_a2a_integer_types,
 )
+from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
 from src.core.domain_routing import route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
+from src.core.http_utils import path_from_asgi_scope
 from src.core.lifecycle import run_all_shutdown_callbacks
 from src.core.main import mcp
 from src.core.resolved_identity import TransportProtocol, public_identity_for
+from src.core.signing.capture import SignedExchangeCapture
 from src.core.tools._boundary import failure_response
 from src.core.tools._wire import to_wire
 from src.landing import generate_tenant_landing_page
@@ -43,6 +46,7 @@ from src.landing.landing_page import generate_fallback_landing_page
 from src.routes.api_v1 import router as api_v1_router
 from src.routes.health import debug_router as health_debug_router
 from src.routes.health import router as health_router
+from src.routes.well_known import router as well_known_router
 from src.services.seller_capabilities import describe_seller
 
 logger = logging.getLogger(__name__)
@@ -349,6 +353,9 @@ _request_handler = AdCPRequestHandler()
 _a2a_rpc_routes_raw = create_jsonrpc_routes(
     request_handler=_request_handler,
     rpc_url="/a2a",
+    # The SDK's default builder, plus the captured HTTP message an RFC 9421 signature covers
+    # — see src/a2a_server/context_builder.py. It carries a value; it decides nothing.
+    context_builder=AdCPCallContextBuilder(),
 )
 # Rebuild each route with an integer-restoring wrapper around its endpoint --
 # mutating route.endpoint in place would not change dispatch, since Starlette
@@ -367,7 +374,7 @@ logger.info("A2A routes added: /a2a")
 
 
 @app.api_route("/a2a/", methods=["GET", "POST", "OPTIONS"])
-async def a2a_trailing_slash_redirect():
+async def a2a_trailing_slash_redirect() -> RedirectResponse:
     """Serve the trailing-slash spelling of /a2a.
 
     The admin root fallback mount would otherwise catch `/a2a/` and hand it to
@@ -378,8 +385,8 @@ async def a2a_trailing_slash_redirect():
 
 
 # ---------------------------------------------------------------------------
-# Dynamic agent card endpoints — override SDK defaults to support
-# tenant-specific URLs based on request headers.
+# Agent card endpoints — one card per tenant, built per request from that
+# tenant's seller description.
 # ---------------------------------------------------------------------------
 
 
@@ -448,7 +455,10 @@ _install_agent_card_routes()
 @app.middleware("http")
 async def a2a_messageid_compatibility_middleware(request: Request, call_next):
     """Handle both numeric and string messageId for backward compatibility."""
-    if request.url.path == "/a2a" and request.method == "POST":
+    # ``path_from_asgi_scope``, not ``request.url.path``: this predicate selects a ROUTE, so
+    # it has to read the path the router matches on — ``root_path`` stripped. Mounted under
+    # a prefix, ``request.url.path`` is ``/adcp/a2a`` and this never fires again.
+    if path_from_asgi_scope(request.scope) == "/a2a" and request.method == "POST":
         body = await request.body()
         try:
             data = json.loads(body)
@@ -515,14 +525,27 @@ app.include_router(health_router)
 if settings.debug_routes_enabled:
     app.include_router(health_debug_router)
 
+# Trust root (#1291 A3): /.well-known/{brand,adagents,jwks}.json and the signed
+# revocation list. Registered at import time so it is matched before
+# _install_admin_mounts() re-appends the Flask "" catch-all at lifespan startup.
+app.include_router(well_known_router)
+
 # ---------------------------------------------------------------------------
 # Middleware stack (via add_middleware — outermost = last registered):
 #   1. AuthChallengeResponder (outermost — renders EVERY transport's 401)
 #   2. CORSMiddleware (adds CORS headers to all responses)
+#   3. SignedExchangeCapture (innermost — records the message, decides nothing)
 #
 # No auth middleware. Each transport hands the request headers to the boundary, and the
-# resolver behind it is the one reader of a credential.
+# resolver behind it is the one reader of a credential — the bearer AND the RFC 9421
+# signature. The capture below is not an exception to that: it reads no credential and
+# refuses nothing. It exists because a signature covers things the boundary cannot rebuild
+# (the exact bytes, and ``@target-uri`` from ``raw_path``), so they have to be recorded where
+# they still exist. INNERMOST, so that nothing between it and the app can rewrite the body it
+# recorded a digest-able copy of.
 # ---------------------------------------------------------------------------
+
+app.add_middleware(SignedExchangeCapture)
 
 app.add_middleware(
     CORSMiddleware,

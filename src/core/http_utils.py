@@ -1,18 +1,26 @@
-"""The host and header facts of an HTTP request, read in one place.
+"""The host, header and path facts of an HTTP request, read in one place.
 
 The host a request names is its ``Host``. ``requested_host`` is that, and it is the only
-host input this application has — a caller asks for the FACT rather than naming a header,
-which is what keeps one answer to "which host is this request for" across the boundary
-resolver, the admin blueprints, the routes and the routing module.
+host input for deciding which tenant a request is for — a caller asks for the FACT rather
+than naming a header, which is what keeps one answer to "which host is this request for"
+across the boundary resolver, the admin blueprints, the routes and the routing module.
 
 Whatever a proxy in front of this app does to produce that ``Host`` is the edge's business
 and has no spelling here.
+
+The path a request names is its ASGI ``path`` with any mount prefix stripped.
+``path_from_asgi_scope`` is that, for the same reason: every routing predicate that must
+agree with the dispatcher asks for the fact instead of restating the rule.
+
+A signature base reads neither of these facts: ``@target-uri`` has to cover the bytes the
+client dialled, so ``src.core.signing.capture`` reads the wire itself — the host line and
+the unstripped, still-encoded path — and deliberately does not come here.
 
 This module holds no state and imports nothing from the application, so every one of those
 callers can import it.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, Protocol
 from urllib.parse import urlsplit
 
@@ -95,3 +103,23 @@ def hostname_of(host: str) -> str:
     inherited.
     """
     return urlsplit(f"//{host}").hostname or host
+
+
+def path_from_asgi_scope(scope: Mapping[str, Any]) -> str:
+    """The request path with any ASGI ``root_path`` mount prefix stripped.
+
+    A sub-mounted app sees ``path`` still carrying the mount prefix, so anything
+    matching a path against a route table or a surface allowlist has to strip it
+    first. Two copies of that rule is two chances to disagree about the empty-path
+    edge, so every routing predicate that must agree with the dispatcher calls
+    this one.
+
+    Deliberately the OPPOSITE of the path that feeds a signature base: ``@target-uri``
+    covers the bytes the client dialed, mount prefix and percent-encoding intact
+    (see ``src.core.signing.capture``). Do not collapse the two.
+    """
+    path = str(scope.get("path", ""))
+    root_path = str(scope.get("root_path") or "")
+    if root_path and path.startswith(root_path):
+        path = path[len(root_path) :] or "/"
+    return path

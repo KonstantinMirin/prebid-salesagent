@@ -220,15 +220,17 @@ def _parse_and_save_properties_file(file, tenant_id: str) -> tuple[int, int, lis
 
 
 def _construct_agent_url(tenant_id: str) -> str:
-    """This tenant's agent URL — the same string the agent card publishes.
+    """This tenant's canonical agent URL — the SAME string every document publishes.
 
-    A counterparty fetches adagents.json and byte-matches the agent URL it finds there
-    against the one the card published, and there is no diagnostic when the two disagree —
-    the check simply fails. So this reads ``tenant.agent_url``, the one accessor, rather
-    than deriving its own.
+    These URLs are compared against the ``url`` values in publishers' adagents.json
+    files (``publisher_partners.py``, the property-sync service) and against the URL
+    the agent card published, and there is no diagnostic when two of them disagree —
+    the check simply fails. So this reads ``tenant.agent_url``, the one accessor,
+    rather than deriving its own.
 
-    Takes no ``request``: a tenant's published identity comes from its row, and a request
-    parameter on a function deriving it is an invitation to read a header instead.
+    Takes no ``request``: a tenant's published identity comes from its row, and a
+    request parameter on a function deriving it is an invitation to read a header
+    instead.
     """
     from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 

@@ -97,6 +97,8 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/auth.py", "login"),
     ("src/admin/blueprints/auth.py", "logout"),
     ("src/admin/blueprints/auth.py", "tenant_login"),
+    # _construct_agent_url removed — the agent URL is stored tenant state, reached
+    # through a repository instead of selected here
     ("src/admin/blueprints/authorized_properties.py", "_save_properties_batch"),
     ("src/admin/blueprints/authorized_properties.py", "create_property"),
     ("src/admin/blueprints/authorized_properties.py", "create_property_tag"),
@@ -158,8 +160,11 @@ ALLOWLIST: set[tuple[str, str]] = {
     ("src/admin/blueprints/policy.py", "review_task"),
     ("src/admin/blueprints/policy.py", "update"),
     ("src/admin/blueprints/principals.py", "create_principal"),
+    # delete_principal removed — the lookup goes through PrincipalRepository.get()
     # delete_webhook / register_webhook / toggle_webhook removed — rewired onto
-    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg)
+    # PushNotificationConfigRepository via PushNotificationConfigUoW (salesagent-tayg;
+    # both sides removed these independently). manage_webhooks below deliberately KEEPS
+    # its raw select — it must list INACTIVE rows, which list_active_by_principal cannot.
     ("src/admin/blueprints/principals.py", "edit_principal"),
     ("src/admin/blueprints/principals.py", "get_gam_advertisers"),
     ("src/admin/blueprints/principals.py", "list_principals"),
@@ -242,9 +247,12 @@ ALLOWLIST: set[tuple[str, str]] = {
     # ── Core ──
     ("src/core/audit_logger.py", "log_operation"),
     ("src/core/audit_logger.py", "log_security_violation"),
-    # config_loader's four routing lookups fixed — every one of them now delegates to
+    # config_loader's tenant lookups fixed — every lookup it still has delegates to
     # TenantLookupRepository, which owns every cross-tenant query on ``tenants`` (#2263).
     # ensure_default_tenant_exists still CREATES the row; only its lookup moved.
+    # add_message removed — now sa_update + jsonb_list_append, zero selects.
+    # _send_push_notifications removed — its config lookup routes through
+    # PushNotificationConfigRepository.
     ("src/core/context_manager.py", "get_context"),
     ("src/core/context_manager.py", "get_context_status"),
     ("src/core/context_manager.py", "get_contexts_for_principal"),
