@@ -577,6 +577,7 @@ def _run_storyboard_runner(protocol: str) -> dict[str, Any]:
         timeout=700,
         env={**os.environ, **webhook_env, **tls_env},
     )
+    _publish_runner_record(protocol, result)
     if not summary_path.exists():
         pytest.fail(
             f"storyboard runner ({protocol}) did not produce a summary (exit={result.returncode}): "
@@ -692,6 +693,26 @@ def _no_graded_checks(protocol: str, summary: dict[str, Any]) -> dict[str, Any]:
         ),
         "reason_kind": "no_graded_checks",
     }
+
+
+def _publish_runner_record(protocol: str, result: subprocess.CompletedProcess[str]) -> None:
+    """Publish the runner's OWN output, in full, beside the summary.
+
+    ``--summary-output`` writes a digest: counts, plus the failures enumerated and the skip
+    causes truncated to a sample. It cannot answer which checks PASSED, so two runs with
+    the same totals are indistinguishable from two runs that passed different checks --
+    and comparing a branch against main means comparing the SETS, not the counts.
+
+    ``--json`` already makes the runner emit its complete per-check record on stdout, and
+    that record was captured and dropped on the floor: read only to quote 2000 characters
+    into a failure message. Written here whatever the exit code, because a run that died
+    is exactly when the record is worth having.
+    """
+    out = _REPO_ROOT / "test-results"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"storyboard_run_{protocol}.json").write_text(result.stdout)
+    if result.stderr:
+        (out / f"storyboard_run_{protocol}.stderr.log").write_text(result.stderr)
 
 
 def _publish_summary(protocol: str, summary: dict[str, Any]) -> None:
