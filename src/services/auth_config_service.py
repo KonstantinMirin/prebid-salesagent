@@ -264,8 +264,10 @@ def _config_is_verified_for(config: TenantAuthConfig | None, tenant: Tenant | No
     current_uri = get_tenant_redirect_uri(tenant)
     if config.oidc_verified_redirect_uri != current_uri:
         logger.warning(
-            f"OIDC config invalid for tenant {tenant_id}: "
-            f"redirect URI changed from {config.oidc_verified_redirect_uri} to {current_uri}"
+            "OIDC config invalid for tenant %s: redirect URI changed from %s to %s",
+            tenant_id,
+            config.oidc_verified_redirect_uri,
+            current_uri,
         )
         return False
     return True
