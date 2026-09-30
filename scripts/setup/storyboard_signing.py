@@ -64,7 +64,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.setup.init_database_ci import CI_TEST_TOKEN  # noqa: E402
+from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
 )
@@ -95,8 +95,9 @@ STORYBOARD_VIRTUAL_HOST = _SEEDED_STORYBOARD_VIRTUAL_HOST
 COUNTERPARTY_AGENT_URL = "https://runner.adcp-conformance.test/a2a"
 
 #: The principal the runner's verified signature establishes. It holds a token because the
-#: schema requires one; nothing ever presents it, and it is deliberately NOT the CI token —
-#: a second principal answering to ``ci-test-token`` would make the token lookup ambiguous.
+#: schema requires one; nothing ever presents it, and it is deliberately NOT the token the
+#: runner sends — a second principal answering to STORYBOARD_TOKEN would make the token
+#: lookup ambiguous.
 COUNTERPARTY_PRINCIPAL_ID = "storyboard-conformance-runner"
 COUNTERPARTY_PRINCIPAL_TOKEN = "storyboard-conformance-runner-token-not-presented"
 
@@ -370,10 +371,16 @@ def _seed_webhook_storyboard_account(session: Session, tenant_id: str) -> None:
     # The principal the RUNNER authenticates as. The grant has to name that principal,
     # not the counterparty one above: the counterparty is who the runner's SIGNATURE
     # establishes, while the account is read on the bearer's behalf.
-    principal = find_principal_by_token_hash(session, hash_token(CI_TEST_TOKEN))
+    #
+    # STORYBOARD_TOKEN, because that is what ``tox.ini`` sends as STORYBOARD_AUTH_TOKEN.
+    # The CI tenant's token would resolve a principal belonging to a DIFFERENT tenant, and
+    # the grant below is keyed (tenant_id, principal_id) -- a foreign key this tenant
+    # cannot satisfy.
+    principal = find_principal_by_token_hash(session, hash_token(STORYBOARD_TOKEN))
     if principal is None:
         raise SystemExit(
-            f"No principal for the runner's bearer in tenant {tenant_id!r}. Run scripts.setup.init_database_ci first."
+            f"No principal for the runner's bearer in tenant {tenant_id!r}. "
+            "Run scripts.setup.seed_storyboard_tenant first."
         )
 
     seeded: list[str] = []
