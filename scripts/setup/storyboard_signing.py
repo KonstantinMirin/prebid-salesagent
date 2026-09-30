@@ -64,10 +64,13 @@ _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
-from scripts.setup.init_database_ci import CI_TEST_TENANT_ID, CI_TEST_TOKEN  # noqa: E402
+from scripts.setup.init_database_ci import CI_TEST_TOKEN  # noqa: E402
+from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
+    STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
+)
 
 #: The Host the conformance runner dials, and therefore the ``virtual_host`` the storyboard
-#: tenant must answer to.
+#: tenant must answer to. Re-exported from ``seed_storyboard_tenant``, which WRITES it.
 #:
 #: A VECTOR PROBE CARRIES NO ROUTING HEADER. The runner's ``-H x-adcp-tenant=...`` reaches
 #: the MCP ``initialize`` handshake and the ordinary storyboard steps, but a signed vector
@@ -79,7 +82,7 @@ from scripts.setup.init_database_ci import CI_TEST_TENANT_ID, CI_TEST_TOKEN  # n
 #:
 #: ``tests/storyboard/test_storyboard_conformance.py`` builds its agent URLs from this, so
 #: the value the runner dials and the value the database answers to are one string.
-STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
+STORYBOARD_VIRTUAL_HOST = _SEEDED_STORYBOARD_VIRTUAL_HOST
 
 #: The conformance runner AS A COUNTERPARTY: the ``agent_url`` its keys resolve at.
 #:
@@ -315,12 +318,17 @@ def seed() -> None:
     from src.core.database.repositories.principal import PrincipalRepository
 
     with get_db_session() as session:
-        tenant = session.scalars(select(Tenant).filter_by(tenant_id=CI_TEST_TENANT_ID)).first()
+        # Found BY HOST. ``seed_storyboard_tenant`` gives this tenant a fresh uuid4
+        # tenant_id on every seed, so the host is its only stable identifier -- and the
+        # host is unique, so it names exactly one row. This script does not WRITE the
+        # host: the seeder already did, and re-asserting it collides with that row on
+        # ``ix_tenants_virtual_host``, which killed this suite before it wrote a report.
+        tenant = session.scalars(select(Tenant).filter_by(virtual_host=STORYBOARD_VIRTUAL_HOST)).first()
         if tenant is None:
-            raise SystemExit(f"No tenant {CI_TEST_TENANT_ID!r}. Run scripts.setup.init_database_ci first.")
+            raise SystemExit(
+                f"No tenant answers at {STORYBOARD_VIRTUAL_HOST!r}. Run scripts.setup.seed_storyboard_tenant first."
+            )
 
-        tenant.virtual_host = STORYBOARD_VIRTUAL_HOST
-        session.flush()  # so brand_json_url() derives from the host just written
         tenant.capability_declarations = declarations(brand_json_url(tenant))
         print(f"Storyboard tenant {tenant.tenant_id} answers to {STORYBOARD_VIRTUAL_HOST}")
         print(f"   posture: required_for={list(REQUIRED_FOR)} covers_content_digest={COVERS_CONTENT_DIGEST}")
