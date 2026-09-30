@@ -213,6 +213,27 @@ def _reset_principal_token_sequence(suffix: str) -> None:
     PrincipalFactory.reset_sequence(int(suffix, 16) % 10_000_000, force=True)
 
 
+def _seed_seller(env) -> None:
+    """Ensure this env's TENANT row exists, and nothing else.
+
+    AUTH_MISSING answers "no credential was presented", which the resolver only reaches
+    once it knows which seller the request addresses. With no tenant it refuses
+    CONFIGURATION_ERROR first, and the assertion then grades the wrong refusal.
+
+    The tenant ALONE: ``setup_default_data`` also creates the env's default principal, and
+    ``principals.token_hash`` is globally unique, so seeding one here collides with the
+    principal the success leg of the same test already committed.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+    from tests.factories import TenantFactory
+
+    if env.get_session().scalars(select(Tenant).filter_by(tenant_id=env.tenant_id)).first() is None:
+        TenantFactory(tenant_id=env.tenant_id)
+        env._commit_factory_data()
+
+
 @pytest.fixture(scope="module")
 def e2e_live_config() -> E2EConfig:
     """Live E2EConfig for ``TestEnvVsClientEquivalenceE2E``, or a clean skip.
@@ -291,6 +312,7 @@ class TestClientCrossTransportConsistency:
         from src.core.errors.codes import CODE_TABLE
 
         with BareIntegrationEnv(tenant_id="client-parity-noauth", principal_id="p1") as env:
+            _seed_seller(env)
             client = AdCPTestClient(env)
             result = client.call("list_accounts", {}, Transport.REST, credential=env.credential(token=None))
 
@@ -351,6 +373,7 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-mcp-e", principal_id="p1") as env:
+            _seed_seller(env)
             via = env.call_via(Transport.MCP, credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
                 "list_accounts", {}, Transport.MCP, credential=env.credential(token=None)
@@ -375,6 +398,7 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-a2a-e", principal_id="p1") as env:
+            _seed_seller(env)
             via = env.call_via(Transport.A2A, credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
                 "list_accounts", {}, Transport.A2A, credential=env.credential(token=None)
@@ -399,6 +423,7 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-rest-e", principal_id="p1") as env:
+            _seed_seller(env)
             via = env.call_via(Transport.REST, credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
                 "list_accounts", {}, Transport.REST, credential=env.credential(token=None)
@@ -530,6 +555,7 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2erest-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+            _seed_seller(env)
             via = env.call_via(Transport.E2E_REST, credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
                 "list_accounts", {}, Transport.E2E_REST, credential=env.credential(token=None)
@@ -557,6 +583,7 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2emcp-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+            _seed_seller(env)
             via = env.call_via(Transport.E2E_MCP, tool_name="list_accounts", credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
                 "list_accounts", {}, Transport.E2E_MCP, credential=env.credential(token=None)
@@ -584,6 +611,7 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2ea2a-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
+            _seed_seller(env)
             via = env.call_via(Transport.E2E_A2A, tool_name="list_accounts", credential=env.credential(token=None))
             client_result = AdCPTestClient(env).call(
                 "list_accounts", {}, Transport.E2E_A2A, credential=env.credential(token=None)

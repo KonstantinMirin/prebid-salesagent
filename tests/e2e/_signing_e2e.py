@@ -231,6 +231,30 @@ def seeded_capabilities_factory(body: dict):
     return json_seeded_client_factory(body)
 
 
+def free_host(live_server: dict, host: str) -> None:
+    """Remove whichever tenant currently holds *host*, whatever its id.
+
+    ``ix_tenants_virtual_host`` is UNIQUE, so a host is a resource exactly one tenant can
+    hold, and every module in this suite claims the SAME one — the single origin the
+    stack serves TLS on. ``tests/e2e`` writes to the SERVER's database, which outlives a
+    run, so a module that died before its ``finally`` leaves its row holding the host and
+    every later claim fails on the index. :func:`drop_tenant` cannot clear that: it deletes
+    by id, and the row belongs to another module's id.
+
+    Claiming by host rather than trusting the previous claimant to have released it is
+    what makes the fixture idempotent across runs.
+    """
+    from sqlalchemy import select
+
+    from src.core.database.models import Tenant
+
+    with live_db_env(live_server) as env:
+        occupant = env.get_session().scalars(select(Tenant).filter_by(virtual_host=host)).first()
+        occupant_id = occupant.tenant_id if occupant is not None else None
+    if occupant_id is not None:
+        drop_tenant(live_server, occupant_id)
+
+
 def drop_tenant(live_server: dict, tenant_id: str) -> None:
     """Remove a test tenant and EVERY row that hangs off it, from the shared e2e database.
 
@@ -465,6 +489,7 @@ def provisioned_trust_root_tenant(
     from tests.factories import AuthorizedPropertyFactory, PrincipalFactory, SigningKeyFactory, TenantFactory
 
     drop_tenant(live_server, tenant_id)
+    free_host(live_server, host)
     try:
         with live_db_env(live_server) as env:
             tenant = TenantFactory(
