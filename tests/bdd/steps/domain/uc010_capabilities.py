@@ -1189,17 +1189,6 @@ def then_portfolio_domains(ctx: dict, domains: str) -> None:
     assert sorted(actual) == sorted(_quoted_list(domains)), f"publisher_domains {actual!r} != {domains}"
 
 
-@then("media_buy.portfolio should be omitted, never a fabricated publisher domain")
-def then_portfolio_omitted_never_fabricated(ctx: dict) -> None:
-    """salesagent-piyo: when no real publisher_domain data exists, media_buy.portfolio
-    must be omitted entirely (never a fabricated <subdomain>.example.com placeholder) --
-    portfolio.publisher_domains is REQUIRED+minItems:1 whenever portfolio is present
-    (pinned v3.1.1 get-adcp-capabilities-response.json), and media_buy has no required
-    fields, so omission is the only spec-legal response.
-    """
-    wire_absent(ctx, "media_buy.portfolio")
-
-
 @then(parsers.parse("the response should include media_buy.portfolio with primary_channels {channels}"))
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
@@ -3071,3 +3060,42 @@ def then_webhook_signing_extras(ctx: dict, expected_extras: str) -> None:
     block = wire_dict(ctx, "webhook_signing")
     for clause in expected_extras.split(" and "):
         _assert_webhook_extra(ctx, block, clause)
+
+
+@given(parsers.parse('the tenant declares an advertising policy described as "{description}"'))
+def given_advertising_policy_described(ctx: dict, description: str) -> None:
+    """Seed the tenant's advertising policy, the way an operator sets it.
+
+    ``configure_tenant_field`` is a real write to the ``tenants`` row and to the
+    in-memory overrides, so the in-process transports and the live server read the
+    same seeded state -- no test-only seam, and nothing for e2e to declare
+    unsupported.
+    """
+    ctx["env"].configure_tenant_field("advertising_policy", {"description": description})
+
+
+@given("the tenant declares no advertising policy")
+def given_no_advertising_policy(ctx: dict) -> None:
+    """The column holds nothing. Stated rather than left to the env's default, so the
+    scenario grades an absent policy instead of whatever the harness happens to seed."""
+    ctx["env"].configure_tenant_field("advertising_policy", None)
+
+
+@given("the tenant declares an advertising policy with no description")
+def given_advertising_policy_without_description(ctx: dict) -> None:
+    """A policy document that carries no publishable member -- the boundary between
+    "no policy" and "a policy that says nothing"."""
+    ctx["env"].configure_tenant_field("advertising_policy", {"enabled": True})
+
+
+@then(parsers.parse('media_buy.portfolio.advertising_policies should equal "{expected}"'))
+def then_advertising_policies_equals(ctx: dict, expected: str) -> None:
+    actual = wire_field(ctx, "media_buy.portfolio.advertising_policies")
+    assert actual == expected, f"advertising_policies {actual!r} != {expected!r}"
+
+
+@then("media_buy.portfolio.advertising_policies should be omitted")
+def then_advertising_policies_omitted(ctx: dict) -> None:
+    """Omitted, never null: the pinned member is ``{"type": "string"}`` with no null arm,
+    and portfolio requires only ``publisher_domains``."""
+    wire_absent(ctx, "media_buy.portfolio.advertising_policies")

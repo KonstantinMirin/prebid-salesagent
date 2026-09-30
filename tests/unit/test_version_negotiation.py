@@ -27,8 +27,6 @@ import re
 
 import pytest
 
-from src.core.schemas import GetAdcpCapabilitiesRequest
-
 
 class TestSupportedAdcpVersionsDerivation:
     """SUPPORTED_ADCP_VERSIONS must be release-precision, derived."""
@@ -150,58 +148,3 @@ class TestNegotiateAdcpVersion:
         # The aligned pairs stay acceptable.
         assert version_negotiation.negotiate_adcp_version("3.1", 3) is None
         assert version_negotiation.negotiate_adcp_version("4.0", 4) is None
-
-
-class TestBoundaryNegotiatesForEveryTool:
-    """Negotiation is the boundary's, so no tool can skip it.
-
-    ``_get_adcp_capabilities_impl`` does not negotiate. That the boundary refuses a bad
-    pin is graded on the wire by BR-PROTOCOL-001 and BR-UC-010's adcp_version scenarios;
-    this class keeps only the implementation-level half.
-    """
-
-    async def test_capabilities_impl_no_longer_negotiates_on_its_own(self):
-        """The implementation does not negotiate; only the boundary does.
-
-        Two negotiators would drift, and the boundary's is the one every tool crosses.
-        """
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from tests.unit.test_get_adcp_capabilities import (
-            _make_capabilities_identity,
-            _patch_capabilities_deps,
-        )
-
-        req = GetAdcpCapabilitiesRequest(adcp_version="0.1")
-
-        # Reached directly, past the boundary, the implementation just answers rather than
-        # refusing the unsupported pin. The caller is ANONYMOUS -- a PublicIdentity with no
-        # principal; the tenant is always resolved, so there is no sellerless identity to
-        # arrive with.
-        with _patch_capabilities_deps():
-            response = _get_adcp_capabilities_impl(req, _make_capabilities_identity(principal_id=None))
-        assert response.adcp.supported_versions is not None
-
-
-class TestBuildAdcpBlockDry:
-    """_build_adcp_block() DERIVES supported_versions -- no literal Adcp(...) in the tool.
-
-    Its sibling test over the "no-tenant minimal response" is removed: there is one response
-    path, because a request naming no seller is refused CONFIGURATION_ERROR before an
-    identity exists, so there is no second declaration site to compare against.
-    """
-
-    def test_full_tenant_response_declares_same_derived_supported_versions(self):
-        from src.core.tools.capabilities import _get_adcp_capabilities_impl
-        from src.core.version_negotiation import SUPPORTED_ADCP_VERSIONS
-        from tests.unit.test_get_adcp_capabilities import (
-            _make_capabilities_identity,
-            _patch_capabilities_deps,
-        )
-
-        identity = _make_capabilities_identity(principal_id=None, tenant_id="test-tenant-version-negotiation")
-
-        with _patch_capabilities_deps(adapter=None):
-            response = _get_adcp_capabilities_impl(None, identity)
-
-        assert response.adcp.supported_versions is not None
-        assert [v.root for v in response.adcp.supported_versions] == SUPPORTED_ADCP_VERSIONS

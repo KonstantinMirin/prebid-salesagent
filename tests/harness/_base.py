@@ -2428,12 +2428,13 @@ class BaseTestEnv:
             # no bytes on a wire and carry their credential another way, so they did not
             # see it — the four legs were not running the same scenario.
             #
-            # ``x-adcp-tenant`` is the load-bearing header there, not the bearer:
-            # ``resolved_identity._detect_tenant`` resolves a tenant from Host -> virtual
-            # host/subdomain, ``x-adcp-tenant``, ``Apx-Incoming-Host`` or a localhost
-            # fallback, NEVER from the auth token, and the in-process ``TestClient`` sends
-            # ``Host: testserver``, which matches no virtual host, no subdomain and is not
-            # localhost. The bearer rides along because production sends it and the SIGNED
+            # The tenant hint is the load-bearing header there, not the bearer:
+            # ``resolved_identity._detect_tenant`` resolves a tenant from ``Host`` matched
+            # against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
+            # tenant id, and from nothing else — never from the auth token. The in-process
+            # ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a
+            # request that states neither is refused CONFIGURATION_ERROR before any
+            # credential is examined. The bearer rides along because production sends it and the SIGNED
             # branch below already does (security.mdx :1269 — an unsigned request carrying
             # a valid bearer is a spec-correct 200).
             return client.post(endpoint, json=body, headers=credential)

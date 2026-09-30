@@ -41,21 +41,14 @@ from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
+from tests.helpers.admin_session import authenticate_http_session
 from tests.helpers.credentials import credential_headers
 from tests.helpers.signing import json_seeded_client_factory, wire_origin
 
-#: The super-admin the e2e stack seeds, and the endpoint that logs it in.
-#: ``/test/auth`` needs ``ADCP_AUTH_TEST_MODE`` (docker-compose.e2e.yml) AND the
-#: target tenant's ``auth_setup_mode``, AND a ``tenant_id`` form field — posting
-#: without one aborts 404, not 401, so a missing field must not be misdiagnosed
-#: as a routing problem. No ``CSRFProtect`` is registered anywhere in
-#: ``src/admin``, so a raw POST is accepted.
-E2E_ADMIN_EMAIL = "test_super_admin@example.com"
-E2E_ADMIN_PASSWORD = "test123"
-
-#: Flask admin is mounted at BOTH ``/admin`` and ``/`` (src/app.py). Auth and the
-#: create POST are pinned to ONE prefix so the session cookie and the ``url_for``
-#: redirect stay on a single script root.
+#: Flask admin is mounted at BOTH ``/admin`` and ``/`` (src/app.py). The session cookie and
+#: the create POST are pinned to ONE prefix so the cookie and the ``url_for`` redirect stay
+#: on a single script root. No ``CSRFProtect`` is registered anywhere in ``src/admin``, so a
+#: raw POST is accepted.
 _ADMIN_PREFIX = "/admin"
 
 #: What the create route FLASHES on success (src/admin/blueprints/signing_keys.py).
@@ -701,18 +694,11 @@ def _admin_post_rendered_page(
 
     with requests.Session() as session:
         session.verify = ca_bundle()
-        auth = session.post(
-            f"{base_url}{_ADMIN_PREFIX}/test/auth",
-            data={"email": E2E_ADMIN_EMAIL, "password": E2E_ADMIN_PASSWORD, "tenant_id": tenant_id},
-            allow_redirects=False,
-            timeout=30,
-        )
-        assert auth.status_code in (200, 302), (
-            f"admin test auth must succeed before {path!r} can be driven through the admin route; POST "
-            f"{_ADMIN_PREFIX}/test/auth returned HTTP {auth.status_code}. A 404 here means "
-            f"ADCP_AUTH_TEST_MODE is off, the tenant's auth_setup_mode is off, or the tenant_id form "
-            f"field never arrived — it is not a routing problem. Body: {auth.text[:300]!r}"
-        )
+        # The session is STATED, not obtained from a login route. `tests/helpers/admin_session.py`
+        # signs the cookie the way the server signs its own, so the app under test is the
+        # deployed app: there is no route that exists only when a flag is set, and the verdict
+        # does not depend on whether the flag happened to be on.
+        authenticate_http_session(session, base_url, tenant_id)
 
         response = session.post(
             f"{base_url}{path}",

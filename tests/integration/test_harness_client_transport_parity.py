@@ -292,7 +292,7 @@ class TestClientCrossTransportConsistency:
 
         with BareIntegrationEnv(tenant_id="client-parity-noauth", principal_id="p1") as env:
             client = AdCPTestClient(env)
-            result = client.call("list_accounts", {}, Transport.REST, credential={})
+            result = client.call("list_accounts", {}, Transport.REST, credential=env.credential(token=None))
 
         assert result.is_error
         result.assert_wire_error("AUTH_MISSING", recovery="correctable")
@@ -351,8 +351,10 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-mcp-e", principal_id="p1") as env:
-            via = env.call_via(Transport.MCP, credential={})
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.MCP, credential={})
+            via = env.call_via(Transport.MCP, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.MCP, credential=env.credential(token=None)
+            )
 
         _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
@@ -373,8 +375,10 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-a2a-e", principal_id="p1") as env:
-            via = env.call_via(Transport.A2A, credential={})
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.A2A, credential={})
+            via = env.call_via(Transport.A2A, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.A2A, credential=env.credential(token=None)
+            )
 
         _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
@@ -395,8 +399,10 @@ class TestEnvVsClientEquivalence:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id="ev-rest-e", principal_id="p1") as env:
-            via = env.call_via(Transport.REST, credential={})
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.REST, credential={})
+            via = env.call_via(Transport.REST, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.REST, credential=env.credential(token=None)
+            )
 
         _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
@@ -524,8 +530,10 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2erest-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
-            via = env.call_via(Transport.E2E_REST, credential={})
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_REST, credential={})
+            via = env.call_via(Transport.E2E_REST, credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.E2E_REST, credential=env.credential(token=None)
+            )
 
         _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
@@ -549,8 +557,10 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2emcp-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
-            via = env.call_via(Transport.E2E_MCP, tool_name="list_accounts", credential={})
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_MCP, credential={})
+            via = env.call_via(Transport.E2E_MCP, tool_name="list_accounts", credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.E2E_MCP, credential=env.credential(token=None)
+            )
 
         _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")
 
@@ -574,7 +584,9 @@ class TestEnvVsClientEquivalenceE2E:
         _assert_success_equivalent(via, client_result)
 
         with AccountListEnv(tenant_id=f"ev-e2ea2a-e-{suffix}", principal_id="p1", e2e_config=e2e_live_config) as env:
-            via = env.call_via(Transport.E2E_A2A, tool_name="list_accounts", credential={})
-            client_result = AdCPTestClient(env).call("list_accounts", {}, Transport.E2E_A2A, credential={})
+            via = env.call_via(Transport.E2E_A2A, tool_name="list_accounts", credential=env.credential(token=None))
+            client_result = AdCPTestClient(env).call(
+                "list_accounts", {}, Transport.E2E_A2A, credential=env.credential(token=None)
+            )
 
         _assert_error_equivalent(via, client_result, "AUTH_MISSING", recovery="correctable")

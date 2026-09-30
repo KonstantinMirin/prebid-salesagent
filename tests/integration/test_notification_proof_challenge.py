@@ -88,12 +88,18 @@ _SUBSCRIBER_URL = "https://buyer.example.com/adcp/notifications"
 
 #: The seller's own host, DOTTED so ``canonical_agent_url`` derives ``https://`` and the
 #: published ``agents[].url`` this challenge names is one a receiver could resolve.
-#: MIXED CASE on purpose. A receiver matches ``seller_agent_url`` byte-for-byte against our
-#: published ``agents[].url`` (security.mdx @ v3.1.1 :1104 step 5, "no canonicalization at
-#: this step"), and ``WebhookChallenge.seller_agent_url`` is a pydantic ``AnyUrl`` whose
-#: serializer LOWERCASES the host. An all-lowercase fixture host cannot tell the published
-#: string from the lowercased one, so it would grade nothing here.
-_AGENT_HOST = "Seller-Proof.Example.com"
+#:
+#: A receiver matches ``seller_agent_url`` byte-for-byte against our published
+#: ``agents[].url`` (security.mdx @ v3.1.1 :1104 step 5, "no canonicalization at this
+#: step"), and ``WebhookChallenge.seller_agent_url`` is a pydantic ``AnyUrl`` whose
+#: serializer lowercases the host. This fixture was MIXED CASE to catch that divergence.
+#: It is lowercase now because the divergence is unreachable: ``virtual_host`` is folded to
+#: lowercase on write and on read (#1845), so no tenant is stored at a mixed-case host and
+#: both strings are lowercase for the same reason rather than by coincidence. What the
+#: assertion still grades is every other axis of the byte match — scheme, port, path and
+#: trailing slash — which is where a published URL and a challenge's copy of it actually
+#: drift.
+_AGENT_HOST = "seller-proof.example.com"
 
 _SUBSCRIBER_ID = "buyer-subscriber-1"
 #: An ACCOUNT-surface notification type. Both halves are load-bearing and were found by

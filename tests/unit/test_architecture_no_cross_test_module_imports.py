@@ -77,11 +77,6 @@ _ALLOWLIST: set[tuple[str, str]] = {
         "tests/unit/test_architecture_ci_suite_coverage.py",
         "tests.smoke.test_smoke_basic",
     ),
-    # DEFERRED — exporter: tests/unit/test_get_adcp_capabilities.py (capabilities).
-    (
-        "tests/unit/test_version_negotiation.py",
-        "tests.unit.test_get_adcp_capabilities",
-    ),
     # DEFERRED — exporter: tests/integration/test_delivery_webhooks_integration.py.
     (
         "tests/integration/test_delivery_webhooks_force.py",

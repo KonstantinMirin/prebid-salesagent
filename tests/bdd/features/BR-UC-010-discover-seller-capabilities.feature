@@ -427,7 +427,6 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response
     And the wire response should not contain an adcp_error field
-    And media_buy.portfolio should be omitted, never a fabricated publisher domain
     # INV-5 (local): degrade-don't-error; the schema-validity half is the spec-hard invariant
     # (storyboard validation check: response_schema). Rewritten (salesagent-ytq6): the two
     # vague Thens ("no error should be propagated", "degradation warnings should be logged
@@ -435,15 +434,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # adcp_error for a non-failure (protocol-envelope). "degradation warnings logged internally"
     # was intentionally NOT re-added: internal logs are not on the wire, so the degradation is
     # graded by its observable output rather than by an untestable internal-log side effect.
-    # Corrected (salesagent-piyo): this row combines adapter-unavailable AND
-    # database-query-fails, so no real publisher_domain data was read at all. It was pinned to
-    # "primary_channels falls back to [display]" via a fabricated placeholder portfolio, which
-    # was salesagent-piyo's bug — portfolio.publisher_domains is REQUIRED+minItems:1 (pinned
-    # v3.1.1 schema) whenever portfolio is present, and media_buy has no required fields, so the
-    # honest, schema-legal response with no real domain is to OMIT portfolio entirely (and
-    # primary_channels along with it, since it lives inside portfolio). Same correction as the
-    # adapter_and_db_fail row of the sibling ext-b-degradation outline. The [display] fallback
-    # itself is still graded, on a row that HAS a real domain: @T-UC-010-degradation-no-cascade.
+    # This scenario grades SCHEMA VALIDITY under a double degradation, and nothing about
+    # portfolio. It used to also assert that portfolio was omitted here, reasoning that with
+    # both the adapter and the partner query down no real publisher_domain had been read, so
+    # emitting one meant emitting a fabricated placeholder -- and publisher_domains is
+    # REQUIRED+minItems:1 whenever portfolio is present. That state no longer exists:
+    # virtual_host is mandatory, so Tenant.primary_domain always answers with the
+    # operator-visible host the tenant declares, which is real data neither lookup had to
+    # supply. Portfolio is present and correct here, and an omission assertion would grade
+    # the absence of a fabrication that can no longer occur --
+    # tests/unit/test_guards_no_fabricated_example_domain.py holds that, with an empty
+    # allowlist. What publisher_domains CARRIES is graded where it belongs, on the rows that
+    # declare a domain: @T-UC-010-degradation-no-cascade and the ext-b outline.
     # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
     # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/core/protocol-envelope.json pointer=/properties/adcp_error (envelope error-signal for fatal failures — absent on a successful degraded response)
