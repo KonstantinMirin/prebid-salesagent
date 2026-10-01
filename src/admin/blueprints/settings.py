@@ -224,7 +224,7 @@ def update_general(tenant_id):
                         db_session,
                         conflict=taken_by_another_tenant,
                         write=claim_virtual_host,
-                        constraint="ix_tenants_virtual_host",
+                        constraint="ux_tenants_virtual_host_name",
                     )
                     if conflict is not None:
                         return conflict

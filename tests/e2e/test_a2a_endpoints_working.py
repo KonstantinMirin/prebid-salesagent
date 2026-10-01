@@ -55,57 +55,76 @@ class TestA2AEndpointsActual:
     stack is guaranteed up, so a connection failure is a real failure instead of a
     skip — same rule as ``test_unknown_task_id_returns_task_not_found_code_on_the_wire``
     below.
+
+    These fetched ``live_server['a2a']`` with no tenant declaring that host, so the card
+    route refused them with the seller-side code and every assertion sat behind
+    ``if response.status_code == 200:`` — never executing, on every run. The front is
+    declared here for the same reason the discovery-path class declares it: a card fetch is
+    discovery, so the tenant has to be resolvable from the Host alone.
     """
+
+    @pytest.fixture(autouse=True)
+    def _front_declared(self, live_server):
+        """This stack's tenant declares the host these tests fetch the card from.
+
+        Released after each test: there is one TLS origin and ``virtual_host`` is unique, so
+        holding it would take it from the signing suite.
+        """
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            yield
 
     @pytest.mark.integration
     def test_well_known_agent_json_endpoint_live(self, live_server):
         """Test /.well-known/agent-card.json endpoint against live server."""
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
-        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        response = requests.get(
+            f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
+        )
 
-        if response.status_code == 200:
-            # Endpoint works - validate response
-            assert response.headers["content-type"].startswith("application/json")
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for the canonical card path: {response.text[:300]!r}"
+        )
+        assert response.headers["content-type"].startswith("application/json")
 
-            data = response.json()
-            assert "name" in data
-            assert "description" in data
-            assert "version" in data
-            assert "skills" in data
+        data = response.json()
+        assert "name" in data
+        assert "description" in data
+        assert "version" in data
+        assert "skills" in data
 
-            # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
-            assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
-            interfaces = data["supportedInterfaces"]
-            assert len(interfaces) > 0
-            url = interfaces[0]["url"]
+        # a2a-sdk 1.0 (protobuf): URL is in supportedInterfaces, not top-level
+        assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
+        interfaces = data["supportedInterfaces"]
+        assert len(interfaces) > 0
+        url = interfaces[0]["url"]
 
-            # Critical regression test: URL should not have trailing slash
-            assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-            assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
+        # Critical regression test: URL should not have trailing slash
+        assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
+        assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
-            # Should be Prebid Sales Agent
-            assert data["name"] == "Prebid Sales Agent"
+        # Should be Prebid Sales Agent
+        assert data["name"] == "Prebid Sales Agent"
 
-            # Should have skills
-            assert "skills" in data
-            assert len(data["skills"]) > 0
+        # Should have skills
+        assert "skills" in data
+        assert len(data["skills"]) > 0
 
-            # AdCP 2.5: Should have AdCP extension in capabilities
-            assert "capabilities" in data
-            assert "extensions" in data["capabilities"]
-            extensions = data["capabilities"]["extensions"]
-            assert len(extensions) > 0
+        # AdCP 2.5: Should have AdCP extension in capabilities
+        assert "capabilities" in data
+        assert "extensions" in data["capabilities"]
+        extensions = data["capabilities"]["extensions"]
+        assert len(extensions) > 0
 
-            # Find AdCP extension
-            adcp_ext = None
-            for ext in extensions:
-                if "adcp-extension" in ext.get("uri", ""):
-                    adcp_ext = ext
-                    break
+        # Find AdCP extension
+        adcp_ext = None
+        for ext in extensions:
+            if "adcp-extension" in ext.get("uri", ""):
+                adcp_ext = ext
+                break
 
-            assert adcp_ext is not None, "AdCP extension not found in live agent card"
-            assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
-            assert "media_buy" in adcp_ext["params"]["protocols_supported"]
+        assert adcp_ext is not None, "AdCP extension not found in live agent card"
+        assert adcp_ext["params"]["adcp_version"] == get_adcp_spec_version()
+        assert "media_buy" in adcp_ext["params"]["protocols_supported"]
 
     @pytest.mark.integration
     def test_agent_json_endpoint_live(self, live_server):

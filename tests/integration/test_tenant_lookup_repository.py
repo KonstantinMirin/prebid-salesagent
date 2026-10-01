@@ -68,67 +68,58 @@ class TestRoutingLookupsSkipInactiveTenants:
 
 
 class TestVirtualHostMatchesHostToHost:
-    """The port is part of the key, because a key with two spellings has no answer.
+    """A port says how a deployment is reached, not which seller it is.
 
-    This class graded the opposite rule -- "a port on either side is not part of the
-    question" -- which compared ``lower(split_part(virtual_host, ':', 1))`` against the
-    requested hostname. Under it a stored ``host`` and a stored ``host:8443`` were two rows
-    BOTH matching ``Host: host``, while ``ix_tenants_virtual_host`` indexes the raw column
-    and so cannot refuse that pair; ``.first()`` then picked one with no ORDER BY. A seller
-    answering from whichever row the planner reached first is worse than one answering
-    nothing, so the rule changed and these tests changed with it (#2191).
+    The same tenant answers at ``host`` and at ``host:8443``: which spelling a client sends
+    depends on the port its origin uses, and ``@T-TENANTID-host-with-port``
+    (``tests/bdd/features/local-tenant-identification-routes.feature``) pins that on every
+    transport.
 
-    What a request carries decides it: a client dialling ``host:8443`` sends
-    ``Host: host:8443`` (RFC 9110 S7.2), and that is also what the agent card publishes. An
-    edge rewriting the host it forwards has to forward the host the tenant declares; this
-    deployment does not guess among spellings on its behalf.
+    The ambiguity that port-insensitivity used to carry is fixed in the KEY, not here. A
+    stored ``host`` and a stored ``host:8443`` were two admissible rows that BOTH matched
+    ``Host: host`` while the unique index covered the raw column, so ``.first()`` chose
+    between them with no ORDER BY. ``ux_tenants_virtual_host_name`` is UNIQUE on
+    ``lower(split_part(virtual_host, ':', 1))``, so that pair cannot exist and the
+    comparison can match at most one row — which is why it may stay port-insensitive.
     """
 
-    def test_the_exact_stored_host_matches(self, integration_db):
+    def test_request_naming_a_port_matches_a_portless_row(self, integration_db):
         with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_p1", virtual_host="ported.example.com:8443")
+            TenantFactory(tenant_id="tlr_p1", virtual_host="ported.example.com")
             repo = TenantLookupRepository(env.get_session())
 
             assert repo.find_active_by_virtual_host("ported.example.com:8443").tenant_id == "tlr_p1"
-            assert repo.active_tenant_id_for_virtual_host("ported.example.com:8443") == "tlr_p1"
 
-    def test_a_ported_request_does_not_match_a_portless_row(self, integration_db):
-        """The direction that used to match. It is a different origin, so it is a miss."""
+    def test_portless_request_matches_a_row_that_stores_a_port(self, integration_db):
         with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_p2", virtual_host="portless.example.com")
+            TenantFactory(tenant_id="tlr_p2", virtual_host="stored.example.com:8443")
             repo = TenantLookupRepository(env.get_session())
 
-            assert repo.find_active_by_virtual_host("portless.example.com:8443") is None
+            assert repo.find_active_by_virtual_host("stored.example.com").tenant_id == "tlr_p2"
+            assert repo.active_tenant_id_for_virtual_host("stored.example.com") == "tlr_p2"
 
-    def test_a_portless_request_does_not_match_a_ported_row(self, integration_db):
+    def test_a_different_host_does_not_match(self, integration_db):
         with _RepoEnv() as env:
             TenantFactory(tenant_id="tlr_p3", virtual_host="stored.example.com:8443")
             repo = TenantLookupRepository(env.get_session())
 
-            assert repo.find_active_by_virtual_host("stored.example.com") is None
+            assert repo.find_active_by_virtual_host("other.example.com") is None
 
-    def test_the_ambiguous_pair_resolves_to_one_row(self, integration_db):
-        """THE REGRESSION: both rows exist, and each host reaches exactly its own tenant.
+    def test_two_tenants_cannot_claim_one_host_name(self, integration_db):
+        """THE REGRESSION: the pair that made the match ambiguous is unrepresentable.
 
-        The pair the unique index cannot refuse. Under the retired rule both rows matched
-        ``Host: host`` and the answer depended on the query plan; the assertion that catches
-        a return to it is that each spelling reaches its OWN row, not merely that one of
-        them resolves.
+        This is what licenses the port-insensitive comparison above. Without the functional
+        index both rows exist and both match ``Host: pair.example.com``, and which tenant
+        answers is the query plan's choice. Reverting the index to the raw column lets this
+        INSERT succeed, which is the failure.
         """
+        from sqlalchemy.exc import IntegrityError
+
         with _RepoEnv() as env:
             TenantFactory(tenant_id="tlr_bare", virtual_host="pair.example.com")
-            TenantFactory(tenant_id="tlr_ported", virtual_host="pair.example.com:8443")
-            repo = TenantLookupRepository(env.get_session())
-
-            assert repo.find_active_by_virtual_host("pair.example.com").tenant_id == "tlr_bare"
-            assert repo.find_active_by_virtual_host("pair.example.com:8443").tenant_id == "tlr_ported"
-
-    def test_a_different_host_does_not_match(self, integration_db):
-        with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_p4", virtual_host="stored.example.com:8443")
-            repo = TenantLookupRepository(env.get_session())
-
-            assert repo.find_active_by_virtual_host("other.example.com") is None
+            with pytest.raises(IntegrityError):
+                TenantFactory(tenant_id="tlr_ported", virtual_host="pair.example.com:8443")
+                env.get_session().flush()
 
     def test_case_is_folded_on_both_sides(self, integration_db):
         """The stored form is folded, so a request naming it in any case reaches it."""

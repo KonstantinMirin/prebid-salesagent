@@ -11,7 +11,7 @@ TWO QUESTIONS, AND THE DIFFERENCE BETWEEN THEM IS LOAD-BEARING:
   ``find_by_virtual_host``, ``find_by_id_or_subdomain``, for the handlers that
   create or rename a tenant. Each maps to one of the three unique keys on
   ``tenants`` (``tenants_pkey``, ``tenants_subdomain_key``,
-  ``ix_tenants_virtual_host``), so a handler recovering from one of those
+  ``ux_tenants_virtual_host_name``), so a handler recovering from one of those
   constraints via ``resolve_or_write`` re-resolves to the winner through the same
   method its pre-check used. These take NO ``is_active`` filter: an inactive
   tenant still occupies its subdomain in the index, so filtering it out would
@@ -37,10 +37,11 @@ would make a second lookup unrepresentable.
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Tenant
+from src.core.http_utils import hostname_of
 
 
 class TenantLookupRepository:
@@ -58,19 +59,19 @@ class TenantLookupRepository:
         return self._session.scalars(select(Tenant).filter_by(subdomain=subdomain)).first()
 
     def find_by_virtual_host(self, virtual_host: str) -> Tenant | None:
-        """The tenant holding ``virtual_host`` (``ix_tenants_virtual_host``), if any.
+        """The tenant holding ``virtual_host`` (``ux_tenants_virtual_host_name``), if any.
 
-        One exact match against the folded column, which is the same expression the routing
-        lookups use. A host differing only in case is the SAME host, and the stored form is
-        the folded one -- the ORM validator folds on write and ``7f31c0ab94d2`` refuses a
-        legacy row that is not folded -- so folding the column again here would only make
-        the comparison non-sargable and give this one key a second spelling.
+        THE SAME predicate routing uses, which is what makes this a usable pre-check: the
+        constraint a create or rename can trip is the functional unique index on the host's
+        NAME, so a check that asked a narrower question would report "free" for a name the
+        index then refuses. ``host`` and ``host:8443`` are the same name, and only one
+        tenant can hold it.
 
-        Folds its ARGUMENT rather than validating it: a lookup answers "no such tenant" for
-        a host this seller does not serve, and a malformed one is just another host it does
-        not serve. Raising here would turn an addressing miss into a 500.
+        Case and port are therefore both out of the question here, and
+        ``resolve_or_write`` requires exactly this: a pre-check that cannot see every
+        collision the write can cause does not help.
         """
-        return self._session.scalars(select(Tenant).where(Tenant.virtual_host == virtual_host.strip().lower())).first()
+        return self._session.scalars(select(Tenant).where(_same_host(virtual_host))).first()
 
     def find_by_id(self, tenant_id: str) -> Tenant | None:
         """The tenant with this id, active or not.
@@ -127,22 +128,24 @@ class TenantLookupRepository:
 
 
 def _same_host(requested: str) -> ColumnElement[bool]:
-    """Match the tenant stored at exactly *requested*, folded.
+    """Match the tenant whose host names the same NAME as *requested*, port aside.
 
-    ONE key, which is what makes the answer unambiguous. This used to compare
-    ``lower(split_part(virtual_host, ':', 1))`` against the requested hostname, so a stored
-    ``host`` and a stored ``host:8443`` were two rows BOTH matching ``Host: host`` while
-    ``ix_tenants_virtual_host`` indexes the raw column and could not refuse the pair --
-    and ``.first()`` picked one with no ORDER BY. A seller that answers a request from
-    whichever row the planner reached first is worse than one that answers nothing.
+    A port is how a deployment is reached, not which seller it is: the same tenant answers
+    at ``host`` and at ``host:8443``, and which one a client sends depends on the port its
+    origin uses. ``@T-TENANTID-host-with-port``
+    (``tests/bdd/features/local-tenant-identification-routes.feature``) pins that on every
+    transport, and the mixed-case readers in
+    ``tests/integration/test_virtual_host_integration.py`` pin it per reader.
 
-    The column is folded on write by ``Tenant._fold_virtual_host``, so no ``lower()`` is
-    needed on this side and the comparison uses the unique index directly.
+    THE AMBIGUITY THIS USED TO CARRY IS NOW IMPOSSIBLE, and that is why the comparison can
+    stay port-insensitive. A stored ``host`` and a stored ``host:8443`` were two rows BOTH
+    matching ``Host: host``, while the unique index covered the RAW column and could not
+    refuse the pair, so ``.first()`` chose between them with no ORDER BY. The fix belongs to
+    the key, not to the comparison: ``ux_tenants_virtual_host_name`` is UNIQUE on
+    ``lower(split_part(virtual_host, ':', 1))``, so at most one tenant can ever hold a given
+    name and this predicate can match at most one row. Making the comparison exact instead
+    would have removed the ambiguity by retiring the pinned behaviour.
 
-    A port is therefore part of the key: a tenant served at ``host:8443`` is reached by a
-    request naming ``host:8443``, which is what a client dialling that origin sends (RFC
-    9110 §7.2) and what the agent card publishes. An edge that rewrites the Host it
-    forwards is an edge that has to forward the host the tenant declares; this deployment
-    does not guess among spellings on its behalf.
+    Sargable against that functional index, which indexes this exact expression.
     """
-    return Tenant.virtual_host == requested.strip().lower()
+    return func.lower(func.split_part(Tenant.virtual_host, ":", 1)) == hostname_of(requested)

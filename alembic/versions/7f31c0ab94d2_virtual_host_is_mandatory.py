@@ -57,37 +57,47 @@ def upgrade() -> None:
         )
 
     # A host differing only in case is the SAME host, so the stored form has to be the folded
-    # one: the ORM validator folds on write, `ix_tenants_virtual_host` covers the raw column,
-    # and every lookup is one exact match against it. A legacy row holding `Host.com` would be
-    # unreachable under that match while still occupying the name. Refused, not folded, for
-    # the same reason as above — and because folding two rows that differ only in case would
-    # trip the unique index mid-migration. The operator's UPDATE hits that index instead,
-    # where the collision is theirs to resolve.
-    unfolded = [
-        row[0]
-        for row in op.get_bind()
-        .execute(sa.text("SELECT tenant_id FROM tenants WHERE virtual_host <> lower(virtual_host)"))
-        .fetchall()
-    ]
-    if unfolded:
-        named = ", ".join(repr(tenant_id) for tenant_id in unfolded)
-        statements = "\n".join(
-            f"  UPDATE tenants SET virtual_host = lower(virtual_host) WHERE tenant_id = '{tenant_id}';"
-            for tenant_id in unfolded
+    # The key routing resolves by is the host's NAME, port aside: the same tenant answers at
+    # `host` and at `host:8443` (@T-TENANTID-host-with-port). The unique index covered the RAW
+    # column, so `host` and `host:8443` were two admissible rows that BOTH matched
+    # `Host: host`, and `.first()` chose between them with no ORDER BY. Indexing the
+    # expression the lookup compares makes that pair unrepresentable.
+    #
+    # Refused rather than resolved, like the NULLs above: which of two tenants claiming one
+    # name keeps it is not a decision a migration can make.
+    collisions = (
+        op.get_bind()
+        .execute(
+            sa.text(
+                "SELECT lower(split_part(virtual_host, ':', 1)) AS name, string_agg(tenant_id, ', ') AS tenants "
+                "FROM tenants GROUP BY 1 HAVING count(*) > 1"
+            )
         )
+        .fetchall()
+    )
+    if collisions:
+        named = "\n".join(f"  {row.name!r} is claimed by: {row.tenants}" for row in collisions)
         raise RuntimeError(
-            f"{len(unfolded)} tenant(s) store a virtual_host that is not case-folded: {named}.\n"
-            "A host differing only in case is the same host, so this column stores the folded "
-            "form and every lookup matches it exactly. Fold each row, then re-run the "
-            "migration. If two rows fold to the same host, the unique index refuses the second "
-            "one: those two tenants claim one address, and which of them keeps it is a "
-            "decision only the operator can make:\n"
-            f"{statements}"
+            f"{len(collisions)} host name(s) are claimed by more than one tenant:\n{named}\n"
+            "A port says how a deployment is reached, not which seller it is, so "
+            "'host' and 'host:8443' are ONE address and only one tenant can hold it. This "
+            "revision makes that a unique index. Decide which tenant keeps each name and "
+            "change or deactivate the others, then re-run the migration. Case is part of it: "
+            "'Host.com' and 'host.com' are the same name."
         )
 
     op.alter_column("tenants", "virtual_host", existing_type=sa.Text(), nullable=False)
+    op.drop_index("ix_tenants_virtual_host", table_name="tenants")
+    op.create_index(
+        "ux_tenants_virtual_host_name",
+        "tenants",
+        [sa.text("lower(split_part(virtual_host, ':', 1))")],
+        unique=True,
+    )
 
 
 def downgrade() -> None:
-    """Let ``tenants.virtual_host`` be NULL again."""
+    """Let ``tenants.virtual_host`` be NULL again, keyed on the raw column."""
+    op.drop_index("ux_tenants_virtual_host_name", table_name="tenants")
+    op.create_index("ix_tenants_virtual_host", "tenants", ["virtual_host"], unique=True)
     op.alter_column("tenants", "virtual_host", existing_type=sa.Text(), nullable=True)

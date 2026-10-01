@@ -216,7 +216,17 @@ class Tenant(Base, JSONValidatorMixin):
 
     __table_args__ = (
         Index("idx_subdomain", "subdomain"),
-        Index("ix_tenants_virtual_host", "virtual_host", unique=True),
+        # UNIQUE on the host's NAME, port aside, because that is the key routing resolves
+        # by: the same tenant answers at `host` and at `host:8443`
+        # (@T-TENANTID-host-with-port). A unique index on the RAW column admitted `host` and
+        # `host:8443` as two rows, and then BOTH matched `Host: host` while `.first()` chose
+        # between them with no ORDER BY. Indexing the expression the lookup compares makes
+        # that pair unrepresentable and the comparison sargable, which is the same fix.
+        Index(
+            "ux_tenants_virtual_host_name",
+            func.lower(func.split_part(virtual_host, ":", 1)),
+            unique=True,
+        ),
     )
 
     # JSON validators are inherited from JSONValidatorMixin
