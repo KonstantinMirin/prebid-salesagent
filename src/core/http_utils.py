@@ -93,7 +93,14 @@ def validate_virtual_host(value: str | None) -> str:
     host = value.strip().lower()
     if any(ch.isspace() for ch in host):
         raise ValueError(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
-    parts = urlsplit(f"//{host}")
+    # EVERY ValueError out of here carries an authored message. ``urlsplit`` raises its own
+    # for an unterminated IPv6 bracket ("Invalid IPv6 URL"), and the management API answers
+    # 400 with ``str(exc)`` -- so an uncaught one puts urllib's text in a response body,
+    # which is the exposure CodeQL flags on that line. Re-raised like the port below.
+    try:
+        parts = urlsplit(f"//{host}")
+    except ValueError as exc:
+        raise ValueError(f"virtual_host {value!r} is not a host this seller can be served at") from exc
     if parts.path or parts.query or parts.fragment:
         raise ValueError(
             f"virtual_host {value!r} is not a bare host: it carries a scheme or a path. "
@@ -101,6 +108,11 @@ def validate_virtual_host(value: str | None) -> str:
         )
     if parts.netloc != host or "@" in parts.netloc:
         raise ValueError(f"virtual_host {value!r} is not a bare host[:port]")
+    # A trailing colon parses as "no port" rather than as an error, so `host:` and `[::1]:`
+    # would store and then publish `https://host:/a2a` on the card. The card is dialled
+    # verbatim, so a host that cannot be dialled is the defect this function exists to catch.
+    if host.endswith(":"):
+        raise ValueError(f"virtual_host {value!r} ends with a colon but names no port")
     try:
         parts.port  # noqa: B018 — raises for a non-numeric port
     except ValueError as exc:
