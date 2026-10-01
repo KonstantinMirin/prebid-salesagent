@@ -68,29 +68,76 @@ class TestRoutingLookupsSkipInactiveTenants:
 
 
 class TestVirtualHostMatchesHostToHost:
-    """A port on either side is not part of the question."""
+    """The port is part of the key, because a key with two spellings has no answer.
 
-    def test_request_naming_a_port_matches_a_portless_row(self, integration_db):
+    This class graded the opposite rule -- "a port on either side is not part of the
+    question" -- which compared ``lower(split_part(virtual_host, ':', 1))`` against the
+    requested hostname. Under it a stored ``host`` and a stored ``host:8443`` were two rows
+    BOTH matching ``Host: host``, while ``ix_tenants_virtual_host`` indexes the raw column
+    and so cannot refuse that pair; ``.first()`` then picked one with no ORDER BY. A seller
+    answering from whichever row the planner reached first is worse than one answering
+    nothing, so the rule changed and these tests changed with it (#2191).
+
+    What a request carries decides it: a client dialling ``host:8443`` sends
+    ``Host: host:8443`` (RFC 9110 S7.2), and that is also what the agent card publishes. An
+    edge rewriting the host it forwards has to forward the host the tenant declares; this
+    deployment does not guess among spellings on its behalf.
+    """
+
+    def test_the_exact_stored_host_matches(self, integration_db):
         with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_p1", virtual_host="ported.example.com")
+            TenantFactory(tenant_id="tlr_p1", virtual_host="ported.example.com:8443")
             repo = TenantLookupRepository(env.get_session())
 
             assert repo.find_active_by_virtual_host("ported.example.com:8443").tenant_id == "tlr_p1"
+            assert repo.active_tenant_id_for_virtual_host("ported.example.com:8443") == "tlr_p1"
 
-    def test_portless_request_matches_a_row_that_stores_a_port(self, integration_db):
+    def test_a_ported_request_does_not_match_a_portless_row(self, integration_db):
+        """The direction that used to match. It is a different origin, so it is a miss."""
         with _RepoEnv() as env:
-            TenantFactory(tenant_id="tlr_p2", virtual_host="stored.example.com:8443")
+            TenantFactory(tenant_id="tlr_p2", virtual_host="portless.example.com")
             repo = TenantLookupRepository(env.get_session())
 
-            assert repo.find_active_by_virtual_host("stored.example.com").tenant_id == "tlr_p2"
-            assert repo.active_tenant_id_for_virtual_host("stored.example.com") == "tlr_p2"
+            assert repo.find_active_by_virtual_host("portless.example.com:8443") is None
 
-    def test_a_different_host_does_not_match(self, integration_db):
+    def test_a_portless_request_does_not_match_a_ported_row(self, integration_db):
         with _RepoEnv() as env:
             TenantFactory(tenant_id="tlr_p3", virtual_host="stored.example.com:8443")
             repo = TenantLookupRepository(env.get_session())
 
+            assert repo.find_active_by_virtual_host("stored.example.com") is None
+
+    def test_the_ambiguous_pair_resolves_to_one_row(self, integration_db):
+        """THE REGRESSION: both rows exist, and each host reaches exactly its own tenant.
+
+        The pair the unique index cannot refuse. Under the retired rule both rows matched
+        ``Host: host`` and the answer depended on the query plan; the assertion that catches
+        a return to it is that each spelling reaches its OWN row, not merely that one of
+        them resolves.
+        """
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tlr_bare", virtual_host="pair.example.com")
+            TenantFactory(tenant_id="tlr_ported", virtual_host="pair.example.com:8443")
+            repo = TenantLookupRepository(env.get_session())
+
+            assert repo.find_active_by_virtual_host("pair.example.com").tenant_id == "tlr_bare"
+            assert repo.find_active_by_virtual_host("pair.example.com:8443").tenant_id == "tlr_ported"
+
+    def test_a_different_host_does_not_match(self, integration_db):
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tlr_p4", virtual_host="stored.example.com:8443")
+            repo = TenantLookupRepository(env.get_session())
+
             assert repo.find_active_by_virtual_host("other.example.com") is None
+
+    def test_case_is_folded_on_both_sides(self, integration_db):
+        """The stored form is folded, so a request naming it in any case reaches it."""
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tlr_case", virtual_host="folded.example.com")
+            repo = TenantLookupRepository(env.get_session())
+
+            assert repo.find_active_by_virtual_host("Folded.Example.COM").tenant_id == "tlr_case"
+            assert repo.find_by_virtual_host("FOLDED.example.com").tenant_id == "tlr_case"
 
 
 class TestDefaultActiveTenant:
