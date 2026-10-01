@@ -1349,6 +1349,21 @@ class AdCPTaskNotFoundError(AdCPNotFoundError[EntityRefDetails]):
     _code: ClassVar[ErrorCodeT] = ErrorCode.REFERENCE_NOT_FOUND
 
 
+class AdCPTenantNotFoundError(AdCPNotFoundError[EntityRefDetails]):
+    """The request addresses no seller this deployment serves (404, REFERENCE_NOT_FOUND).
+
+    A request names its seller by the ``Host`` the seller declares or by ``x-adcp-tenant``.
+    When neither resolves, the caller has addressed something that does not exist here --
+    with wildcard DNS, any name under the apex. The pinned enum's fallback for "a referenced
+    identifier ... or other resource that does not exist" is ``REFERENCE_NOT_FOUND``, and the
+    spec has no tenant concept, so no resource-specific code applies. It is not
+    ``CONFIGURATION_ERROR``: that code means "the seller's deployment is misconfigured", and
+    a request for a host nobody declared is no fault of the deployment's.
+
+    Inherits recovery=correctable: the caller can address a seller this deployment serves.
+    """
+
+
 class AdCPBudgetTooLowError(AdCPSalesAgentError[BudgetDetails]):
     """Requested budget falls below product minimum (422, BUDGET_TOO_LOW)."""
 
