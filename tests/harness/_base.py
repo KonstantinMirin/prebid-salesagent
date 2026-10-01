@@ -2762,7 +2762,7 @@ class BaseTestEnv:
 
         Discovery scenarios (list_creative_formats, get_products) never run a Given step
         that creates a tenant, and EVERY real-database env needs one regardless of mode: a
-        request naming a tenant no row matches is REFUSED (CONFIGURATION_ERROR), because a
+        request naming a tenant no row matches is REFUSED (REFERENCE_NOT_FOUND), because a
         deployment that cannot tell which seller a request is for has no rule to apply.
         Seeding here is what keeps an env from addressing a phantom tenant by accident;
         "identity is a mock, so no row is needed" holds only for a mocked resolver.
