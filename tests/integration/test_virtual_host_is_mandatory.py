@@ -225,7 +225,7 @@ def test_the_host_wins_when_both_headers_name_a_served_tenant(integration_db):
     header first left the whole suite green.
 
     Both names here resolve a DIFFERENT seeded tenant, so each header alone would succeed and
-    only the precedence decides which. The card's published origin is the oracle: it is read
+    only the precedence decides which. The card's published origin decides it: that value is read
     from the row that resolved, so it names the winner.
     """
     from src.app import app
