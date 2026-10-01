@@ -23,8 +23,18 @@ BANNED_TRANSPORT_MODULES = {
 
 
 def _find_impl_functions(file_path: Path) -> list[tuple[str, ast.FunctionDef]]:
-    """Find all _impl functions in a Python file."""
-    source = file_path.read_text()
+    """Find all _impl functions in a Python file.
+
+    A file that vanishes between the glob and the read is not an implementation:
+    ``test_ast_grep_identity_rules`` writes a ``_synthetic_identity_probe_<uuid>.py`` into
+    ``src/core/tools`` to prove a rule fires and deletes it again, and under xdist that
+    window overlaps this scan. Skipping it grades nothing less — the file is gone, so it
+    declares no ``_impl`` for any caller to reach.
+    """
+    try:
+        source = file_path.read_text()
+    except FileNotFoundError:
+        return []
     tree = ast.parse(source, filename=str(file_path))
     results = []
     for node in ast.walk(tree):
