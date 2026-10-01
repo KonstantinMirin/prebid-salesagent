@@ -153,6 +153,7 @@ class TestHostnameValidation:
         assert _is_valid_hostname("my-host.example.com:443")
         assert _is_valid_hostname("192.168.1.1")
         assert _is_valid_hostname("192.168.1.1:8080")
+        assert _is_valid_hostname("Sub.Example.COM")
 
     def test_path_traversal_rejected(self):
         """Hostnames with path components are rejected."""
@@ -170,6 +171,9 @@ class TestHostnameValidation:
         assert not _is_valid_hostname("example.com<script>")
         assert not _is_valid_hostname("example.com; rm -rf /")
         assert not _is_valid_hostname("example.com' OR '1'='1")
+        assert not _is_valid_hostname("example.com\n")
+        assert not _is_valid_hostname("example.com:443\n")
+        assert not _is_valid_hostname("\u212aelvin.example")  # KELVIN SIGN, which IGNORECASE folds to "k"
 
     def test_empty_and_none_rejected(self):
         """Empty strings are rejected."""

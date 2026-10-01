@@ -37,7 +37,7 @@ from src.core.agent_identity import agent_identity_for_tenant_id
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
 from src.core.domain_config import get_a2a_server_url, get_sales_agent_domain
-from src.core.domain_routing import route_landing_page
+from src.core.domain_routing import is_hostname, route_landing_page
 from src.core.errors.issues import issues_from_validation_error
 from src.core.exceptions import AdCPInvalidRequestError, AdCPSalesAgentError
 from src.core.http_utils import get_header_case_insensitive as _get_header_case_insensitive
@@ -401,14 +401,10 @@ async def a2a_trailing_slash_redirect() -> RedirectResponse:
 # ---------------------------------------------------------------------------
 
 
-_VALID_HOSTNAME_RE = re.compile(
-    r"^[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]*[a-zA-Z0-9])?)*(\:\d{1,5})?$"
-)
-
-
 def _is_valid_hostname(value: str) -> bool:
     """Validate that a string is a safe hostname (with optional port). Rejects path traversal and injection chars."""
-    return bool(value) and len(value) <= 253 and _VALID_HOSTNAME_RE.match(value) is not None
+    host, colon, port = value.partition(":")
+    return is_hostname(host) and (not colon or re.fullmatch(r"[0-9]{1,5}", port) is not None)
 
 
 def _card_with_url(server_url: str):

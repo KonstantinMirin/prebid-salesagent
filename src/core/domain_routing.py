@@ -31,9 +31,11 @@ from src.core.domain_config import (
 )
 
 # A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
-# leading or trailing hyphen. No port, no wildcard, no path.
+# leading or trailing hyphen. No port, no wildcard, no path. ``re.ASCII`` keeps IGNORECASE
+# from folding non-ASCII letters (the Kelvin sign, a dotless i) into ``[a-z]``.
 _HOSTNAME = re.compile(
-    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z"
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z",
+    re.ASCII | re.IGNORECASE,
 )
 
 
@@ -124,10 +126,15 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     return RoutingResult("subdomain", tenant, effective_host)
 
 
+def is_hostname(name: str) -> bool:
+    """Whether ``name`` is exactly a DNS hostname, in any case: no port, wildcard, path or whitespace."""
+    return _HOSTNAME.match(name) is not None
+
+
 def normalize_hostname(host: str) -> str | None:
     """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname."""
     normalized = host.strip().lower().removesuffix(".")
-    return normalized if _HOSTNAME.match(normalized) else None
+    return normalized if is_hostname(normalized) else None
 
 
 def label_under(host: str, apex: str) -> str | None:
