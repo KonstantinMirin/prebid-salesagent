@@ -2,8 +2,8 @@
   "schema_version": 2,
   "captured": {
     "image": "adcp-creative-agent",
-    "pin": "2b2f6569e54e",
-    "captured_at": "2026-10-01T12:40:01.908466+00:00",
+    "pin": "76b031a85eb8",
+    "captured_at": "2026-10-01T17:35:27.090170+00:00",
     "source_url": "https://agent.localhost:9444/api/creative-agent"
   },
   "agent_url": "https://creative.adcontextprotocol.org",

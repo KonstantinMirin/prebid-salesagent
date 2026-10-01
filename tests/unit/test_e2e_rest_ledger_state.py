@@ -114,7 +114,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # Then fails there for the same reason as the three UC-005 rows above.
         # Upstream's v3.1.1 release was inconsistent with itself: its reference catalog
         # publishes pixel_tracker on 45 formats (45 of 71 in the catalog now captured at
-        # agent pin 2b2f6569e54e, v3.1.24), its core/format.json admits none, and adcp#7338
+        # agent pin 76b031a85eb8, v3.1.25), its core/format.json admits none, and adcp#7338
         # fixed the schema only in v3.1.22. The row graduates when the SPEC pin (the commit
         # the feature files cite, 467fd93d7) moves to v3.1.22 or later; moving the agent
         # pin alone changes nothing here. The adcp SDK from that release already

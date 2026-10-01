@@ -228,7 +228,7 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # The inconsistency is UPSTREAM's, within the v3.1.1 release: its reference creative agent
 # publishes pixel_tracker assets on 45 formats and its core/format.json admits none.
 # adcp#7338 fixed the schema in v3.1.22. tests/fixtures/creative_formats/reference_formats.json
-# is now captured at agent pin 2b2f6569e54e (v3.1.24), which carries the same 45, while the
+# is now captured at agent pin 76b031a85eb8 (v3.1.25), which carries the same 45, while the
 # feature files still cite the v3.1.1 schemas (@source ref=v3.1.1 commit=467fd93d7). So the
 # row graduates when the SPEC pin moves to v3.1.22 or later, not when the agent pin moves.
 # The adcp SDK from that release ALREADY accommodates the mismatch on the read path:

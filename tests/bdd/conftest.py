@@ -954,7 +954,7 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # ending "-INVALID_REQUEST".
     #
     # NOT our formats. tests/fixtures/creative_formats/reference_formats.json is captured
-    # from the REFERENCE creative agent (provenance pin 2b2f6569e54e, the v3.1.24 tag; it was
+    # from the REFERENCE creative agent (provenance pin 76b031a85eb8, the v3.1.25 tag; it was
     # 467fd93d7711, v3.1.1, when this was ledgered, with the same 45 pixel_tracker formats),
     # and 4 of the 16 files under the spec's own formats/canonical/ declare pixel_tracker
     # assets. At v3.1.1 the spec's reference catalogue emits what the spec's response schema
