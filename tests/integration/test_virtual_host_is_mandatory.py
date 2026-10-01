@@ -168,6 +168,46 @@ def test_the_card_publishes_the_stored_origin_when_the_host_header_names_another
 
 
 @pytest.mark.requires_db
+def test_the_host_wins_when_both_headers_name_a_served_tenant(integration_db):
+    """THE RESOLUTION ORDER: ``Host`` is tried first, and this is the only test that proves it.
+
+    The order was stated and ungraded. Every other request carries ONE of the two names --
+    ``credential_headers`` sends a Host or an ``x-adcp-tenant``, never both -- and the one
+    request that sends both (above) names an UNSERVED host, so the header is the only thing
+    that can resolve and the fallback runs either way. Swapping ``_detect_tenant`` to try the
+    header first left the whole suite green.
+
+    Both names here resolve a DIFFERENT seeded tenant, so each header alone would succeed and
+    only the precedence decides which. The card's published origin is the oracle: it is read
+    from the row that resolved, so it names the winner.
+    """
+    from src.app import app
+    from tests.factories import PrincipalFactory, TenantFactory
+    from tests.harness import ProductEnv
+
+    host_origin = "host-wins.adcp.test"
+    header_origin = "header-loses.adcp.test"
+
+    with ProductEnv(tenant_id="order-host-t", principal_id="order-p") as env:
+        by_host = TenantFactory(tenant_id="order-host-t", virtual_host=host_origin)
+        PrincipalFactory(tenant=by_host, principal_id="order-p")
+        TenantFactory(tenant_id="order-header-t", virtual_host=header_origin)
+        env._commit_factory_data()
+
+        card = TestClient(app).get(
+            "/.well-known/agent-card.json",
+            headers={"Host": host_origin, "x-adcp-tenant": "order-header-t"},
+        )
+
+        assert card.status_code == 200, card.text
+        urls = [interface["url"] for interface in card.json()["supportedInterfaces"]]
+        assert urls == [f"https://{host_origin}/a2a"], (
+            f"the card published {urls}; the Host named a tenant this deployment serves, so it "
+            f"decides, and the x-adcp-tenant fallback must not have been consulted"
+        )
+
+
+@pytest.mark.requires_db
 def test_the_admin_form_refuses_to_create_a_tenant_with_no_host(authenticated_admin_session, integration_db):
     """A submission naming no host creates no tenant.
 
