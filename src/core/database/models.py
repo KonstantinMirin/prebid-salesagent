@@ -254,12 +254,12 @@ class Tenant(Base, JSONValidatorMixin):
         step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
         which is what resolves a row that was stored mixed-case before this hook existed.
         """
-        if value is None or not value.strip():
-            raise ValueError(
-                f"tenant {self.tenant_id!r}: virtual_host is required — a tenant declares the "
-                "host it is served at, and nothing derives one on its behalf"
-            )
-        return value.strip().lower()
+        from src.core.http_utils import validate_virtual_host
+
+        try:
+            return validate_virtual_host(value)
+        except ValueError as exc:
+            raise ValueError(f"tenant {self.tenant_id!r}: {exc}") from exc
 
     @property
     def gemini_api_key(self) -> str | None:

@@ -23,6 +23,7 @@ from src.core.database.models import (
 )
 from src.core.database.repositories import TenantLookupRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.http_utils import validate_virtual_host
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,15 @@ def create_tenant():
             for field in required_fields:
                 if field not in data:
                     return jsonify({"error": f"Missing required field: {field}"}), 400
+
+            # Presence is not shape. The key being there admits "" and "https://evil.com",
+            # which the column refuses at assignment -- and that ValueError reached the
+            # generic handler below as 500 "Failed to create tenant", telling the caller the
+            # SELLER broke about a value the caller chose, with no field named.
+            try:
+                data["virtual_host"] = validate_virtual_host(data["virtual_host"])
+            except ValueError as exc:
+                return jsonify({"error": str(exc), "field": "virtual_host"}), 400
 
             if blocked := _webhook_url_refusal(data):
                 return blocked
@@ -296,10 +306,12 @@ def create_tenant():
                 "tenant_id": tenant_id,
                 "name": data["name"],
                 "subdomain": data["subdomain"],
-                "admin_ui_url": (
-                    f"http://{data['subdomain']}.localhost:{get_settings().runtime.adcp_sales_port}"
-                    f"/admin/tenant/{tenant_id}"
-                ),
+                # The DEPLOYMENT's admin URL plus this tenant's path. It used to be built
+                # from the subdomain -- the last site deriving a URL from that column, which
+                # nothing routes by (#2191): a tenant is named by its Host against
+                # virtual_host or by its id. `admin_ui_url` is where the admin UI actually
+                # answers, and the tenant is a path under it, not a host beside it.
+                "admin_ui_url": f"{get_settings().runtime.admin_ui_url.rstrip('/')}/admin/tenant/{tenant_id}",
             }
 
             if principal_token:

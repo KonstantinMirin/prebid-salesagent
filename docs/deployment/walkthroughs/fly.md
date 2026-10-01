@@ -214,7 +214,7 @@ fly ssh console --app your-app-name -C "cd /app && python scripts/ops/migrate.py
    Then configure SSO in **Users & Access** and disable Setup Mode.
 
 2. **"Access denied" after SSO login:** You need to add yourself first:
-   - Go back to the login page (use test credentials if Setup Mode is still enabled)
+   - Go back to the login page and sign in with Google
    - Go to **Users & Access**
    - Add your email as a user OR add your domain to Allowed Domains
    - Try the SSO test again

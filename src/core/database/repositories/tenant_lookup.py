@@ -41,7 +41,6 @@ from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Tenant
-from src.core.http_utils import hostname_of
 
 
 class TenantLookupRepository:
@@ -125,19 +124,22 @@ class TenantLookupRepository:
 
 
 def _same_host(requested: str) -> ColumnElement[bool]:
-    """Match a tenant whose stored origin names the same host as *requested*.
+    """Match the tenant stored at exactly *requested*, folded.
 
-    Host to host, so a request resolves whether or not either side spells the port:
-    ``storyboard.adcp.test`` and ``storyboard.adcp.test:8443`` are the same tenant, and
-    the deployment does not have to guess which form a proxy will forward.
+    ONE key, which is what makes the answer unambiguous. This used to compare
+    ``lower(split_part(virtual_host, ':', 1))`` against the requested hostname, so a stored
+    ``host`` and a stored ``host:8443`` were two rows BOTH matching ``Host: host`` while
+    ``ix_tenants_virtual_host`` indexes the raw column and could not refuse the pair --
+    and ``.first()`` picked one with no ORDER BY. A seller that answers a request from
+    whichever row the planner reached first is worse than one that answers nothing.
 
-    BOTH SIDES ARE CASE-FOLDED, and neither half of that is optional. ``hostname_of`` goes
-    through ``urlsplit(...).hostname``, which lowercases — so the requested side arrives
-    folded whatever the client sent — while ``split_part`` on a ``Text`` column preserves
-    case. That asymmetry is why a tenant stored as ``Probe-Case.AdCP.test`` matched NO
-    spelling at all, not even its own: every reader of this predicate went dark together
-    and the tenant was reachable only by ``x-adcp-tenant`` (PR #2191). Folding the column
-    here also means a row written before ``Tenant.virtual_host``'s validator existed
-    resolves without a data fix.
+    The column is folded on write by ``Tenant._fold_virtual_host``, so no ``lower()`` is
+    needed on this side and the comparison uses the unique index directly.
+
+    A port is therefore part of the key: a tenant served at ``host:8443`` is reached by a
+    request naming ``host:8443``, which is what a client dialling that origin sends (RFC
+    9110 §7.2) and what the agent card publishes. An edge that rewrites the Host it
+    forwards is an edge that has to forward the host the tenant declares; this deployment
+    does not guess among spellings on its behalf.
     """
-    return func.lower(func.split_part(Tenant.virtual_host, ":", 1)) == hostname_of(requested)
+    return Tenant.virtual_host == requested.strip().lower()

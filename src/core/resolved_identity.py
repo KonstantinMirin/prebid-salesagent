@@ -607,8 +607,13 @@ def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
     pinned enum gives a seller-side deployment fault -- ``CONFIGURATION_ERROR``, which that
     enum classifies ``terminal``: the buyer has no lever, and MUST NOT auto-retry.
 
-    The refusal carries what the request named, so the operator reading it can see which
-    host or tenant reached a deployment that serves neither.
+    What the request named travels in ``internal_detail`` -- the server's record -- and not
+    in the wire envelope. ``details.rejected_value`` is defined by ``core/error.json`` as
+    "the offending value the buyer supplied", and putting a buyer-supplied value inside an
+    envelope whose recovery says the buyer has no lever makes the envelope argue with
+    itself; the pinned error-handling text additionally gives this code no ``details``
+    shape. The operator still gets the host or tenant that reached a deployment serving
+    neither, which is who the value was ever for.
     """
     from src.core.errors.details import ConfigurationDetails
     from src.core.exceptions import AdCPConfigurationError
@@ -617,7 +622,10 @@ def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
     tenant = TenantContext.load(tenant_id) if tenant_id else None
     if tenant is None:
         named = _get_header_case_insensitive(headers, "x-adcp-tenant") or _get_header_case_insensitive(headers, "host")
-        raise AdCPConfigurationError(details=ConfigurationDetails(rejected_value=named))
+        raise AdCPConfigurationError(
+            details=ConfigurationDetails(),
+            internal_detail=LookupError(f"request named {named!r}; this deployment serves no tenant at it"),
+        )
     return tenant
 
 

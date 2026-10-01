@@ -85,7 +85,11 @@ def _discover_integration_test_files() -> list[str]:
         test_files.extend(glob.glob(f"{root}/**/test_*.py", recursive=True))
         conftest_files.extend(glob.glob(f"{root}/conftest.py", recursive=True))
     helper_files = glob.glob("tests/helpers/**/*.py", recursive=True)
-    return sorted(set(test_files + conftest_files + helper_files))
+    # tests/utils/** too: the consolidation moved session.add out of the test bodies into
+    # database_helpers.py and tenant_setup.py, and two allowlist rows were removed as
+    # "fixed" when the calls had only moved somewhere this glob did not reach.
+    util_files = glob.glob("tests/utils/**/*.py", recursive=True)
+    return sorted(set(test_files + conftest_files + helper_files + util_files))
 
 
 INTEGRATION_TEST_FILES = _discover_integration_test_files()
@@ -93,6 +97,15 @@ INTEGRATION_TEST_FILES = _discover_integration_test_files()
 # Pre-existing violations: (file_path, function_or_fixture_name)
 # FIXME(#2133): integration tests should use polyfactory fixtures
 INTEGRATION_SESSION_ADD_ALLOWLIST = {
+    # tests/utils/** — the SAME pre-existing violations, at the address they moved to.
+    # Two rows were removed from this allowlist as "removed by the consolidation"; the
+    # calls were not removed, they were lifted out of the test bodies into these shared
+    # helpers, which this file's discovery glob did not reach until it did. Restoring them
+    # is bookkeeping, not a new concession: the count that changed was the visible one.
+    ("tests/utils/database_helpers.py", "add_product_prerequisites"),
+    ("tests/utils/database_helpers.py", "seed_tenant_with_principal"),
+    ("tests/utils/database_helpers.py", "seed_tenant_with_product_prerequisites"),
+    ("tests/utils/tenant_setup.py", "seed_gam_tenant"),
     # tests/integration/conftest.py
     ("tests/integration/conftest.py", "authenticated_admin_session"),
     ("tests/integration/conftest.py", "test_tenant_with_data"),

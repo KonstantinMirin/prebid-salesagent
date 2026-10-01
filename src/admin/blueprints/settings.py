@@ -192,18 +192,16 @@ def update_general(tenant_id):
             if "virtual_host" in request.form:
                 virtual_host = request.form.get("virtual_host", "").strip()
                 if virtual_host:
-                    # Basic validation for virtual host format
-                    # Check for invalid patterns first
-                    if ".." in virtual_host or virtual_host.startswith(".") or virtual_host.endswith("."):
-                        flash("Virtual host cannot contain consecutive dots or start/end with dots", "error")
-                        return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
+                    # ONE definition of the shape, shared with the ORM validator. The rule
+                    # spelled out here refused the ':' in 'host:8443' -- a form that cannot
+                    # save what the column legitimately holds, so a tenant served on a
+                    # non-default port could not be renamed.
+                    from src.core.http_utils import validate_virtual_host
 
-                    # Then check allowed characters
-                    if not virtual_host.replace("-", "").replace(".", "").replace("_", "").isalnum():
-                        flash(
-                            "Virtual host must contain only alphanumeric characters, dots, hyphens, and underscores",
-                            "error",
-                        )
+                    try:
+                        virtual_host = validate_virtual_host(virtual_host)
+                    except ValueError as exc:
+                        flash(str(exc), "error")
                         return redirect(url_for("tenants.tenant_settings", tenant_id=tenant_id, section="general"))
 
                     # Check if virtual host is already in use by another tenant.

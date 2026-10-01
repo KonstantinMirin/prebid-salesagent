@@ -65,4 +65,4 @@ Feature: A request identifies its seller by host or by header
     When the buyer requests capabilities naming a seller nobody serves
     Then the response contains error code CONFIGURATION_ERROR
     And the error recovery should be "terminal"
-    And the refusal names the host the request used
+    And the refusal carries no buyer-supplied value on the wire

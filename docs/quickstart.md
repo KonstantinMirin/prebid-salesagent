@@ -42,20 +42,18 @@ curl http://localhost:8000/health
 
 ## First-Time Setup
 
-1. Open http://localhost:8000/admin
-2. New tenants start in **Setup Mode** - test credentials work initially
-3. Log in with test credentials (see below)
-4. Configure SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
-5. Test your SSO login works
-6. Disable Setup Mode to require SSO for all users
+1. Configure Google OAuth before you start: set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
+   and `SUPER_ADMIN_EMAILS` in `.env.secrets` (see
+   [Environment variables](deployment/environment-variables.md#authentication)). The login
+   page says so too, and offers nothing else.
+2. Open http://localhost:8000/admin
+3. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses
+4. Configure per-tenant SSO in **Users & Access** (see [SSO Setup Guide](user-guide/sso-setup.md))
 
-### Setup Mode
-
-New tenants start with `auth_setup_mode=true`, which allows test credentials:
-- Click "Log in to Dashboard" button on the login page
-- Password: `test123`
-
-Once you've configured and tested SSO, disable Setup Mode from the Users & Access page. After that, only SSO authentication works.
+There is no password login. A route that accepted a fixed password existed for local use and
+is gone: it was composed only when a test-mode flag was set, which made the app under test a
+different app from the deployed one, and it minted an operator session from a default
+password.
 
 ## Local Testing with Demo Data
 

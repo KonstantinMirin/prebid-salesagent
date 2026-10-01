@@ -62,15 +62,9 @@
             <tr>
                 <td><strong>{{ tenant.name }}</strong></td>
                 <td>
-                    {% if tenant.virtual_host %}
                     <code>{{ tenant.virtual_host }}</code>
                     <br><small style="color: #666;">https://{{ tenant.virtual_host }}</small>
                     <br><small style="color: #999;">(Virtual Host)</small>
-                    {% else %}
-                    <code>{{ tenant.tenant_id }}</code>
-                    <br><small style="color: #666;">{% if is_production %}https://{{ request.host }}/mcp/{% else %}http://localhost:{{ mcp_port }}/mcp/{% endif %}</small>
-                    <br><small style="color: #999;">(use x-adcp-tenant: {{ tenant.tenant_id }})</small>
-                    {% endif %}
                 </td>
                 <td>
                     {% if tenant.is_configured %}

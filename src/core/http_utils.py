@@ -71,6 +71,45 @@ def requested_host(headers: HeaderSource) -> str | None:
     return get_header_case_insensitive(headers, "Host")
 
 
+def validate_virtual_host(value: str | None) -> str:
+    """The host a tenant is served at, folded to lowercase — or a ValueError saying why not.
+
+    ONE definition of the shape, so the ORM validator and the admin form cannot disagree
+    about it. The column previously accepted anything non-blank, which stored
+    ``https://evil.com`` and ``evil.com/path`` and then published
+    ``agent_url == "https://https://evil.com"`` on the card.
+
+    The parsing is ``urlsplit``'s, never string surgery: it decides where a netloc ends,
+    what a path is, where userinfo stops and whether a port is a number. The one rule
+    spelled out here is whitespace, because ``urlsplit`` parses ``a b.com`` happily and no
+    ``Host`` header can carry a space (RFC 3986 §3.2.2) — a row holding one is unreachable,
+    which is the same defect class as a fabricated host.
+
+    Accepts a bare ``host`` and ``host:port``, including a bracketed IPv6 literal, because
+    the card publishes this string verbatim and a client dials what the card says.
+    """
+    if value is None or not value.strip():
+        raise ValueError("virtual_host is required: a tenant declares the host it is served at")
+    host = value.strip().lower()
+    if any(ch.isspace() for ch in host):
+        raise ValueError(f"virtual_host {value!r} contains whitespace, so no Host header can name it")
+    parts = urlsplit(f"//{host}")
+    if parts.path or parts.query or parts.fragment:
+        raise ValueError(
+            f"virtual_host {value!r} is not a bare host: it carries a scheme or a path. "
+            "Store the host a request names, e.g. 'seller.example.com' or 'seller.example.com:8443'"
+        )
+    if parts.netloc != host or "@" in parts.netloc:
+        raise ValueError(f"virtual_host {value!r} is not a bare host[:port]")
+    try:
+        parts.port  # noqa: B018 — raises for a non-numeric port
+    except ValueError as exc:
+        raise ValueError(f"virtual_host {value!r} has a non-numeric port") from exc
+    if not parts.hostname:
+        raise ValueError(f"virtual_host {value!r} names no host")
+    return host
+
+
 def hostname_of(host: str) -> str:
     """*host* without its port.
 

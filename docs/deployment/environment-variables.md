@@ -44,7 +44,7 @@ Each tenant configures their own SSO provider in the Admin UI (**Users & Access*
 **Setup flow:**
 
 1. Start the system. The first startup creates a default tenant with Setup Mode enabled.
-2. Log in with test credentials (Setup Mode enables them for new tenants).
+2. Log in with Google as one of the `SUPER_ADMIN_EMAILS` addresses.
 3. Configure SSO in **Users & Access** - supports Google, Microsoft, or any OIDC provider (Okta, Auth0, Keycloak, and others) as Custom OIDC.
 4. Test your SSO login.
 5. Disable Setup Mode once SSO is working.

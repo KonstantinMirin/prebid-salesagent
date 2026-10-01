@@ -244,8 +244,12 @@ class TestAgentCardDiscoveryPathsLive:
         body = response.json()
         assert body["adcp_error"]["code"] == "CONFIGURATION_ERROR", body
         assert body["adcp_error"]["recovery"] == "terminal", body
-        assert body["adcp_error"]["details"]["rejected_value"] == "unclaimed.example", (
-            "the refusal must name the host it could not serve, or an operator cannot act on it"
+        # The host the caller named belongs in the SERVER's record, not the envelope:
+        # ``rejected_value`` is "the offending value the buyer supplied", and a terminal
+        # envelope says the buyer has no lever. Carrying it also echoes caller-controlled
+        # text back, which is the shape this route exists to refuse.
+        assert "unclaimed.example" not in response.text, (
+            f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
         )
         assert "supportedInterfaces" not in response.text, (
             "the refusal published an agent URL built from the caller's own Host"

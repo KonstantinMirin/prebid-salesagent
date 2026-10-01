@@ -54,10 +54,25 @@ def _steps(record: Path) -> dict[str, bool]:
         for scenario in track.get("scenarios") or []:
             for step in scenario.get("steps") or []:
                 key = f"{track.get('track')}::{scenario.get('scenario')}::{step.get('task') or step.get('step')}"
+                if step.get("skipped") or step.get("selection_reason"):
+                    continue
                 if any(marker in key for marker in _SKIP_MARKERS):
                     continue
                 out[key] = bool(step.get("passed"))
     return out
+
+
+def runner_score(record: Path) -> dict[str, Any]:
+    """The runner's OWN counts. The authoritative score, never re-derived here.
+
+    Deriving it from the step list is a trap with several floors: whole tracks come back
+    ``status=skip`` or ``silent`` with every step marked ``passed``, 244 individual steps
+    carry ``skipped``, and a dozen carry ``selection_reason``. Each filter looks like the
+    last one needed and none of them reproduces ``steps_passed``. So this tool reports the
+    runner's number and compares step IDENTITIES; it never offers a score of its own.
+    """
+    summary = json.loads(record.read_text()).get("summary") or {}
+    return {k: summary.get(f"steps_{k}") for k in ("passed", "failed", "skipped", "not_selected")}
 
 
 def _record_for(where: Path, protocol: str) -> Path | None:
@@ -111,7 +126,10 @@ def main() -> int:
         if base_rec is None or head_rec is None:
             missing.append(f"{protocol} (base={base_rec is not None} head={head_rec is not None})")
             continue
-        report[protocol] = _compare(_steps(base_rec), _steps(head_rec))
+        comparison = _compare(_steps(base_rec), _steps(head_rec))
+        comparison["base_score"] = runner_score(base_rec)
+        comparison["head_score"] = runner_score(head_rec)
+        report[protocol] = comparison
 
     if missing:
         # Loud, never a silent partial: a protocol whose record is absent was not compared,
@@ -131,8 +149,9 @@ def main() -> int:
         for protocol, r in sorted(report.items()):
             verdict = "IDENTICAL" if r["identical"] else "DIFFERENT"
             print(f"[{protocol}] passing sets {verdict}")
-            print(f"  graded: base={r['base_graded']} head={r['head_graded']}")
-            print(f"  passed: base={r['base_passed']} head={r['head_passed']}")
+            print(f"  runner score (authoritative) base={r['base_score']} head={r['head_score']}")
+            print(f"  graded-step identities compared: base={r['base_graded']} head={r['head_graded']}")
+            print(f"  of those passing: base={r['base_passed']} head={r['head_passed']}  (NOT the score above)")
             print(f"  lost ({len(r['lost'])}) — passed on base, not on head:")
             for step in r["lost"]:
                 print(f"    - {step}")

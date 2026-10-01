@@ -40,7 +40,14 @@ repos:
         # types_or, not types: the developer-path check is not Python-specific —
         # #2228 removed hardcoded homes from docs, formulas, a shell script and two
         # tracked SYMLINKS. The Python-only checks guard their own scope internally.
-        types_or: [python, markdown, yaml, shell, symlink]
+        #
+        # `types: []` is required for the symlink entry to do anything. pre-commit ANDs
+        # `types` (default `[file]`) with `types_or`, and a symlink is not a `file`, so the
+        # entry listed below never matched one — the very case #2228 added it for. Emptying
+        # `types` drops the AND; `text` then also reaches the JSON, TOML and HTML a
+        # hardcoded home can hide in, which the explicit list did not.
+        types: []
+        types_or: [text, symlink]
         pass_filenames: true
 
       # Layer 2 — pre-push stage (medium cost; CI is authoritative for heavy checks)

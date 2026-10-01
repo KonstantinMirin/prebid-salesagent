@@ -44,7 +44,7 @@ When complete, services are running at **http://localhost:8000**:
 | A2A Server | http://localhost:8000/a2a |
 | Health Check | http://localhost:8000/health |
 
-**Test login:** Click "Log in to Dashboard" on the login page (password: `test123`).
+**Log in:** with Google, as one of the `SUPER_ADMIN_EMAILS` addresses. There is no password login.
 
 ## Manual Setup
 

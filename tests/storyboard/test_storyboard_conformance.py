@@ -608,10 +608,26 @@ _PASS_FLOOR_PATH = _REPO_ROOT / ".storyboard-pass-floor"
 
 
 def _pass_floor(protocol: str) -> int:
-    """The recorded floor for *protocol*, or 0 when none is recorded."""
+    """The recorded floor for *protocol*. Refuses rather than defaulting.
+
+    A missing file and a misspelt key both used to answer 0, which is a floor no run can
+    breach — the one direction this exists to catch, with infinite slack. Neither is a
+    state to tolerate: the file is committed, so its absence means the checkout is
+    broken, and a key the file does not carry means nobody set a floor for a protocol
+    this suite grades. Both are the path being wrong, not a value being absent.
+    """
     if not _PASS_FLOOR_PATH.is_file():
-        return 0
-    return int(json.loads(_PASS_FLOOR_PATH.read_text(encoding="utf-8")).get(protocol, 0))
+        raise FileNotFoundError(
+            f"{_PASS_FLOOR_PATH} is committed and missing from this checkout, so there is no floor "
+            f"to grade {protocol!r} against. A default of 0 is a floor nothing can breach."
+        )
+    recorded = json.loads(_PASS_FLOOR_PATH.read_text(encoding="utf-8"))
+    if protocol not in recorded:
+        raise KeyError(
+            f"{_PASS_FLOOR_PATH.name} records no floor for {protocol!r} (it has {sorted(recorded)}). "
+            "Record one from a measured run; a missing key must not read as a floor of 0."
+        )
+    return int(recorded[protocol])
 
 
 def _below_pass_floor(protocol: str, summary: dict[str, Any]) -> dict[str, Any] | None:

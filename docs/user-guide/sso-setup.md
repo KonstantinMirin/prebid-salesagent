@@ -335,7 +335,7 @@ Once SSO is working:
 1. **Verify test logins work** - Have team members test the SSO flow (add them as users or add their domain first).
 2. **Click "Disable Setup Mode"** on the Users & Access page.
 3. After disabling Setup Mode:
-   - Test credentials no longer work
+   - Only this tenant's own SSO is accepted
    - Only SSO authentication is allowed
    - You can re-enable Setup Mode if needed for troubleshooting
 
