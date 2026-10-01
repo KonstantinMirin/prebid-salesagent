@@ -138,9 +138,10 @@ ENV ADCP_HOST=0.0.0.0
 # Internal services (MCP:8080, Admin:8001, A2A:8091) are accessed via nginx
 EXPOSE 8000
 
-# Health check
+# Health check through nginx, so a dead proxy is unhealthy (nginx proxies /health to :8080).
+# A deployment that sets SKIP_NGINX defines its own healthcheck, as every compose file does.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
 USER app:app
 
