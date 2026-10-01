@@ -69,7 +69,7 @@ from a branch that carries them:
 | [#2315](https://github.com/prebid/salesagent/pull/2315) | `CREATIVE_AGENT_URL` can be the agent's base URL; the client falls back to `<url>/mcp`. |
 | [#2305](https://github.com/prebid/salesagent/pull/2305) | Pins the reference creative agent to adcp v3.1.25 and keeps `canonical_parameters.format_kind` and `params` in the format list. |
 | [#2191](https://github.com/prebid/salesagent/pull/2191) | Tenants are found by `virtual_host` alone; `setup_tenant.py` takes `--virtual-host`. Without it, use `--subdomain` (see [Step 6](#step-6-create-a-tenant)). |
-| [#2313](https://github.com/prebid/salesagent/pull/2313) | Only for the Caddy option in [Tenant TLS](#tenant-tls-and-custom-domains): the `/tls/ask` endpoint. |
+| [#2313](https://github.com/prebid/salesagent/pull/2313) | Only for the Caddy option in [Tenant TLS](#tenant-tls-and-custom-domains): the `/tls/ask` endpoint, mounted only when `TLS_ASK_ENABLED=true`. |
 
 ## Before you start
 
@@ -306,6 +306,11 @@ used. It adds nothing that runs or bills, keeps every certificate in ACM with au
 renewal, and covers the usual case: most tenants use subdomains and a handful bring a
 domain. Move to (c) when tenants must onboard a domain without an operator, or need apex
 domains; move to (b) when custom domains number in the hundreds.
+
+The ALB and CloudFront options hold a certificate for each configured domain and never ask
+the app about a host, so this Terraform leaves `TLS_ASK_ENABLED` unset and `/tls/ask`
+answers 404. Option (c) needs it: set `TLS_ASK_ENABLED=true` in the app task's environment,
+or Caddy's ask request gets 404 and Caddy refuses every certificate.
 
 To add a custom domain:
 
