@@ -150,7 +150,7 @@ def _list_creative_formats_impl(
         req = ListCreativeFormatsRequest()
 
     principal_id = identity.principal_id
-    # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
+    # Always a tenant: a request naming no seller is refused REFERENCE_NOT_FOUND by the
     # resolver, so there is no empty-format answer for one.
     tenant = identity.tenant
 
