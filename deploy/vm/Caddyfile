@@ -4,7 +4,7 @@
 # client connects to it, after asking the app whether it serves that hostname (GET /tls/ask). The app
 # says yes for SALES_AGENT_DOMAIN, ADMIN_DOMAIN and every active tenant's host, so adding a tenant
 # never needs a Caddy change. Without the ask, anyone who points a domain here makes Caddy request
-# certificates for it.
+# certificates for it. The app mounts /tls/ask only with TLS_ASK_ENABLED=true, which compose.yml sets.
 {
 	email {$ACME_EMAIL}
 	on_demand_tls {

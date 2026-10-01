@@ -17,7 +17,7 @@ The example files are in [`deploy/vm/`](../../deploy/vm/):
 >
 > - #2310: nginx starts as the image's non-root user, and the cron job runs the right script. Without it
 >   nothing answers on port 8000 while the container reports healthy.
-> - #2313: `GET /tls/ask`. Without it Caddy issues no certificate.
+> - #2313: `GET /tls/ask`, mounted when `TLS_ASK_ENABLED=true`. Without it Caddy issues no certificate.
 > - #2315: a creative agent configured by its base URL answers in under a second instead of
 >   hanging or retrying.
 > - #2305: pins the reference creative agent to AdCP v3.1.25.
@@ -52,6 +52,12 @@ internet --443/80--> caddy --> app:8000 (the image's nginx) --> FastAPI :8080 (M
 ```
 
 The app picks the tenant from the `Host` header. Caddy passes it through unchanged.
+
+Before Caddy requests a certificate for a host, it asks the app at `GET /tls/ask?domain=<host>`.
+The app mounts that route only when `TLS_ASK_ENABLED=true`, and `compose.yml` sets it for the `app`
+service. It is off by default because only a proxy that issues certificates on demand, as Caddy does
+here, ever asks. With it off, `/tls/ask` answers 404 and Caddy issues no certificate, so keep the
+setting if you edit `compose.yml` or move the app's environment into `.env`.
 
 | Host | Serves |
 |---|---|
@@ -379,7 +385,7 @@ schema in a way the old version cannot read; check `docker compose logs app` fir
 
 | Symptom | Cause and fix |
 |---|---|
-| TLS handshake fails (`tlsv1 alert internal error`) for a host | Caddy asked `/tls/ask` and got 403: the host is not an active tenant's host. The refusal is in the app's log, not Caddy's: `docker compose logs app \| grep tls/ask`. Ask it yourself: `docker compose exec app curl -s -o /dev/null -w '%{http_code}\n' 'http://localhost:8000/tls/ask?domain=<host>'` must print 200. If it does and the handshake still fails, the host's DNS does not point at the VM yet, so Let's Encrypt cannot validate it (`docker compose logs caddy`). |
+| TLS handshake fails (`tlsv1 alert internal error`) for a host | Caddy asked `/tls/ask` and got 403: the host is not an active tenant's host. The refusal is in the app's log, not Caddy's: `docker compose logs app \| grep tls/ask`. Ask it yourself: `docker compose exec app curl -s -o /dev/null -w '%{http_code}\n' 'http://localhost:8000/tls/ask?domain=<host>'` must print 200. A 404 for every host means the route is not mounted: the `app` service is missing `TLS_ASK_ENABLED=true` (`docker compose exec app printenv TLS_ASK_ENABLED`). If it prints 200 and the handshake still fails, the host's DNS does not point at the VM yet, so Let's Encrypt cannot validate it (`docker compose logs caddy`). |
 | `app` is healthy but every request returns 502 | The image's nginx did not start. You built an image without #2310; rebuild from a ref that has it. |
 | `list_creative_formats` returns no formats | The app cannot read the creative agent's catalog. With `CREATIVE_AGENT_URL` unset it asks the public agent, whose AdCP 3.2 catalog is rejected (#2274); run the reference agent (step 6). With it set, check `curl https://<apex>/api/creative-agent/health` from the VM, which also proves the VM reaches its own public address. |
 | Admin login fails after the provider redirects back | The redirect URI registered with the provider differs from `GOOGLE_OAUTH_REDIRECT_URI` in `.env`, or the ID token has no `email`. |
