@@ -47,6 +47,10 @@ def _routed_page(headers: dict) -> tuple[RoutingResult, str | None, str | None]:
 # exist at all. No per-request check: a route that is not mounted cannot be reached.
 debug_router = APIRouter()
 
+# Mounted the same way, when ``get_settings().runtime.tls_ask_enabled`` says so: only a
+# deployment behind an on-demand TLS proxy needs it.
+tls_ask_router = APIRouter()
+
 
 @router.get("/health")
 async def health(request: Request):
@@ -54,7 +58,7 @@ async def health(request: Request):
     return JSONResponse({"status": "healthy", "service": "mcp"})
 
 
-@router.get("/tls/ask", include_in_schema=False)
+@tls_ask_router.get("/tls/ask", include_in_schema=False)
 def tls_ask(domain: str = "") -> Response:
     """Reverse-proxy on-demand TLS gate: 200 if this deployment serves ``domain``, else 403.
 
