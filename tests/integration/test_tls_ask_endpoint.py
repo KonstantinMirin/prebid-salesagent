@@ -2,7 +2,11 @@
 
 Caddy calls the endpoint with ``?domain=<host>`` before it requests a certificate and
 issues only on a 2xx. These cases drive the real ASGI app over PostgreSQL, so the active
-filter and the two unique-key lookups are the ones production runs.
+filter and the ``virtual_host`` lookup are the ones production runs.
+
+A tenant is served at the host it declares as its ``virtual_host`` and nowhere else, so a
+tenant's ``subdomain`` under ``SALES_AGENT_DOMAIN`` is NOT a served host unless the tenant
+declares it.
 """
 
 from __future__ import annotations
@@ -24,12 +28,23 @@ def client(factory_session, monkeypatch):
 
     inject_runtime(monkeypatch, sales_agent_domain=APEX, admin_domain=None)
     TenantFactory(tenant_id="t_acme", subdomain="acme", virtual_host="ads.publisher.example")
+    TenantFactory(tenant_id="t_beta", subdomain="beta", virtual_host=f"beta.{APEX}")
+    TenantFactory(tenant_id="t_port", subdomain="port", virtual_host="alt.publisher.example:8443")
     TenantFactory(tenant_id="t_gone", subdomain="gone", virtual_host="old.publisher.example", is_active=False)
     return TestClient(app)
 
 
 @pytest.mark.parametrize(
-    "host", [APEX, f"admin.{APEX}", f"acme.{APEX}", "ads.publisher.example", f"ACME.{APEX}.", "Ads.Publisher.Example"]
+    "host",
+    [
+        APEX,
+        f"admin.{APEX}",
+        "ads.publisher.example",
+        "Ads.Publisher.Example",
+        "ads.publisher.example.",
+        f"beta.{APEX}",
+        "alt.publisher.example",
+    ],
 )
 def test_served_host_is_allowed(client, host):
     response = client.get("/tls/ask", params={"domain": host})
@@ -39,11 +54,12 @@ def test_served_host_is_allowed(client, host):
 @pytest.mark.parametrize(
     "host",
     [
-        f"gone.{APEX}",
+        f"acme.{APEX}",
         "old.publisher.example",
+        f"gone.{APEX}",
         f"nobody.{APEX}",
-        f"x.acme.{APEX}",
-        f"acme.{APEX}.evil.example",
+        f"x.beta.{APEX}",
+        f"beta.{APEX}.evil.example",
         "random.example.org",
         f"*.{APEX}",
         "ads.publisher.example:443",

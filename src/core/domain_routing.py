@@ -15,6 +15,8 @@ serves what it decides, and the ``/debug/*`` reports in :mod:`src.routes.health`
 it decided rather than repeating the lookup — a debug endpoint naming a detection the
 deployment does not have is worse than no endpoint. A tool never comes here; its tenant is
 resolved once by the boundary and carried on the identity.
+
+``is_served_host`` answers the reverse proxy's on-demand TLS question from the same decision.
 """
 
 import re
@@ -23,8 +25,8 @@ from typing import Literal
 
 # Import existing tenant lookup functions from config_loader
 # This ensures all servers (MCP, Admin, A2A) use the same lookup logic
-from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
-from src.core.domain_config import get_admin_domain, get_sales_agent_domain, is_admin_domain
+from src.core.config_loader import get_tenant_by_virtual_host
+from src.core.domain_config import get_sales_agent_domain, is_admin_domain
 from src.core.http_utils import requested_host
 
 # A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
@@ -113,39 +115,33 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     return RoutingResult("custom_domain", tenant, effective_host)
 
 
-def is_hostname(name: str) -> bool:
-    """Whether ``name`` is exactly a DNS hostname, in any case: no port, wildcard, path or whitespace."""
-    return _HOSTNAME.match(name) is not None
-
-
 def normalize_hostname(host: str) -> str | None:
-    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname."""
-    normalized = host.strip().lower().removesuffix(".")
-    return normalized if is_hostname(normalized) else None
+    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname.
 
-
-def label_under(host: str, apex: str) -> str | None:
-    """The single label in front of ``apex`` (``acme`` for ``acme.<apex>``), else None.
-
-    Stricter than ``extract_subdomain_from_host``, which matches ``.<apex>`` anywhere in the
-    host: ``x.acme.<apex>`` and ``acme.<apex>.evil.example`` are not ``acme``'s host.
+    Matched BEFORE folding: ``str.lower`` maps the Kelvin sign to ``k``, so folding first would
+    let a non-ASCII name through as an ASCII one.
     """
-    label = host.removesuffix(f".{apex}")
-    return label if label != host and "." not in label else None
+    candidate = host.strip().removesuffix(".")
+    return candidate.lower() if _HOSTNAME.match(candidate) else None
 
 
 def is_served_host(host: str) -> bool:
     """Whether this deployment serves ``host``: the on-demand TLS gate's decision.
 
-    Served: ``SALES_AGENT_DOMAIN``, the admin domain, or an active tenant's ``virtual_host``.
+    Served: the hosts :func:`route_landing_page` routes -- the admin domain and an active
+    tenant's ``virtual_host`` (whose port, if it stores one, a certificate does not carry) --
+    plus ``SALES_AGENT_DOMAIN``, which the deployment answers on for the OAuth callbacks it
+    builds from it (``get_oauth_redirect_uri``). Nothing is derived from a subdomain: a tenant
+    served at ``acme.<SALES_AGENT_DOMAIN>`` declares that as its ``virtual_host``.
+
     The endpoint asking this is unauthenticated, so a malformed host is refused before any
-    query, and the rest cost at most one single-column lookup on a unique index
-    (``tenant_id_for``).
+    query; the rest cost one lookup on the unique ``virtual_host_name`` index.
     """
     normalized = normalize_hostname(host)
     if normalized is None:
         return False
     # ``normalized`` is never empty, so an unset domain matches nothing here.
-    if normalized in {(get_sales_agent_domain() or "").lower(), (get_admin_domain() or "").lower()}:
+    if normalized == (get_sales_agent_domain() or "").lower():
         return True
-    return tenant_id_for(virtual_host=normalized) is not None
+    routed = route_landing_page({"Host": normalized})
+    return routed.type == "admin" or routed.tenant is not None
