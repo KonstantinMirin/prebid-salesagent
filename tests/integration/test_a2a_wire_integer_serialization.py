@@ -40,7 +40,7 @@ class TestA2AHttpRouteIntegerRestoration:
         from src.app import app
 
         # Inside the env because the request has to NAME a seller -- one naming none is
-        # refused (CONFIGURATION_ERROR) before any handler runs. The env seeds the tenant
+        # refused (REFERENCE_NOT_FOUND) before any handler runs. The env seeds the tenant
         # it presents, and `credential()` is how the request says which one it is for.
         with CapabilitiesEnv() as env:
             # A request must name a seller this deployment serves.

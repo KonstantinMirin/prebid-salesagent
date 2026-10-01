@@ -50,7 +50,7 @@ def given_tenant_resolvable(ctx: dict) -> None:
     one. A request addressing that id resolved anyway, through the loopback fallback to the
     ``default`` tenant that #2259 removed — so the scenarios reading this Background were
     served by a tenant they never mentioned, and once the fallback went they were refused
-    CONFIGURATION_ERROR for want of a seller. That refusal is correct; the Background was
+    REFERENCE_NOT_FOUND for want of a seller. That refusal is correct; the Background was
     the thing that was wrong.
 
     ``setup_default_data`` is get-or-create, so an env that already seeded (every e2e env,

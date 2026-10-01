@@ -109,15 +109,13 @@ def then_describes_that_tenant(ctx: dict) -> None:
 def then_refusal_carries_no_buyer_value(ctx: dict) -> None:
     """The host the request named is the SERVER's record, not the envelope's.
 
-    ``details.rejected_value`` is "the offending value the buyer supplied"
-    (``core/error.json``), and an envelope whose recovery is ``terminal`` says the buyer
-    has no lever — carrying one makes it argue with itself, and the pinned error-handling
-    text gives this code no ``details`` shape at all. The value still reaches the operator,
-    through ``internal_detail``, which never goes on a wire.
+    The refusal reads the same whatever host was named, so a caller probing names under a
+    wildcard apex learns nothing from the body beyond "not served here". The value still
+    reaches the operator, through ``internal_detail``, which never goes on a wire.
     """
-    details = ctx["result"].wire_error_details("CONFIGURATION_ERROR")
+    details = ctx["result"].wire_error_details("REFERENCE_NOT_FOUND")
     assert "rejected_value" not in details, (
-        f"the refusal put {details.get('rejected_value')!r} on the wire. A terminal envelope "
-        "that names what the buyer supplied invites the buyer to fix what it just said they cannot"
+        f"the refusal put {details.get('rejected_value')!r} on the wire; the host the caller "
+        "named belongs in the operator's record"
     )
     assert UNSERVED_HOST not in str(details), f"the host the request named leaked into the wire details: {details!r}"
