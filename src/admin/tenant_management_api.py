@@ -212,8 +212,16 @@ def create_tenant():
             # helper invokes `conflict` on both paths, so the check has to be a
             # real query: a callable that unconditionally answered 409 would
             # answer 409 before ever writing.
-            def subdomain_taken():
-                if TenantLookupRepository(db_session).find_by_subdomain(data["subdomain"]):
+            # The pre-check has to see every collision the INSERT can cause, which is this
+            # helper's stated corollary. `virtual_host` is UNIQUE and NOT NULL, so a
+            # duplicate host trips `ix_tenants_virtual_host` — a constraint the
+            # subdomain-only check could not see, which is how a taken host reached the
+            # `except` below and answered 500 for a value the caller chose.
+            def host_or_subdomain_taken():
+                lookup = TenantLookupRepository(db_session)
+                if lookup.find_by_virtual_host(data["virtual_host"]):
+                    return jsonify({"error": "virtual_host already in use", "field": "virtual_host"}), 409
+                if lookup.find_by_subdomain(data["subdomain"]):
                     return jsonify({"error": "Subdomain already exists"}), 409
                 return None
 
@@ -222,9 +230,9 @@ def create_tenant():
             # are ever staged.
             conflict = resolve_or_write(
                 db_session,
-                conflict=subdomain_taken,
+                conflict=host_or_subdomain_taken,
                 write=lambda: db_session.add(new_tenant),
-                constraint="tenants_subdomain_key",
+                constraint=("tenants_subdomain_key", "ix_tenants_virtual_host"),
             )
             if conflict is not None:
                 return conflict

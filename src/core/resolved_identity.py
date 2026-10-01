@@ -634,8 +634,12 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
 
     The third sanctioned entry into this module's one resolution, after
     ``_resolve_identity`` (a tool request) and ``identity_of`` (server-initiated work).
-    It exists for the A2A agent card, which is reachable at three ROOT paths that the A2A
-    specification fixes, answers before any AdCP exchange, and therefore cannot be a
+    It exists for the A2A agent card, which is reachable at the three ROOT paths
+    ``_AGENT_CARD_PATHS`` declares -- A2A fixes one of them
+    (``/.well-known/agent-card.json``, A2A §8.2 and §14.3), AdCP's own guide names
+    ``/.well-known/agent.json`` (``a2a-guide.mdx:782``), and ``/agent.json`` is the legacy
+    spelling neither specification fixes. The card answers before any AdCP exchange, and
+    therefore cannot be a
     registry row: it carries no AdCP envelope, and a row for it would advertise itself as
     a skill on the card it serves. What it does need is the same answer to "which tenant
     is this request for" that every tool gets -- so it asks here rather than deriving one

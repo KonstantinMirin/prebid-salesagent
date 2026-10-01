@@ -23,6 +23,8 @@ tests grade anything at all:
   one the fixture seeds as ``super_admin_emails``.
 """
 
+import re
+
 import pytest
 from starlette.testclient import TestClient
 
@@ -99,6 +101,30 @@ def test_a_ui_created_tenants_card_publishes_its_stored_origin(authenticated_adm
     # the agent UNREACHABLE without ever sending a request.
     bindings = [(interface.get("protocolBinding") or "").upper() for interface in interfaces]
     assert bindings == ["JSONRPC"], f"the card published protocolBinding {bindings}, which no A2A 1.x client selects"
+
+    # The identity fields a client reads off the card. They had unit graders in
+    # ``test_a2a_transport_contract.py``; the card is already parsed here, so they are graded
+    # where the real route produced it instead.
+    body = card.json()
+    assert body["name"] == "Prebid Sales Agent", f"the card published name {body.get('name')!r}"
+
+    # Graded by SHAPE, not against ``get_adcp_spec_version()``: deriving the expected value
+    # from the same call production makes moves both sides together, so a mutated version
+    # would stay green. A semver reddens on any placeholder.
+    extensions = body["capabilities"]["extensions"]
+    declared = [e["params"]["adcp_version"] for e in extensions]
+    assert len(declared) == 1 and re.fullmatch(r"\d+\.\d+\.\d+", declared[0]), (
+        f"the card published adcp_version {declared}, which is not a spec version"
+    )
+    assert [e["uri"] for e in extensions] == [
+        f"https://adcontextprotocol.org/schemas/{declared[0]}/protocols/adcp-extension.json"
+    ], "the extension URI names a different version than its own params do"
+    assert re.fullmatch(r"\d+\.\d+\.\d+.*", body["version"] or ""), (
+        f"the card published version {body.get('version')!r}"
+    )
+
+    # A2A joins the interface URL to a method path, so a trailing slash yields `/a2a//...`.
+    assert not urls[0].endswith("/"), f"the card published a trailing-slash URL: {urls[0]!r}"
 
 
 @pytest.mark.requires_db

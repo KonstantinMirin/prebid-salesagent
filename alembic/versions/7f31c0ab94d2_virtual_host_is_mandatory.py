@@ -56,6 +56,35 @@ def upgrade() -> None:
             f"{statements}"
         )
 
+    # A host differing only in case is the SAME host, so the stored form has to be the folded
+    # one: the ORM validator folds on write, `ix_tenants_virtual_host` covers the raw column,
+    # and every lookup is one exact match against it. A legacy row holding `Host.com` would be
+    # unreachable under that match while still occupying the name. Refused, not folded, for
+    # the same reason as above — and because folding two rows that differ only in case would
+    # trip the unique index mid-migration. The operator's UPDATE hits that index instead,
+    # where the collision is theirs to resolve.
+    unfolded = [
+        row[0]
+        for row in op.get_bind()
+        .execute(sa.text("SELECT tenant_id FROM tenants WHERE virtual_host <> lower(virtual_host)"))
+        .fetchall()
+    ]
+    if unfolded:
+        named = ", ".join(repr(tenant_id) for tenant_id in unfolded)
+        statements = "\n".join(
+            f"  UPDATE tenants SET virtual_host = lower(virtual_host) WHERE tenant_id = '{tenant_id}';"
+            for tenant_id in unfolded
+        )
+        raise RuntimeError(
+            f"{len(unfolded)} tenant(s) store a virtual_host that is not case-folded: {named}.\n"
+            "A host differing only in case is the same host, so this column stores the folded "
+            "form and every lookup matches it exactly. Fold each row, then re-run the "
+            "migration. If two rows fold to the same host, the unique index refuses the second "
+            "one: those two tenants claim one address, and which of them keeps it is a "
+            "decision only the operator can make:\n"
+            f"{statements}"
+        )
+
     op.alter_column("tenants", "virtual_host", existing_type=sa.Text(), nullable=False)
 
 

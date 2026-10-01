@@ -37,7 +37,7 @@ would make a second lookup unrepresentable.
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Tenant
@@ -60,14 +60,17 @@ class TenantLookupRepository:
     def find_by_virtual_host(self, virtual_host: str) -> Tenant | None:
         """The tenant holding ``virtual_host`` (``ix_tenants_virtual_host``), if any.
 
-        Case-folded, like the routing lookups below: a host differing only in case is the
-        SAME host, so a form offering ``Acme.example.com`` against a stored
-        ``acme.example.com`` is a collision and must be reported as one rather than
-        admitted and then never routed to.
+        One exact match against the folded column, which is the same expression the routing
+        lookups use. A host differing only in case is the SAME host, and the stored form is
+        the folded one -- the ORM validator folds on write and ``7f31c0ab94d2`` refuses a
+        legacy row that is not folded -- so folding the column again here would only make
+        the comparison non-sargable and give this one key a second spelling.
+
+        Folds its ARGUMENT rather than validating it: a lookup answers "no such tenant" for
+        a host this seller does not serve, and a malformed one is just another host it does
+        not serve. Raising here would turn an addressing miss into a 500.
         """
-        return self._session.scalars(
-            select(Tenant).where(func.lower(Tenant.virtual_host) == virtual_host.lower())
-        ).first()
+        return self._session.scalars(select(Tenant).where(Tenant.virtual_host == virtual_host.strip().lower())).first()
 
     def find_by_id(self, tenant_id: str) -> Tenant | None:
         """The tenant with this id, active or not.

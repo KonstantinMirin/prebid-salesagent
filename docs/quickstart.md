@@ -158,7 +158,8 @@ docker compose up -d
 ```
 
 ### "No tenant context" error
-- Ensure you're using the test login credentials
+- Ensure the request names a tenant: either a `Host` header matching the tenant's
+  `virtual_host`, or an `x-adcp-tenant` header carrying the tenant id
 - Check that migrations ran: `docker compose logs db-init`
 
 ### Port 8000 already in use
