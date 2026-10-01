@@ -31,6 +31,7 @@ from src.core.schemas import (
     GetMediaBuyDeliveryResponse,
     GetProductsRequest,
     GetProductsResponse,
+    ListCreativeFormatsResponse,
     ListCreativesResponse,
     Measurement,
     MediaBuyDeliveryData,
@@ -783,14 +784,25 @@ class TestAdCPContract:
         # type removed from Format in adcp 3.12
         assert format_obj.name == "Native Feed Ad"
 
-    def test_format_canonical_parameters_round_trip(self):
+    @pytest.mark.parametrize(
+        "parse",
+        [
+            pytest.param(Format.model_validate, id="format"),
+            # The response re-parsed from its own wire, as a buyer (and the harness) reads it.
+            pytest.param(
+                lambda payload: ListCreativeFormatsResponse.model_validate({"formats": [payload]}).formats[0],
+                id="list_creative_formats_response",
+            ),
+        ],
+    )
+    def test_format_canonical_parameters_round_trip(self, parse):
         """canonical_parameters keeps format_kind and params (3.1.1 product-format-declaration.json
         requires both). The SDK's generated declaration has neither field and ignores extras, so a
         creative agent's catalog came back as {"canonical_formats_only": false, "experimental": false}."""
         from tests.helpers.adcp_factories import create_test_format_id
 
         declaration = {"format_kind": "image", "params": {"width": 300, "height": 250, "pixel_ratios": [2]}}
-        format_obj = Format.model_validate(
+        format_obj = parse(
             {
                 "format_id": create_test_format_id("display_300x250_image_2x"),
                 "name": "Medium Rectangle - Image (2x)",
