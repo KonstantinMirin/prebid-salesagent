@@ -99,22 +99,20 @@ def drop_stated_session_cookie(session: Any) -> None:
 
     Call this between a form POST and the GET that renders its flash.
 
-    The two cookies coexist and ours wins, which silently loses every flash. A flash lives
-    ONLY in the session the server just wrote: it deserializes our cookie, adds
-    ``_flashes``, and writes the whole thing back in a ``Set-Cookie`` that carries a domain
-    (Flask sets no ``Domain``, so the jar records the request host). Ours is domainless --
-    it has to be, see :func:`authenticate_http_session` -- so the jar holds two cookies
-    named ``session`` and sends ours, which has no ``_flashes``. The route succeeded, the
-    page rendered, and the message was gone.
+    A flash lives ONLY in the session the server writes: it deserializes the stated cookie,
+    adds ``_flashes``, and writes the whole thing back in a ``Set-Cookie`` carrying a domain
+    (Flask sets no ``Domain``, so the jar records the request host). The stated cookie is
+    domainless -- it has to be, see :func:`authenticate_http_session` -- so without this the
+    jar holds two cookies named ``session`` and sends the stated one, which has no
+    ``_flashes``: the page renders with no message.
 
-    Measured, both host shapes: without this the follow-up GET reads
-    ``FLASHES=[]``; with it, the flash is there and the session still carries its email,
-    because the server's cookie holds everything ours did plus the flash.
+    Dropping the stated cookie rather than matching its domain to the server's is
+    deliberate: a cookie whose domain is set is NOT sent to a DOTLESS host, and the
+    in-network stacks are reached at ``proxy`` and ``localhost``. Domainless is the only
+    form that reaches every host, so the duplicate is what gets fixed.
 
-    Dropping ours rather than matching its domain to the server's is deliberate: a cookie
-    whose domain is set is NOT sent to a DOTLESS host, and the in-network stacks are
-    reached at ``proxy`` and ``localhost``. Domainless is the only form that reaches every
-    host, so the duplicate is what gets fixed.
+    The server's cookie carries everything the stated one did, so the session survives the
+    drop.
     """
     for cookie in list(session.cookies):
         if cookie.name == "session" and not cookie.domain:

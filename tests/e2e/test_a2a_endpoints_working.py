@@ -56,11 +56,9 @@ class TestA2AEndpointsActual:
     skip — same rule as ``test_unknown_task_id_returns_task_not_found_code_on_the_wire``
     below.
 
-    These fetched ``live_server['a2a']`` with no tenant declaring that host, so the card
-    route refused them with the seller-side code and every assertion sat behind
-    ``if response.status_code == 200:`` — never executing, on every run. The front is
-    declared here for the same reason the discovery-path class declares it: a card fetch is
-    discovery, so the tenant has to be resolvable from the Host alone.
+    The front is declared here for the same reason the discovery-path class declares it: a
+    card fetch is discovery, so the tenant has to be resolvable from the Host alone, and a
+    request naming a host no tenant declares is refused rather than answered with a card.
     """
 
     @pytest.fixture(autouse=True)
@@ -387,10 +385,8 @@ class TestA2AServerIntegration:
     def _front_declared(self, live_server):
         """Declared for the card fetch in ``test_server_discovery_flow``.
 
-        Without it that test fetched a host no tenant declares, got the seller-side
-        refusal, and called ``pytest.skip("A2A server not responding")`` — on every run,
-        for the whole life of the test. The server was responding; the request named no
-        tenant.
+        A card fetch carries no tenant header, so the tenant has to be resolvable from the
+        Host alone or the request is refused.
         """
         with declare_tenant_front(live_server, card_origin(live_server)):
             yield
@@ -439,10 +435,8 @@ class TestA2AServerIntegration:
     def test_server_discovery_flow(self, live_server):
         """Test complete A2A client discovery flow.
 
-        The stack is guaranteed up by ``live_server``, so a non-200 here is a failure and
-        never a skip. It used to skip itself on every run: the fetch named a host no tenant
-        declared, so the refusal arrived and `pytest.skip("A2A server not responding")` ran
-        — describing a server that was in fact answering.
+        The stack is guaranteed up by ``live_server`` and the fixture above declares the
+        front this fetches, so a non-200 here is a failure and never a skip.
         """
         # Step 1: Client discovers agent (a2a-sdk 1.0 canonical path)
         response = requests.get(

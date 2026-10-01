@@ -75,12 +75,10 @@ class TestVirtualHostMatchesHostToHost:
     (``tests/bdd/features/local-tenant-identification-routes.feature``) pins that on every
     transport.
 
-    The ambiguity that port-insensitivity used to carry is fixed in the KEY, not here. A
-    stored ``host`` and a stored ``host:8443`` were two admissible rows that BOTH matched
-    ``Host: host`` while the unique index covered the raw column, so ``.first()`` chose
-    between them with no ORDER BY. ``ux_tenants_virtual_host_name`` is UNIQUE on
-    ``lower(split_part(virtual_host, ':', 1))``, so that pair cannot exist and the
-    comparison can match at most one row — which is why it may stay port-insensitive.
+    The match is unambiguous because ``ux_tenants_virtual_host_name`` is UNIQUE on
+    ``virtual_host_name``: one name is held by one tenant, so a port-insensitive comparison
+    can reach at most one row. That name is derived by ``urlsplit().hostname`` and stored,
+    never computed in SQL -- ``test_two_ipv6_tenants_do_not_collide`` is why that matters.
     """
 
     def test_request_naming_a_port_matches_a_portless_row(self, integration_db):
@@ -120,6 +118,24 @@ class TestVirtualHostMatchesHostToHost:
             with pytest.raises(IntegrityError):
                 TenantFactory(tenant_id="tlr_ported", virtual_host="pair.example.com:8443")
                 env.get_session().flush()
+
+    def test_two_ipv6_tenants_do_not_collide(self, integration_db):
+        """Two bracketed IPv6 tenants are two tenants, and each resolves to its own row.
+
+        The case that decides where the host name may be derived. Splitting a host on its
+        first colon yields ``[`` for both of these, so deriving the key that way makes the
+        two rows one: the second INSERT is refused as a duplicate and whichever row exists
+        answers for the other's address. ``urlsplit().hostname`` gives ``::1`` and ``::2``.
+        """
+        with _RepoEnv() as env:
+            TenantFactory(tenant_id="tlr_v6a", virtual_host="[::1]:8000")
+            TenantFactory(tenant_id="tlr_v6b", virtual_host="[::2]:9000")
+            repo = TenantLookupRepository(env.get_session())
+
+            assert repo.find_active_by_virtual_host("[::1]:8000").tenant_id == "tlr_v6a"
+            assert repo.find_active_by_virtual_host("[::2]:9000").tenant_id == "tlr_v6b"
+            # Port aside, as for any other host.
+            assert repo.find_active_by_virtual_host("[::1]").tenant_id == "tlr_v6a"
 
     def test_case_is_folded_on_both_sides(self, integration_db):
         """The stored form is folded, so a request naming it in any case reaches it."""

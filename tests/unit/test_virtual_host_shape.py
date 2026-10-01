@@ -3,12 +3,9 @@
 A pure function, so a unit test is the right level: input in, folded host or a ValueError
 out, no database and no transport.
 
-Why it is graded at all. The column previously took anything non-blank, so
-``https://evil.com`` stored and the agent card published
-``agent_url == "https://https://evil.com"`` (#2191). Three entry points now delegate here
--- the ORM validator, the admin settings form and the tenant management API -- and the
-point of one definition is that they cannot disagree, which only holds if the definition
-itself is pinned.
+Why it is graded at all. Three entry points delegate here -- the ORM validator, the admin
+settings form and the tenant management API -- and the point of one definition is that they
+cannot disagree, which only holds if the definition itself is pinned.
 
 EVERY refusal message is authored here. The management API answers 400 with ``str(exc)``,
 so a ValueError escaping from ``urlsplit`` would put urllib's own text in a response body;
@@ -92,3 +89,27 @@ def test_folding_is_idempotent() -> None:
     """What the column stores validates to itself, so a re-save cannot drift."""
     for stored in ACCEPTED.values():
         assert validate_virtual_host(stored) == stored
+
+
+def test_the_stored_name_is_the_stdlib_hostname_of_the_stored_origin() -> None:
+    """``Tenant.virtual_host_name`` is derived, and ``hostname_of`` is what derives it.
+
+    The unique key routing resolves by is that column, so it has to hold the host's name and
+    nothing else. Deriving it in the index instead would mean splitting the origin in SQL,
+    which is wrong for a bracketed IPv6 literal -- graded end to end by
+    ``tests/integration/test_tenant_lookup_repository.py::...::test_two_ipv6_tenants_do_not_collide``.
+
+    No database here: the validator is a plain method, so assigning the column on an
+    unattached instance exercises the derivation on its own.
+    """
+    from src.core.database.models import Tenant
+    from src.core.http_utils import hostname_of
+
+    for origin in ("host.example.com", "host.example.com:8443", "[2001:db8::1]:8443", "HOST.Example.COM"):
+        tenant = Tenant(tenant_id="t", virtual_host=origin)
+        assert tenant.virtual_host_name == hostname_of(tenant.virtual_host), (
+            f"{origin!r} stored name {tenant.virtual_host_name!r}, but its host is {hostname_of(tenant.virtual_host)!r}"
+        )
+
+    # The case the SQL form gets wrong: the bracketed literal keeps its address.
+    assert Tenant(tenant_id="t", virtual_host="[2001:db8::1]:8443").virtual_host_name == "2001:db8::1"

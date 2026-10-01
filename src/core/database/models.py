@@ -70,6 +70,10 @@ class Tenant(Base, JSONValidatorMixin):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     subdomain: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     virtual_host: Mapped[str] = mapped_column(Text, nullable=False)
+    #: ``virtual_host`` with its port removed, derived by ``hostname_of`` and stored so the
+    #: unique key below is a PLAIN COLUMN. Maintained by ``_fold_virtual_host``; never
+    #: assigned directly.
+    virtual_host_name: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -222,11 +226,7 @@ class Tenant(Base, JSONValidatorMixin):
         # `host:8443` as two rows, and then BOTH matched `Host: host` while `.first()` chose
         # between them with no ORDER BY. Indexing the expression the lookup compares makes
         # that pair unrepresentable and the comparison sargable, which is the same fix.
-        Index(
-            "ux_tenants_virtual_host_name",
-            func.lower(func.split_part(virtual_host, ":", 1)),
-            unique=True,
-        ),
+        Index("ux_tenants_virtual_host_name", "virtual_host_name", unique=True),
     )
 
     # JSON validators are inherited from JSONValidatorMixin
@@ -264,12 +264,16 @@ class Tenant(Base, JSONValidatorMixin):
         step. The routing lookups in ``TenantLookupRepository`` fold the column as well,
         which is what resolves a row that was stored mixed-case before this hook existed.
         """
-        from src.core.http_utils import validate_virtual_host
+        from src.core.http_utils import hostname_of, validate_virtual_host
 
         try:
-            return validate_virtual_host(value)
+            host = validate_virtual_host(value)
         except ValueError as exc:
             raise ValueError(f"tenant {self.tenant_id!r}: {exc}") from exc
+        # The hostname is derived here, by stdlib, and stored, so the unique key below is a
+        # plain column and nothing takes a URL apart in SQL.
+        self.virtual_host_name = hostname_of(host)
+        return host
 
     @property
     def gemini_api_key(self) -> str | None:

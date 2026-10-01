@@ -11,7 +11,7 @@ TWO QUESTIONS, AND THE DIFFERENCE BETWEEN THEM IS LOAD-BEARING:
   ``find_by_virtual_host``, ``find_by_id_or_subdomain``, for the handlers that
   create or rename a tenant. Each maps to one of the three unique keys on
   ``tenants`` (``tenants_pkey``, ``tenants_subdomain_key``,
-  ``ux_tenants_virtual_host_name``), so a handler recovering from one of those
+  ``ux_tenants_virtual_host_name`` on ``virtual_host_name``), so a handler recovering from one of those
   constraints via ``resolve_or_write`` re-resolves to the winner through the same
   method its pre-check used. These take NO ``is_active`` filter: an inactive
   tenant still occupies its subdomain in the index, so filtering it out would
@@ -37,7 +37,7 @@ would make a second lookup unrepresentable.
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, func, or_, select
+from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import Tenant
@@ -130,22 +130,19 @@ class TenantLookupRepository:
 def _same_host(requested: str) -> ColumnElement[bool]:
     """Match the tenant whose host names the same NAME as *requested*, port aside.
 
-    A port is how a deployment is reached, not which seller it is: the same tenant answers
-    at ``host`` and at ``host:8443``, and which one a client sends depends on the port its
-    origin uses. ``@T-TENANTID-host-with-port``
+    A port says how a deployment is reached, not which seller it is: the same tenant answers
+    at ``host`` and at ``host:8443``, and which spelling a client sends depends on the port
+    its origin uses. ``@T-TENANTID-host-with-port``
     (``tests/bdd/features/local-tenant-identification-routes.feature``) pins that on every
     transport, and the mixed-case readers in
     ``tests/integration/test_virtual_host_integration.py`` pin it per reader.
 
-    THE AMBIGUITY THIS USED TO CARRY IS NOW IMPOSSIBLE, and that is why the comparison can
-    stay port-insensitive. A stored ``host`` and a stored ``host:8443`` were two rows BOTH
-    matching ``Host: host``, while the unique index covered the RAW column and could not
-    refuse the pair, so ``.first()`` chose between them with no ORDER BY. The fix belongs to
-    the key, not to the comparison: ``ux_tenants_virtual_host_name`` is UNIQUE on
-    ``lower(split_part(virtual_host, ':', 1))``, so at most one tenant can ever hold a given
-    name and this predicate can match at most one row. Making the comparison exact instead
-    would have removed the ambiguity by retiring the pinned behaviour.
+    At most one row can match, because ``ux_tenants_virtual_host_name`` is UNIQUE on
+    ``virtual_host_name`` -- so one name is held by one tenant and this predicate is
+    unambiguous.
 
-    Sargable against that functional index, which indexes this exact expression.
+    Both sides are stdlib: the stored side is written by ``Tenant._fold_virtual_host`` from
+    ``urlsplit().hostname``, and the requested side is the same function. A plain-column
+    equality, so it uses the index directly.
     """
-    return func.lower(func.split_part(Tenant.virtual_host, ":", 1)) == hostname_of(requested)
+    return Tenant.virtual_host_name == hostname_of(requested)

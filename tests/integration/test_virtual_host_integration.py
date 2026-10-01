@@ -18,6 +18,7 @@ from sqlalchemy import text
 from src.core.agent_identity import AGENT_ENDPOINT_PATHS
 from src.core.config_loader import get_tenant_by_virtual_host
 from src.core.domain_routing import route_landing_page
+from src.core.http_utils import hostname_of
 from src.core.resolved_identity import public_identity_for
 from src.services.seller_capabilities import describe_seller
 from tests.factories import TenantFactory
@@ -53,16 +54,27 @@ class _VhostEnv(IntegrationEnv):
 
         Written with a raw UPDATE on purpose, and that is the whole value of this fixture:
         ``Tenant.virtual_host``'s validator folds every assignment, so no production path
-        can produce such a row any more, and a factory call would silently seed a lowercase
-        one. Then the readers below would pass on the strength of the WRITE-side fold and
-        say nothing about the read side — a fixture that cannot express the defect cannot
+        can produce such a row, and a factory call would silently seed a lowercase one.
+        Then the readers below would pass on the strength of the WRITE-side fold and say
+        nothing about the read side — a fixture that cannot express the defect cannot
         falsify the fix.
+
+        ``virtual_host_name`` is written in the same statement, because that is the row the
+        migration produces: it derives the name with ``urlsplit().hostname``, which folds,
+        so a legacy row carries a mixed-case origin and a folded name. Writing only the
+        origin would seed a desynced pair instead, and nothing can produce one — every
+        production write of ``virtual_host`` is an ORM assignment, so the validator derives
+        the name with it.
         """
         tenant = TenantFactory(tenant_id="vh_case", virtual_host="placeholder.example.com", is_active=True)
         self._commit_factory_data()
         self._session.execute(
-            text("UPDATE tenants SET virtual_host = :host WHERE tenant_id = :tid"),
-            {"host": STORED_MIXED_CASE, "tid": tenant.tenant_id},
+            text("UPDATE tenants SET virtual_host = :host, virtual_host_name = :name WHERE tenant_id = :tid"),
+            {
+                "host": STORED_MIXED_CASE,
+                "name": hostname_of(STORED_MIXED_CASE),
+                "tid": tenant.tenant_id,
+            },
         )
         self._session.commit()
         return tenant.tenant_id

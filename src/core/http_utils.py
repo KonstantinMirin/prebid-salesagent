@@ -74,10 +74,9 @@ def requested_host(headers: HeaderSource) -> str | None:
 def validate_virtual_host(value: str | None) -> str:
     """The host a tenant is served at, folded to lowercase — or a ValueError saying why not.
 
-    ONE definition of the shape, so the ORM validator and the admin form cannot disagree
-    about it. The column previously accepted anything non-blank, which stored
-    ``https://evil.com`` and ``evil.com/path`` and then published
-    ``agent_url == "https://https://evil.com"`` on the card.
+    ONE definition of the shape, so the ORM validator, the admin form and the management
+    API cannot disagree about it. The card publishes this string verbatim, so a value that
+    is not a bare host is a value nothing can dial.
 
     The parsing is ``urlsplit``'s, never string surgery: it decides where a netloc ends,
     what a path is, where userinfo stops and whether a port is a number. The one rule

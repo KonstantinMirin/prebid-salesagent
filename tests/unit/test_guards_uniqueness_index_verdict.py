@@ -301,11 +301,6 @@ EXPECTED_FORM_COUNTS = {"unique-constraint": 13, "unique-index": 5, "column-uniq
 EXPECTED_UNUSABLE = {
     ("Account", "uq_accounts_natural_key"),
     ("MediaBuy", "idx_media_buys_idempotency_key"),
-    # UNIQUE on `lower(split_part(virtual_host, ':', 1))`, so no COLUMN subset it names is
-    # unique: `virtual_host` itself is not, deliberately — `host` and `host:8443` are one
-    # address and only one tenant may hold it. Recorded here rather than counted as a
-    # column key, which is what this set is for.
-    ("Tenant", "ux_tenants_virtual_host_name"),
 }
 
 #: Composite primary keys are unique indexes too, and for these models the ONLY one.
@@ -329,7 +324,7 @@ def test_unique_key_inventory_is_complete_and_untruncated():
     form_counts = {form: sum(1 for key in declared if key.kind == form) for form in EXPECTED_FORM_COUNTS}
     assert form_counts == EXPECTED_FORM_COUNTS, (
         "every declaration form is the ONLY form for at least one model — Tenant.subdomain and "
-        "Principal.token_hash are column-level only, and `idx_*` unique indexes are Index-only"
+        "Principal.token_hash are column-level only, ux_tenants_virtual_host_name is Index-only"
     )
 
     unusable = {(key.model, key.name) for key in keys if not key.usable}

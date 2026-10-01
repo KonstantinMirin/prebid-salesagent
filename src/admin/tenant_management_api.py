@@ -213,10 +213,9 @@ def create_tenant():
             # real query: a callable that unconditionally answered 409 would
             # answer 409 before ever writing.
             # The pre-check has to see every collision the INSERT can cause, which is this
-            # helper's stated corollary. `virtual_host` is UNIQUE and NOT NULL, so a
-            # duplicate host trips `ux_tenants_virtual_host_name` — a constraint the
-            # subdomain-only check could not see, which is how a taken host reached the
-            # `except` below and answered 500 for a value the caller chose.
+            # helper's stated corollary: a duplicate host trips
+            # `ux_tenants_virtual_host_name`, so a subdomain-only check would report a taken
+            # host as free and let it reach the `except` below as a 500.
             def host_or_subdomain_taken():
                 lookup = TenantLookupRepository(db_session)
                 if lookup.find_by_virtual_host(data["virtual_host"]):
