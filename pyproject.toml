@@ -141,6 +141,11 @@ dev = [
     # declared dependency -- it resolved only via `uvx`, i.e. from the network.
     # Floor is the pre-push stage requirement (docs/development/ci-pipeline.md).
     "pre-commit>=3.2.0",
+    # Transitive, via pre-commit, which sets no upper bound. PYSEC-2026-4011/4012/4013/4014
+    # name 21.7.11, 21.7.12 and 21.7.13 as fixes, so the floor is the highest of them.
+    # Dev-only: the hook runner builds environments, and nothing the application serves
+    # imports it, which is why this is a dev-group floor and not a project dependency.
+    "virtualenv>=21.7.13",
 ]
 
 [tool.ruff]
