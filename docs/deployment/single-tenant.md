@@ -238,4 +238,4 @@ docker compose exec -T postgres psql -U adcp_user adcp < backup.sql
 - Configure your ad server adapter in the Admin UI
 - Set up products that match your GAM line item templates
 - Add advertisers (principals) who will use the MCP API
-- See [walkthroughs](walkthroughs/) for cloud-specific deployment guides
+- See [walkthroughs](walkthroughs/) and the [AWS guide](aws.md) for cloud-specific deployment guides
