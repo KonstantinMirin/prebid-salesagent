@@ -87,6 +87,30 @@ fly ips list --app your-app-name
 - **Cloud Run**: Use Cloud Load Balancer with managed certificates
 - **Docker**: Use Caddy, nginx with certbot, or a reverse proxy with a wildcard certificate
 
+#### Caddy on-demand TLS (no wildcard certificate)
+
+Caddy can issue a certificate for each hostname the first time a client connects to it, which covers tenant subdomains and tenant custom domains without a DNS-01 wildcard. Caddy must first ask whether the hostname is yours, or anyone who points a domain at the server makes Caddy request certificates for it. The sales agent answers that question at `GET /tls/ask?domain=<host>`:
+
+- **200** for `SALES_AGENT_DOMAIN`, the admin domain (`ADMIN_DOMAIN`, or `admin.<SALES_AGENT_DOMAIN>`), `<subdomain>.<SALES_AGENT_DOMAIN>` of an active tenant, and an active tenant's custom domain.
+- **403** for anything else, including inactive tenants and names nested under a tenant (`x.acme.<SALES_AGENT_DOMAIN>`). If the database is unreachable, it answers 500, which Caddy also treats as a refusal.
+
+```caddyfile
+{
+    on_demand_tls {
+        ask http://sales-agent-backend:8000/tls/ask
+    }
+}
+
+https:// {
+    tls {
+        on_demand
+    }
+    reverse_proxy sales-agent-backend:8000
+}
+```
+
+Replace `sales-agent-backend:8000` with the address Caddy reaches the deployment at. The endpoint is unauthenticated: it reveals only whether a hostname is a tenant hostname, which that hostname's DNS already shows. It refuses a malformed hostname without querying the database and otherwise runs at most two single-row lookups on unique indexes. Keep it reachable only from Caddy where you can, because Caddy calls it on every handshake for a hostname that has no certificate yet.
+
 ## Step 4: Optional: custom domains with Approximated
 
 Approximated is a proxy service that lets tenants use their own custom domains (for example, `sales.publisher.com`) instead of subdomains.

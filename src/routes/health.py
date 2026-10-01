@@ -8,7 +8,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from sqlalchemy import select
 
 from src.core.config_loader import get_tenant_by_virtual_host, tenant_id_for
@@ -17,6 +17,7 @@ from src.core.database.models import Product as ModelProduct
 from src.core.database.models import Tenant
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.domain_config import extract_subdomain_from_host, is_sales_agent_domain
+from src.core.domain_routing import is_served_host
 from src.landing import generate_tenant_landing_page
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,17 @@ debug_router = APIRouter()
 async def health(request: Request):
     """Health check endpoint."""
     return JSONResponse({"status": "healthy", "service": "mcp"})
+
+
+@router.get("/tls/ask", include_in_schema=False)
+def tls_ask(domain: str = "") -> Response:
+    """Reverse-proxy on-demand TLS gate: 200 if this deployment serves ``domain``, else 403.
+
+    Caddy's ``on_demand_tls { ask ... }`` calls this before requesting a certificate and
+    issues only on a 2xx. A database failure raises, and the resulting 500 is a refusal too.
+    Sync, so FastAPI runs the blocking lookup in its thread pool.
+    """
+    return Response(status_code=200 if is_served_host(domain) else 403)
 
 
 @debug_router.post("/_internal/reset-db-pool")

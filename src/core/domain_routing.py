@@ -7,8 +7,11 @@ Centralizes the logic for determining how to route requests based on domain:
 - Unknown domains → fallback
 
 Used by MCP server, Admin UI, and A2A server to ensure consistent behavior.
+
+``is_served_host`` answers the reverse proxy's on-demand TLS question for the same mapping.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -17,11 +20,20 @@ from typing import Literal
 from src.core.config_loader import (
     get_tenant_by_subdomain,
     get_tenant_by_virtual_host,
+    tenant_id_for,
 )
 from src.core.domain_config import (
     extract_subdomain_from_host,
+    get_admin_domain,
+    get_sales_agent_domain,
     is_admin_domain,
     is_sales_agent_domain,
+)
+
+# A DNS hostname: 1-253 characters of dot-separated labels, each 1-63 of [a-z0-9-] with no
+# leading or trailing hyphen. No port, no wildcard, no path.
+_HOSTNAME = re.compile(
+    r"(?=.{1,253}\Z)[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*\Z"
 )
 
 
@@ -110,3 +122,40 @@ def route_landing_page(request_headers: dict) -> RoutingResult:
     subdomain = extract_subdomain_from_host(effective_host)
     tenant = get_tenant_by_subdomain(subdomain) if subdomain else None
     return RoutingResult("subdomain", tenant, effective_host)
+
+
+def normalize_hostname(host: str) -> str | None:
+    """``host`` lower-cased with any trailing dot dropped, or None when it is not a DNS hostname."""
+    normalized = host.strip().lower().removesuffix(".")
+    return normalized if _HOSTNAME.match(normalized) else None
+
+
+def label_under(host: str, apex: str) -> str | None:
+    """The single label in front of ``apex`` (``acme`` for ``acme.<apex>``), else None.
+
+    Stricter than ``extract_subdomain_from_host``, which matches ``.<apex>`` anywhere in the
+    host: ``x.acme.<apex>`` and ``acme.<apex>.evil.example`` are not ``acme``'s host.
+    """
+    label = host.removesuffix(f".{apex}")
+    return label if label != host and "." not in label else None
+
+
+def is_served_host(host: str) -> bool:
+    """Whether this deployment serves ``host``: the on-demand TLS gate's decision.
+
+    Served: ``SALES_AGENT_DOMAIN``, the admin domain, an active tenant's ``virtual_host``, or
+    ``<subdomain>.<SALES_AGENT_DOMAIN>`` of an active tenant. The endpoint asking this is
+    unauthenticated, so a malformed host is refused before any query, and the rest cost at
+    most two single-column lookups on unique indexes (``tenant_id_for``).
+    """
+    normalized = normalize_hostname(host)
+    if normalized is None:
+        return False
+    apex = (get_sales_agent_domain() or "").lower()
+    # ``normalized`` is never empty, so an unset domain matches nothing here.
+    if normalized in {apex, (get_admin_domain() or "").lower()}:
+        return True
+    if tenant_id_for(virtual_host=normalized):
+        return True
+    label = label_under(normalized, apex) if apex else None
+    return label is not None and tenant_id_for(subdomain=label) is not None
