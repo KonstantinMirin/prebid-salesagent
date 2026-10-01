@@ -251,8 +251,9 @@ def run_nginx():
     """Run nginx as reverse proxy."""
     print("Starting nginx reverse proxy on port 8000...")
 
-    # Create nginx directories if they don't exist (the pid file is in /tmp; see config/nginx/)
+    # Create nginx directories if they don't exist
     os.makedirs("/var/log/nginx", exist_ok=True)
+    os.makedirs("/var/run", exist_ok=True)
 
     # Select nginx config based on ADCP_MULTI_TENANT env var
     # Default: simple (single-tenant, path-based routing only)
