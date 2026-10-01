@@ -2716,6 +2716,36 @@ class BaseTestEnv:
             f"{type(self).__name__} does not implement get_rest_client(). REST dispatch requires IntegrationEnv."
         )
 
+    def fetch_agent_card(
+        self,
+        *,
+        path: str,
+        host: str | None = None,
+        tenant: str | None = None,
+        host_resolves_nothing: bool = False,
+    ) -> Any:
+        """GET the agent card at *path*, naming the seller by *host* or by *tenant*.
+
+        The card is not a registry tool, so it is not reachable through ``call_via``: it is a
+        root endpoint that answers before any AdCP exchange and carries no envelope. A
+        scenario still has to grade it on every transport, so the per-transport HOW lives
+        here, which is where the BDD rules put it.
+
+        In-process the card comes off the same ASGI app the REST dispatcher uses, so all
+        three in-process transports fetch one route; on e2e it is a real HTTP GET against the
+        live stack.
+
+        Returns the ``requests``/``httpx`` style response, so a step can read
+        ``status_code``, ``json()`` and ``text`` the same way on either side.
+        """
+        headers = credential_headers(host=host, tenant=tenant, host_resolves_nothing=host_resolves_nothing)
+        if self.is_e2e:
+            import httpx
+
+            assert self.e2e_config is not None, "fetch_agent_card()'s e2e branch needs env.e2e_config"
+            return httpx.get(f"{self.e2e_config.base_url}{path}", headers=headers, timeout=30)
+        return self.get_rest_client().get(path, headers=headers)
+
     def _commit_factory_data(self) -> None:
         """Flush pending session state before calling production code.
 

@@ -94,6 +94,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
+    "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -5964,6 +5965,23 @@ ENV_ROUTES: list[EnvRoute] = [
     # incidental: a tenant with its own virtual_host is exactly the state being
     # graded, and _seed_tenant_and_principal builds it through TenantFactory, which sets
     # one by default.
+    # ── @agentcard (local agent-card-discovery feature) ─────────────────────
+    # An UNSCOPED `when` row for the same reason as the rows around it: the scenarios
+    # carry T-AGENTCARD-* identity tags rather than a T-UC-<n>, so detect_uc returns None
+    # and no coarse bucket claims them.
+    #
+    # The capabilities env, for the one thing a card fetch needs from an env: the
+    # in-process ASGI client (`get_rest_client`), which `fetch_agent_card` uses on the
+    # three in-process transports. The card is NOT dispatched as a tool — it is a root
+    # endpoint carrying no envelope — so which tool this env would dispatch is irrelevant.
+    # The seed is the point: a tenant declaring its own virtual_host is the state being
+    # graded, and _seed_tenant_and_principal builds it through TenantFactory.
+    EnvRoute(
+        tag="agentcard",
+        when=lambda m: "agentcard" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,

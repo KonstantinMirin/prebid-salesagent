@@ -76,6 +76,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # x-adcp-tenant), graded through the public capabilities tool. Pinned in the
         # change that registered the route: before it, NO test set a virtual_host, so
         # the host branch had never executed anywhere.
+        # The agent card is a root endpoint, not a registry tool, so its scenarios reach it
+        # through `env.fetch_agent_card` rather than `call_via`.
+        "agentcard",
         "tenantid",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.

@@ -16,7 +16,11 @@ from __future__ import annotations
 
 
 def credential_headers(
-    *, token: str | None = None, tenant: str | None = None, host: str | None = None
+    *,
+    token: str | None = None,
+    tenant: str | None = None,
+    host: str | None = None,
+    host_resolves_nothing: bool = False,
 ) -> dict[str, str]:
     """THE producer: the headers a test presents to this seller, from plain values.
 
@@ -36,6 +40,15 @@ def credential_headers(
     Each header is OMITTED when its value is absent, never sent empty: ``token=None``
     dispatches unauthenticated, so the resolver returns the real AUTH_MISSING rejection
     instead of one for a malformed credential.
+
+    ``host_resolves_nothing=True`` is the ONE case that sends BOTH, and it says what it
+    requires: the ``Host`` names a seller this deployment serves for nobody, so the tenant
+    header is the only name that can resolve. That is what frees the Host to carry something
+    else, which is the only shape that tells a stored read from an echo of the request --
+    every other request sends the stored host AS the Host, so an echo and a read produce the
+    same string and both pass. Without the flag the Host wins alone, deliberately: a Host
+    that resolved nothing must not be silently rescued by a header the scenario did not mean
+    to lean on.
 
     ``tenant`` is the ``x-adcp-tenant`` value: the tenant_id on every leg, taken verbatim
     as the literal id by ``_detect_tenant`` (``src/core/resolved_identity.py``). No
@@ -61,6 +74,6 @@ def credential_headers(
         # a Host that resolved nothing, and the suite would go on believing it had graded
         # host resolution.
         headers["Host"] = host
-    elif tenant:
+    if tenant and (host_resolves_nothing or not host):
         headers["x-adcp-tenant"] = tenant
     return headers
