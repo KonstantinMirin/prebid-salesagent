@@ -129,26 +129,28 @@ class TestA2AEndpointsActual:
     @pytest.mark.integration
     def test_agent_json_endpoint_live(self, live_server):
         """Test /agent.json endpoint against live server."""
-        response = requests.get(f"{live_server['a2a']}/agent.json", timeout=2)
+        response = requests.get(f"{card_origin(live_server)}/agent.json", verify=e2e_ca_bundle(), timeout=5)
 
-        if response.status_code == 200:
-            assert response.headers["content-type"].startswith("application/json")
-            data = response.json()
-            assert data["name"] == "Prebid Sales Agent"
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for /agent.json: {response.text[:300]!r}"
+        )
+        assert response.headers["content-type"].startswith("application/json")
+        data = response.json()
+        assert data["name"] == "Prebid Sales Agent"
 
-            # Same URL validation as the well-known endpoint. a2a-sdk 1.0
-            # (protobuf) puts the endpoint in supportedInterfaces, NOT top-level:
-            # `data["url"]` here was a dormant 0.3-era read that never ran, because
-            # /agent.json 404'd and this whole block sits behind a 200 check. Routing
-            # the path woke it into a KeyError, which is what a vacuous assertion
-            # does the moment it stops being vacuous.
-            assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
-            interfaces = data["supportedInterfaces"]
-            assert len(interfaces) > 0
-            url = interfaces[0]["url"]
+        # Same URL validation as the well-known endpoint. a2a-sdk 1.0
+        # (protobuf) puts the endpoint in supportedInterfaces, NOT top-level:
+        # `data["url"]` here was a dormant 0.3-era read that never ran, because
+        # /agent.json 404'd and this whole block sits behind a 200 check. Routing
+        # the path woke it into a KeyError, which is what a vacuous assertion
+        # does the moment it stops being vacuous.
+        assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
+        interfaces = data["supportedInterfaces"]
+        assert len(interfaces) > 0
+        url = interfaces[0]["url"]
 
-            assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-            assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
+        assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
+        assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
     @pytest.mark.integration
     def test_a2a_endpoint_accessible(self, live_server):
@@ -169,14 +171,17 @@ class TestA2AEndpointsActual:
 
         # a2a-sdk 1.0 canonical path is /.well-known/agent-card.json
         response = requests.get(
-            f"{live_server['a2a']}/.well-known/agent-card.json",
+            f"{card_origin(live_server)}/.well-known/agent-card.json",
             headers={"Origin": allowed_origin},
-            timeout=2,
+            verify=e2e_ca_bundle(),
+            timeout=5,
         )
 
-        if response.status_code == 200:
-            # Should have CORS headers for an allowed origin
-            assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for the card: {response.text[:300]!r}"
+        )
+        # Should have CORS headers for an allowed origin
+        assert "Access-Control-Allow-Origin" in response.headers, "Missing CORS headers"
 
     @pytest.mark.integration
     def test_options_preflight_support(self, live_server):
@@ -378,6 +383,18 @@ class TestA2ARequestHandler:
 class TestA2AServerIntegration:
     """Integration tests for complete A2A server setup."""
 
+    @pytest.fixture(autouse=True)
+    def _front_declared(self, live_server):
+        """Declared for the card fetch in ``test_server_discovery_flow``.
+
+        Without it that test fetched a host no tenant declares, got the seller-side
+        refusal, and called ``pytest.skip("A2A server not responding")`` — on every run,
+        for the whole life of the test. The server was responding; the request named no
+        tenant.
+        """
+        with declare_tenant_front(live_server, card_origin(live_server)):
+            yield
+
     @pytest.mark.integration
     @pytest.mark.parametrize("method", ["GetTask", "CancelTask"])
     def test_unknown_task_id_returns_task_not_found_code_on_the_wire(self, method, live_server):
@@ -420,13 +437,22 @@ class TestA2AServerIntegration:
 
     @pytest.mark.integration
     def test_server_discovery_flow(self, live_server):
-        """Test complete A2A client discovery flow."""
+        """Test complete A2A client discovery flow.
+
+        The stack is guaranteed up by ``live_server``, so a non-200 here is a failure and
+        never a skip. It used to skip itself on every run: the fetch named a host no tenant
+        declared, so the refusal arrived and `pytest.skip("A2A server not responding")` ran
+        — describing a server that was in fact answering.
+        """
         # Step 1: Client discovers agent (a2a-sdk 1.0 canonical path)
-        response = requests.get(f"{live_server['a2a']}/.well-known/agent-card.json", timeout=2)
+        response = requests.get(
+            f"{card_origin(live_server)}/.well-known/agent-card.json", verify=e2e_ca_bundle(), timeout=5
+        )
 
-        if response.status_code != 200:
-            pytest.skip("A2A server not responding")
-
+        assert response.status_code == 200, (
+            f"the declared front returned {response.status_code} for the card a client discovers "
+            f"the agent with: {response.text[:300]!r}"
+        )
         agent_card = response.json()
 
         # Step 2: Validate agent card has what client needs
@@ -441,8 +467,9 @@ class TestA2AServerIntegration:
         # Step 4: Test that messaging endpoint exists
         messaging_url = url if url.endswith("/a2a") else f"{url}/a2a"
 
-        # Try to connect (will fail with auth error, but should not be 404)
-        response = requests.post(messaging_url, json={"test": "message"}, timeout=2)
+        # Try to connect (will fail with auth error, but should not be 404). The URL comes
+        # off the card, so it is the declared front's https origin and needs the test CA.
+        response = requests.post(messaging_url, json={"test": "message"}, verify=e2e_ca_bundle(), timeout=5)
         assert response.status_code != 404, "Messaging endpoint should exist"
 
     @pytest.mark.integration

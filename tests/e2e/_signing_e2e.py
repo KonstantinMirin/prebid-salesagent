@@ -34,6 +34,7 @@ import ssl
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin
 
 import httpx
 import pytest
@@ -41,7 +42,7 @@ from sqlalchemy import delete
 
 from tests.e2e.conftest import e2e_ca_bundle, e2e_tls_base_url
 from tests.e2e.utils import _LiveDBEnv, live_db_env, live_repo_session
-from tests.helpers.admin_session import authenticate_http_session
+from tests.helpers.admin_session import authenticate_http_session, drop_stated_session_cookie
 from tests.helpers.credentials import credential_headers
 from tests.helpers.signing import json_seeded_client_factory, wire_origin
 
@@ -739,9 +740,17 @@ def _admin_post_rendered_page(
         response = session.post(
             f"{base_url}{path}",
             data=data,
-            allow_redirects=True,
+            allow_redirects=False,
             timeout=30,
         )
+        if response.is_redirect:
+            # The redirect is followed by hand so the STATED cookie can be dropped first.
+            # It is domainless and therefore shadows the server's own session cookie, which
+            # is the only place the flash lives -- following the redirect with both in the
+            # jar renders the destination page with no message at all. See
+            # ``drop_stated_session_cookie``.
+            drop_stated_session_cookie(session)
+            response = session.get(urljoin(base_url, response.headers["Location"]), timeout=30)
         assert response.status_code == 200, (
             f"the admin route {path!r} must succeed; got HTTP {response.status_code} for tenant "
             f"{tenant_id!r}. Body: {response.text[:300]!r}"
