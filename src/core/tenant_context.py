@@ -90,20 +90,6 @@ class TenantContext(BaseModel):
 
         return canonical_agent_url(self)
 
-    @property
-    def host_name(self) -> str:
-        """The host this tenant's agent answers on, without the port: a HOSTNAME, never an origin.
-
-        The same accessor the ORM row carries, over the same derivation
-        (:func:`src.core.http_utils.hostname_of`). It is the SELLER's host and never a
-        publisher domain: those come from the tenant's authorized properties (#1845). A
-        reader holding the projection asks for the name here rather than stripping the port
-        itself.
-        """
-        from src.core.http_utils import hostname_of
-
-        return hostname_of(self.virtual_host)
-
     # --- Construction helpers ---
 
     @classmethod

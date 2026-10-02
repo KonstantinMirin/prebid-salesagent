@@ -97,15 +97,12 @@ class TenantConfigRepository:
         tenant.updated_at = datetime.now(UTC)
         return True
 
-    def list_publisher_partners(self) -> list[PublisherPartner]:
-        """Get all publisher partners for the tenant."""
+    def list_publisher_partners(self, *, verified: bool | None = None) -> list[PublisherPartner]:
+        """The tenant's publisher partners; with *verified*, only those whose adagents.json check did (or did not) succeed."""
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
+        if verified is not None:
+            stmt = stmt.filter_by(is_verified=verified)
         return list(self._session.scalars(stmt).all())
-
-    def list_publisher_domains(self) -> list[str]:
-        """Get sorted list of publisher domain strings for the tenant."""
-        partners = self.list_publisher_partners()
-        return sorted([p.publisher_domain for p in partners])
 
     # ------------------------------------------------------------------
     # Authorized-list mutation (atomic)

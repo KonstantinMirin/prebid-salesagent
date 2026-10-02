@@ -1,7 +1,7 @@
 """CapabilitiesEnv — integration test environment for _get_adcp_capabilities_impl.
 
 Patches: adapter CLASS resolver + audit logger ONLY.
-Real: CapabilitiesUoW (publisher partners AND signing-key backing, in one
+Real: TrustRootUoW (verified publishers AND signing-key backing, in one
 session), the full response builder (all hit real DB).
 
 Production reads adapter default_channels/get_targeting_capabilities off a
@@ -118,7 +118,7 @@ class CapabilitiesEnv(IntegrationEnv):
     """Integration test environment for get_adcp_capabilities.
 
     Only mocks the adapter factory and the audit logger. Everything else is
-    real: real DB, real CapabilitiesUoW (publisher partners and signing-key
+    real: real DB, real TrustRootUoW (verified publishers and signing-key
     backing), real transport dispatch. Capabilities is a pure read — no adapter
     I/O beyond attribute access on the mock.
 
@@ -552,11 +552,11 @@ class CapabilitiesEnv(IntegrationEnv):
         e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
     )
     def break_tenant_config_db(self) -> None:
-        """Make the capabilities DB reads fail — production degrades to placeholder.
+        """Make the capabilities DB reads fail — production omits portfolio.
 
-        Patches CapabilitiesUoW at the seller-capabilities service seam — the module
+        Patches TrustRootUoW at the seller-capabilities service seam — the module
         that assembles the response and therefore opens the session — so BOTH reads it
-        owns fail: the publisher partners (placeholder domain) and, since #1291 D1, the
+        owns fail: the verified publisher domains (portfolio omitted) and, since #1291 D1, the
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.
@@ -564,7 +564,7 @@ class CapabilitiesEnv(IntegrationEnv):
         declares E2EUnsupportedSetup).
         """
         patcher = patch(
-            "src.services.seller_capabilities.CapabilitiesUoW",
+            "src.services.seller_capabilities.TrustRootUoW",
             side_effect=Exception("tenant config DB failure (harness)"),
         )
         self.mock["tenant_config_uow"] = patcher.start()

@@ -52,8 +52,8 @@ STORYBOARD_SUBDOMAIN = "storyboard"
 #: THE ORIGIN, PORT INCLUDED. This is the string the agent card publishes, and an A2A
 #: client connects to what the card says: advertising ``https://storyboard.adcp.test/a2a``
 #: for an agent listening on 8443 points every client at a closed port, which took the A2A
-#: conformance axis from 27 passing checks to zero. The port comes off at the two reads
-#: that want a hostname -- the tenant lookup and ``Tenant.host_name``
+#: conformance axis from 27 passing checks to zero. The port comes off where a hostname is
+#: wanted: ``Tenant.virtual_host_name``, which the tenant lookup reads
 #: (``http_utils.hostname_of``).
 STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
 

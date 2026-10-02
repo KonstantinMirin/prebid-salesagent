@@ -321,26 +321,6 @@ class Tenant(Base, JSONValidatorMixin):
         return canonical_agent_url(self)
 
     @property
-    def host_name(self) -> str:
-        """The host this tenant's agent answers on, without the port -- a HOSTNAME, never an origin.
-
-        ``virtual_host`` stores the origin the tenant is served at, port included, because
-        the agent card publishes that string and a card naming the wrong port sends every
-        client to a closed one. A reader that wants the bare name asks for it here rather
-        than stripping the port itself.
-
-        It is the SELLER's host, never a publisher's. A tenant represents many publishers,
-        each of which authorizes this agent in its own ``/.well-known/adagents.json``; a
-        publisher domain comes from the tenant's authorized properties, and this name is not
-        one (#1845).
-
-        Always a string, because ``virtual_host`` is mandatory.
-        """
-        from src.core.http_utils import hostname_of
-
-        return hostname_of(self.virtual_host)
-
-    @property
     def is_gam_tenant(self) -> bool:
         """Check if this tenant is using Google Ad Manager adapter.
 

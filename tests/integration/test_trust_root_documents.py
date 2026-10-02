@@ -465,8 +465,8 @@ class TestRevocationGraceWindow:
             revoked = SigningKeyFactory(tenant=tenant, not_before=_NOW - timedelta(days=2), revoked_at=revoked_at)
             # An authorization record is a PRECONDITION for this test, not incidental setup:
             # every authorized_agents[*] variant requires its selector array (minItems: 1), so a
-            # tenant with no backing record correctly publishes authorized_agents == [] (asserted
-            # by test_adagents_claims_no_authorization_without_a_backing_record). Without a record
+            # tenant with no backing record publishes no adagents.json at all (graded by
+            # tests/bdd/features/local-trust-root-adagents.feature). Without a record
             # there is no pin to inspect, and the marker assertions below would pass VACUOUSLY —
             # `all(...)` over an empty list is true. Same shape as the two sibling tests.
             authorization = AuthorizedPropertyFactory(
@@ -514,7 +514,7 @@ class TestRevocationGraceWindow:
     def test_revoked_key_past_grace_disappears_from_both_documents(self, integration_db):
         """Once the cache TTL has elapsed across all verifiers the key is removed."""
         from src.core.signing.trust_root import build_adagents_json, build_jwks
-        from tests.factories import SigningKeyFactory
+        from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory
 
         with BareIntegrationEnv(tenant_id="trust_root_env_k") as env:
             env.setup_default_data()
@@ -524,16 +524,19 @@ class TestRevocationGraceWindow:
                 not_before=_NOW - timedelta(days=3),
                 revoked_at=_NOW - timedelta(seconds=_grace_seconds() * 2),
             )
+            # An authorization so the document carries a pin at all; without one the
+            # "gone from the pin" assertion below holds over an empty set.
+            authorization = AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host)
             env.get_session()
 
             keys = _publishable(env, tenant.tenant_id)
             jwks = build_jwks(keys)
-            adagents = build_adagents_json(tenant, keys, [])
+            adagents = build_adagents_json(tenant, keys, [authorization])
 
             assert _kids(jwks["keys"]) == {live.kid}, (
                 f"a key revoked beyond the grace window must be gone from the JWKS; got {sorted(_kids(jwks['keys']))}"
             )
-            assert expired.kid not in _pinned_kids(adagents), (
+            assert _pinned_kids(adagents) == {live.kid}, (
                 f"...and gone from the adagents pin too; got {sorted(_pinned_kids(adagents))}"
             )
 
@@ -550,10 +553,14 @@ class TestRevocationGraceWindow:
         # by design, so the dotted path is the only caller shape there is — and it is
         # the one src/core/config.py and src/routes/well_known.py use.
         from src.core.signing.algorithms import CACHE_MAX_AGE_SECONDS
+        from tests.factories import AuthorizedPropertyFactory
 
         with BareIntegrationEnv(tenant_id="trust_root_env_l") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "l")
+            # adagents.json exists only for a host that owns a property.
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host)
+            env.get_session()
             client = env.get_rest_client()
 
             assert _grace_seconds() == 2 * CACHE_MAX_AGE_SECONDS, (
@@ -577,9 +584,14 @@ class TestWellKnownEndpoints:
         """These documents bootstrap the trust chain: requiring the signature they
         exist to let a verifier check would deadlock every counterparty.
         """
+        from tests.factories import AuthorizedPropertyFactory
+
         with BareIntegrationEnv(tenant_id="trust_root_env_m") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "m")
+            # adagents.json exists only for a host that owns a property.
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host)
+            env.get_session()
             client = env.get_rest_client()
 
             for path in (_BRAND_PATH, _ADAGENTS_PATH, _JWKS_PATH):
@@ -682,24 +694,4 @@ class TestAdagentsDocument:
             assert _pinned_kids(adagents) == _kids(jwks["keys"]), (
                 "the adagents signing_keys[] pin and the JWKS must be the same key set; "
                 f"pin={sorted(_pinned_kids(adagents))} jwks={sorted(_kids(jwks['keys']))}"
-            )
-
-    def test_adagents_claims_no_authorization_without_a_backing_record(self, integration_db):
-        """R-M1: ``authorizations`` come from the existing authorized-properties
-        records and are NEVER fabricated — fabricating them means self-attesting an
-        authorization no publisher granted.
-        """
-        with BareIntegrationEnv(tenant_id="trust_root_env_q") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "q")
-            client = env.get_rest_client()
-
-            response = client.get(_ADAGENTS_PATH, headers={"Host": tenant.virtual_host})
-
-            assert response.status_code == 200, (
-                f"the endpoint answers for a tenant with no properties; got {response.status_code}"
-            )
-            assert response.json()["authorized_agents"] == [], (
-                "with no authorized-property record on file the document must claim NO authorization; "
-                f"got {response.json()['authorized_agents']}"
             )
