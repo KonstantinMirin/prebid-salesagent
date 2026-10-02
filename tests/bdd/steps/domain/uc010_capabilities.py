@@ -293,6 +293,30 @@ def given_publisher_partnerships(ctx: dict, domains: str) -> None:
         PublisherPartnerFactory(tenant=ctx["tenant"], publisher_domain=ctx["env"].publisher_address(domain))
 
 
+@given(parsers.re(r'the tenant has an? (?P<state>verified|unverified) publisher partner "(?P<domain>[^"]+)"'))
+def given_publisher_partner(ctx: dict, state: str, domain: str) -> None:
+    """One partner row, its verification stated: only a verified partner is a publisher
+    the seller may name in ``portfolio.publisher_domains``."""
+    from tests.factories.core import PublisherPartnerFactory
+
+    verified = state == "verified"
+    PublisherPartnerFactory(
+        tenant=ctx["tenant"],
+        publisher_domain=domain,
+        is_verified=verified,
+        sync_status="success" if verified else "pending",
+    )
+
+
+@given(parsers.parse('the tenant holds an authorized property on "{domain}" with verification status "{status}"'))
+def given_authorized_property(ctx: dict, domain: str, status: str) -> None:
+    """One property the seller sells for the publisher at *domain*, in one of the
+    ``ck_verification_status`` states (pending, verified, failed)."""
+    from tests.factories.core import AuthorizedPropertyFactory
+
+    AuthorizedPropertyFactory(tenant=ctx["tenant"], publisher_domain=domain, verification_status=status)
+
+
 @given("the adapter provides targeting capabilities including geo")
 def given_adapter_geo_targeting(ctx: dict) -> None:
     ctx["env"].set_targeting_capabilities(geo_countries=True, geo_regions=True, nielsen_dma=True)
@@ -398,7 +422,7 @@ def given_full_degradation_baseline(ctx: dict) -> None:
 
 @given("a tenant is resolvable but both adapter and DB fail")
 def given_tenant_adapter_and_db_fail(ctx: dict) -> None:
-    """adapter_and_db_fail row: both degrade — [display] channels + placeholder domain."""
+    """adapter_and_db_fail row: both degrade — [display] channels and no portfolio."""
     ctx["env"].make_adapter_unavailable()
     ctx["env"].break_tenant_config_db()
 
@@ -1581,14 +1605,19 @@ def _deg_display_default(ctx: dict) -> None:
 
 
 def _assert_portfolio_omitted_never_fabricated(ctx: dict) -> None:
-    """salesagent-piyo: portfolio.publisher_domains is REQUIRED+minItems:1 (pinned
-    v3.1.1 get-adcp-capabilities-response.json) whenever portfolio is present, and
-    media_buy has no required fields -- so a DB failure (no real publisher_domain
-    data read) has no spec-legal portfolio to emit. Production used to fabricate a
-    '<subdomain>.example.com' placeholder here; the honest, schema-legal response
-    omits media_buy.portfolio entirely instead.
+    """portfolio.publisher_domains is REQUIRED+minItems:1 (pinned v3.1.1
+    get-adcp-capabilities-response.json) whenever portfolio is present, and media_buy has
+    no required fields -- so a seller with no verified publisher, or one whose lookup
+    failed, has no spec-legal portfolio to emit. Production used to fill the gap with a
+    fabricated '<subdomain>.example.com' (salesagent-piyo) and later with the seller's own
+    host; neither is a publisher, so the response omits media_buy.portfolio instead.
     """
     wire_absent(ctx, "media_buy.portfolio")
+
+
+@then("media_buy.portfolio should be omitted")
+def then_portfolio_omitted(ctx: dict) -> None:
+    _assert_portfolio_omitted_never_fabricated(ctx)
 
 
 def _deg_db_fail(ctx: dict) -> None:

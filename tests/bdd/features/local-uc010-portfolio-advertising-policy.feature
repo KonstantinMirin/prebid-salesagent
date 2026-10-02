@@ -15,6 +15,11 @@
 # publisher_domains, so a seller that declares no policy OMITS the member rather than
 # sending null — the omit-don't-null contract this repo grades everywhere else.
 #
+# Every scenario seeds a verified publisher partner. Without one the seller represents no
+# verified publisher, so portfolio itself is omitted, and an "advertising_policies is
+# omitted" assertion would pass because its parent is missing rather than because the
+# policy is absent.
+#
 # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/advertising_policies
 # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/required
 Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising policy (local)
@@ -22,6 +27,7 @@ Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising p
   @T-UC-010-local-advertising-policy-declared @main-flow @partition @boundary
   Scenario: a declared advertising policy reaches the buyer verbatim
     Given a tenant is resolvable from the request context
+    And the tenant has a verified publisher partner "news.example"
     And the tenant declares an advertising policy described as "No adult content allowed"
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
@@ -30,6 +36,7 @@ Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising p
   @T-UC-010-local-advertising-policy-absent @main-flow @partition @boundary @invariant
   Scenario: a seller declaring no advertising policy omits the member
     Given a tenant is resolvable from the request context
+    And the tenant has a verified publisher partner "news.example"
     And the tenant declares no advertising policy
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
@@ -38,6 +45,7 @@ Feature: UC-010 get_adcp_capabilities — the seller publishes its advertising p
   @T-UC-010-local-advertising-policy-empty-description @main-flow @partition @boundary
   Scenario: a policy carrying no description omits the member rather than sending an empty string
     Given a tenant is resolvable from the request context
+    And the tenant has a verified publisher partner "news.example"
     And the tenant declares an advertising policy with no description
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec

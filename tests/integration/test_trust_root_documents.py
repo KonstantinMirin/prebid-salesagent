@@ -106,7 +106,7 @@ _BRAND_AGENT_KEYS = {
 }
 
 
-def _seed(env, slug: str, **key_kwargs):
+def _seed(env, slug: str, *, virtual_host: str | None = None, **key_kwargs):
     """Seed one tenant reachable at its own virtual host, plus one signing key.
 
     Every test gets its OWN slug: the integration database is not rolled back
@@ -121,7 +121,7 @@ def _seed(env, slug: str, **key_kwargs):
     tenant = TenantFactory(
         tenant_id=f"tr_{slug}",
         subdomain=f"seller-{slug}",
-        virtual_host=f"seller-{slug}.example.com",
+        virtual_host=virtual_host or f"seller-{slug}.example.com",
     )
     key_kwargs.setdefault("not_before", _NOW - timedelta(days=1))
     key = SigningKeyFactory(tenant=tenant, **key_kwargs)
@@ -465,8 +465,8 @@ class TestRevocationGraceWindow:
             revoked = SigningKeyFactory(tenant=tenant, not_before=_NOW - timedelta(days=2), revoked_at=revoked_at)
             # An authorization record is a PRECONDITION for this test, not incidental setup:
             # every authorized_agents[*] variant requires its selector array (minItems: 1), so a
-            # tenant with no backing record correctly publishes authorized_agents == [] (asserted
-            # by test_adagents_claims_no_authorization_without_a_backing_record). Without a record
+            # tenant with no backing record publishes no adagents.json at all (asserted by
+            # test_adagents_is_not_served_by_a_host_that_owns_no_property). Without a record
             # there is no pin to inspect, and the marker assertions below would pass VACUOUSLY —
             # `all(...)` over an empty list is true. Same shape as the two sibling tests.
             authorization = AuthorizedPropertyFactory(
@@ -514,7 +514,7 @@ class TestRevocationGraceWindow:
     def test_revoked_key_past_grace_disappears_from_both_documents(self, integration_db):
         """Once the cache TTL has elapsed across all verifiers the key is removed."""
         from src.core.signing.trust_root import build_adagents_json, build_jwks
-        from tests.factories import SigningKeyFactory
+        from tests.factories import AuthorizedPropertyFactory, SigningKeyFactory
 
         with BareIntegrationEnv(tenant_id="trust_root_env_k") as env:
             env.setup_default_data()
@@ -524,16 +524,19 @@ class TestRevocationGraceWindow:
                 not_before=_NOW - timedelta(days=3),
                 revoked_at=_NOW - timedelta(seconds=_grace_seconds() * 2),
             )
+            # An authorization so the document carries a pin at all; without one the
+            # "gone from the pin" assertion below holds over an empty set.
+            authorization = AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host)
             env.get_session()
 
             keys = _publishable(env, tenant.tenant_id)
             jwks = build_jwks(keys)
-            adagents = build_adagents_json(tenant, keys, [])
+            adagents = build_adagents_json(tenant, keys, [authorization])
 
             assert _kids(jwks["keys"]) == {live.kid}, (
                 f"a key revoked beyond the grace window must be gone from the JWKS; got {sorted(_kids(jwks['keys']))}"
             )
-            assert expired.kid not in _pinned_kids(adagents), (
+            assert _pinned_kids(adagents) == {live.kid}, (
                 f"...and gone from the adagents pin too; got {sorted(_pinned_kids(adagents))}"
             )
 
@@ -550,10 +553,14 @@ class TestRevocationGraceWindow:
         # by design, so the dotted path is the only caller shape there is — and it is
         # the one src/core/config.py and src/routes/well_known.py use.
         from src.core.signing.algorithms import CACHE_MAX_AGE_SECONDS
+        from tests.factories import AuthorizedPropertyFactory
 
         with BareIntegrationEnv(tenant_id="trust_root_env_l") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "l")
+            # adagents.json exists only for a host that owns a property.
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host)
+            env.get_session()
             client = env.get_rest_client()
 
             assert _grace_seconds() == 2 * CACHE_MAX_AGE_SECONDS, (
@@ -577,9 +584,14 @@ class TestWellKnownEndpoints:
         """These documents bootstrap the trust chain: requiring the signature they
         exist to let a verifier check would deadlock every counterparty.
         """
+        from tests.factories import AuthorizedPropertyFactory
+
         with BareIntegrationEnv(tenant_id="trust_root_env_m") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "m")
+            # adagents.json exists only for a host that owns a property.
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain=tenant.virtual_host)
+            env.get_session()
             client = env.get_rest_client()
 
             for path in (_BRAND_PATH, _ADAGENTS_PATH, _JWKS_PATH):
@@ -684,22 +696,52 @@ class TestAdagentsDocument:
                 f"pin={sorted(_pinned_kids(adagents))} jwks={sorted(_kids(jwks['keys']))}"
             )
 
-    def test_adagents_claims_no_authorization_without_a_backing_record(self, integration_db):
+    def test_adagents_is_not_served_by_a_host_that_owns_no_property(self, integration_db):
         """R-M1: ``authorizations`` come from the existing authorized-properties
         records and are NEVER fabricated — fabricating them means self-attesting an
         authorization no publisher granted.
+
+        With no record there is no document to serve. A file with an empty
+        ``authorized_agents`` and no catalog content is one the pinned schema rejects
+        (``adagents.json`` ``oneOf[1].allOf[0]``: "a file with neither sales authorization
+        nor non-empty catalog content is rejected"), and a sales agent that owns no
+        property does not publish adagents.json at all (seller-setup.mdx "Who publishes
+        what"). So the host answers 404, which a buyer reads as "no authorization here".
         """
+        from tests.factories import AuthorizedPropertyFactory
+
         with BareIntegrationEnv(tenant_id="trust_root_env_q") as env:
             env.setup_default_data()
             tenant, _ = _seed(env, "q")
+            # A property this tenant sells on ANOTHER publisher's domain: it backs that
+            # publisher's own adagents.json, never a claim served at the tenant's host.
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain="some-publisher.example")
+            env.get_session()
             client = env.get_rest_client()
 
-            response = client.get(_ADAGENTS_PATH, headers={"Host": tenant.virtual_host})
+            _get_document(client, _ADAGENTS_PATH, tenant, expect_status=404)
 
-            assert response.status_code == 200, (
-                f"the endpoint answers for a tenant with no properties; got {response.status_code}"
-            )
-            assert response.json()["authorized_agents"] == [], (
-                "with no authorized-property record on file the document must claim NO authorization; "
-                f"got {response.json()['authorized_agents']}"
+    def test_adagents_finds_the_properties_of_a_host_served_on_a_port(self, integration_db):
+        """``virtual_host`` keeps the port the agent is served on, and
+        ``publisher_domain`` never carries one (its pattern admits no colon). The lookup
+        drops the port, or a tenant on a non-default port could never claim a property on
+        its own host.
+        """
+        from tests.factories import AuthorizedPropertyFactory
+
+        with BareIntegrationEnv(tenant_id="trust_root_env_s") as env:
+            env.setup_default_data()
+            tenant, _ = _seed(env, "s", virtual_host="seller-s.example.com:8443")
+            AuthorizedPropertyFactory(tenant=tenant, publisher_domain="seller-s.example.com", tags=["premium_news"])
+            env.get_session()
+            client = env.get_rest_client()
+
+            document = _get_document(client, _ADAGENTS_PATH, tenant)
+
+            validate_against_pinned_schema(_ADAGENTS_SCHEMA, document)
+            claimed = {
+                prop["publisher_domain"] for entry in document["authorized_agents"] for prop in entry["properties"]
+            }
+            assert claimed == {"seller-s.example.com"}, (
+                f"the property on the host itself must be claimed; got {sorted(claimed)}"
             )
