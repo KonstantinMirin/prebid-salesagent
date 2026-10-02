@@ -55,7 +55,7 @@ class PublicIdentity(BaseModel):
 
     Only the CALLER can be absent. ``tenant`` is required on this type, so no application
     path holds an undefined tenant: a request naming no seller this deployment serves is
-    refused REFERENCE_NOT_FOUND before any identity is built (``_addressed_tenant``), and
+    refused CONFIGURATION_ERROR before any identity is built (``_addressed_tenant``), and
     ``identity_of`` refuses a stored id whose tenant does not load. That asymmetry is the
     design: an anonymous buyer is a real caller of a public tool, a sellerless request is
     not a request.
@@ -78,8 +78,8 @@ class PublicIdentity(BaseModel):
     # The tenant the request names, its row loaded by the resolver. ONE type, never a dict.
     #
     # REQUIRED. There is no path in the application with an undefined tenant: each of the
-    # three construction sites resolves one or raises first (REFERENCE_NOT_FOUND from
-    # ``_addressed_tenant`` for a request, the explicit refusal in ``identity_of`` for
+    # three construction sites resolves one or raises CONFIGURATION_ERROR first
+    # (``_addressed_tenant`` for a request, the explicit refusal in ``identity_of`` for
     # stored-id work). An optional here would make every reader check for a ``None`` that
     # cannot arrive; mypy refuses the construction instead.
     tenant: InstanceOf[TenantContext]
@@ -255,8 +255,8 @@ def _detect_tenant(headers: Mapping[str, str]) -> str | None:
     arrives here is the ``Host``.
 
     ``None`` means the request names no seller, and nothing downstream carries that state:
-    the sole caller, ``_addressed_tenant``, turns it into REFERENCE_NOT_FOUND, which the
-    pinned enum classifies ``correctable`` (BR-UC-010 T-UC-010-ext-a grades it). A protected
+    the sole caller, ``_addressed_tenant``, turns it into CONFIGURATION_ERROR, which the
+    pinned enum classifies ``terminal`` (BR-UC-010 T-UC-010-ext-a grades it). A protected
     tool presenting no credential is refused AUTH_MISSING one step earlier, before detection
     runs at all. Identification is the whole job here; answering with a tenant the request
     never named would be worse than refusing.
@@ -444,7 +444,7 @@ def _resolve_identity(
     # refusal precedes the lookup.
     #
     # It RAISES rather than returning None -- a request naming no seller this deployment
-    # serves gets REFERENCE_NOT_FOUND -- so every step below has a tenant, and none of them
+    # serves gets CONFIGURATION_ERROR -- so every step below has a tenant, and none of them
     # checks for one. That refusal is the same whether or not the request carried a bearer or
     # a signature: a deployment that cannot tell which seller a request is for has nothing to
     # verify a credential against.
@@ -601,28 +601,32 @@ def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
 
     There are two ways to say which seller a request is for -- the ``Host`` the seller
     declares it is served at, and an explicit ``x-adcp-tenant``. A request that does
-    neither, or that names something this deployment does not serve, has addressed a seller
-    that does not exist here: there is no seller to apply any rule of, including the rule
-    that would reject it. So it is refused here, at the point the question is asked, for
-    every path that asks -- a tool request and the agent card alike -- with
-    ``REFERENCE_NOT_FOUND`` (:class:`AdCPTenantNotFoundError`, 404, correctable). With
-    wildcard DNS any name under the apex reaches this, so it is the caller's miss, not the
-    seller-side deployment fault ``CONFIGURATION_ERROR`` describes.
+    neither, or that names something this deployment does not serve, is not a request with
+    a missing field: there is no seller to apply any rule of, including the rule that would
+    reject it. So it is refused here, at the point the question is asked, with the code the
+    pinned enum gives a seller-side deployment fault -- ``CONFIGURATION_ERROR``, which that
+    enum classifies ``terminal``: the buyer has no lever, and MUST NOT auto-retry.
 
     What the request named travels in ``internal_detail`` -- the server's record -- and not
-    in the wire envelope, so the refusal reads the same whatever was named. The operator
-    still gets the host or tenant that reached a deployment serving neither.
+    in the wire envelope. ``details.rejected_value`` is defined by ``core/error.json`` as
+    "the offending value the buyer supplied", and putting a buyer-supplied value inside an
+    envelope whose recovery says the buyer has no lever makes the envelope argue with
+    itself; the pinned error-handling text additionally gives this code no ``details``
+    shape. The operator still gets the host or tenant that reached a deployment serving
+    neither, which is who the value was ever for.
     """
-    from src.core.errors.details import EntityRefDetails
-    from src.core.exceptions import AdCPTenantNotFoundError
+    from src.core.exceptions import AdCPTenantUndefinedError
 
     tenant_id = _detect_tenant(headers)
     tenant = TenantContext.load(tenant_id) if tenant_id else None
     if tenant is None:
         named = _get_header_case_insensitive(headers, "x-adcp-tenant") or _get_header_case_insensitive(headers, "host")
-        raise AdCPTenantNotFoundError(
-            details=EntityRefDetails(),
-            internal_detail=LookupError(f"request named {named!r}; this deployment serves no tenant at it"),
+        # Raised FROM the LookupError, not handed to ``internal_detail``: the boundary logs
+        # ``exc_info=error``, which formats the error's ``__cause__`` chain, and an attribute
+        # is not in that chain -- so the attribute form writes the host nowhere at all. The
+        # operator needs the address that was dialled; the buyer must not be told it back.
+        raise AdCPTenantUndefinedError() from LookupError(
+            f"request named {named!r}; this deployment serves no tenant at it"
         )
     return tenant
 
@@ -632,12 +636,9 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
 
     The third sanctioned entry into this module's one resolution, after
     ``_resolve_identity`` (a tool request) and ``identity_of`` (server-initiated work).
-    It exists for the A2A agent card, which is reachable at the three ROOT paths
-    ``_AGENT_CARD_PATHS`` declares -- A2A fixes one of them
-    (``/.well-known/agent-card.json``, A2A §8.2 and §14.3), AdCP's own guide names
-    ``/.well-known/agent.json`` (``a2a-guide.mdx:782``), and ``/agent.json`` is the legacy
-    spelling neither specification fixes. The card answers before any AdCP exchange, and
-    therefore cannot be a
+    It exists for the A2A agent card, served at the one ROOT path ``AGENT_CARD_PATH``
+    declares -- ``/.well-known/agent-card.json``, which A2A fixes (§8.2, §14.3). The card
+    answers before any AdCP exchange, and therefore cannot be a
     registry row: it carries no AdCP envelope, and a row for it would advertise itself as
     a skill on the card it serves. What it does need is the same answer to "which tenant
     is this request for" that every tool gets -- so it asks here rather than deriving one
@@ -660,7 +661,7 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
     ``serve``.
 
     A request naming no tenant this deployment serves is REFUSED, by the same
-    ``_addressed_tenant`` every tool goes through: the caller gets REFERENCE_NOT_FOUND
-    (404) rather than a card describing nobody.
+    ``_addressed_tenant`` every tool goes through: the caller gets CONFIGURATION_ERROR
+    rather than a card describing nobody.
     """
     return PublicIdentity(principal=None, tenant=_addressed_tenant(headers))

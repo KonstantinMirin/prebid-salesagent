@@ -44,6 +44,14 @@ from src.core.domain_config import _get_protocol_for_domain
 # the URL we publish drifting from the mount the app actually serves.
 AGENT_ENDPOINT_PATHS: dict[str, str] = {"mcp": "/mcp/", "a2a": "/a2a"}
 
+#: Where the A2A agent card is served. A2A FIXES this path (§8.2, §14.3) and the a2a-sdk
+#: factory mounts it. ONE path: ``src/app.py`` routes it, the tenant landing page links it
+#: and the e2e suite reads it, all from here, so no second spelling can diverge. The
+#: non-canonical ``/.well-known/agent.json`` that AdCP's guide names was served too and is
+#: not — a client that follows the guide reaches the card through its own fallback
+#: (``@adcp/sdk``'s ``buildCardUrls`` tries both and breaks on the first success).
+AGENT_CARD_PATH = "/.well-known/agent-card.json"
+
 BRAND_JSON_PATH = "/.well-known/brand.json"
 ADAGENTS_JSON_PATH = "/.well-known/adagents.json"
 JWKS_PATH = "/.well-known/jwks.json"

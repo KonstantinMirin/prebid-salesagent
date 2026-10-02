@@ -60,7 +60,7 @@ def test_the_page_and_the_card_publish_the_stored_origin(integration_db):
 
         client = TestClient(app)
 
-        card = client.get("/.well-known/agent.json", headers={"Host": REQUEST_HOST})
+        card = client.get("/.well-known/agent-card.json", headers={"Host": REQUEST_HOST})
         assert card.status_code == 200, card.text
         card_urls = [interface["url"] for interface in card.json()["supportedInterfaces"]]
         assert card_urls == [f"https://{ORIGIN}/a2a"], f"the card published {card_urls}, not the stored origin"
@@ -73,7 +73,7 @@ def test_the_page_and_the_card_publish_the_stored_origin(integration_db):
             f"the page published {sorted(set(_TENANT_ORIGINS.findall(html)))} for a tenant stored at "
             f"{ORIGIN!r}, so it and the card do not name the same agent"
         )
-        assert f"https://{ORIGIN}/.well-known/agent.json" in html, "the page linked no card at the stored origin"
+        assert f"https://{ORIGIN}/.well-known/agent-card.json" in html, "the page linked no card at the stored origin"
 
         # The PATHS have to agree too, not only the origin. The page and the card are two
         # publishers of one fact, and AGENT_ENDPOINT_PATHS is the fact -- it is also what
