@@ -548,9 +548,37 @@ class CapabilitiesEnv(IntegrationEnv):
         self.mock["idempotency_posture"] = patcher.start()
         self._guard("patch:idempotency_posture", patcher.stop)
 
-    @realize_e2e(
-        e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
-    )
+    def _realize_tenant_config_db_failure(self) -> None:
+        """E2E realization: the live server's capabilities read meets a database that fails it.
+
+        A real fault in the real database, not a production hook: the publisher-partner
+        table is renamed for the scenario, so the live server's first read in the
+        capabilities session raises ``UndefinedTable``, the transaction is aborted, and
+        the reads after it in the same session fail too. That is the state the in-process
+        patch describes (every read of the capabilities session fails), reached the way a
+        deployment reaches it. The table is renamed back on env teardown (``_guard``), so
+        the fault cannot outlive the scenario. ``lock_timeout`` makes a rename that would
+        wait on another backend fail loudly instead of hanging; it takes one lock on one
+        table, so it cannot join a lock cycle.
+        """
+        from sqlalchemy import text
+
+        from src.core.database.models import PublisherPartner
+
+        table = PublisherPartner.__tablename__
+        renamed = f"{table}__harness_fault"
+        session = self.get_session()
+
+        def _rename(source: str, target: str) -> None:
+            session.rollback()
+            session.execute(text("SET LOCAL lock_timeout = '10s'"))
+            session.execute(text(f"ALTER TABLE {source} RENAME TO {target}"))
+            session.commit()
+
+        _rename(table, renamed)
+        self._guard(f"db:{table} renamed", lambda: _rename(renamed, table))
+
+    @realize_e2e(_realize_tenant_config_db_failure)
     def break_tenant_config_db(self) -> None:
         """Make the capabilities DB reads fail — production omits portfolio.
 
@@ -560,8 +588,8 @@ class CapabilitiesEnv(IntegrationEnv):
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.
-        In-process only — no server-side DB-fault-injection surface exists (e2e branch
-        declares E2EUnsupportedSetup).
+        E2E: :meth:`_realize_tenant_config_db_failure` fails the live server's read in
+        its database instead.
         """
         patcher = patch(
             "src.services.seller_capabilities.TrustRootUoW",

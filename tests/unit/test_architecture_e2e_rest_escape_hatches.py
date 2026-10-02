@@ -719,11 +719,8 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "live stack always serves the agent catalog; an empty catalog cannot be realized over e2e",
         ),
         ("tests/harness/creative_formats.py", "_validate_registry_formats", "<dynamic>"),
-        (
-            "tests/harness/capabilities.py",
-            "break_tenant_config_db",
-            "no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP",
-        ),
+        # break_tenant_config_db removed — its e2e realization renames the table the live
+        # server's capabilities read hits, a real database fault with no production hook.
         (
             "tests/harness/capabilities.py",
             "set_supported_versions",
