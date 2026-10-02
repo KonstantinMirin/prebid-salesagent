@@ -18,11 +18,11 @@ from src.core.database.models import (
     CurrencyLimit,
     GAMInventory,
     Product,
-    PublisherPartner,
     Tenant,
-    TenantAuthConfig,
 )
 from src.core.database.repositories.signing_key import SigningKeyRepository
+from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
 
 logger = logging.getLogger(__name__)
@@ -46,6 +46,12 @@ def _mock_adapter_config_state() -> tuple[bool, str]:
     if get_settings().mock_adapter_counts_as_configured:
         return True, "Mock adapter configured (test mode)"
     return False, "Mock adapter - Configure a real ad server for production"
+
+
+def _verified_publisher_count(session, tenant_id: str) -> int:
+    """How many of the tenant's publisher partners have verified it, through the one
+    repository read of "verified partners" that ``get_adcp_capabilities`` also uses."""
+    return len(TenantConfigRepository(session, tenant_id).list_publisher_partners(verified=True))
 
 
 def _is_multi_tenant_mode() -> bool:
@@ -171,9 +177,7 @@ class SetupChecklistService:
         now_utc = datetime.now(UTC)
 
         with get_db_session() as session:
-            # Bulk fetch all uncached tenants
-            stmt = select(Tenant).where(Tenant.tenant_id.in_(uncached_ids))
-            tenants = {t.tenant_id: t for t in session.scalars(stmt).all()}
+            tenant_lookup = TenantLookupRepository(session)
 
             # Bulk count queries for all metrics (only for uncached tenants)
             # Currency limits per tenant
@@ -232,20 +236,12 @@ class SetupChecklistService:
 
             principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
 
-            # Verified publisher partners per tenant
-            verified_publisher_stmt = (
-                select(PublisherPartner.tenant_id, func.count())
-                .where(PublisherPartner.tenant_id.in_(uncached_ids))
-                .where(PublisherPartner.is_verified == True)  # noqa: E712
-                .group_by(PublisherPartner.tenant_id)
-            )
-            verified_publisher_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(verified_publisher_stmt).all()
-            }
-
             # Build status for each uncached tenant using pre-fetched data
             for tenant_id in uncached_ids:
-                tenant = tenants.get(tenant_id)
+                # The tenant row and its verified partners come through the repositories, one
+                # tenant at a time, like the signing-key read below: a primary-key get and one
+                # tenant-scoped select each, which a dashboard of tenants affords.
+                tenant = tenant_lookup.find_by_id(tenant_id)
                 if not tenant:
                     continue
 
@@ -256,7 +252,7 @@ class SetupChecklistService:
                     currency_count=currency_counts.get(tenant_id, 0),
                     budget_limit_count=budget_limit_counts.get(tenant_id, 0),
                     property_count=property_counts.get(tenant_id, 0),
-                    verified_publisher_count=verified_publisher_counts.get(tenant_id, 0),
+                    verified_publisher_count=_verified_publisher_count(session, tenant_id),
                     gam_inventory_count=gam_inventory_counts.get(tenant_id, 0),
                     product_count=product_counts.get(tenant_id, 0),
                     principal_count=principal_counts.get(tenant_id, 0),
@@ -432,8 +428,7 @@ class SetupChecklistService:
         # 2. SSO Configuration - Critical for single-tenant deployments, optional for multi-tenant
         # In multi-tenant mode, the platform manages authentication centrally
         if not _is_multi_tenant_mode():
-            auth_config_stmt = select(TenantAuthConfig).filter_by(tenant_id=self.tenant_id)
-            auth_config = session.scalars(auth_config_stmt).first()
+            auth_config = tenant.auth_config
             sso_enabled = bool(auth_config and auth_config.oidc_enabled)
             setup_mode_disabled = bool(not tenant.auth_setup_mode) if hasattr(tenant, "auth_setup_mode") else False
 
@@ -481,12 +476,7 @@ class SetupChecklistService:
         property_count = session.scalar(stmt) or 0
 
         # Also check verified publisher count for better messaging
-        stmt_publishers = (
-            select(func.count())
-            .select_from(PublisherPartner)
-            .where(PublisherPartner.tenant_id == self.tenant_id, PublisherPartner.is_verified == True)  # noqa: E712
-        )
-        verified_publisher_count = session.scalar(stmt_publishers) or 0
+        verified_publisher_count = _verified_publisher_count(session, self.tenant_id)
 
         is_complete = property_count > 0
         details = (
@@ -727,8 +717,7 @@ class SetupChecklistService:
         # SSO Configuration - Optional in multi-tenant mode (platform manages auth centrally)
         # In single-tenant mode, SSO is critical and shown there instead
         if _is_multi_tenant_mode():
-            auth_config_stmt = select(TenantAuthConfig).filter_by(tenant_id=self.tenant_id)
-            auth_config = session.scalars(auth_config_stmt).first()
+            auth_config = tenant.auth_config
             sso_enabled = bool(auth_config and auth_config.oidc_enabled)
             setup_mode_disabled = bool(not tenant.auth_setup_mode) if hasattr(tenant, "auth_setup_mode") else False
 
