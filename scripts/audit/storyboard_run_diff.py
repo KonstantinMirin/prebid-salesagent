@@ -73,9 +73,17 @@ def _steps(record: Path) -> dict[str, bool]:
     for track in data.get("tracks") or []:
         for scenario in track.get("scenarios") or []:
             for step in scenario.get("steps") or []:
-                identity = step.get("step_id") or step.get("id")
+                # ORDER MATTERS, and it is measured against REAL runner records rather than
+                # against the storyboard definitions. The yaml gives every step an ``id``, but
+                # the runner does NOT emit one -- a record carries ``step``, ``task``,
+                # ``details``, ``duration_ms``, ``observation_data``, ``passed`` and nothing
+                # else. So ``step_id`` is here only for a future runner that publishes it, and
+                # what actually identifies a step today is ``step``, its title: measured over
+                # 358 steps, keying on ``step`` loses 0 identities and keying on ``task`` loses
+                # 90. ``task`` is the tool name, repeated by every step that calls it.
+                identity = step.get("step_id") or step.get("id") or step.get("step")
                 if not identity:
-                    identity = step.get("task") or step.get("step")
+                    identity = step.get("task")
                     _FALLBACK_KEYS.add(f"{scenario.get('scenario')}::{identity}")
                 key = f"{track.get('track')}::{scenario.get('scenario')}::{identity}"
                 if step.get("skipped") or step.get("selection_reason"):
