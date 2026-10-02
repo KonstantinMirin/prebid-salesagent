@@ -42,6 +42,7 @@ def test_hostname_is_normalized(raw, expected):
         "under_score.example",
         "a" * 64 + ".example",
         ("a" * 60 + ".") * 5 + "example",  # 312 characters, over the 253 limit
+        "Kelvin.example",  # KELVIN SIGN: str.lower() folds it to "k"
     ],
 )
 def test_malformed_hostname_is_rejected(raw):
