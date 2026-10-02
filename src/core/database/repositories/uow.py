@@ -441,27 +441,29 @@ class CapabilitiesUoW(BaseUoW):
     """Unit of Work for one ``get_adcp_capabilities`` request (#1291 D1).
 
     ONE session for everything the capabilities response reads from the database: the
-    tenant's publisher partners, its signing keys, and the ``tenants`` row itself —
-    whose stored host IS the agent identity the ``identity`` block points at.
+    publishers that have verified the tenant (its verified partners and verified
+    authorized properties), its signing keys, and the ``tenants`` row itself — whose
+    stored host IS the agent identity the ``identity`` block points at.
 
     One session because the ORM ``Tenant`` must stay attached while the identity URLs
     are derived from it: no session in this codebase sets ``expire_on_commit=False``, so
     handing the row out to the response-construction site would raise
     ``DetachedInstanceError`` on the first attribute read.
 
-    Deliberately NOT :class:`TrustRootUoW`, which carries the same two repositories plus
-    ``authorized_properties``: its name asserts a different purpose, and its third
-    repository is dead weight on a per-request read path.
+    Deliberately NOT :class:`TrustRootUoW`, which carries the same three repositories:
+    its name asserts a different purpose.
 
     Added for #1291 D1 (the declarable signing family).
     """
 
     tenant_config: TenantConfigRepository | None
     signing_keys: SigningKeyRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
 
     _REPOSITORIES: ClassVar[Mapping[str, type]] = {
         "tenant_config": TenantConfigRepository,
         "signing_keys": SigningKeyRepository,
+        "authorized_properties": AuthorizedPropertyRepository,
     }
 
 

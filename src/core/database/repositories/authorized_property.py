@@ -41,13 +41,26 @@ class AuthorizedPropertyRepository:
         """This tenant's properties on *publisher_domain*, oldest-registered first.
 
         Used to build the adagents.json served at that domain. A tenant whose
-        agent host is not itself a publisher property domain gets an empty list
-        — and therefore a document claiming no authorization, which is the
-        honest answer rather than a self-attested one.
+        agent host is not itself a publisher property domain gets an empty list,
+        and the route then serves no document at all rather than a self-attested one.
         """
         stmt = (
             select(AuthorizedProperty)
             .where(*self._scope_prefix(), AuthorizedProperty.publisher_domain == publisher_domain)
             .order_by(AuthorizedProperty.created_at.asc(), AuthorizedProperty.property_id.asc())
+        )
+        return list(self._session.scalars(stmt).all())
+
+    def list_verified_publisher_domains(self) -> list[str]:
+        """The distinct publisher domains of this tenant's VERIFIED properties, sorted.
+
+        A pending or failed property is one whose publisher has not been seen to
+        authorize this agent, so its domain is not one the tenant may claim to represent.
+        """
+        stmt = (
+            select(AuthorizedProperty.publisher_domain)
+            .where(*self._scope_prefix(), AuthorizedProperty.verification_status == "verified")
+            .distinct()
+            .order_by(AuthorizedProperty.publisher_domain)
         )
         return list(self._session.scalars(stmt).all())

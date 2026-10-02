@@ -4704,6 +4704,9 @@ def _uc010_wired_tags() -> frozenset[str]:
             # than for its real, cited reason (#1291).
             "T-UC-010-main-reporting-delivery",
             "T-UC-010-degradation-no-cascade",
+            # portfolio.publisher_domains: the verified publishers, or no portfolio at all
+            "T-UC-010-portfolio-verified-publishers",
+            "T-UC-010-portfolio-no-verified-publisher",
             "T-UC-010-main-timestamp",
             "T-UC-010-main-readonly",
             "T-UC-010-pricing",

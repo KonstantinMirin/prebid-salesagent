@@ -38,9 +38,10 @@ request. Each document is built in its own request, its own UoW, and its own
 Every DB read is dispatched with ``asyncio.to_thread`` — these are
 synchronous calls on an async route, and blocking the event loop on an
 unauthenticated endpoint is a denial-of-service surface. The three
-secret-free documents serve unconditionally at any Host, including
-``http://localhost`` — this module never consults ``origin_is_publishable``,
-exactly as before the fourth document existed.
+secret-free documents serve at any Host, including ``http://localhost`` —
+this module never consults ``origin_is_publishable``, exactly as before the
+fourth document existed. adagents.json alone also needs the host to own an
+authorized property, and answers 404 where it owns none.
 """
 
 from __future__ import annotations
@@ -63,6 +64,7 @@ from src.core.agent_identity import (
 from src.core.config import get_settings
 from src.core.database.repositories.uow import TrustRootUoW
 from src.core.domain_routing import route_landing_page
+from src.core.http_utils import hostname_of
 
 # Dotted-path imports, never ``from src.core.signing import ...``: that package's
 # ``__init__`` deliberately re-exports NOTHING, which is what keeps the signing
@@ -162,14 +164,18 @@ def _adagents_json_handler(uow: TrustRootUoWType, tenant: Tenant, now: datetime)
     built from the same key set so the two cannot drift.
     """
     assert uow.authorized_properties is not None
-    keys = _publishable_keys(uow, now)
     # An adagents.json served at OUR host speaks for the properties on that
     # host — never for properties a publisher hosts elsewhere, whose own
-    # adagents.json is the document a verifier consults. A tenant whose
-    # agent host is not a property domain therefore claims nothing here.
-    # The host itself, not a re-split of the published origin: the origin IS scheme plus
-    # this column, so splitting it back apart is the same read with a step in between.
-    properties = uow.authorized_properties.list_for_publisher_domain(tenant.virtual_host)
+    # adagents.json is the document a verifier consults. ``publisher_domain`` is a
+    # hostname (its pattern admits no colon), so the port comes off ``virtual_host``.
+    properties = uow.authorized_properties.list_for_publisher_domain(hostname_of(tenant.virtual_host))
+    if not properties:
+        # A host that owns no property publishes no adagents.json (seller-setup.mdx "Who
+        # publishes what"). An empty file is not a fallback: with neither sales
+        # authorization nor catalog content the pinned schema rejects it.
+        logger.info("[TRUST-ROOT] tenant %s owns no property at its host; no adagents.json", tenant.tenant_id)
+        return None
+    keys = _publishable_keys(uow, now)
     return build_adagents_json(tenant, keys, properties), CACHE_MAX_AGE_SECONDS
 
 
