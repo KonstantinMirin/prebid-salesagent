@@ -552,11 +552,11 @@ class CapabilitiesEnv(IntegrationEnv):
         e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
     )
     def break_tenant_config_db(self) -> None:
-        """Make the capabilities DB reads fail — production degrades to placeholder.
+        """Make the capabilities DB reads fail — production omits portfolio.
 
         Patches CapabilitiesUoW at the seller-capabilities service seam — the module
         that assembles the response and therefore opens the session — so BOTH reads it
-        owns fail: the publisher partners (placeholder domain) and, since #1291 D1, the
+        owns fail: the verified publisher domains (portfolio omitted) and, since #1291 D1, the
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.

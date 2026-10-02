@@ -107,6 +107,15 @@ class TenantConfigRepository:
         partners = self.list_publisher_partners()
         return sorted([p.publisher_domain for p in partners])
 
+    def list_verified_publisher_domains(self) -> list[str]:
+        """Sorted domains of the partners whose adagents.json check succeeded."""
+        stmt = (
+            select(PublisherPartner.publisher_domain)
+            .filter_by(tenant_id=self._tenant_id, is_verified=True)
+            .order_by(PublisherPartner.publisher_domain)
+        )
+        return list(self._session.scalars(stmt).all())
+
     # ------------------------------------------------------------------
     # Authorized-list mutation (atomic)
     # ------------------------------------------------------------------
