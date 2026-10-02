@@ -193,18 +193,27 @@ def get_scoped_session():
     return _scoped_session
 
 
-def _is_connection_failure(e: OperationalError | DisconnectionError) -> bool:
-    """Whether *e* means the database could not be reached, rather than one statement failing.
+def _server_never_answered(e: SQLAlchemyError) -> bool:
+    """Whether *e* is a connect the server never answered, the one failure that trips the fail-fast.
 
-    Only the first trips the fail-fast below, which refuses EVERY session in the process
-    for 10 seconds. A deadlock victim, a statement_timeout cancel or a lock timeout is
-    the server answering on a live connection: the error carries a SQLSTATE (``pgcode``)
-    and the connection is still good. A refused connect has no SQLSTATE, and a dropped
-    one is flagged ``connection_invalidated`` by SQLAlchemy's disconnect detection.
+    The fail-fast below refuses EVERY session in the process for 10 seconds. It exists for
+    a database that cannot be reached, where each new connect would otherwise hold a worker
+    for the connect timeout. Nothing else trips it:
+
+    - A deadlock victim, a statement_timeout cancel or a lock timeout is the server answering
+      on a live connection; the error carries the server's SQLSTATE.
+    - A connection that dropped (an admin terminate, ``idle_session_timeout``, PgBouncer
+      closing a client) is flagged ``connection_invalidated``. SQLAlchemy has already
+      discarded it and the next checkout reconnects, so one dead connection is not an outage.
+      A ``DisconnectionError`` is the pool's own signal of the same thing.
+
+    The SQLSTATE is read under both drivers' names: psycopg2 calls it ``pgcode``, psycopg 3
+    ``sqlstate``. Reading only one would make every error under the other driver look
+    unanswered and trip the fail-fast on every failed statement again.
     """
-    if isinstance(e, DisconnectionError) or e.connection_invalidated:
-        return True
-    return getattr(e.orig, "pgcode", None) is None
+    if not isinstance(e, OperationalError) or e.connection_invalidated:
+        return False
+    return getattr(e.orig, "pgcode", None) is None and getattr(e.orig, "sqlstate", None) is None
 
 
 @contextmanager
@@ -239,21 +248,12 @@ def get_db_session() -> Generator[Session, None, None]:
     session = scoped()
     try:
         yield session
-    except (OperationalError, DisconnectionError) as e:
-        session.rollback()
-        # Remove session from registry to force reconnection
-        scoped.remove()
-        if _is_connection_failure(e):
-            logger.error(f"Database connection error: {e}")
-            # Mark as unhealthy for circuit breaker
-            _is_healthy = False
-            _last_health_check = time.time()
-        else:
-            logger.error(f"Database error: {e}")
-        raise
     except SQLAlchemyError as e:
         logger.error(f"Database error: {e}")
         session.rollback()
+        if _server_never_answered(e):
+            _is_healthy = False
+            _last_health_check = time.time()
         raise
     finally:
         session.close()
