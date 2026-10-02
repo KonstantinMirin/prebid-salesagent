@@ -278,26 +278,30 @@ class TestAgentCardDiscoveryPathsLive:
         )
 
     @pytest.mark.integration
-    def test_all_declared_card_paths_return_byte_identical_bodies_live(self, live_server):
-        """The live server serves one byte-identical card on every declared path.
+    def test_the_card_is_declared_on_the_canonical_path_alone(self, live_server):
+        """ONE declared path, and it is the one A2A fixes.
 
-        Compares raw bytes, not the parsed dict: a caching fetcher keyed on bytes
-        treats a re-serialization difference as a different document.
+        This compared every declared path's raw bytes against the canonical one's, which was
+        the right test while three paths were served. One path cannot disagree with itself,
+        so what is graded now is the DECLARATION: a non-canonical path added back here would
+        reintroduce the divergence the single declaration exists to prevent, and a buyer
+        reaching the card at two addresses can cache two documents for one agent.
+
+        ``/.well-known/agent.json`` (AdCP's guide) and ``/agent.json`` were both served.
+        Dropping them is safe for discovery because a conforming client falls back --
+        ``@adcp/sdk``'s ``buildCardUrls`` tries both well-known paths and breaks on the
+        first success.
         """
-        bodies = {
-            path: requests.get(f"{card_origin(live_server)}{path}", verify=e2e_ca_bundle(), timeout=5)
-            for path in AGENT_CARD_PATHS
-        }
+        assert AGENT_CARD_PATHS == [CANONICAL_AGENT_CARD_PATH], (
+            f"the card is declared on {AGENT_CARD_PATHS}; A2A fixes "
+            f"{CANONICAL_AGENT_CARD_PATH} (§8.2, §14.3) and this seller serves that one"
+        )
 
-        for path, response in bodies.items():
-            assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-
-        canonical = bodies[CANONICAL_AGENT_CARD_PATH].content
-        for path, response in bodies.items():
-            assert response.content == canonical, (
-                f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
-                f"all declared paths must serve one byte-identical card"
-            )
+        response = requests.get(
+            f"{card_origin(live_server)}{CANONICAL_AGENT_CARD_PATH}", verify=e2e_ca_bundle(), timeout=5
+        )
+        assert response.status_code == 200, f"{CANONICAL_AGENT_CARD_PATH} returned {response.status_code}"
+        assert response.json()["supportedInterfaces"], "the card declares no interface for a client to select"
 
 
 class TestA2AAgentCardCreation:

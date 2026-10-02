@@ -63,6 +63,6 @@ Feature: A request identifies its seller by host or by header
   Scenario: A Host no tenant claims is refused as a misconfiguration
     Given the tenant is reachable at its own virtual host
     When the buyer requests capabilities naming a seller nobody serves
-    Then the response contains error code CONFIGURATION_ERROR
+    Then the response contains error code TENANT_UNDEFINED
     And the error recovery should be "terminal"
     And the refusal carries no buyer-supplied value on the wire

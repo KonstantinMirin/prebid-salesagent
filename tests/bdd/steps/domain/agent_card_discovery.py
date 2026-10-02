@@ -135,7 +135,7 @@ def then_refusal_is_configuration_error(ctx: dict) -> None:
     # ``assert_envelope_shape`` rather than ``result.assert_wire_error``: the card is not
     # dispatched through ``call_via``, so there is no ``TransportResult`` -- this is the
     # bare-envelope case that helper exists for (tests/CLAUDE.md § Error verification).
-    assert_envelope_shape(response.json(), "CONFIGURATION_ERROR", recovery="terminal")
+    assert_envelope_shape(response.json(), "TENANT_UNDEFINED", recovery="terminal")
     assert ctx["requested_host"] not in response.text, (
         f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
     )
