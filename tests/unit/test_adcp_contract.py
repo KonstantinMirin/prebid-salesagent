@@ -31,6 +31,7 @@ from src.core.schemas import (
     GetMediaBuyDeliveryResponse,
     GetProductsRequest,
     GetProductsResponse,
+    ListCreativeFormatsResponse,
     ListCreativesResponse,
     Measurement,
     MediaBuyDeliveryData,
@@ -801,6 +802,19 @@ class TestAdCPContract:
 
         dumped = format_obj.model_dump(mode="json", exclude_none=True)["canonical_parameters"]
         assert dumped == {**declaration, "canonical_formats_only": False, "experimental": False}
+
+    def test_list_creative_formats_response_round_trips_the_reference_catalog(self):
+        """A response re-parsed from its own wire serializes to the same wire, as a buyer reads it.
+
+        The response inherited the library ``formats`` type, so the re-parse rebuilt each entry as
+        the library Format and dropped canonical_parameters.format_kind and .params."""
+        from src.core.format_cache import load_reference_formats
+
+        wire = ListCreativeFormatsResponse(formats=list(load_reference_formats())).model_dump(mode="json")
+        # The catalog must carry declarations, or the round-trip below has nothing to lose.
+        assert any("format_kind" in (f.get("canonical_parameters") or {}) for f in wire["formats"])
+
+        assert ListCreativeFormatsResponse.model_validate(wire).model_dump(mode="json") == wire
 
     def test_field_mapping_consistency(self):
         """Test that field names are consistent between models and schemas."""
