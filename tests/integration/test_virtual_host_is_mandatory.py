@@ -167,64 +167,51 @@ def test_the_card_publishes_the_stored_origin_when_the_host_header_names_another
         )
 
 
-def _refusal_for_an_unserved_host(response) -> None:
-    """404 and a REFERENCE_NOT_FOUND / correctable envelope that reflects nothing back.
-
-    With wildcard DNS any name under the apex reaches the app, so a host no tenant declares
-    is the caller addressing a seller that does not exist here -- the pinned enum's
-    "referenced identifier ... or other resource that does not exist" -- and not the
-    "seller's deployment is misconfigured" that ``CONFIGURATION_ERROR`` names and answers
-    500 (enums/error-code.json, enumDescriptions, at the 3.1.1 pin).
-
-    The envelope emits ``details`` as an empty object, the shared serializer's shape for
-    every code. What is graded is that it carries NOTHING -- in particular not the host the
-    caller supplied, which reaches the operator's record through ``internal_detail``.
-    """
-    from tests.helpers.envelope_assertions import assert_envelope_shape
-
-    assert response.status_code == 404, (
-        f"a request naming a host this deployment serves for nobody answered "
-        f"{response.status_code}; the refusal's status is part of its contract"
-    )
-    assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
-    assert response.json()["adcp_error"]["details"] == {}, (
-        f"the refusal carried details {response.json()['adcp_error']['details']!r}; "
-        f"the host the caller supplied must reach the operator's record, never the buyer"
-    )
-    assert UNSERVED_HOST not in response.text, (
-        f"the refusal reflected {UNSERVED_HOST!r} back to the caller somewhere in its body"
-    )
-
-
 @pytest.mark.requires_db
-def test_a_tool_call_naming_no_served_tenant_is_not_found(integration_db):
-    """THE REFUSAL, on a tool surface, through the real app.
+def test_a_tool_call_naming_no_served_tenant_is_refused_with_its_status(integration_db):
+    """THE REFUSAL, on a tool surface: 500 and a CONFIGURATION_ERROR / terminal envelope.
 
-    The refusal answers every tool on every transport. REST is the transport that carries a
-    status, so it is where the status is graded.
+    The refusal answers every tool on every transport, and the only thing grading it was one
+    e2e assertion on the agent CARD -- so the status was ungraded on every tool-call surface,
+    and changing 500 to anything else left the in-process suites green.
+
+    REST is the transport that carries a status, so it is where the status is graded. The
+    envelope carries no ``details``: the pinned text says ``CONFIGURATION_ERROR`` "carries no
+    ``error.details`` shape", citing the minimal-disclosure precedent, and the host the caller
+    named travels in ``internal_detail`` to the operator's record instead
+    (``error-handling.mdx:853``, 3.1.0 docs at the 3.1.1 pin).
     """
     from tests.harness.capabilities import CapabilitiesEnv
     from tests.helpers.credentials import credential_headers
+    from tests.helpers.envelope_assertions import assert_envelope_shape
 
     with CapabilitiesEnv() as env:
         env.setup_default_data()
+
         response = env.get_rest_client().post(
             "/api/v1/capabilities",
             json={},
             headers=credential_headers(host=UNSERVED_HOST),
         )
-        _refusal_for_an_unserved_host(response)
 
+        assert response.status_code == 500, (
+            f"a request naming a host this deployment serves for nobody answered "
+            f"{response.status_code}; the refusal's status is part of its contract"
+        )
+        assert_envelope_shape(response.json(), "CONFIGURATION_ERROR", recovery="terminal")
 
-@pytest.mark.requires_db
-def test_an_agent_card_naming_no_served_tenant_is_not_found(integration_db):
-    """THE SAME REFUSAL on the agent card, which resolves its tenant through the same seam."""
-    from tests.harness.capabilities import CapabilitiesEnv
-
-    with CapabilitiesEnv() as env:
-        env.setup_default_data()
-        response = env.get_rest_client().get("/.well-known/agent-card.json", headers={"Host": UNSERVED_HOST})
-        _refusal_for_an_unserved_host(response)
+        # The envelope emits the key as an empty object rather than omitting it, which is the
+        # shared serializer's shape for every code. What the pin constrains is that this code
+        # has no details SHAPE, so what is graded is that it carries NOTHING -- and in
+        # particular not the host the caller supplied. This reddens if `rejected_value` or any
+        # other reflection of the request comes back.
+        assert response.json()["adcp_error"]["details"] == {}, (
+            f"CONFIGURATION_ERROR carried details {response.json()['adcp_error']['details']!r}; "
+            f"the host the caller supplied must reach the operator's record, never the buyer"
+        )
+        assert UNSERVED_HOST not in response.text, (
+            f"the refusal reflected {UNSERVED_HOST!r} back to the caller somewhere in its body"
+        )
 
 
 @pytest.mark.requires_db

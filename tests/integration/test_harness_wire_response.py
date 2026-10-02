@@ -87,7 +87,7 @@ class TestWireResponseIsRealWire:
         """
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             result = env.call_via(Transport.REST)
             assert result.wire_response == result.raw_response.json()
@@ -118,7 +118,7 @@ class TestWireResponseIsRealWire:
         """
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             bodies = {
                 transport: env.call_via(transport) for transport in (Transport.A2A, Transport.REST, Transport.MCP)
@@ -158,7 +158,7 @@ class TestWireResponseIsRealWire:
         """
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             result = env.call_via(Transport.MCP)
             assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
@@ -180,7 +180,7 @@ class TestWireResponseIsRealWire:
         """
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             result = env.call_via(Transport.MCP)
         assert isinstance(result.wire_response, dict), "MCP: wire_response not a dict"
@@ -484,7 +484,7 @@ class TestDispatchersDeclareHasWireOnRealDispatch:
     def test_wire_transports_declare_a_wire_and_carry_one(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             result = env.call_via(transport)
         assert result.has_wire is True, f"{transport}: success dispatch did not declare has_wire"
@@ -519,7 +519,7 @@ class TestWireReadersBranchOnTheDeclaration:
         """
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             response = env.call_impl()
         assert response is not None
@@ -623,7 +623,7 @@ class TestBothDispatchSeamsStashTheTransportResult:
     def test_call_via_stashes_the_transport_result(self, transport, integration_db):
         with CreativeFormatsEnv() as env:
             # The request has to NAME a seller this deployment serves: one naming none is
-            # refused (REFERENCE_NOT_FOUND). This test creates no tenant of its own.
+            # refused (CONFIGURATION_ERROR). This test creates no tenant of its own.
             env.setup_default_data()
             ctx: dict = {"env": env}
             _call_via(ctx, transport)

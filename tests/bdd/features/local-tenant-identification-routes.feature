@@ -60,9 +60,9 @@ Feature: A request identifies its seller by host or by header
     Then the response describes that tenant
 
   @T-TENANTID-unserved-host
-  Scenario: A Host no tenant claims is refused as not found
+  Scenario: A Host no tenant claims is refused as a misconfiguration
     Given the tenant is reachable at its own virtual host
     When the buyer requests capabilities naming a seller nobody serves
-    Then the response contains error code REFERENCE_NOT_FOUND
-    And the error recovery should be "correctable"
+    Then the response contains error code CONFIGURATION_ERROR
+    And the error recovery should be "terminal"
     And the refusal carries no buyer-supplied value on the wire

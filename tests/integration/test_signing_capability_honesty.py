@@ -571,7 +571,7 @@ class TestTheOneConstructionSite:
 
     Was ``TestBothConstructionSitesAgree``, over a no-tenant site and a tenant-resolved
     one. There is no no-tenant site: a request naming no seller is refused
-    REFERENCE_NOT_FOUND before an identity exists, ``PublicIdentity.tenant`` is required,
+    CONFIGURATION_ERROR before an identity exists, ``PublicIdentity.tenant`` is required,
     and ``_resolve_signing_blocks`` carries no branch for a tenant whose row is missing.
     What remains is that the one site DERIVES every block rather than re-literalling any
     of them, graded below on a keyless tenant.

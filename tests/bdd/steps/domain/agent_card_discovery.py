@@ -121,21 +121,21 @@ def then_no_card(ctx: dict) -> None:
     )
 
 
-@then("the refusal says no such seller is served here")
-def then_refusal_is_not_found(ctx: dict) -> None:
-    """The request addressed a seller this deployment does not serve, so it answers 404.
+@then("the refusal names a seller-side misconfiguration")
+def then_refusal_is_configuration_error(ctx: dict) -> None:
+    """The deployment cannot tell which seller the request is for, so it answers.
 
     Graded on the envelope rather than the status alone, and the host the request named
-    must not appear: it reaches the operator through ``internal_detail``, never a wire.
+    must not appear: the pinned error-handling text gives this code no ``details`` shape,
+    and the value reaches the operator through ``internal_detail``, never a wire.
     """
     from tests.helpers.envelope_assertions import assert_envelope_shape
 
     response = ctx["card_response"]
-    assert response.status_code == 404, f"expected 404 for an unserved host, got {response.status_code}"
     # ``assert_envelope_shape`` rather than ``result.assert_wire_error``: the card is not
     # dispatched through ``call_via``, so there is no ``TransportResult`` -- this is the
     # bare-envelope case that helper exists for (tests/CLAUDE.md § Error verification).
-    assert_envelope_shape(response.json(), "REFERENCE_NOT_FOUND", recovery="correctable")
+    assert_envelope_shape(response.json(), "CONFIGURATION_ERROR", recovery="terminal")
     assert ctx["requested_host"] not in response.text, (
         f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
     )

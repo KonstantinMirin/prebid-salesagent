@@ -242,12 +242,12 @@ class TestAgentCardDiscoveryPathsLive:
         assert response.headers["content-type"].startswith("application/json")
 
     @pytest.mark.integration
-    def test_a_request_naming_no_tenant_is_not_found(self, live_server):
-        """No tenant, no card — refused as not found, not a card.
+    def test_a_request_naming_no_tenant_is_refused_as_a_misconfiguration(self, live_server):
+        """No tenant, no card — refused with the seller-side code, not a card.
 
         The complement of the tests above: the card publishes a tenant's stored identity,
-        so with no tenant there is nothing truthful to publish. With wildcard DNS any name
-        under the apex arrives here, so the answer is 404; what it must never do is publish the
+        so with no tenant there is nothing truthful to publish. The refusal names what was
+        rejected, which is the operator's lever; what it must never do is publish the
         caller's Host as the AGENT'S OWN advertised URL, which is what it did before #1440
         and what let an attacker-supplied `Host: evil.example.com` come back as
         `supportedInterfaces[0].url`.
@@ -259,16 +259,17 @@ class TestAgentCardDiscoveryPathsLive:
             timeout=5,
         )
 
-        assert response.status_code == 404, (
-            f"a Host no tenant claims returned {response.status_code}; the caller addressed a "
-            f"seller this deployment does not serve"
+        assert response.status_code == 500, (
+            f"a Host no tenant claims returned {response.status_code}; the deployment cannot "
+            f"tell which seller this request is for, which is a seller-side misconfiguration"
         )
         body = response.json()
-        assert body["adcp_error"]["code"] == "REFERENCE_NOT_FOUND", body
-        assert body["adcp_error"]["recovery"] == "correctable", body
+        assert body["adcp_error"]["code"] == "CONFIGURATION_ERROR", body
+        assert body["adcp_error"]["recovery"] == "terminal", body
         # The host the caller named belongs in the SERVER's record, not the envelope:
-        # carrying it echoes caller-controlled text back, which is the shape this route
-        # exists to refuse.
+        # ``rejected_value`` is "the offending value the buyer supplied", and a terminal
+        # envelope says the buyer has no lever. Carrying it also echoes caller-controlled
+        # text back, which is the shape this route exists to refuse.
         assert "unclaimed.example" not in response.text, (
             f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
         )
