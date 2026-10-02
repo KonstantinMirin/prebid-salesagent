@@ -150,32 +150,36 @@ class TestConversionDeliveryMeasurementDefaults:
         db_product = _make_db_product(
             delivery_measurement={"provider": "ias", "notes": "IAS viewability"},
         )
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="google_ad_manager")
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type="google_ad_manager", authorized_properties=[]
+        )
         assert schema_product.delivery_measurement.provider == "ias"
         assert schema_product.delivery_measurement.notes == "IAS viewability"
 
     def test_conversion_uses_gam_default_when_missing(self):
         """Products without delivery_measurement get GAM default when adapter is GAM."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="google_ad_manager")
+        schema_product = convert_product_model_to_schema(
+            db_product, adapter_type="google_ad_manager", authorized_properties=[]
+        )
         assert schema_product.delivery_measurement.provider == "google_ad_manager"
 
     def test_conversion_uses_mock_default_when_missing(self):
         """Products without delivery_measurement get mock default when adapter is mock."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="mock")
+        schema_product = convert_product_model_to_schema(db_product, adapter_type="mock", authorized_properties=[])
         assert schema_product.delivery_measurement.provider == "mock"
 
     def test_conversion_uses_publisher_fallback_when_no_adapter(self):
         """Products without delivery_measurement get publisher fallback when no adapter_type."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type=None)
+        schema_product = convert_product_model_to_schema(db_product, adapter_type=None, authorized_properties=[])
         assert schema_product.delivery_measurement.provider == "publisher"
 
     def test_conversion_uses_publisher_fallback_for_unknown_adapter(self):
         """Products without delivery_measurement get publisher fallback for unknown adapter."""
         db_product = _make_db_product(delivery_measurement=None)
-        schema_product = convert_product_model_to_schema(db_product, adapter_type="unknown")
+        schema_product = convert_product_model_to_schema(db_product, adapter_type="unknown", authorized_properties=[])
         assert schema_product.delivery_measurement.provider == "publisher"
 
 

@@ -20,6 +20,7 @@ from sqlalchemy import ColumnElement, select
 from sqlalchemy.orm import Session
 
 from src.core.database.models import AuthorizedProperty
+from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 
 
 class AuthorizedPropertyRepository:
@@ -83,3 +84,22 @@ class AuthorizedPropertyRepository:
         prop.verification_checked_at = now
         prop.verification_error = error
         prop.updated_at = now
+
+    def list_refs(self) -> list[AuthorizedPropertyRef]:
+        """Every property this tenant is authorized to represent, as values, by publisher.
+
+        What a product's legacy selectors resolve against (#1845): a product names the
+        publishers these rows belong to, never the tenant's own host. Values rather than
+        rows because ``get_products`` reads them again after its session has closed.
+        """
+        stmt = (
+            select(AuthorizedProperty)
+            .where(*self._scope_prefix())
+            .order_by(AuthorizedProperty.publisher_domain.asc(), AuthorizedProperty.property_id.asc())
+        )
+        return [
+            AuthorizedPropertyRef(
+                property_id=row.property_id, publisher_domain=row.publisher_domain, tags=tuple(row.tags or ())
+            )
+            for row in self._session.scalars(stmt)
+        ]

@@ -21,6 +21,7 @@ from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Pro
 from src.core.database.product_pricing import get_product_pricing_options
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
+from src.core.helpers.publisher_property_helpers import by_id_selectors
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -1133,26 +1134,8 @@ def add_product(tenant_id):
                         flash("One or more selected properties not found or not authorized", "error")
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    # Group property_ids by publisher_domain for correct AdCP format
-                    from collections import defaultdict
-
-                    properties_by_domain: dict[str, list[str]] = defaultdict(list)
-                    for prop in properties:
-                        properties_by_domain[prop.publisher_domain].append(prop.property_id)
-
-                    # Build AdCP 2.13.0 discriminated union format
-                    publisher_properties = []
-                    for domain, prop_ids in properties_by_domain.items():
-                        publisher_properties.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_ids": prop_ids,
-                                "selection_type": "by_id",
-                            }
-                        )
-
-                    # Store in the properties field (supports full publisher_properties structure)
-                    product_kwargs["properties"] = publisher_properties
+                    # One by_id selector per publisher: property IDs are publisher-scoped
+                    product_kwargs["properties"] = by_id_selectors(properties)
 
                 elif property_mode == "full":
                     # Get selected property IDs and load full property objects (legacy mode)
@@ -1539,8 +1522,6 @@ def edit_product(tenant_id, product_id):
                     # Get selected property IDs
                     property_ids_list = request.form.getlist("selected_property_ids")
                     if property_ids_list:
-                        from collections import defaultdict
-
                         from src.core.database.models import AuthorizedProperty
 
                         # Query properties to get their publisher_domain
@@ -1551,21 +1532,8 @@ def edit_product(tenant_id, product_id):
                             )
                         ).all()
 
-                        # Group by publisher_domain
-                        properties_by_domain: dict[str, list[str]] = defaultdict(list)
-                        for prop in properties:
-                            properties_by_domain[prop.publisher_domain].append(prop.property_id)
-
-                        # Build AdCP discriminated union format
-                        publisher_properties = []
-                        for domain, prop_ids in properties_by_domain.items():
-                            publisher_properties.append(
-                                {
-                                    "publisher_domain": domain,
-                                    "property_ids": prop_ids,
-                                    "selection_type": "by_id",
-                                }
-                            )
+                        # One by_id selector per publisher: property IDs are publisher-scoped
+                        publisher_properties = by_id_selectors(properties)
 
                         if publisher_properties:
                             product.properties = publisher_properties
@@ -1990,7 +1958,7 @@ def edit_product(tenant_id, product_id):
             ]
 
             # Get current publisher properties from product (for pre-selecting in edit form)
-            selected_publisher_properties = product.effective_properties
+            selected_publisher_properties = product.resolve_publisher_properties(authorized_properties_query)
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":

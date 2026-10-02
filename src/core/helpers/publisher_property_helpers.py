@@ -10,6 +10,9 @@ This module provides ensure_selection_type() to normalize on read.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
+from typing import Protocol
 
 _PROPERTY_ID_PATTERN = re.compile(r"^[a-z0-9_]+$")
 _PROPERTY_TAG_PATTERN = re.compile(r"^[a-z0-9_]+$")
@@ -60,3 +63,93 @@ def ensure_selection_type(properties: list[dict]) -> list[dict] | None:
         converted.append(result)
 
     return converted if converted else None
+
+
+# ---------------------------------------------------------------------------
+# Selectors resolved against the seller's authorized properties
+# ---------------------------------------------------------------------------
+
+#: The seller's default property tag. Its stored description is "Default tag that applies to
+#: all properties", so it matches every authorized property whether or not the row lists it.
+ALL_INVENTORY_TAG = "all_inventory"
+
+
+class SelectableProperty(Protocol):
+    """The three facts of an authorized property that a selector is built from."""
+
+    @property
+    def property_id(self) -> str: ...
+
+    @property
+    def publisher_domain(self) -> str: ...
+
+    @property
+    def tags(self) -> Sequence[str] | None: ...
+
+
+@dataclass(frozen=True)
+class AuthorizedPropertyRef:
+    """An authorized property as a value, so it outlives the session that read it.
+
+    ``get_products`` converts dynamic variants after its unit of work has closed, where an
+    ORM row would raise on its first attribute read.
+    """
+
+    property_id: str
+    publisher_domain: str
+    tags: tuple[str, ...]
+
+
+def _by_publisher(properties: Iterable[SelectableProperty]) -> dict[str, list[SelectableProperty]]:
+    """*properties* grouped by publisher domain, domains in first-seen order."""
+    grouped: dict[str, list[SelectableProperty]] = {}
+    for prop in properties:
+        grouped.setdefault(prop.publisher_domain, []).append(prop)
+    return grouped
+
+
+def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
+    """One ``by_id`` selector per publisher, holding the IDs of that publisher's properties.
+
+    AdCP 3.1.1 ``core/publisher-property-selector.json``: by_id is "Single-publisher only —
+    property IDs are publisher-scoped".
+    """
+    return [
+        {"publisher_domain": domain, "property_ids": [p.property_id for p in props], "selection_type": "by_id"}
+        for domain, props in _by_publisher(properties).items()
+    ]
+
+
+def by_tag_selectors(tags: Sequence[str], properties: Iterable[SelectableProperty]) -> list[dict]:
+    """One ``by_tag`` selector per publisher whose properties carry any of *tags*.
+
+    Each selector lists the requested tags that publisher's properties carry, in the order
+    requested. A publisher carrying none of them is not named.
+    """
+    selectors = []
+    for domain, props in _by_publisher(properties).items():
+        carried = {ALL_INVENTORY_TAG}.union(*(p.tags or () for p in props))
+        matched = [tag for tag in tags if tag in carried]
+        if matched:
+            selectors.append({"publisher_domain": domain, "property_tags": matched, "selection_type": "by_tag"})
+    return selectors
+
+
+def legacy_selectors(
+    property_ids: Sequence[str] | None,
+    property_tags: Sequence[str] | None,
+    properties: Sequence[SelectableProperty],
+) -> list[dict]:
+    """The ``publisher_properties`` of a product selecting by the legacy columns.
+
+    Resolved against the seller's *properties*, one selector per publisher (AdCP 3.1.1
+    ``core/product.json`` admits only the singular ``publisher_domain`` form on a product).
+    A product that selects nothing offers every authorized publisher whole. Returns ``[]``
+    when no authorized property backs the selection: there is then no publisher to name.
+    """
+    if property_ids:
+        wanted = set(property_ids)
+        return by_id_selectors(p for p in properties if p.property_id in wanted)
+    if property_tags:
+        return by_tag_selectors(property_tags, properties)
+    return [{"publisher_domain": domain, "selection_type": "all"} for domain in _by_publisher(properties)]

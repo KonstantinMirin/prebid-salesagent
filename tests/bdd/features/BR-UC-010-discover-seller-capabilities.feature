@@ -439,7 +439,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # both the adapter and the partner query down no real publisher_domain had been read, so
     # emitting one meant emitting a fabricated placeholder -- and publisher_domains is
     # REQUIRED+minItems:1 whenever portfolio is present. That state no longer exists:
-    # virtual_host is mandatory, so Tenant.primary_domain always answers with the
+    # virtual_host is mandatory, so Tenant.host_name always answers with the
     # operator-visible host the tenant declares, which is real data neither lookup had to
     # supply. Portfolio is present and correct here, and an omission assertion would grade
     # the absence of a fabrication that can no longer occur --

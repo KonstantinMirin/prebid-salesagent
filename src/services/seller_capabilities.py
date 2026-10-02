@@ -601,10 +601,10 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     # With no publisher partners recorded, the seller's portfolio is its own inventory, so
     # the domain it names is the one it is served at — never a derived name, which reaches
     # the buyer as the publisher's own domain while nobody owns it (#1845). Through
-    # ``primary_domain``, the one accessor, because AdCP's publisher_domain pattern admits no
+    # ``host_name``, the one accessor, because AdCP's publisher_domain pattern admits no
     # colon while virtual_host carries the port.
     if not publisher_domains:
-        publisher_domains = [PublisherDomain(root=tenant.primary_domain)]
+        publisher_domains = [PublisherDomain(root=tenant.host_name)]
 
     # Get advertising policies from tenant config
     advertising_policies: str | None = None

@@ -24,7 +24,9 @@ def _row(**overrides):
 
 def _served(row) -> dict:
     """The product as the buyer receives it: converted, then through the wire function."""
-    (product,) = to_wire(GetProductsResponse(products=[convert_product_model_to_schema(row)]))["products"]
+    (product,) = to_wire(
+        GetProductsResponse(products=[convert_product_model_to_schema(row, authorized_properties=[])])
+    )["products"]
     return product
 
 

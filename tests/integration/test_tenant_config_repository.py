@@ -178,13 +178,13 @@ class TestUpdateTenantProvesEveryKeyNamesAWritableAttribute:
                 repo.update_tenant(_gemini_api_key="stored-in-the-clear")
 
     def test_a_read_only_property_is_rejected(self, integration_db):
-        """``primary_domain`` is a property with no setter — a write naming it cannot land."""
+        """``host_name`` is a property with no setter — a write naming it cannot land."""
         with _RepoEnv() as env:
             TenantFactory(tenant_id="tcr_upd_readonly")
             repo = TenantConfigRepository(env.get_session(), "tcr_upd_readonly")
 
-            with pytest.raises(ValueError, match="primary_domain"):
-                repo.update_tenant(primary_domain="nope.example.test")
+            with pytest.raises(ValueError, match="host_name"):
+                repo.update_tenant(host_name="nope.example.test")
 
 
 class TestListPublisherDomains:

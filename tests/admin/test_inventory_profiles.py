@@ -13,7 +13,7 @@ from src.admin.app import create_app
 from src.admin.blueprints import inventory_profiles as inventory_profiles_module
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Tenant
-from tests.factories import InventoryProfileFactory, TenantFactory
+from tests.factories import AuthorizedPropertyFactory, InventoryProfileFactory, TenantFactory
 from tests.helpers import concurrent_commit_in_write_window, operator_answer
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -49,10 +49,7 @@ def test_tenant(integration_db):
             tenant_id=_TENANT_ID,
             name="Inventory Profile Test Tenant",
             subdomain="inv-prof-test",
-            # The host this tenant is served at. `Tenant.primary_domain` projects it and
-            # fabricates nothing (#1845), so the inventory-profile create and edit routes
-            # refuse a tenant that declares no host. A tenant that sells inventory states
-            # the host it sells from.
+            # The host this tenant is served at; mandatory on every tenant.
             virtual_host="inv-prof-test.real-configured-domain.test",
             ad_server="mock",
             is_active=True,
@@ -139,8 +136,10 @@ class TestInventoryProfileCreate:
         response = client.get(f"/tenant/{test_tenant}/inventory-profiles/add")
         assert response.status_code == 200
 
-    def test_create_profile_with_tags_saves_to_db(self, client, test_tenant):
+    def test_create_profile_with_tags_saves_to_db(self, client, test_tenant, factory_session):
         """POST with valid tag-based config creates a profile."""
+        # The tag names the publishers of the tenant's authorized properties (#1845).
+        AuthorizedPropertyFactory(tenant=factory_session.get(Tenant, test_tenant))
         _auth_session(client, test_tenant)
         response = client.post(
             f"/tenant/{test_tenant}/inventory-profiles/add",
@@ -265,12 +264,12 @@ class TestAddInventoryProfileDuplicateId:
         }
 
     def test_winner_and_loser_get_the_same_answer(self, client, factory_session):
-        # A real virtual_host is required to reach the write window at all:
-        # Tenant.primary_domain no longer fabricates a placeholder domain, and the
-        # add route refuses to proceed without one BEFORE it ever gets to the
-        # uq_inventory_profile write this test grades. Same reseeding the
-        # test_tenant fixture above needed.
+        # An authorized property is required to reach the write window at all: the
+        # "tags" selection names the publishers whose properties carry the tag, and the
+        # add route refuses a selection naming none BEFORE it ever gets to the
+        # uq_inventory_profile write this test grades.
         tenant = TenantFactory(virtual_host="contested-profile.real-configured-domain.test")
+        AuthorizedPropertyFactory(tenant=tenant)
         _auth_session(client, tenant.tenant_id)
 
         def post_add():
@@ -294,3 +293,133 @@ class TestAddInventoryProfileDuplicateId:
             [("error", f"Inventory profile with ID '{self.PROFILE_ID}' already exists")],
         )
         assert loser == winner
+
+
+class TestProfileSelectorsNamePublishers:
+    """A profile's ``tags`` and ``property_ids`` modes name each property's own publisher.
+
+    AdCP 3.1.1 ``core/product.json`` admits only the singular ``publisher_domain`` form on a
+    product, and ``core/publisher-property-selector.json`` makes property IDs
+    publisher-scoped, so selections spanning publishers are one selector per publisher. The
+    domain is the authorized property's ``publisher_domain`` -- never the host the seller's
+    agent answers on, which is no publisher's (#1845).
+    """
+
+    @staticmethod
+    def _seller(virtual_host: str):
+        tenant = TenantFactory(virtual_host=virtual_host)
+        AuthorizedPropertyFactory(
+            tenant=tenant, property_id="news_home", publisher_domain="news.example", tags=["premium"]
+        )
+        AuthorizedPropertyFactory(
+            tenant=tenant, property_id="sports_home", publisher_domain="sports.example", tags=["premium"]
+        )
+        AuthorizedPropertyFactory(
+            tenant=tenant, property_id="weather_home", publisher_domain="weather.example", tags=["standard"]
+        )
+        return tenant
+
+    @staticmethod
+    def _form(profile_id: str, **selection):
+        return {
+            "name": f"Profile {profile_id}",
+            "profile_id": profile_id,
+            "targeted_ad_unit_ids": "[]",
+            "targeted_placement_ids": "[]",
+            "formats": json.dumps([{"agent_url": "https://formats.example.com", "id": "display_300x250_image"}]),
+            **selection,
+        }
+
+    @staticmethod
+    def _stored(session, tenant_id: str, profile_id: str):
+        session.expire_all()
+        return session.scalars(
+            select(InventoryProfile).where(
+                InventoryProfile.tenant_id == tenant_id, InventoryProfile.profile_id == profile_id
+            )
+        ).first()
+
+    def test_tags_mode_names_each_publisher_carrying_the_tag(self, client, factory_session):
+        tenant = self._seller("seller-tags.example.test")
+        _auth_session(client, tenant.tenant_id)
+
+        client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data=self._form("by_tag_profile", property_mode="tags", property_tags="premium"),
+        )
+
+        profile = self._stored(factory_session, tenant.tenant_id, "by_tag_profile")
+        assert profile is not None
+        assert profile.publisher_properties == [
+            {"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"},
+            {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"},
+        ]
+
+    def test_property_ids_mode_groups_ids_under_their_publishers(self, client, factory_session):
+        tenant = self._seller("seller-ids.example.test")
+        _auth_session(client, tenant.tenant_id)
+
+        client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            data={
+                **self._form("by_id_profile", property_mode="property_ids"),
+                "selected_property_ids": ["news_home", "weather_home"],
+            },
+        )
+
+        profile = self._stored(factory_session, tenant.tenant_id, "by_id_profile")
+        assert profile is not None
+        assert profile.publisher_properties == [
+            {"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"},
+            {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"},
+        ]
+
+    def test_edit_regroups_by_publisher(self, client, factory_session):
+        tenant = self._seller("seller-edit.example.test")
+        profile = InventoryProfileFactory(tenant=tenant, profile_id="edited_profile")
+        _auth_session(client, tenant.tenant_id)
+
+        client.post(
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/{profile.id}/edit",
+            data={
+                **self._form("edited_profile", property_mode="property_ids"),
+                "selected_property_ids": ["sports_home", "news_home"],
+            },
+        )
+
+        stored = self._stored(factory_session, tenant.tenant_id, "edited_profile")
+        assert stored.publisher_properties == [
+            {"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"},
+            {"publisher_domain": "sports.example", "property_ids": ["sports_home"], "selection_type": "by_id"},
+        ]
+
+    def test_a_tag_no_authorized_property_carries_is_refused(self, client, factory_session):
+        tenant = self._seller("seller-orphan.example.test")
+        _auth_session(client, tenant.tenant_id)
+
+        answer = operator_answer(
+            client,
+            client.post(
+                f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+                data=self._form("orphan_profile", property_mode="tags", property_tags="podcast"),
+            ),
+        )
+
+        assert answer == (
+            302,
+            f"/tenant/{tenant.tenant_id}/inventory-profiles/add",
+            [("error", "No authorized property carries the tags: podcast")],
+        )
+        assert self._stored(factory_session, tenant.tenant_id, "orphan_profile") is None
+
+    def test_the_form_offers_no_agent_host_default(self, client, factory_session):
+        tenant = self._seller("seller-form.example.test")
+        profile = InventoryProfileFactory(tenant=tenant, profile_id="form_profile")
+        _auth_session(client, tenant.tenant_id)
+
+        add_page = client.get(f"/tenant/{tenant.tenant_id}/inventory-profiles/add")
+        edit_page = client.get(f"/tenant/{tenant.tenant_id}/inventory-profiles/{profile.id}/edit")
+
+        assert add_page.status_code == edit_page.status_code == 200
+        assert "seller-form.example.test" not in add_page.get_data(as_text=True)
+        assert "seller-form.example.test" not in edit_page.get_data(as_text=True)

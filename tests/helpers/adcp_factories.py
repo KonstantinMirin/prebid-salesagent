@@ -17,11 +17,13 @@ from adcp.types import CreativeAsset, FormatId
 from adcp.types.generated_poc.brand import Brand  # TODO: no stable alias in adcp.types
 
 # Import Package and PackageRequest from our schemas (they extend adcp library)
+from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 from src.core.product_conversion import default_reporting_capabilities
 from src.core.schemas import Package, PackageRequest, url
 from src.core.schemas.product import Product
 from tests.factories import PricingOptionFactory
 from tests.factories.creative_asset import build_assets, image_spec
+from tests.factories.product import default_publisher_properties
 
 
 def create_test_product(
@@ -830,6 +832,15 @@ def create_test_package_request_dict(
     }
 
 
+#: A seller authorized for one property, as ``AuthorizedPropertyRepository.list_refs`` returns
+#: it. What a legacy ``property_tags=["all_inventory"]`` row resolves against when a test
+#: converts it without seeding ``authorized_properties``: ``all_inventory`` applies to every
+#: property, so the row names this one publisher.
+ONE_AUTHORIZED_PROPERTY = (
+    AuthorizedPropertyRef(property_id="site_home", publisher_domain="publisher.example.com", tags=()),
+)
+
+
 def create_test_db_product(
     tenant_id: str,
     product_id: str = "test_product",
@@ -860,9 +871,10 @@ def create_test_db_product(
         name: Product name
         description: Product description
         format_ids: List of format ID dicts with {agent_url: str, id: str}. Defaults to display_300x250
-        property_tags: List of property tags (e.g., ["all_inventory", "premium"]). Default: ["all_inventory"]
+        property_tags: List of property tags (e.g., ["all_inventory", "premium"]), resolved against the
+            tenant's authorized properties (alternative to properties)
         property_ids: List of property IDs (alternative to property_tags)
-        properties: List of full Property objects (legacy, alternative to property_tags/property_ids)
+        properties: Explicit publisher_properties selectors. Default: default_publisher_properties()
         delivery_type: "guaranteed" or "non_guaranteed"
         targeting_template: Targeting template dict. Defaults to empty dict
         inventory_profile_id: Optional inventory profile ID to link
@@ -902,9 +914,10 @@ def create_test_db_product(
             }
         ]
 
-    # Default property_tags if no property authorization provided
+    # An explicit selector if no property authorization provided: it names its publisher,
+    # so the product is offered without an authorized-property row (#1845)
     if property_tags is None and property_ids is None and properties is None:
-        property_tags = ["all_inventory"]
+        properties = default_publisher_properties()
 
     # Default targeting_template
     if targeting_template is None:
@@ -964,7 +977,7 @@ def create_test_db_product_with_pricing(
 
             # Product can now be converted to AdCP schema
             from src.core.product_conversion import convert_product_model_to_schema
-            adcp_product = convert_product_model_to_schema(product)
+            adcp_product = convert_product_model_to_schema(product, authorized_properties=[])
     """
     from decimal import Decimal
 
