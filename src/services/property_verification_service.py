@@ -15,6 +15,7 @@ from adcp import (
     verify_agent_authorization,
 )
 
+from src.core.agent_identity import adagents_scoped_to_agent
 from src.core.database.repositories.uow import AuthorizedPropertyUoW
 from src.services.adagents_error_messages import describe_adagents_error
 
@@ -104,7 +105,7 @@ class PropertyVerificationService:
                 property_identifiers = property_obj.identifiers or []
 
                 is_authorized = verify_agent_authorization(
-                    adagents_data=adagents_data,
+                    adagents_data=adagents_scoped_to_agent(adagents_data, agent_url),
                     agent_url=agent_url,
                     property_type=property_obj.property_type,
                     property_identifiers=property_identifiers,
