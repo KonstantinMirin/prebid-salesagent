@@ -46,7 +46,7 @@ class TestCapabilitiesRestPostRoute:
                 "/api/v1/capabilities",
                 json={"context": {"request_id": "buyer-echo-123"}},
                 # The request has to NAME a seller: one naming none is refused
-                # (CONFIGURATION_ERROR), because there is no tenant whose rules to apply.
+                # (TENANT_UNDEFINED), because there is no tenant whose rules to apply.
                 headers=env.credential(),
             )
 

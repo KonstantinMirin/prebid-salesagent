@@ -209,9 +209,14 @@ def seed_storyboard_tenant() -> str:
     )
     from src.core.database.repositories.principal import PrincipalRepository
     from src.core.database.repositories.principal_lookup import find_principal_by_token_hash
+    from tests.storyboard.bundle import materialize_bundle
 
     # Resolved BEFORE any write: a missing bundle is a refusal, and refusing after seeding
-    # a tenant would leave the database half-configured for the next run to inherit.
+    # a tenant would leave the database half-configured for the next run to inherit. This
+    # runs ahead of the grading suite, so it puts the bundle on disk the same way the suite
+    # does rather than requiring a separate download step first.
+    if (failure := materialize_bundle()) is not None:
+        raise FileNotFoundError(failure)
     domains = kit_property_domains()
     accounts = kit_account_references()
 

@@ -615,16 +615,18 @@ def _addressed_tenant(headers: Mapping[str, str]) -> TenantContext:
     shape. The operator still gets the host or tenant that reached a deployment serving
     neither, which is who the value was ever for.
     """
-    from src.core.errors.details import ConfigurationDetails
-    from src.core.exceptions import AdCPConfigurationError
+    from src.core.exceptions import AdCPTenantUndefinedError
 
     tenant_id = _detect_tenant(headers)
     tenant = TenantContext.load(tenant_id) if tenant_id else None
     if tenant is None:
         named = _get_header_case_insensitive(headers, "x-adcp-tenant") or _get_header_case_insensitive(headers, "host")
-        raise AdCPConfigurationError(
-            details=ConfigurationDetails(),
-            internal_detail=LookupError(f"request named {named!r}; this deployment serves no tenant at it"),
+        # Raised FROM the LookupError, not handed to ``internal_detail``: the boundary logs
+        # ``exc_info=error``, which formats the error's ``__cause__`` chain, and an attribute
+        # is not in that chain -- so the attribute form writes the host nowhere at all. The
+        # operator needs the address that was dialled; the buyer must not be told it back.
+        raise AdCPTenantUndefinedError() from LookupError(
+            f"request named {named!r}; this deployment serves no tenant at it"
         )
     return tenant
 
@@ -634,12 +636,9 @@ def public_identity_for(headers: Mapping[str, str]) -> PublicIdentity:
 
     The third sanctioned entry into this module's one resolution, after
     ``_resolve_identity`` (a tool request) and ``identity_of`` (server-initiated work).
-    It exists for the A2A agent card, which is reachable at the three ROOT paths
-    ``_AGENT_CARD_PATHS`` declares -- A2A fixes one of them
-    (``/.well-known/agent-card.json``, A2A §8.2 and §14.3), AdCP's own guide names
-    ``/.well-known/agent.json`` (``a2a-guide.mdx:782``), and ``/agent.json`` is the legacy
-    spelling neither specification fixes. The card answers before any AdCP exchange, and
-    therefore cannot be a
+    It exists for the A2A agent card, served at the one ROOT path ``AGENT_CARD_PATH``
+    declares -- ``/.well-known/agent-card.json``, which A2A fixes (§8.2, §14.3). The card
+    answers before any AdCP exchange, and therefore cannot be a
     registry row: it carries no AdCP envelope, and a row for it would advertise itself as
     a skill on the card it serves. What it does need is the same answer to "which tenant
     is this request for" that every tool gets -- so it asks here rather than deriving one
