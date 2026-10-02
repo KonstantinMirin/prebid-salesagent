@@ -95,6 +95,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.trust_root_adagents",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -4786,6 +4787,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-local-unbacked-specialism",
             "T-UC-010-local-orphaned-specialism",
             "T-UC-010-local-unbacked-protocol",
+            # Batch 17 — the locally-added advertising-policy graders. Their feature was
+            # edited before it was wired, so it had never run; portfolio, and the policy
+            # inside it, now exists only for a seller some publisher has verified.
+            "T-UC-010-local-advertising-policy-declared",
+            "T-UC-010-local-advertising-policy-absent",
+            "T-UC-010-local-advertising-policy-empty-description",
+            "T-UC-010-local-advertising-policy-no-verified-publisher",
             # Batch 14 — account.sandbox boundary outline (#1721 M4). Was dormant
             # (no bound Given for "the tenant account is configured for
             # {boundary_point}"), citing #1855 (generic wiring) instead of the
@@ -5988,6 +5996,16 @@ ENV_ROUTES: list[EnvRoute] = [
     EnvRoute(
         tag="tenantid",
         when=lambda m: "tenantid" in m,
+        env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @adagents (local trust-root adagents.json feature) ──────────────────
+    # The same shape as @agentcard: an unscoped row for T-ADAGENTS-* identity tags, the
+    # capabilities env for its in-process ASGI client, and a tenant declaring its own
+    # virtual_host, whose properties are what the document is built from.
+    EnvRoute(
+        tag="adagents",
+        when=lambda m: "adagents" in m,
         env_builder=_build_capabilities_env,
         seed=_seed_tenant_and_principal,
     ),

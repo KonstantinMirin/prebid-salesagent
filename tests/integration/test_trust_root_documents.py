@@ -106,7 +106,7 @@ _BRAND_AGENT_KEYS = {
 }
 
 
-def _seed(env, slug: str, *, virtual_host: str | None = None, **key_kwargs):
+def _seed(env, slug: str, **key_kwargs):
     """Seed one tenant reachable at its own virtual host, plus one signing key.
 
     Every test gets its OWN slug: the integration database is not rolled back
@@ -121,7 +121,7 @@ def _seed(env, slug: str, *, virtual_host: str | None = None, **key_kwargs):
     tenant = TenantFactory(
         tenant_id=f"tr_{slug}",
         subdomain=f"seller-{slug}",
-        virtual_host=virtual_host or f"seller-{slug}.example.com",
+        virtual_host=f"seller-{slug}.example.com",
     )
     key_kwargs.setdefault("not_before", _NOW - timedelta(days=1))
     key = SigningKeyFactory(tenant=tenant, **key_kwargs)
@@ -465,8 +465,8 @@ class TestRevocationGraceWindow:
             revoked = SigningKeyFactory(tenant=tenant, not_before=_NOW - timedelta(days=2), revoked_at=revoked_at)
             # An authorization record is a PRECONDITION for this test, not incidental setup:
             # every authorized_agents[*] variant requires its selector array (minItems: 1), so a
-            # tenant with no backing record publishes no adagents.json at all (asserted by
-            # test_adagents_is_not_served_by_a_host_that_owns_no_property). Without a record
+            # tenant with no backing record publishes no adagents.json at all (graded by
+            # tests/bdd/features/local-trust-root-adagents.feature). Without a record
             # there is no pin to inspect, and the marker assertions below would pass VACUOUSLY —
             # `all(...)` over an empty list is true. Same shape as the two sibling tests.
             authorization = AuthorizedPropertyFactory(
@@ -694,54 +694,4 @@ class TestAdagentsDocument:
             assert _pinned_kids(adagents) == _kids(jwks["keys"]), (
                 "the adagents signing_keys[] pin and the JWKS must be the same key set; "
                 f"pin={sorted(_pinned_kids(adagents))} jwks={sorted(_kids(jwks['keys']))}"
-            )
-
-    def test_adagents_is_not_served_by_a_host_that_owns_no_property(self, integration_db):
-        """R-M1: ``authorizations`` come from the existing authorized-properties
-        records and are NEVER fabricated — fabricating them means self-attesting an
-        authorization no publisher granted.
-
-        With no record there is no document to serve. A file with an empty
-        ``authorized_agents`` and no catalog content is one the pinned schema rejects
-        (``adagents.json`` ``oneOf[1].allOf[0]``: "a file with neither sales authorization
-        nor non-empty catalog content is rejected"), and a sales agent that owns no
-        property does not publish adagents.json at all (seller-setup.mdx "Who publishes
-        what"). So the host answers 404, which a buyer reads as "no authorization here".
-        """
-        from tests.factories import AuthorizedPropertyFactory
-
-        with BareIntegrationEnv(tenant_id="trust_root_env_q") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "q")
-            # A property this tenant sells on ANOTHER publisher's domain: it backs that
-            # publisher's own adagents.json, never a claim served at the tenant's host.
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain="some-publisher.example")
-            env.get_session()
-            client = env.get_rest_client()
-
-            _get_document(client, _ADAGENTS_PATH, tenant, expect_status=404)
-
-    def test_adagents_finds_the_properties_of_a_host_served_on_a_port(self, integration_db):
-        """``virtual_host`` keeps the port the agent is served on, and
-        ``publisher_domain`` never carries one (its pattern admits no colon). The lookup
-        drops the port, or a tenant on a non-default port could never claim a property on
-        its own host.
-        """
-        from tests.factories import AuthorizedPropertyFactory
-
-        with BareIntegrationEnv(tenant_id="trust_root_env_s") as env:
-            env.setup_default_data()
-            tenant, _ = _seed(env, "s", virtual_host="seller-s.example.com:8443")
-            AuthorizedPropertyFactory(tenant=tenant, publisher_domain="seller-s.example.com", tags=["premium_news"])
-            env.get_session()
-            client = env.get_rest_client()
-
-            document = _get_document(client, _ADAGENTS_PATH, tenant)
-
-            validate_against_pinned_schema(_ADAGENTS_SCHEMA, document)
-            claimed = {
-                prop["publisher_domain"] for entry in document["authorized_agents"] for prop in entry["properties"]
-            }
-            assert claimed == {"seller-s.example.com"}, (
-                f"the property on the host itself must be claimed; got {sorted(claimed)}"
             )

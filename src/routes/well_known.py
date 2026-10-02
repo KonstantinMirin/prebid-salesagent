@@ -64,7 +64,6 @@ from src.core.agent_identity import (
 from src.core.config import get_settings
 from src.core.database.repositories.uow import TrustRootUoW
 from src.core.domain_routing import route_landing_page
-from src.core.http_utils import hostname_of
 
 # Dotted-path imports, never ``from src.core.signing import ...``: that package's
 # ``__init__`` deliberately re-exports NOTHING, which is what keeps the signing
@@ -167,8 +166,9 @@ def _adagents_json_handler(uow: TrustRootUoWType, tenant: Tenant, now: datetime)
     # An adagents.json served at OUR host speaks for the properties on that
     # host — never for properties a publisher hosts elsewhere, whose own
     # adagents.json is the document a verifier consults. ``publisher_domain`` is a
-    # hostname (its pattern admits no colon), so the port comes off ``virtual_host``.
-    properties = uow.authorized_properties.list_for_publisher_domain(hostname_of(tenant.virtual_host))
+    # hostname (its pattern admits no colon), so the lookup is by the stored hostname,
+    # never by ``virtual_host``, which keeps the port.
+    properties = uow.authorized_properties.list_for_publisher_domain(tenant.virtual_host_name)
     if not properties:
         # A host that owns no property publishes no adagents.json (seller-setup.mdx "Who
         # publishes what"). An empty file is not a fallback: with neither sales

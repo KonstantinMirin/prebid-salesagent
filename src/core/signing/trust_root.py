@@ -231,10 +231,11 @@ def build_adagents_json(
     *authorizations* are the tenant's existing authorized-property records — the
     document NEVER fabricates one. Fabricating an entry would mean
     self-attesting an authorization no publisher granted, and this file's entire
-    purpose is to be a publisher's attestation. The caller passes at least one:
-    with no backing record there is no document to build, because a file with
-    neither sales authorization nor catalog content is one the pinned schema
-    rejects (``adagents.json`` ``oneOf[1].allOf[0]``), and the route answers 404.
+    purpose is to be a publisher's attestation. An empty *authorizations* is
+    refused with ``ValueError``: with no backing record there is no document to
+    build, because a file with neither sales authorization nor catalog content is
+    one the pinned schema rejects (``adagents.json`` ``oneOf[1].allOf[0]``), and
+    the route answers 404 instead of calling this.
 
     ``authorization_type: "inline_properties"`` carries the property objects on
     the entry itself, so the document is self-contained and needs no top-level
@@ -245,6 +246,8 @@ def build_adagents_json(
     byte-equality" — and a canonical-by-construction producer satisfies both
     rules at once.
     """
+    if not authorizations:
+        raise ValueError(f"tenant {tenant.tenant_id!r}: an adagents.json needs at least one authorized property")
     entry: dict[str, Any] = {
         "authorization_type": "inline_properties",
         "properties": [_property_entry(prop) for prop in authorizations],
@@ -265,5 +268,5 @@ def build_adagents_json(
     # (``minItems: 1``). So does the pinned schema: its inline variant requires sales
     # authorization or non-empty catalog content, and that empty document had neither. The
     # route now serves no document in that case, and every document built here carries
-    # one entry; the integration suite validates it against the pinned schema.
+    # one entry; local-trust-root-adagents.feature validates it against the pinned schema.
     return document
