@@ -19,9 +19,14 @@ from src.core.database.database_session import get_db_session
 from src.core.database.integrity import resolve_or_write
 from src.core.database.models import PersistedMediaBuyStatus, PricingOption, Product, ProductInventoryMapping, Tenant
 from src.core.database.product_pricing import get_product_pricing_options
+from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
-from src.core.helpers.publisher_property_helpers import by_id_selectors
+from src.core.helpers.publisher_property_helpers import (
+    by_id_selectors,
+    by_tag_selectors_per_publisher,
+    tags_by_publisher,
+)
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
 
@@ -490,6 +495,10 @@ def list_products(tenant_id):
                     "custom_keys": custom_key_count,
                 }
 
+            # What a buyer is sold is resolved against these, so the page marks a product
+            # get_products leaves out (#1845): it names no verified publisher.
+            verified_properties = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+
             # Convert products to dict format for template
             products_list = []
             for product in products:
@@ -600,6 +609,7 @@ def list_products(tenant_id):
                         },
                     ),
                     "inventory_profile": inventory_profile_dict,
+                    "offered": bool(product.resolve_publisher_properties(verified_properties)),
                     # Dynamic product fields
                     "is_dynamic": getattr(product, "is_dynamic", False),
                     "is_dynamic_variant": getattr(product, "is_dynamic_variant", False),
@@ -1050,27 +1060,10 @@ def add_product(tenant_id):
                         flash("Please select at least one property tag", "error")
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    # Parse domain:tag pairs and group by publisher_domain
-                    import re
-                    from collections import defaultdict
-
-                    tags_by_domain: dict[str, list[str]] = defaultdict(list)
-                    tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-                    for selection in selected_tags:
-                        if ":" not in selection:
-                            flash(f"Invalid tag selection format: {selection}", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        domain, tag = selection.split(":", 1)
-
-                        # Validate tag format
-                        if not tag_pattern.match(tag):
-                            flash(f"Invalid tag '{tag}': use only lowercase letters, numbers, and underscores", "error")
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                        if tag not in tags_by_domain[domain]:
-                            tags_by_domain[domain].append(tag)
+                    tags_by_domain, refusal = tags_by_publisher(selected_tags)
+                    if refusal:
+                        flash(refusal, "error")
+                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
                     # Validate that tags exist for properties from these publishers
                     from src.core.database.models import AuthorizedProperty
@@ -1097,19 +1090,8 @@ def add_product(tenant_id):
                             )
                             return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
 
-                    # Build AdCP 2.13.0 discriminated union format
-                    publisher_properties = []
-                    for domain, tags in tags_by_domain.items():
-                        publisher_properties.append(
-                            {
-                                "publisher_domain": domain,
-                                "property_tags": tags,
-                                "selection_type": "by_tag",
-                            }
-                        )
-
-                    # Store in the properties field (supports full publisher_properties structure)
-                    product_kwargs["properties"] = publisher_properties
+                    # One by_tag selector per publisher, in the properties field
+                    product_kwargs["properties"] = by_tag_selectors_per_publisher(tags_by_domain)
                 elif property_mode == "property_ids":
                     # Get selected property IDs and store in AdCP discriminated union format
                     # grouped by publisher_domain
@@ -1489,28 +1471,13 @@ def edit_product(tenant_id, product_id):
                     # Get selected property tags (format: "domain:tag")
                     selected_tags = request.form.getlist("selected_property_tags")
                     if selected_tags:
-                        import re
-                        from collections import defaultdict
-
-                        tags_by_domain: dict[str, list[str]] = defaultdict(list)
-                        tag_pattern = re.compile(r"^[a-z0-9_]+$")
-
-                        for selection in selected_tags:
-                            if ":" in selection:
-                                domain, tag = selection.split(":", 1)
-                                if tag_pattern.match(tag) and tag not in tags_by_domain[domain]:
-                                    tags_by_domain[domain].append(tag)
-
-                        # Build AdCP discriminated union format
-                        publisher_properties = []
-                        for domain, tags in tags_by_domain.items():
-                            publisher_properties.append(
-                                {
-                                    "publisher_domain": domain,
-                                    "property_tags": tags,
-                                    "selection_type": "by_tag",
-                                }
+                        tags_by_domain, refusal = tags_by_publisher(selected_tags)
+                        if refusal:
+                            flash(refusal, "error")
+                            return redirect(
+                                url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
+                        publisher_properties = by_tag_selectors_per_publisher(tags_by_domain)
 
                         if publisher_properties:
                             product.properties = publisher_properties

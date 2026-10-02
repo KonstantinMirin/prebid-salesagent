@@ -484,23 +484,23 @@ class Product(Base, JSONValidatorMixin):
     def resolve_publisher_properties(self, authorized_properties: Sequence["SelectableProperty"]) -> list[dict]:
         """This product's ``publisher_properties``, one selector per publisher.
 
-        An inventory profile's selectors, or the product's own ``properties``, already name
-        their publishers and are returned normalized. The legacy ``property_ids`` /
-        ``property_tags`` columns name none, so they resolve against
-        *authorized_properties* -- the seller's authorized-property rows, loaded once per
-        request by the caller (``AuthorizedPropertyRepository.list_refs``).
+        *authorized_properties* are the seller's VERIFIED authorized properties, loaded once
+        per request by the caller (``AuthorizedPropertyRepository.list_refs``). An inventory
+        profile's selectors, or the product's own ``properties``, already name their
+        publishers and keep only those this list holds. The legacy ``property_ids`` /
+        ``property_tags`` columns name none, so they resolve against it.
 
         A tenant is a SELLER: its host is where its agent answers, not a publisher, and a
         buyer verifies a product at ``https://<publisher_domain>/.well-known/adagents.json``
-        (#1845). So a legacy product that no authorized property backs resolves to ``[]``
-        rather than borrowing the host; the caller does not offer it.
+        (#1845). So a product no verified property backs resolves to ``[]`` rather than
+        borrowing the host; the caller does not offer it.
         """
-        from src.core.helpers.publisher_property_helpers import ensure_selection_type, legacy_selectors
+        from src.core.helpers.publisher_property_helpers import authorized_selectors, legacy_selectors
 
         if self.inventory_profile_id and self.inventory_profile:
-            return ensure_selection_type(self.inventory_profile.publisher_properties) or []
+            return authorized_selectors(self.inventory_profile.publisher_properties, authorized_properties)
         if self.properties:
-            return ensure_selection_type(self.properties) or []
+            return authorized_selectors(self.properties, authorized_properties)
         return legacy_selectors(self.property_ids, self.property_tags, authorized_properties)
 
     @property
@@ -2464,6 +2464,27 @@ class AuthorizedProperty(Base, JSONValidatorMixin):
 
     # Relationships
     tenant = relationship("Tenant", backref="authorized_properties")
+
+    @classmethod
+    def verified_website(
+        cls, *, tenant_id: str, property_id: str, domain: str, name: str, tags: list[str] | None = None
+    ) -> "AuthorizedProperty":
+        """A website on *domain* whose publisher already authorizes this agent.
+
+        The row a seed writes for a publisher it controls: the domain is both the property's
+        identifier and its publisher, and it is stored ``verified`` because no verification
+        fetch will run for it.
+        """
+        return cls(
+            tenant_id=tenant_id,
+            property_id=property_id,
+            property_type="website",
+            name=name,
+            identifiers=[{"type": "domain", "value": domain}],
+            tags=tags,
+            publisher_domain=domain,
+            verification_status="verified",
+        )
 
     __table_args__ = (
         ForeignKeyConstraint(["tenant_id"], ["tenants.tenant_id"], ondelete="CASCADE"),

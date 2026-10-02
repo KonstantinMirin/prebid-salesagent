@@ -351,7 +351,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         assert uow.products is not None
         assert uow.authorized_properties is not None
         db_products = uow.products.list_all()
-        # Once per request: every product's legacy selectors resolve against these (#1845).
+        # Once per request: every product's selectors resolve against these (#1845).
         authorized_properties = uow.authorized_properties.list_refs()
 
         # Convert database Product models to AdCP Product schema
@@ -783,7 +783,7 @@ def get_product_catalog(tenant_id: str) -> list[Product]:
 
     Returns:
         List of Product objects with full pricing options. A product that names no
-        publisher the tenant is authorized to represent is left out, as get_products
+        publisher the tenant holds a verified authorized property of is left out, as get_products
         leaves it out (``convert_product_model_to_schema`` answers ``None``).
     """
     from src.core.database.repositories.uow import ProductUoW

@@ -234,7 +234,9 @@ class CapabilitiesEnv(IntegrationEnv):
 
         tenant = self.get_session().get(Tenant, self._tenant_id)
         for channel in channels:
-            ProductFactory(tenant=tenant, channels=[channel])
+            # Channels only: a verified property would add a publisher to the portfolio
+            # the scenario did not declare.
+            ProductFactory(tenant=tenant, channels=[channel], authorize_publisher=False)
         self._commit_factory_data()
 
     def declare_signing(

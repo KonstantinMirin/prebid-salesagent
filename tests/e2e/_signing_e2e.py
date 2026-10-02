@@ -412,22 +412,10 @@ def _seed_buying_surface(env: Any, tenant: Any, *, access_token: str) -> None:
     # account it names cannot leave this seeding the old one.
     seed_default_account(tenant.tenant_id, principal.principal_id, account_id=CI_TEST_ACCOUNT["account_id"])
     PropertyTagFactory(tenant=tenant, tag_id="all_inventory")
-    # ``publisher_properties`` is spelled out rather than left to the model's fallback.
-    # The fallback derives ``publisher_domain`` from ``tenant.virtual_host``, which on
-    # this seam carries the stack's PORT — and the AdCP ``Product`` schema types that
-    # field as a bare hostname, so the derived value fails validation and every read of
-    # the product 500s before anything about signing is reached.
-    publisher_domain = (tenant.virtual_host or "").split(":")[0]
-    # ``property_tags`` is cleared in the same breath: ``ck_product_authorization`` is an
-    # XOR across properties / property_ids / property_tags, so the factory's default tag
-    # list and an explicit ``properties`` cannot both stand.
-    product = ProductFactory(
-        tenant=tenant,
-        property_tags=None,
-        properties=[
-            {"publisher_domain": publisher_domain, "property_tags": ["all_inventory"], "selection_type": "by_tag"}
-        ],
-    )
+    # The factory's default selector names its publisher and seeds the verified property
+    # that backs it, so the product is offered: a product naming the tenant's own host would
+    # not be (#1845).
+    product = ProductFactory(tenant=tenant)
     PricingOptionFactory(product=product)
     # Creates the mock AdapterConfig row and pins approval in one call — e2e shares one
     # database and pytest-randomly reorders, so leftover approval state is not something

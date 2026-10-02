@@ -70,7 +70,10 @@ def ensure_selection_type(properties: list[dict]) -> list[dict] | None:
 # ---------------------------------------------------------------------------
 
 #: The seller's default property tag. Its stored description is "Default tag that applies to
-#: all properties", so it matches every authorized property whether or not the row lists it.
+#: all properties". It is the SELLER's tag, not one a publisher declares: AdCP 3.1.1
+#: ``core/publisher-property-selector.json`` "Selects properties from a publisher's
+#: adagents.json", so a buyer resolves a ``by_tag`` selector against the publisher's own file,
+#: where ``all_inventory`` names nothing. Selecting it selects each publisher whole.
 ALL_INVENTORY_TAG = "all_inventory"
 
 
@@ -108,6 +111,11 @@ def _by_publisher(properties: Iterable[SelectableProperty]) -> dict[str, list[Se
     return grouped
 
 
+def all_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
+    """One ``all`` selector per publisher of *properties*: each publisher offered whole."""
+    return [{"publisher_domain": domain, "selection_type": "all"} for domain in _by_publisher(properties)]
+
+
 def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
     """One ``by_id`` selector per publisher, holding the IDs of that publisher's properties.
 
@@ -120,19 +128,30 @@ def by_id_selectors(properties: Iterable[SelectableProperty]) -> list[dict]:
     ]
 
 
-def by_tag_selectors(tags: Sequence[str], properties: Iterable[SelectableProperty]) -> list[dict]:
-    """One ``by_tag`` selector per publisher whose properties carry any of *tags*.
+def by_tag_selectors_per_publisher(tags_by_publisher: dict[str, list[str]]) -> list[dict]:
+    """One ``by_tag`` selector per publisher domain, holding the tags chosen for it."""
+    return [
+        {"publisher_domain": domain, "property_tags": tags, "selection_type": "by_tag"}
+        for domain, tags in tags_by_publisher.items()
+    ]
 
-    Each selector lists the requested tags that publisher's properties carry, in the order
-    requested. A publisher carrying none of them is not named.
+
+def by_tag_selectors(tags: Sequence[str], properties: Iterable[SelectableProperty]) -> list[dict]:
+    """One selector per publisher whose properties carry any of *tags*.
+
+    Each ``by_tag`` selector lists the requested tags that publisher's properties carry, in
+    the order requested. A publisher carrying none of them is not named. ``all_inventory``
+    selects every publisher whole (:data:`ALL_INVENTORY_TAG`).
     """
-    selectors = []
+    if ALL_INVENTORY_TAG in tags:
+        return all_selectors(properties)
+    tags_by_publisher = {}
     for domain, props in _by_publisher(properties).items():
-        carried = {ALL_INVENTORY_TAG}.union(*(p.tags or () for p in props))
+        carried = set().union(*(p.tags or () for p in props))
         matched = [tag for tag in tags if tag in carried]
         if matched:
-            selectors.append({"publisher_domain": domain, "property_tags": matched, "selection_type": "by_tag"})
-    return selectors
+            tags_by_publisher[domain] = matched
+    return by_tag_selectors_per_publisher(tags_by_publisher)
 
 
 def legacy_selectors(
@@ -152,4 +171,48 @@ def legacy_selectors(
         return by_id_selectors(p for p in properties if p.property_id in wanted)
     if property_tags:
         return by_tag_selectors(property_tags, properties)
-    return [{"publisher_domain": domain, "selection_type": "all"} for domain in _by_publisher(properties)]
+    return all_selectors(properties)
+
+
+def authorized_selectors(selectors: list[dict] | None, properties: Iterable[SelectableProperty]) -> list[dict]:
+    """Stored selectors that name a publisher of *properties*; the rest are dropped.
+
+    An inventory profile or a product's own ``properties`` already name their publishers,
+    and a buyer verifies each one at ``https://<publisher_domain>/.well-known/adagents.json``
+    (AdCP 3.1.1 ``governance/property/authorized-properties.mdx``). So a selector is kept
+    only for a publisher the seller holds a verified property of -- a row the old profile
+    form stored with the seller's own host, or a publisher whose property was never
+    verified, is not offered (#1845).
+    """
+    domains = {p.publisher_domain for p in properties}
+    return [
+        selector
+        for selector in ensure_selection_type(selectors or []) or []
+        if selector.get("publisher_domain") in domains
+    ]
+
+
+def refuse_property_tag(tag: str) -> str | None:
+    """Why *tag* cannot be stored, or ``None``: AdCP's ``core/property-tag.json`` pattern."""
+    if _PROPERTY_TAG_PATTERN.match(tag):
+        return None
+    return f"Invalid tag '{tag}': use only lowercase letters, numbers, and underscores"
+
+
+def tags_by_publisher(selections: Iterable[str]) -> tuple[dict[str, list[str]], str | None]:
+    """The admin product form's ``domain:tag`` choices grouped by publisher, or why not.
+
+    Returns ``(tags_by_domain, None)``, or ``({}, refusal)`` at the first malformed choice.
+    """
+    grouped: dict[str, list[str]] = {}
+    for selection in selections:
+        domain, separator, tag = selection.partition(":")
+        if not separator:
+            return {}, f"Invalid tag selection format: {selection}"
+        refusal = refuse_property_tag(tag)
+        if refusal:
+            return {}, refusal
+        tags = grouped.setdefault(domain, [])
+        if tag not in tags:
+            tags.append(tag)
+    return grouped, None

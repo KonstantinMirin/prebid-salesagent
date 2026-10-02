@@ -1,0 +1,111 @@
+"""Harness for the admin pages that decide which publishers a product names (#1845).
+
+Sibling of :mod:`tests.harness.admin_accounts` and :mod:`tests.harness.admin_principal`: the
+operator's inventory-profile form, and the products page that marks a product buyers are
+not offered. A :class:`tests.harness.product.ProductEnv` rather than a standalone env,
+because a profile the operator saves is only half the behavior: the other
+half is what ``get_products`` then announces for a product linked to it. One env carries
+both, so a scenario saves the profile through the real form and reads it back off the wire
+on every buyer transport, and the factories, the database and the e2e realization are
+ProductEnv's.
+
+The admin transport follows the env's own. In process it is a Flask test client against
+the same database the factories write; over e2e it is a ``requests`` session against the
+live stack at ``e2e_config.base_url``, authenticated with the signed cookie
+``authenticate_http_session`` states, exactly as ``AdminAccountEnv`` does. Neither mode
+needs releasing: each request opens and closes its own client, so the env adds no
+``__enter__`` (``tests/harness/test_harness_base.py`` keeps that list closed).
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+from urllib.parse import urljoin
+
+from src.core.database.models import InventoryProfile
+from tests.harness.admin_accounts import _AdminResponse
+from tests.harness.product import ProductEnv
+from tests.helpers.admin_session import admin_auth_session, authenticate_http_session, drop_stated_session_cookie
+
+#: A format the profile form requires. Any id serves: the form stores it verbatim.
+_PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}])
+
+
+class AdminInventoryProfileEnv(ProductEnv):
+    """``ProductEnv`` plus the operator's inventory-profile form and products page."""
+
+    _admin_app: Any = None
+
+    # ── requests ───────────────────────────────────────────────────────────
+
+    def create_inventory_profile(self, profile_id: str, **selection: Any) -> _AdminResponse:
+        """POST the add form for *profile_id* with a ``tags`` or ``property_ids`` *selection*."""
+        return self._admin_request("inventory-profiles/add", self._profile_form(profile_id, **selection))
+
+    def edit_inventory_profile(self, profile_id: str, **selection: Any) -> _AdminResponse:
+        """POST the edit form of the stored profile *profile_id* with a new *selection*."""
+        stored = self.stored_inventory_profile(profile_id)
+        assert stored is not None, f"no inventory profile {profile_id!r} to edit"
+        return self._admin_request(f"inventory-profiles/{stored.id}/edit", self._profile_form(profile_id, **selection))
+
+    def admin_page(self, path: str) -> _AdminResponse:
+        """GET ``/tenant/<tenant>/<path>``."""
+        return self._admin_request(path)
+
+    # ── reads ──────────────────────────────────────────────────────────────
+
+    def stored_inventory_profile(self, profile_id: str) -> InventoryProfile | None:
+        """The profile row as the form left it, read fresh from the env's database."""
+        self.get_session().expire_all()
+        return self.get_one(InventoryProfile, tenant_id=self.tenant_id, profile_id=profile_id)
+
+    # ── internals ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _profile_form(profile_id: str, **selection: Any) -> dict[str, Any]:
+        return {
+            "name": f"Profile {profile_id}",
+            "profile_id": profile_id,
+            "targeted_ad_unit_ids": "[]",
+            "targeted_placement_ids": "[]",
+            "formats": _PROFILE_FORMATS,
+            **selection,
+        }
+
+    def _flask_app(self) -> Any:
+        if self._admin_app is None:
+            from src.admin.app import create_app
+
+            app = create_app()
+            app.config["TESTING"] = True
+            app.config["WTF_CSRF_ENABLED"] = False
+            self._admin_app = app
+        return self._admin_app
+
+    def _admin_request(self, path: str, form: dict[str, Any] | None = None) -> _AdminResponse:
+        """GET *path*, or POST *form* to it and follow the redirect to the page showing its flash."""
+        url = f"/tenant/{self.tenant_id}/{path}"
+        if form is not None:
+            self._commit_factory_data()
+        if self.e2e_config is None:
+            with self._flask_app().test_client() as client:
+                admin_auth_session(client, self.tenant_id)
+                answer = client.get(url) if form is None else client.post(url, data=form, follow_redirects=True)
+                return _AdminResponse.from_flask(answer)
+
+        import requests
+
+        base_url = self.e2e_config.base_url
+        with requests.Session() as session:
+            authenticate_http_session(session, base_url, self.tenant_id)
+            if form is None:
+                response = session.get(base_url + url, allow_redirects=False)
+            else:
+                response = session.post(base_url + url, data=form, allow_redirects=False)
+                location = response.headers.get("location")
+                if location:
+                    # The flash lives in the session the server just wrote; see the helper.
+                    drop_stated_session_cookie(session)
+                    response = session.get(urljoin(base_url + "/", location), allow_redirects=False)
+            return _AdminResponse.from_requests(response)

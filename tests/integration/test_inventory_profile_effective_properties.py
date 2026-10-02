@@ -19,8 +19,8 @@ import pytest
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import InventoryProfile, Product, Tenant
-from src.core.helpers.publisher_property_helpers import AuthorizedPropertyRef
 from tests.factories import PricingOptionFactory
+from tests.factories.product import authorized_refs
 from tests.helpers import assert_effective_properties_normalized
 from tests.helpers.adcp_factories import create_test_db_product
 
@@ -244,7 +244,7 @@ class TestEffectiveProperties:
             assert product.inventory_profile is not None
 
             # effective_properties should return profile data + selection_type (non-destructive)
-            effective = product.resolve_publisher_properties([])
+            effective = product.resolve_publisher_properties(authorized_refs("example.com"))
             assert_effective_properties_normalized(
                 effective, test_profile.publisher_properties, expected_selection_type="by_id"
             )
@@ -276,17 +276,6 @@ class TestEffectiveProperties:
             # Custom product uses property_tags, so properties should be None
             assert product.properties is None
             assert product.property_tags == ["premium", "video"]
-
-            # property_tags resolve against the seller's authorized properties, naming
-            # the publisher whose properties carry them (#1845)
-            authorized = [
-                AuthorizedPropertyRef(
-                    property_id="media_home", publisher_domain="media.example", tags=("premium", "video")
-                )
-            ]
-            assert product.resolve_publisher_properties(authorized) == [
-                {"publisher_domain": "media.example", "property_tags": ["premium", "video"], "selection_type": "by_tag"}
-            ]
 
 
 class TestEffectivePropertyTags:
@@ -479,7 +468,7 @@ class TestEffectiveImplementationConfig:
             assert len(effective_formats) == 2
 
             # effective_properties uses profile (non-destructive normalization)
-            effective_properties = product.resolve_publisher_properties([])
+            effective_properties = product.resolve_publisher_properties(authorized_refs("example.com"))
             assert_effective_properties_normalized(
                 effective_properties, test_profile.publisher_properties, expected_selection_type="by_id"
             )

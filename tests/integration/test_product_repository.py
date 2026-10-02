@@ -21,7 +21,7 @@ from src.core.database.repositories.uow import ProductUoW
 from src.core.product_conversion import convert_product_model_to_schema
 from src.core.schemas import Product as ProductSchema
 from tests.factories import PricingOptionFactory
-from tests.helpers.adcp_factories import ONE_AUTHORIZED_PROPERTY
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY
 
 
 def _create_test_tenant(session, unique_id: str) -> TenantModel:

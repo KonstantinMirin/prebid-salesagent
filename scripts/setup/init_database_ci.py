@@ -51,8 +51,8 @@ CI_TEST_TOKEN = "ci-test-token"
 def _ensure_example_property(session, tenant_id: str) -> None:
     """Give *tenant_id* the CI seed's one authorized property, ``example.com``, unless it has it.
 
-    The setup checklist counts authorized properties, and a product's legacy
-    ``property_tags`` name the publishers of these rows on the wire (#1845).
+    The setup checklist counts authorized properties, and a product names only the
+    publishers of verified rows on the wire (#1845).
     """
     from sqlalchemy import select
 
@@ -63,14 +63,8 @@ def _ensure_example_property(session, tenant_id: str) -> None:
         print("  ℹ️  Authorized property already exists: example.com")
         return
     session.add(
-        AuthorizedProperty(
-            tenant_id=tenant_id,
-            property_id="example_com",
-            property_type="website",
-            name="Example Website",
-            identifiers=[{"type": "domain", "value": "example.com"}],
-            publisher_domain="example.com",
-            verification_status="verified",
+        AuthorizedProperty.verified_website(
+            tenant_id=tenant_id, property_id="example_com", domain="example.com", name="Example Website"
         )
     )
     session.commit()

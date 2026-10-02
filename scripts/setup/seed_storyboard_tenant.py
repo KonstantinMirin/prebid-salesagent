@@ -361,14 +361,8 @@ def seed_storyboard_tenant() -> str:
                 select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id=property_id)
             ).first():
                 session.add(
-                    AuthorizedProperty(
-                        tenant_id=tenant_id,
-                        property_id=property_id,
-                        property_type="website",
-                        name=domain,
-                        identifiers=[{"type": "domain", "value": domain}],
-                        publisher_domain=domain,
-                        verification_status="verified",
+                    AuthorizedProperty.verified_website(
+                        tenant_id=tenant_id, property_id=property_id, domain=domain, name=domain
                     )
                 )
 
