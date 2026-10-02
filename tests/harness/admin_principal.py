@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AuditLog, Principal
-from tests.helpers.admin_session import admin_auth_session
+from tests.helpers.admin_session import admin_auth_session, admin_test_app
 
 
 class AdminPrincipalEnv:
@@ -44,12 +44,8 @@ class AdminPrincipalEnv:
         themselves, so there is no resource for an unwind guard to protect and the
         lifecycle methods would have been ceremony around a plain constructor.
         """
-        from src.admin.app import create_app
-
         self._tenant_id = tenant_id or self.DEFAULT_TENANT_ID
-        self._app: Any = create_app()
-        self._app.config["TESTING"] = True
-        self._app.config["WTF_CSRF_ENABLED"] = False
+        self._app: Any = admin_test_app()
 
     @property
     def tenant_id(self) -> str:

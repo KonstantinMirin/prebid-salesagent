@@ -4591,18 +4591,6 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
-#: Admin features with no e2e_admin leg, each with the reason the live stack cannot realize
-#: its Given. A scenario here is graded on admin_integration alone, and its feature header
-#: says so; the entry is the place that claim is reviewed.
-_ADMIN_IN_PROCESS_ONLY_TAGS: dict[str, str] = {
-    "pubauth": (
-        "the live server fetches a publisher's adagents.json through adcp's fetch_adagents, whose "
-        "pinned dialer refuses every private address and takes no override "
-        "(adcp/adagents.py _owned_pinned_client); every origin the compose stack serves is private, "
-        "so no live scenario can choose what a publisher's file says"
-    ),
-}
-
 # (Deleted) A one-tag exemption, "T-UC-010-auth", held the capabilities auth outline out of
 # transport parametrization because its <channel> column supplied the transport instead.
 # That column is gone: an outline that takes the transport as DATA can grade one transport
@@ -4913,8 +4901,7 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         from tests.harness.admin_accounts import AdminTransport
 
-        e2e_admin = [] if marker_names & _ADMIN_IN_PROCESS_ONLY_TAGS.keys() else [AdminTransport.E2E]
-        _parametrize_ctx(metafunc, [AdminTransport.INTEGRATION], e2e_admin)
+        _parametrize_ctx(metafunc, [AdminTransport.INTEGRATION], [AdminTransport.E2E])
         return
 
     # IMPL-only scenarios: harness has no transport wrappers for this path
@@ -5020,6 +5007,7 @@ def e2e_stack():
     # shared-server/shared-DB contention. Falls back to the shared stack when off.
     ca_bundle = os.environ.get("E2E_CA_BUNDLE")
     tls_base_url = os.environ.get("E2E_TLS_BASE_URL")
+    production_base_url = os.environ.get("E2E_PRODUCTION_BASE_URL")
     worker = os.environ.get("PYTEST_XDIST_WORKER")  # e.g. "gw3"
     if os.environ.get("E2E_PER_WORKER") == "1" and worker and worker.startswith("gw"):
         import re
@@ -5030,6 +5018,9 @@ def e2e_stack():
         proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
         prefix = f"{proj}-" if proj else ""
         base_url = f"http://{prefix}server-{worker}:8080"
+        # Its production twin, on the same per-worker database (run_all_tests.sh).
+        if production_base_url:
+            production_base_url = f"http://{prefix}server-{worker}-production:8080"
         # Each worker's TLS sidecar carries its own DOTTED CONTAINER NAME for the
         # same reason — `docker compose run` cannot give it a network alias.
         if tls_base_url:
@@ -5075,6 +5066,7 @@ def e2e_stack():
         postgres_url=postgres_url,
         tls_base_url=tls_base_url,
         ca_bundle=ca_bundle,
+        production_base_url=production_base_url,
     )
 
 

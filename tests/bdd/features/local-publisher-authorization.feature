@@ -19,12 +19,11 @@
 # pending authorized properties, and opening a partner's properties. Each scenario drives
 # the admin route, and every Then reads what that route wrote or answered.
 #
-# ONE TRANSPORT: admin_integration. The live stack cannot serve a publisher's file: the
-# server fetches it through adcp's fetch_adagents, whose pinned dialer refuses every
-# private address and takes no override (adcp/adagents.py, _owned_pinned_client), and an
-# origin the compose stack serves has nothing but a private address. So no e2e_admin leg
-# can choose what the publisher says. tests/bdd/conftest.py's
-# _ADMIN_IN_PROCESS_ONLY_TAGS names this feature with that reason.
+# BOTH ADMIN TRANSPORTS. admin_integration drives the routes in process, where the one
+# replaced piece is the publisher's origin (the SDK refuses to dial a private address,
+# and an in-process origin has nothing else). e2e_admin drives them on the live stack,
+# whose server dials a real TLS origin the runner serves on the stack's non-private
+# subnet, and "the seller is deployed in production" is the stack's production server.
 #
 # SPELLINGS. "{origin}" is the tenant's agent_url, "{ORIGIN}" the same string upper-cased,
 # "{host}" its host alone. Each scenario's tenant runs in production, because anywhere
@@ -78,11 +77,11 @@ Feature: A publisher's adagents.json authorizes this agent by its origin or an e
     Then the tenant holds <properties> from "pub.example"
 
     Examples:
-      | entry                                | properties               |
-      | {origin}/mcp/                        | properties "Front page"  |
-      | {origin}/a2a                         | properties "Front page"  |
-      | http://{host}/mcp                    | properties "pub.example" |
-      | https://other-seller.example.com/mcp | properties "pub.example" |
+      | entry                                | properties              |
+      | {origin}/mcp/                        | properties "Front page" |
+      | {origin}/a2a                         | properties "Front page" |
+      | http://{host}/mcp                    | the fallback property   |
+      | https://other-seller.example.com/mcp | the fallback property   |
 
   @T-ADMIN-PUBAUTH-verify
   Scenario Outline: Property verification reads the publisher's entry for this agent

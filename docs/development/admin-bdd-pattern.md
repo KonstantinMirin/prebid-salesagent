@@ -182,7 +182,8 @@ follow:
 
 ### Integration (`admin_integration`)
 
-Flask `test_client` against `create_app()`, in process, no Docker
+Flask `test_client` against `admin_test_app()` (`tests/helpers/admin_session.py`,
+the one composition every admin harness uses), in process, no Docker
 (`:214-222`). Auth injects the session through
 `tests/helpers/admin_session.py`. Runs in `tox -e bdd`.
 
@@ -202,11 +203,12 @@ fixture by way of `_build_admin_env`.
    branch uses (`tests/bdd/conftest.py:4379-4387`, `:4104-4135`). It derives the
    pytest ids from the enum values, because `tox.ini`'s `-k` selectors match on
    them.
-   A feature whose Given the live stack cannot realize is named, with the reason,
-   in `_ADMIN_IN_PROCESS_ONLY_TAGS`, and gets no `AdminTransport.E2E` leg:
-   `local-publisher-authorization.feature` serves a publisher's adagents.json, which
-   the live server fetches through a dialer that refuses every address the compose
-   stack has. Its header says which transport grades it.
+   Every admin scenario gets both legs. When the live stack cannot realize a Given
+   as it stands, the harness or the stack is extended until it can:
+   `local-publisher-authorization.feature` serves a publisher's adagents.json from a
+   TLS origin in the runner (`publisher.adcp-e2e.dev`, the runner's alias on the
+   stack's non-private subnet) and sends "the seller is deployed in production" to
+   the stack's production server (`adcp-server-production`).
 2. **One registry row builds the env.** `ENV_ROUTES["ADMIN"]`
    (`tests/bdd/conftest.py:5061`) names `_build_admin_env` (`:4782-4806`), and
    `_run_env_route` is the single consumer. That builder is the only one that

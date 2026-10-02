@@ -45,21 +45,23 @@ def given_ad_server(ctx: dict, adapter_type: str) -> None:
     _env(ctx).run_ad_server(adapter_type)
 
 
-@given(parsers.parse('the publisher "{domain}" lists property "{property_id}" named "{name}" in its adagents.json'))
-def given_publisher_lists_property(ctx: dict, domain: str, property_id: str, name: str) -> None:
-    _env(ctx).adagents_document(domain)["properties"].append(
+@given(parsers.parse('the publisher "{publisher}" lists property "{property_id}" named "{name}" in its adagents.json'))
+def given_publisher_lists_property(ctx: dict, publisher: str, property_id: str, name: str) -> None:
+    _env(ctx).adagents_document(publisher)["properties"].append(
         {
             "property_id": property_id,
             "property_type": "website",
             "name": name,
-            "identifiers": [{"type": "domain", "value": domain}],
+            # The domain the file lists is the domain it is served from: property sync keeps
+            # only the properties whose domain identifier matches the publisher it fetched.
+            "identifiers": [{"type": "domain", "value": _env(ctx).publisher_address(publisher)}],
         }
     )
 
 
-@given(parsers.parse('the publisher "{domain}" authorizes "{entry}" for property "{property_id}"'))
-def given_publisher_authorizes(ctx: dict, domain: str, entry: str, property_id: str) -> None:
-    _env(ctx).adagents_document(domain)["authorized_agents"].append(
+@given(parsers.parse('the publisher "{publisher}" authorizes "{entry}" for property "{property_id}"'))
+def given_publisher_authorizes(ctx: dict, publisher: str, entry: str, property_id: str) -> None:
+    _env(ctx).adagents_document(publisher)["authorized_agents"].append(
         {
             "url": _spell(entry, ctx["tenant"].agent_url),
             "authorized_for": "Display inventory",
@@ -69,9 +71,9 @@ def given_publisher_authorizes(ctx: dict, domain: str, entry: str, property_id: 
     )
 
 
-@given(parsers.parse('the tenant has authorized property "{property_id}" of "{domain}" pending verification'))
-def given_pending_property(ctx: dict, property_id: str, domain: str) -> None:
-    _env(ctx).pending_property(property_id=property_id, publisher_domain=domain)
+@given(parsers.parse('the tenant has authorized property "{property_id}" of "{publisher}" pending verification'))
+def given_pending_property(ctx: dict, property_id: str, publisher: str) -> None:
+    _env(ctx).pending_property(property_id=property_id, publisher=publisher)
 
 
 # ── When ──────────────────────────────────────────────────────────────────
@@ -87,9 +89,9 @@ def when_verify(ctx: dict) -> None:
     ctx["admin_page"] = _env(ctx).verify_pending_properties()
 
 
-@when(parsers.parse('the operator opens the properties of the partnership with "{domain}"'))
-def when_open_properties(ctx: dict, domain: str) -> None:
-    ctx["admin_page"] = _env(ctx).open_partner_properties(domain)
+@when(parsers.parse('the operator opens the properties of the partnership with "{publisher}"'))
+def when_open_properties(ctx: dict, publisher: str) -> None:
+    ctx["admin_page"] = _env(ctx).open_partner_properties(publisher)
 
 
 # ── Then ──────────────────────────────────────────────────────────────────
@@ -101,24 +103,24 @@ def _admin_body(ctx: dict) -> dict:
     return dict(response.get_json())
 
 
-@then(parsers.parse('the partnership with "{domain}" is verified'))
-def then_partnership_verified(ctx: dict, domain: str) -> None:
+@then(parsers.parse('the partnership with "{publisher}" is verified'))
+def then_partnership_verified(ctx: dict, publisher: str) -> None:
     body = _admin_body(ctx)
-    partner = _env(ctx).partner(domain)
+    partner = _env(ctx).partner(publisher)
     assert (partner.is_verified, partner.sync_status, partner.sync_error) == (True, "success", None), (
-        f"the sync recorded {domain!r} as is_verified={partner.is_verified}, "
+        f"the sync recorded {publisher!r} as is_verified={partner.is_verified}, "
         f"sync_status={partner.sync_status!r}, sync_error={partner.sync_error!r} (response {body})"
     )
-    assert partner.last_synced_at is not None, f"no successful sync of {domain!r} was recorded (response {body})"
+    assert partner.last_synced_at is not None, f"no successful sync of {publisher!r} was recorded (response {body})"
 
 
-@then(parsers.parse('the partnership with "{domain}" is refused'))
-def then_partnership_refused(ctx: dict, domain: str) -> None:
+@then(parsers.parse('the partnership with "{publisher}" is refused'))
+def then_partnership_refused(ctx: dict, publisher: str) -> None:
     body = _admin_body(ctx)
     agent_url = ctx["tenant"].agent_url
-    partner = _env(ctx).partner(domain)
+    partner = _env(ctx).partner(publisher)
     assert (partner.is_verified, partner.sync_status) == (False, "error"), (
-        f"the sync recorded {domain!r} as is_verified={partner.is_verified}, "
+        f"the sync recorded {publisher!r} as is_verified={partner.is_verified}, "
         f"sync_status={partner.sync_status!r} (response {body})"
     )
     assert partner.sync_error == f"Agent {agent_url} is not authorized by this publisher", (
@@ -126,16 +128,24 @@ def then_partnership_refused(ctx: dict, domain: str) -> None:
     )
 
 
-@then(parsers.parse('the tenant holds properties {names} from "{domain}"'))
-def then_holds_properties(ctx: dict, names: str, domain: str) -> None:
-    held = sorted(prop.name for prop in _env(ctx).properties_from(domain))
-    assert held == sorted(_quoted_list(names)), f"the tenant holds {held} from {domain!r}"
+@then(parsers.parse('the tenant holds properties {names} from "{publisher}"'))
+def then_holds_properties(ctx: dict, names: str, publisher: str) -> None:
+    held = sorted(prop.name for prop in _env(ctx).properties_from(publisher))
+    assert held == sorted(_quoted_list(names)), f"the tenant holds {held} from {publisher!r}"
 
 
-@then(parsers.parse('the tenant holds no properties from "{domain}"'))
-def then_holds_no_properties(ctx: dict, domain: str) -> None:
-    held = [prop.name for prop in _env(ctx).properties_from(domain)]
-    assert held == [], f"the tenant holds {held} from {domain!r}, from a file that does not authorize it"
+@then(parsers.parse('the tenant holds the fallback property from "{publisher}"'))
+def then_holds_fallback_property(ctx: dict, publisher: str) -> None:
+    """The one property a sync names after the publisher when the file gives this agent none."""
+    address = _env(ctx).publisher_address(publisher)
+    held = [(prop.name, prop.verification_status) for prop in _env(ctx).properties_from(publisher)]
+    assert held == [(address, "verified")], f"the tenant holds {held} from {publisher!r}, expected only the fallback"
+
+
+@then(parsers.parse('the tenant holds no properties from "{publisher}"'))
+def then_holds_no_properties(ctx: dict, publisher: str) -> None:
+    held = [prop.name for prop in _env(ctx).properties_from(publisher)]
+    assert held == [], f"the tenant holds {held} from {publisher!r}, from a file that does not authorize it"
 
 
 @then(parsers.parse('authorized property "{property_id}" is {status}'))
