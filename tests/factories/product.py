@@ -22,6 +22,16 @@ def authorized_refs(*domains: str) -> tuple[AuthorizedPropertyRef, ...]:
     )
 
 
+def authorize_publishers(tenant, *domains: str) -> None:
+    """Store *tenant*'s verified property on each publisher domain its test products name.
+
+    A product's selectors are offered only for a publisher the seller holds a verified
+    property of (#1845), so a test seeding explicit selectors seeds this too.
+    """
+    for domain in domains:
+        AuthorizedPropertyFactory(tenant=tenant, publisher_domain=domain)
+
+
 #: The seller's one verified property on the publisher a test product sells. The ONE
 #: spelling of the default publisher: a product names only publishers the seller holds a
 #: verified property of (#1845).
