@@ -8,6 +8,9 @@ auto-approve id that matches no catalog format never approves anything.
 
 The catalog is the checked-in capture of the pinned reference creative agent
 (``tests/fixtures/creative_formats/reference_formats.json``, #1418).
+
+Every module under ``src/`` and ``scripts/`` is scanned, rather than a list of known
+seeders, so a seeder added later is checked the day it lands.
 """
 
 from __future__ import annotations
@@ -15,21 +18,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-import pytest
-
 from src.core.format_cache import load_reference_formats
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-# Modules that seed tenants or products with literal format ids.
-SEED_MODULES = (
-    "scripts/setup/init_database.py",
-    "scripts/setup/init_database_ci.py",
-    "scripts/setup/setup_tenant.py",
-    "src/core/database/database.py",
-    "src/admin/blueprints/public.py",
-    "src/admin/tenant_management_api.py",
-)
+SCANNED_ROOTS = ("src", "scripts")
 
 AUTO_APPROVE = "auto_approve_format_ids"
 
@@ -63,12 +55,16 @@ def _seeded_format_ids(source: str) -> list[str]:
     return ids
 
 
-@pytest.mark.parametrize("module", SEED_MODULES)
-def test_seeded_format_ids_exist_in_reference_catalog(module: str) -> None:
+def test_seeded_format_ids_exist_in_reference_catalog() -> None:
     catalog = {fmt.format_id.id for fmt in load_reference_formats()}
-    seeded = _seeded_format_ids((REPO_ROOT / module).read_text())
+    seeded = {
+        path.relative_to(REPO_ROOT).as_posix(): ids
+        for root in SCANNED_ROOTS
+        for path in sorted((REPO_ROOT / root).rglob("*.py"))
+        if (ids := _seeded_format_ids(path.read_text()))
+    }
 
-    # A module that no longer yields any id would pass the membership check vacuously.
-    assert seeded, f"{module}: no seeded format ids found; update SEED_MODULES or this scanner"
-    missing = sorted(set(seeded) - catalog)
-    assert not missing, f"{module} seeds format ids absent from the reference catalog: {missing}"
+    # A scanner that stopped recognizing the seed shapes would pass the membership check vacuously.
+    assert seeded, f"no seeded format ids found under {SCANNED_ROOTS}; the scanner no longer matches the seeders"
+    missing = {module: sorted(set(ids) - catalog) for module, ids in seeded.items() if set(ids) - catalog}
+    assert not missing, f"seeded format ids absent from the reference catalog: {missing}"
