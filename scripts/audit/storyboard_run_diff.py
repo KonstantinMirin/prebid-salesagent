@@ -41,9 +41,29 @@ _SKIP_MARKERS = ("requirement_unmet", "Storyboard skipped")
 
 _PROTOCOLS = ("mcp", "a2a")
 
+#: Steps whose identity had to come from ``task`` because the record carried no id, and
+#: identities that two steps shared. Both are reported: a comparison resting on either is
+#: weaker than it looks, and the second one is the defect that made a lost pass invisible.
+_FALLBACK_KEYS: set[str] = set()
+_COLLIDED_KEYS: set[str] = set()
+
 
 def _steps(record: Path) -> dict[str, bool]:
-    """Every step in *record*, keyed ``track::scenario::task``, mapped to passed.
+    """Every step in *record*, keyed ``track::scenario::step_id``, mapped to passed.
+
+    KEYED ON ``step_id``, NOT ``task``. A task repeats within one storyboard constantly --
+    measured over the 181 pinned storyboards at 3.1.1: 1155 steps, every one carrying an
+    ``id``, and 427 of them (36%) share a task with a sibling. ``deterministic_testing``
+    alone has 19 steps named ``comply_test_controller``.
+
+    Keying on the task merged those into one entry, so the LAST one read won: a storyboard
+    with four ``update_media_buy`` steps reported one verdict for all four, and a step that
+    regressed while a sibling still passed was invisible. That is the one thing this tool
+    exists to catch, and the collapse made it silently uncatchable. ``step_id`` is also what
+    the repo's own ledger identifies a check by (``tests/storyboard/collected.py``).
+
+    ``task`` remains the fallback for a record predating the id, and the fallback is COUNTED
+    so a caller can see how much of a comparison rests on it.
 
     Skip markers are excluded here rather than by the caller, so no consumer can
     accidentally count one.
@@ -53,11 +73,23 @@ def _steps(record: Path) -> dict[str, bool]:
     for track in data.get("tracks") or []:
         for scenario in track.get("scenarios") or []:
             for step in scenario.get("steps") or []:
-                key = f"{track.get('track')}::{scenario.get('scenario')}::{step.get('task') or step.get('step')}"
+                identity = step.get("step_id") or step.get("id")
+                if not identity:
+                    identity = step.get("task") or step.get("step")
+                    _FALLBACK_KEYS.add(f"{scenario.get('scenario')}::{identity}")
+                key = f"{track.get('track')}::{scenario.get('scenario')}::{identity}"
                 if step.get("skipped") or step.get("selection_reason"):
                     continue
-                if any(marker in key for marker in _SKIP_MARKERS):
+                # Matched against the SCENARIO and TASK, never the key. The key used to carry
+                # the task, so testing the key happened to work; keyed on ``step_id`` it would
+                # miss a marker that the task names and the scenario does not.
+                named = f"{scenario.get('scenario') or ''}::{step.get('task') or step.get('step') or ''}"
+                if any(marker in named for marker in _SKIP_MARKERS):
                     continue
+                if key in out:
+                    # Two steps with ONE identity: the collapse this keying exists to avoid.
+                    # Loud, because a silent overwrite is what made a lost pass invisible.
+                    _COLLIDED_KEYS.add(key)
                 out[key] = bool(step.get("passed"))
     return out
 
@@ -132,16 +164,37 @@ def main() -> int:
         report[protocol] = comparison
 
     if missing:
-        # Loud, never a silent partial: a protocol whose record is absent was not compared,
-        # and reporting the other one as the verdict is how a half-measured run reads green.
+        # Loud AND fatal, never a silent partial. This used to exit 2 only when EVERY protocol
+        # was missing, so a run that published mcp and lost a2a printed the error and still
+        # exited 0 — the half-measured verdict this paragraph claims to prevent.
         print(f"ERROR: no storyboard record for: {', '.join(missing)}", file=sys.stderr)
         print(
             "       Records come from the runner's --json stdout, published per protocol. A run "
-            "that died before writing one cannot be compared.",
+            "that died before writing one cannot be compared, so no verdict is offered for any "
+            "protocol: a comparison of the ones that survived is not a comparison of the run.",
             file=sys.stderr,
         )
-        if not report:
-            return 2
+        return 2
+
+    empty = [p for p, r in report.items() if not r["base_graded"] or not r["head_graded"]]
+    if empty:
+        # Zero graded steps on either side compares nothing and used to print IDENTICAL.
+        print(
+            f"ERROR: nothing was graded for: {', '.join(sorted(empty))}. Two empty sets are equal, "
+            "which is not agreement — it is the absence of a measurement.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if _COLLIDED_KEYS:
+        # Cannot happen with step_id present; if it does, the comparison is under-counting
+        # again and must not report a verdict.
+        print(
+            f"ERROR: {len(_COLLIDED_KEYS)} step identit(ies) were claimed twice, so a verdict "
+            f"would rest on whichever was read last: {sorted(_COLLIDED_KEYS)[:5]}",
+            file=sys.stderr,
+        )
+        return 2
 
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
@@ -159,6 +212,11 @@ def main() -> int:
             for step in r["gained"]:
                 print(f"    + {step}")
             print(f"  failing on both: {len(r['failing_both'])}   newly graded and failing: {len(r['newly_failing'])}")
+        if _FALLBACK_KEYS:
+            print(
+                f"\nNOTE: {len(_FALLBACK_KEYS)} step(s) carried no id, so their identity came from "
+                f"the task name and siblings sharing that name are indistinguishable."
+            )
 
     return 1 if any(r["lost"] for r in report.values()) else 0
 
