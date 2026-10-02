@@ -19,6 +19,7 @@ Where a step depends on a fix that is still an open pull request, the step says 
 - [Step 3: Create the registries and push](#step-3-create-the-registries-and-push)
 - [Step 4: Apply](#step-4-apply)
 - [Step 5: Create the databases](#step-5-create-the-databases)
+- [Tenants and publishers](#tenants-and-publishers)
 - [Step 6: Create a tenant](#step-6-create-a-tenant)
 - [Step 7: Verify](#step-7-verify)
 - [Admin login](#admin-login)
@@ -179,6 +180,34 @@ flags, one blank `default` tenant at the apex.
 aws logs tail /ecs/<project>/app --region eu-central-1 --since 10m | grep -E "Migrations complete|Database initialization"
 ```
 
+## Tenants and publishers
+
+A tenant is a seller: one sales agent, served at one URL. The URL's host is the tenant's
+`virtual_host`.
+
+A tenant is not a publisher. One tenant sells for many publisher sites, hundreds in
+production. Each site authorizes the tenant by serving `/.well-known/adagents.json` on its
+own domain, with an `authorized_agents` entry whose `url` is the tenant's URL. The tenant
+holds the site as an authorized property (Admin UI, **Authorized Properties**) and verifies
+it against that file.
+
+The recommended tenant host is on the seller's own domain, for example `sales.acme.com`. A
+subdomain of `<domain>`, such as `acme.<domain>`, also works.
+
+`custom_domains` (Step 2) is the list of tenant hosts outside `<domain>`: one entry per
+tenant on its own domain, each with its own ACM certificate on the listener. Publisher sites
+never go in it.
+
+- Adding a tenant on its own domain takes one `custom_domains` entry, the DNS record that
+  points its host at the ALB (plus ACM's validation record, see
+  [Tenant TLS](#tenant-tls-and-custom-domains)), and the tenant's `virtual_host`. A subdomain
+  tenant takes only the `virtual_host`: the wildcard record and certificate cover it.
+- Adding a publisher site to a tenant changes no DNS record, no certificate and no Terraform.
+
+The app finds the tenant from the request's host. With #2191 it matches `virtual_host` only.
+Current main also matches a host under `<domain>` by its first label against the tenant's
+subdomain, which is why Step 6 passes `--subdomain` when #2191 is absent.
+
 ## Step 6: Create a tenant
 
 `deploy/aws/run-task.sh app <command>` runs any command in the application image with the
@@ -288,14 +317,14 @@ configured no provider and checked only that the Admin UI redirects to its login
 ## Tenant TLS and custom domains
 
 Subdomain tenants are covered by the `*.<domain>` certificate and DNS record. A tenant on
-its own domain (`ads.publisher.com`) needs a certificate for that name. Three ways to do it
-on AWS:
+the seller's own domain (`sales.acme.com`) needs a certificate for that name. Three ways to
+do it on AWS:
 
 | | (a) ACM certificate per domain on the ALB | (b) CloudFront SaaS Manager | (c) Caddy on-demand TLS on Fargate |
 |---|---|---|---|
 | How | One ACM certificate per custom domain, added to the HTTPS listener (SNI) | A multi-tenant distribution in front of the ALB; each tenant is a distribution tenant with a CloudFront-managed certificate | Caddy behind an NLB (TCP passthrough) obtains a Let's Encrypt certificate on first connection, after asking the app's `/tls/ask` (#2313) |
 | Tenant's DNS | Validation CNAME + CNAME to the ALB | CNAME to the CloudFront endpoint | A record to the NLB's Elastic IPs, or a CNAME |
-| Apex domain (`publisher.com`) | Only if the tenant's DNS supports ALIAS/flattening (the ALB has no fixed IP) | Same | Yes (Elastic IPs) |
+| Apex domain (`acme.com`) | Only if the tenant's DNS supports ALIAS/flattening (the ALB has no fixed IP) | Same | Yes (Elastic IPs) |
 | Per-domain operator step | Add the domain to `custom_domains` and apply | Create a distribution tenant (API call) | None: setting the tenant's `virtual_host` is enough |
 | Limits | 25 certificates per ALB by default, raisable to 100 | Designed for large tenant counts | Let's Encrypt rate limits; certificate storage must persist (EFS or S3) or every task restart re-issues |
 | Extra cost | None | 10 tenants free, then $20/month up to 200, then $0.10 per tenant; plus CloudFront traffic | NLB (about $20/month) + a Caddy task (about $10/month) + EFS |
@@ -303,9 +332,10 @@ on AWS:
 
 **Recommendation: (a)**, and it is what this Terraform does and what the verified run
 used. It adds nothing that runs or bills, keeps every certificate in ACM with automatic
-renewal, and covers the usual case: most tenants use subdomains and a handful bring a
-domain. Move to (c) when tenants must onboard a domain without an operator, or need apex
-domains; move to (b) when custom domains number in the hundreds.
+renewal, and holds 25 tenants on their own domains by default (100 after a quota increase),
+plus any number of subdomain tenants. Move to (c) when tenants must onboard a domain without
+an operator, or need apex domains; move to (b) when tenants on their own domains number in
+the hundreds.
 
 The ALB and CloudFront options hold a certificate for each configured domain and never ask
 the app about a host, so this Terraform leaves `TLS_ASK_ENABLED` unset and `/tls/ask`
@@ -319,11 +349,11 @@ To add a custom domain:
 2. Otherwise create the certificate on its own and hand the records to the domain owner:
 
    ```bash
-   terraform apply -target='aws_acm_certificate.custom["ads.publisher.com"]'
+   terraform apply -target='aws_acm_certificate.custom["sales.acme.com"]'
    terraform output -json custom_domain_dns
    ```
 
-3. The owner publishes the validation CNAME and `ads.publisher.com CNAME <alb_dns_name>`.
+3. The owner publishes the validation CNAME and `sales.acme.com CNAME <alb_dns_name>`.
 4. `terraform apply`. It waits (up to 2 hours) for ACM to issue the certificate, then adds
    it to the listener.
 5. Set the tenant's `virtual_host` to the domain (`setup_tenant.py --virtual-host`, or the
