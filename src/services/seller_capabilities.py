@@ -55,7 +55,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from src.adapters.base import TargetingCapabilities
 from src.core.agent_identity import AGENT_ENDPOINT_PATHS, brand_json_url, canonical_agent_url, jwks_origin
 from src.core.billing_policy import BillingParty, resolve_account_sandbox, resolve_supported_billing
-from src.core.database.repositories.uow import CapabilitiesUoW
+from src.core.database.repositories.uow import TrustRootUoW
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import AdCPConfigurationError
@@ -114,7 +114,7 @@ def _record_degradation(advisories: list[Error], what: str, exc: Exception) -> N
 
     ONE helper for EVERY degradation site in :func:`describe_seller` — the discovery
     lookups routed through :func:`_resolve_or_degrade`, and the two reads inside the
-    ``CapabilitiesUoW`` block that need their own terminal-error posture.
+    ``TrustRootUoW`` block that need their own terminal-error posture.
     A site that only logs and falls through to a default leaves the response
     silently carrying a placeholder (or an omission), with no way for the buyer to
     tell "this seller has none" from "the lookup failed" — the quiet-failure class
@@ -233,7 +233,7 @@ def _build_signing_blocks(
 
 
 def _resolve_signing_blocks(
-    uow: CapabilitiesUoW,
+    uow: TrustRootUoW,
     declarations: CapabilityDeclarations,
     *,
     tenant: TenantContext,
@@ -571,7 +571,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
         jwks_origin=None,
     )
     try:
-        with CapabilitiesUoW(tenant_id) as uow:
+        with TrustRootUoW(tenant_id) as uow:
             tenant_config = uow.tenant_config
             authorized_properties = uow.authorized_properties
             assert tenant_config is not None and authorized_properties is not None
@@ -585,7 +585,9 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
                 # left out: claiming a publisher whose authorization was never seen sends the
                 # buyer to a file that does not list this agent.
                 domains = set(authorized_properties.list_verified_publisher_domains())
-                domains.update(tenant_config.list_verified_publisher_domains())
+                domains.update(
+                    partner.publisher_domain for partner in tenant_config.list_publisher_partners(verified=True)
+                )
                 return [PublisherDomain(root=domain) for domain in sorted(domains)]
 
             publisher_domains = _resolve_or_degrade(
