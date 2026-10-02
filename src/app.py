@@ -29,6 +29,7 @@ from src.a2a_server.adcp_a2a_server import (
 )
 from src.a2a_server.context_builder import AdCPCallContextBuilder
 from src.admin.app import create_app
+from src.core.agent_identity import AGENT_CARD_PATH
 from src.core.auth_middleware import AuthChallengeResponder
 from src.core.config import load_settings
 from src.core.domain_routing import route_landing_page
@@ -150,6 +151,18 @@ app.mount("/mcp", mcp_app)
 # ---------------------------------------------------------------------------
 
 
+def _recorded_operation(path: str) -> tuple[TransportProtocol, str]:
+    """The ``(protocol, operation)`` a non-tool route's failure is recorded under.
+
+    A path, not a per-route ``except``. The agent card is served on both of its declared
+    paths and is an A2A surface, so its faults belong to one operation rather than to one
+    per URL; every other non-tool route is REST and names itself by its path.
+    """
+    if path in _AGENT_CARD_PATHS:
+        return TransportProtocol.A2A, "agent_card"
+    return TransportProtocol.REST, path
+
+
 def _envelope_response(request: Request, exc: Exception) -> JSONResponse:
     """Answer an exception raised OUTSIDE ``serve`` with the failure response, recorded unscoped.
 
@@ -160,8 +173,16 @@ def _envelope_response(request: Request, exc: Exception) -> JSONResponse:
     No WWW-Authenticate here. A 401 MUST name a scheme the caller can authenticate with
     (RFC 7235; graded by the storyboard's security_baseline), and AuthChallengeResponder
     attaches it app-wide by reading the code off this very body.
+
+    THE ONE PLACE a non-tool route's failure is built. Every app-level handler funnels here
+    -- typed, ValueError, PermissionError and the catch-all -- so a route does not catch for
+    itself: the agent card's route used to, purely to label its record, and a route holding
+    its own ``except`` reports one identity for the faults it catches and another for the
+    ones that escape it. The operation is DATA, resolved from the path below, so the label
+    and the handling stay one thing.
     """
-    response = failure_response(TransportProtocol.REST, request.url.path, exc)
+    protocol, operation = _recorded_operation(request.url.path)
+    response = failure_response(protocol, operation, exc)
     return JSONResponse(status_code=response.http_status, content=to_wire(response))
 
 
@@ -412,11 +433,20 @@ def _create_dynamic_agent_card(request: Request) -> A2AAgentCard:
     return render_agent_card(describe_seller(public_identity_for(request.headers)))
 
 
-# The paths the agent card is served on. This set is the declaration; every card route
-# derives from it, so there is nothing for a route table to disagree with. /.well-known/
-# agent.json is the path AdCP's own guide names and the one the tenant landing page links
-# to; /agent.json is the legacy spelling. Sorted so the route table is deterministic.
-_AGENT_CARD_PATHS = {"/.well-known/agent-card.json", "/.well-known/agent.json", "/agent.json"}
+# The path the agent card is served on. ONE, and this set is the declaration: every card
+# route derives from it, the landing page links to it, and the e2e suite reads it as the
+# authority, so there is nothing for a second list to diverge from.
+#
+# /.well-known/agent-card.json is the path A2A FIXES (§8.2, §14.3) and what the a2a-sdk
+# factory mounts. Two others were served and are deleted:
+#   * /.well-known/agent.json — named by AdCP's own guide (a2a-guide.mdx:782), and the one
+#     @adcp/sdk's buildCardUrls() tries first. Dropping it is safe for discovery because
+#     that client falls back: it loops both paths, breaks on the first success, and throws
+#     only if neither answers (SingleAgentClient.js:423-440). A buyer following the AdCP
+#     guide without that fallback gets a 404 — the deprecation is filed upstream.
+#   * /agent.json — no specification named it, no conformance artifact fetched it, nothing
+#     in this repo read it and nothing advertised it.
+_AGENT_CARD_PATHS = {AGENT_CARD_PATH}
 
 
 def _install_agent_card_routes():
@@ -431,14 +461,11 @@ def _install_agent_card_routes():
     async def dynamic_agent_card(request: Request):
         # to_thread: resolving the tenant and describing the seller both hit the
         # database, and this endpoint is unauthenticated.
-        try:
-            card = await asyncio.to_thread(_create_dynamic_agent_card, request)
-        except AdCPSalesAgentError as exc:
-            # The card is served OUTSIDE `serve`, so this route builds the failure the way
-            # every transport does for a fault in its own container handling -- one builder,
-            # so the envelope a buyer gets here is the envelope it gets anywhere.
-            failure = failure_response(TransportProtocol.A2A, "agent_card", exc)
-            return JSONResponse(status_code=failure.http_status, content=to_wire(failure))
+        # NO ``except`` HERE. The app-level handlers answer every fault this route can
+        # raise, typed or not, through the one builder in ``_envelope_response`` -- which
+        # records a card path as ``(A2A, agent_card)``. A route that caught for itself
+        # answered the faults it named and let the rest escape to a different identity.
+        card = await asyncio.to_thread(_create_dynamic_agent_card, request)
         return JSONResponse(agent_card_to_dict(card))
 
     for path in sorted(_AGENT_CARD_PATHS):

@@ -17,7 +17,7 @@ Pins four behaviors:
    ``tests/integration/test_version_negotiation_wire.py``.
 4. The DRY ``_build_adcp_block()`` helper derives ``supported_versions`` from
    the single-sourced constant -- no literal duplication. There is one response
-   path: a request naming no seller is refused REFERENCE_NOT_FOUND before an
+   path: a request naming no seller is refused TENANT_UNDEFINED before an
    identity exists, so there is no minimal (no-tenant) response to cover.
 """
 

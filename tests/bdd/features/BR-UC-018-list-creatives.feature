@@ -117,8 +117,8 @@ Feature: BR-UC-018 List Creatives
     Given no tenant can be resolved from the request context
     When the Buyer Agent sends a list_creatives request
     Then the error is compliant with the AdCP error spec
-    And the operation should fail with error code "CONFIGURATION_ERROR"
-    And the error code should be "CONFIGURATION_ERROR"
+    And the operation should fail with error code "TENANT_UNDEFINED"
+    And the error code should be "TENANT_UNDEFINED"
     And the error recovery should be "terminal"
     And the error should include a "suggestion" field
     # Was AUTH_MISSING, and before that AUTH_REQUIRED, and before that TENANT_REQUIRED — a

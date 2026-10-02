@@ -186,7 +186,7 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
         raise AdCPValidationError()
 
     principal_id: str | None = identity.principal_id
-    # Always a tenant: a request naming no seller is refused REFERENCE_NOT_FOUND by the
+    # Always a tenant: a request naming no seller is refused CONFIGURATION_ERROR by the
     # resolver, so there is no empty-catalog answer for one.
     tenant = identity.tenant
 

@@ -218,7 +218,7 @@ def _seed_seller(env) -> None:
 
     AUTH_MISSING answers "no credential was presented", which the resolver only reaches
     once it knows which seller the request addresses. With no tenant it refuses
-    REFERENCE_NOT_FOUND first, and the assertion then grades the wrong refusal.
+    TENANT_UNDEFINED first, and the assertion then grades the wrong refusal.
 
     The tenant ALONE: ``setup_default_data`` also creates the env's default principal, and
     ``principals.token_hash`` is globally unique, so seeding one here collides with the
