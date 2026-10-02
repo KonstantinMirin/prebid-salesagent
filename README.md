@@ -73,6 +73,7 @@ Publishers deploy their own sales agent. Choose based on your needs:
 | **Fly.io** (cloud) | 10-15 min | Medium | [fly.md](docs/deployment/walkthroughs/fly.md) |
 | **Google Cloud Run** | 15-20 min | Medium | [gcp.md](docs/deployment/walkthroughs/gcp.md) |
 | **Single VM** (Docker Compose + Caddy) | 30-45 min | Medium | [vm.md](docs/deployment/vm.md) |
+| **AWS** (ECS Fargate, RDS) | 30 min | Medium | [aws.md](docs/deployment/aws.md) |
 
 **Docker is the fastest** - it bundles PostgreSQL and just works. Cloud platforms require separate database setup.
 
@@ -168,6 +169,7 @@ docker compose logs adcp-server | head -50
 - **[Fly.io](docs/deployment/walkthroughs/fly.md)** - Cloud deployment (10-15 min)
 - **[Google Cloud Run](docs/deployment/walkthroughs/gcp.md)** - GCP deployment (15-20 min)
 - **[Single VM](docs/deployment/vm.md)** - Docker Compose and Caddy on one Linux VM, multi-tenant
+- **[AWS](docs/deployment/aws.md)** - ECS Fargate, RDS and ALB with Terraform (30 min)
 - **[Single-Tenant](docs/deployment/single-tenant.md)** - Single publisher deployment
 - **[Multi-Tenant](docs/deployment/multi-tenant.md)** - Platform deployment
 
