@@ -202,6 +202,11 @@ fixture by way of `_build_admin_env`.
    branch uses (`tests/bdd/conftest.py:4379-4387`, `:4104-4135`). It derives the
    pytest ids from the enum values, because `tox.ini`'s `-k` selectors match on
    them.
+   A feature whose Given the live stack cannot realize is named, with the reason,
+   in `_ADMIN_IN_PROCESS_ONLY_TAGS`, and gets no `AdminTransport.E2E` leg:
+   `local-publisher-authorization.feature` serves a publisher's adagents.json, which
+   the live server fetches through a dialer that refuses every address the compose
+   stack has. Its header says which transport grades it.
 2. **One registry row builds the env.** `ENV_ROUTES["ADMIN"]`
    (`tests/bdd/conftest.py:5061`) names `_build_admin_env` (`:4782-4806`), and
    `_run_env_route` is the single consumer. That builder is the only one that

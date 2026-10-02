@@ -95,6 +95,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -4590,6 +4591,18 @@ _UC002_V31_SUCCESS_WIRED: set[str] = {
 # They must NOT be parametrized across MCP/A2A/REST/IMPL API transports.
 _ADMIN_TAG_PREFIX = "T-ADMIN-"
 
+#: Admin features with no e2e_admin leg, each with the reason the live stack cannot realize
+#: its Given. A scenario here is graded on admin_integration alone, and its feature header
+#: says so; the entry is the place that claim is reviewed.
+_ADMIN_IN_PROCESS_ONLY_TAGS: dict[str, str] = {
+    "pubauth": (
+        "the live server fetches a publisher's adagents.json through adcp's fetch_adagents, whose "
+        "pinned dialer refuses every private address and takes no override "
+        "(adcp/adagents.py _owned_pinned_client); every origin the compose stack serves is private, "
+        "so no live scenario can choose what a publisher's file says"
+    ),
+}
+
 # (Deleted) A one-tag exemption, "T-UC-010-auth", held the capabilities auth outline out of
 # transport parametrization because its <channel> column supplied the transport instead.
 # That column is gone: an outline that takes the transport as DATA can grade one transport
@@ -4900,7 +4913,8 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     if any(t.startswith(_ADMIN_TAG_PREFIX) for t in marker_names):
         from tests.harness.admin_accounts import AdminTransport
 
-        _parametrize_ctx(metafunc, [AdminTransport.INTEGRATION], [AdminTransport.E2E])
+        e2e_admin = [] if marker_names & _ADMIN_IN_PROCESS_ONLY_TAGS.keys() else [AdminTransport.E2E]
+        _parametrize_ctx(metafunc, [AdminTransport.INTEGRATION], e2e_admin)
         return
 
     # IMPL-only scenarios: harness has no transport wrappers for this path
@@ -5980,6 +5994,16 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="agentcard",
         when=lambda m: "agentcard" in m,
         env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @pubauth (local publisher-authorization feature) ────────────────────
+    # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
+    # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
+    # publisher's file. The seed is the tenant whose agent_url the publisher names.
+    EnvRoute(
+        tag="pubauth",
+        when=lambda m: "pubauth" in m,
+        env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
         seed=_seed_tenant_and_principal,
     ),
     EnvRoute(
