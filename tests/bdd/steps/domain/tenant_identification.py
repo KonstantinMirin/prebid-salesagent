@@ -107,17 +107,14 @@ def then_describes_that_tenant(ctx: dict) -> None:
 
 @then("the refusal carries no buyer-supplied value on the wire")
 def then_refusal_carries_no_buyer_value(ctx: dict) -> None:
-    """The host the request named is the SERVER's record, not the envelope's.
+    """The address the request named is the SERVER's record, not the envelope's.
 
-    ``details.rejected_value`` is "the offending value the buyer supplied"
-    (``core/error.json``), and an envelope whose recovery is ``terminal`` says the buyer
-    has no lever — carrying one makes it argue with itself, and the pinned error-handling
-    text gives this code no ``details`` shape at all. The value still reaches the operator,
-    through ``internal_detail``, which never goes on a wire.
+    The WHOLE envelope is searched, not one field: a reflection of the request could arrive
+    anywhere in it, and searching the serialized form parses nothing. That the code declares
+    no ``details`` shape is graded where the status is, in
+    ``tests/integration/test_virtual_host_is_mandatory.py``. The operator still gets the
+    address, from the raise's ``__cause__``.
     """
-    details = ctx["result"].wire_error_details("CONFIGURATION_ERROR")
-    assert "rejected_value" not in details, (
-        f"the refusal put {details.get('rejected_value')!r} on the wire. A terminal envelope "
-        "that names what the buyer supplied invites the buyer to fix what it just said they cannot"
-    )
-    assert UNSERVED_HOST not in str(details), f"the host the request named leaked into the wire details: {details!r}"
+    ctx["result"].assert_wire_error("TENANT_UNDEFINED", recovery="terminal")
+    envelope = ctx["result"].error_envelope()
+    assert UNSERVED_HOST not in str(envelope), f"the host the request named leaked onto the wire: {envelope!r}"

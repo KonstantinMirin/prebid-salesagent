@@ -19,18 +19,48 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-def _hostname_of(host: str | None) -> str:
-    """*host* without its port, by stdlib.
+def _parsed_host(host: str | None) -> tuple[str, str]:
+    """``(folded, name)`` for *host*, or a ValueError naming why it is not a host.
 
     Inlined rather than imported from ``src.core.http_utils``: a revision has to keep
-    behaving the way it did when it ran, and an application helper is free to change.
-    ``urlsplit`` is the parser either way -- this takes a URL apart with no string surgery,
-    which is the whole reason the derived name is a column and not an index expression.
+    behaving the way it did when it ran, and an application helper is free to change --
+    if the application later accepts a shape this revision refused, this revision must
+    still refuse it, because the rows it already admitted were admitted under these rules.
+    That is why this is not the DRY violation it resembles: the two answer different
+    questions, one fixed at this revision and one current.
+
+    ``urlsplit`` is the parser, so nothing here takes a URL apart by hand. The checks are
+    the same axes the application validates -- scheme, path, query, fragment, userinfo,
+    port, whitespace -- because the derived name below makes a malformed row REACHABLE: a
+    stored ``user@host.com`` derives the name ``host.com``, and a request naming that host
+    would then be served a card advertising ``https://user@host.com/a2a``.
     """
     from urllib.parse import urlsplit
 
     folded = (host or "").strip().lower()
-    return urlsplit(f"//{folded}").hostname or folded
+    if not folded:
+        raise ValueError("is blank")
+    if any(ch.isspace() for ch in folded):
+        raise ValueError("contains whitespace, so no Host header can name it")
+    try:
+        parts = urlsplit(f"//{folded}")
+    except ValueError as exc:
+        # urllib's own text ("Invalid IPv6 URL") names no tenant, and it would abort the
+        # upgrade instead of reporting the row.
+        raise ValueError("is not parseable as a host") from exc
+    if parts.path or parts.query or parts.fragment:
+        raise ValueError("carries a scheme or a path, not a bare host")
+    if parts.netloc != folded or "@" in parts.netloc:
+        raise ValueError("is not a bare host[:port]")
+    if folded.endswith(":"):
+        raise ValueError("ends with a colon but names no port")
+    try:
+        parts.port  # noqa: B018 — raises for a non-numeric port
+    except ValueError as exc:
+        raise ValueError("has a non-numeric port") from exc
+    if not parts.hostname:
+        raise ValueError("names no host")
+    return folded, parts.hostname
 
 
 def upgrade() -> None:
@@ -84,7 +114,28 @@ def upgrade() -> None:
     op.add_column("tenants", sa.Column("virtual_host_name", sa.Text(), nullable=True))
 
     rows = op.get_bind().execute(sa.text("SELECT tenant_id, virtual_host FROM tenants")).fetchall()
-    derived = {row.tenant_id: _hostname_of(row.virtual_host) for row in rows}
+
+    # Refuses SHAPE too, for the same reason it refuses NULL: this revision derives a name
+    # from the stored origin, and a name makes the row reachable. The application validator
+    # refuses every one of these shapes, so such a row predates it or came from direct SQL.
+    malformed = []
+    derived = {}
+    for row in rows:
+        try:
+            _, derived[row.tenant_id] = _parsed_host(row.virtual_host)
+        except ValueError as exc:
+            malformed.append((row.tenant_id, row.virtual_host, str(exc)))
+    if malformed:
+        named = "\n".join(f"  {tenant_id!r} holds {host!r}, which {why}" for tenant_id, host, why in malformed)
+        raise RuntimeError(
+            f"{len(malformed)} tenant(s) store a virtual_host that is not a host a request can name:\n"
+            f"{named}\n"
+            "This revision derives the routing key from this column, which would make each of "
+            "these rows REACHABLE -- a stored 'user@host.com' derives the name 'host.com', and "
+            "a request naming that host would be served a card advertising "
+            "'https://user@host.com/a2a'. Set each one to the host that deployment really "
+            "answers at, then re-run the migration."
+        )
 
     # Refused rather than resolved, like the NULLs above: which of two tenants claiming one
     # name keeps it is not a decision a migration can make.

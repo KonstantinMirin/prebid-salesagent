@@ -169,17 +169,18 @@ def test_the_card_publishes_the_stored_origin_when_the_host_header_names_another
 
 @pytest.mark.requires_db
 def test_a_tool_call_naming_no_served_tenant_is_refused_with_its_status(integration_db):
-    """THE REFUSAL, on a tool surface: 500 and a CONFIGURATION_ERROR / terminal envelope.
+    """THE REFUSAL, on a tool surface: 421 and a TENANT_UNDEFINED / terminal envelope.
 
     The refusal answers every tool on every transport, and the only thing grading it was one
     e2e assertion on the agent CARD -- so the status was ungraded on every tool-call surface,
     and changing 500 to anything else left the in-process suites green.
 
     REST is the transport that carries a status, so it is where the status is graded. The
-    envelope carries no ``details``: the pinned text says ``CONFIGURATION_ERROR`` "carries no
-    ``error.details`` shape", citing the minimal-disclosure precedent, and the host the caller
-    named travels in ``internal_detail`` to the operator's record instead
-    (``error-handling.mdx:853``, 3.1.0 docs at the 3.1.1 pin).
+    421 Misdirected Request (RFC 9110 S15.5.20) is the status for a request "directed at a
+    server that is unable or unwilling to produce an authoritative response for the target
+    URI's origin", which is this condition. The envelope carries no ``details``: the address
+    the caller supplied is the one thing it must not be handed back, and it reaches the
+    operator through the raise's ``__cause__`` instead.
     """
     from tests.harness.capabilities import CapabilitiesEnv
     from tests.helpers.credentials import credential_headers
@@ -194,24 +195,104 @@ def test_a_tool_call_naming_no_served_tenant_is_refused_with_its_status(integrat
             headers=credential_headers(host=UNSERVED_HOST),
         )
 
-        assert response.status_code == 500, (
+        assert response.status_code == 421, (
             f"a request naming a host this deployment serves for nobody answered "
             f"{response.status_code}; the refusal's status is part of its contract"
         )
-        assert_envelope_shape(response.json(), "CONFIGURATION_ERROR", recovery="terminal")
+        assert_envelope_shape(response.json(), "TENANT_UNDEFINED", recovery="terminal")
 
-        # The envelope emits the key as an empty object rather than omitting it, which is the
-        # shared serializer's shape for every code. What the pin constrains is that this code
-        # has no details SHAPE, so what is graded is that it carries NOTHING -- and in
-        # particular not the host the caller supplied. This reddens if `rejected_value` or any
-        # other reflection of the request comes back.
-        assert response.json()["adcp_error"]["details"] == {}, (
-            f"CONFIGURATION_ERROR carried details {response.json()['adcp_error']['details']!r}; "
-            f"the host the caller supplied must reach the operator's record, never the buyer"
+        # The key is ABSENT, not an empty object: the error declares no details shape at all
+        # (``AdCPSalesAgentError[ErrorDetails]``), which is what the pinned text asks of a
+        # code like this one. Reddens if any reflection of the request comes back.
+        assert "details" not in response.json()["adcp_error"], (
+            f"TENANT_UNDEFINED carried details {response.json()['adcp_error'].get('details')!r}; "
+            f"the address the caller supplied reaches the operator's record, never the buyer"
         )
         assert UNSERVED_HOST not in response.text, (
             f"the refusal reflected {UNSERVED_HOST!r} back to the caller somewhere in its body"
         )
+
+
+@pytest.mark.requires_db
+def test_the_refused_host_reaches_the_operators_record_and_not_the_buyer(integration_db, caplog):
+    """The two halves of the refusal's disclosure, graded together.
+
+    The operator has to know which address was dialled -- it is the only thing that
+    distinguishes an edge misrouting from a buyer with a stale URL -- and the buyer must not
+    be told it back. Only asserting the wire half leaves the channel free to deliver nothing,
+    which is what handing the ``LookupError`` to ``internal_detail`` did: the boundary logs
+    ``exc_info=error``, which formats the ``__cause__`` chain, and a bare attribute is not in
+    it. The host appeared in no record on any surface.
+    """
+    import logging
+
+    from tests.harness.capabilities import CapabilitiesEnv
+    from tests.helpers.credentials import credential_headers
+
+    with CapabilitiesEnv() as env:
+        env.setup_default_data()
+        with caplog.at_level(logging.DEBUG):
+            response = env.get_rest_client().post(
+                "/api/v1/capabilities", json={}, headers=credential_headers(host=UNSERVED_HOST)
+            )
+
+    assert response.status_code == 421, response.text
+    assert UNSERVED_HOST not in response.text, (
+        f"the refusal reflected {UNSERVED_HOST!r} back to the caller: {response.text[:300]!r}"
+    )
+    captured = "\n".join(
+        record.getMessage() + "\n" + (logging.Formatter().formatException(record.exc_info) if record.exc_info else "")
+        for record in caplog.records
+    )
+    assert UNSERVED_HOST in captured, (
+        f"the host the request named reached no log record, so an operator cannot tell which "
+        f"address was dialled. Captured {len(captured)} characters across {len(caplog.records)} records"
+    )
+
+
+@pytest.mark.requires_db
+@pytest.mark.parametrize("fault", ["typed", "untyped"])
+def test_the_card_route_records_one_operation_whatever_fails(integration_db, caplog, monkeypatch, fault):
+    """One route, one recorded operation — for a typed refusal and for a crash alike.
+
+    The route used to carry its own ``except AdCPSalesAgentError``, so a tenant refusal was
+    recorded as ``A2A … operation=agent_card`` while anything else escaped to the app's
+    catch-all and became ``REST … operation=/.well-known/agent-card.json``. One route
+    reporting two operations splits its own error rate across two names, so neither is the
+    route's — and the untyped half is the one on-call reads.
+
+    Both halves are graded because catching every exception IN the route fixes only this
+    pair; the operation is resolved from the path in ``_envelope_response`` instead, so the
+    route catches nothing and every handler funnels to one label.
+    """
+    import logging
+
+    from src.core.agent_identity import AGENT_CARD_PATH
+    from tests.harness.capabilities import CapabilitiesEnv
+
+    if fault == "untyped":
+        monkeypatch.setattr(
+            "src.app._create_dynamic_agent_card",
+            lambda request: (_ for _ in ()).throw(RuntimeError("card construction blew up")),
+        )
+
+    with CapabilitiesEnv() as env:
+        env.setup_default_data()
+        # The env's own client, not an ad hoc TestClient: the harness owns REST dispatch, and
+        # this flag is how it lets an untyped fault become a response rather than propagate
+        # (``inject_untyped_exception`` sets the same one for a tool).
+        env.REST_RAISE_SERVER_EXCEPTIONS = False
+        with caplog.at_level(logging.DEBUG):
+            response = env.fetch_agent_card(path=AGENT_CARD_PATH, host=UNSERVED_HOST)
+
+    assert response.status_code >= 400, response.text
+    recorded = "\n".join(record.getMessage() for record in caplog.records)
+    assert "operation=agent_card" in recorded, (
+        f"the {fault} fault on the card route was recorded under another operation; records: {recorded[-400:]!r}"
+    )
+    assert "operation=/.well-known/agent-card.json" not in recorded, (
+        f"the {fault} fault was recorded by URL path, so this route reports two identities"
+    )
 
 
 @pytest.mark.requires_db

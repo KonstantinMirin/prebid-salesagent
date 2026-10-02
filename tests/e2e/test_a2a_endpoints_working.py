@@ -125,30 +125,27 @@ class TestA2AEndpointsActual:
         assert "media_buy" in adcp_ext["params"]["protocols_supported"]
 
     @pytest.mark.integration
-    def test_agent_json_endpoint_live(self, live_server):
-        """Test /agent.json endpoint against live server."""
-        response = requests.get(f"{card_origin(live_server)}/agent.json", verify=e2e_ca_bundle(), timeout=5)
+    @pytest.mark.parametrize("retired", ["/agent.json", "/.well-known/agent.json"])
+    def test_a_retired_card_path_is_not_served(self, live_server, retired):
+        """The paths this seller stopped serving answer 404, and keep answering 404.
 
-        assert response.status_code == 200, (
-            f"the declared front returned {response.status_code} for /agent.json: {response.text[:300]!r}"
+        The card is declared on one path (``AGENT_CARD_PATH``). These two were served as
+        well: ``/.well-known/agent.json`` is the path AdCP's guide names, and ``/agent.json``
+        is a bare spelling no specification names. Serving one document at three addresses
+        lets a URL-keyed cache hold three copies of one agent's card.
+
+        Asserted rather than dropped, because "retired" is a claim that can regress: a route
+        re-added here would not fail any other test, and this is what makes the single
+        declaration enforceable. A conforming client is unaffected — ``@adcp/sdk``'s
+        ``buildCardUrls`` tries both well-known paths and breaks on the first success.
+        """
+        response = requests.get(f"{card_origin(live_server)}{retired}", verify=e2e_ca_bundle(), timeout=5)
+
+        assert response.status_code == 404, (
+            f"{retired} answered {response.status_code}; this seller serves the card at "
+            f"{CANONICAL_AGENT_CARD_PATH} alone, and a second address for one document is "
+            f"a second document as far as any cache keyed on the URL is concerned"
         )
-        assert response.headers["content-type"].startswith("application/json")
-        data = response.json()
-        assert data["name"] == "Prebid Sales Agent"
-
-        # Same URL validation as the well-known endpoint. a2a-sdk 1.0
-        # (protobuf) puts the endpoint in supportedInterfaces, NOT top-level:
-        # `data["url"]` here was a dormant 0.3-era read that never ran, because
-        # /agent.json 404'd and this whole block sits behind a 200 check. Routing
-        # the path woke it into a KeyError, which is what a vacuous assertion
-        # does the moment it stops being vacuous.
-        assert "supportedInterfaces" in data, "Agent card must have supportedInterfaces"
-        interfaces = data["supportedInterfaces"]
-        assert len(interfaces) > 0
-        url = interfaces[0]["url"]
-
-        assert not url.endswith("/"), f"Agent card URL should not have trailing slash: {url}"
-        assert url.endswith("/a2a"), f"Agent card URL should end with '/a2a': {url}"
 
     @pytest.mark.integration
     def test_a2a_endpoint_accessible(self, live_server):
@@ -253,23 +250,22 @@ class TestAgentCardDiscoveryPathsLive:
         `supportedInterfaces[0].url`.
         """
         response = requests.get(
-            f"{card_origin(live_server)}/agent.json",
+            f"{card_origin(live_server)}{CANONICAL_AGENT_CARD_PATH}",
             headers={"Host": "unclaimed.example"},
             verify=e2e_ca_bundle(),
             timeout=5,
         )
 
-        assert response.status_code == 500, (
-            f"a Host no tenant claims returned {response.status_code}; the deployment cannot "
-            f"tell which seller this request is for, which is a seller-side misconfiguration"
+        assert response.status_code == 421, (
+            f"a Host no tenant claims returned {response.status_code}; 421 Misdirected Request "
+            f"is the status for a request this server cannot answer authoritatively for"
         )
         body = response.json()
-        assert body["adcp_error"]["code"] == "CONFIGURATION_ERROR", body
+        assert body["adcp_error"]["code"] == "TENANT_UNDEFINED", body
         assert body["adcp_error"]["recovery"] == "terminal", body
-        # The host the caller named belongs in the SERVER's record, not the envelope:
-        # ``rejected_value`` is "the offending value the buyer supplied", and a terminal
-        # envelope says the buyer has no lever. Carrying it also echoes caller-controlled
-        # text back, which is the shape this route exists to refuse.
+        # The host the caller named belongs in the SERVER's record, not the envelope: this
+        # code declares no details shape, and echoing caller-controlled text back is the
+        # shape this route exists to refuse.
         assert "unclaimed.example" not in response.text, (
             f"the refusal echoed the caller's own Host back to it: {response.text[:300]!r}"
         )
@@ -278,26 +274,30 @@ class TestAgentCardDiscoveryPathsLive:
         )
 
     @pytest.mark.integration
-    def test_all_declared_card_paths_return_byte_identical_bodies_live(self, live_server):
-        """The live server serves one byte-identical card on every declared path.
+    def test_the_card_is_declared_on_the_canonical_path_alone(self, live_server):
+        """ONE declared path, and it is the one A2A fixes.
 
-        Compares raw bytes, not the parsed dict: a caching fetcher keyed on bytes
-        treats a re-serialization difference as a different document.
+        This compared every declared path's raw bytes against the canonical one's, which was
+        the right test while three paths were served. One path cannot disagree with itself,
+        so what is graded now is the DECLARATION: a non-canonical path added back here would
+        reintroduce the divergence the single declaration exists to prevent, and a buyer
+        reaching the card at two addresses can cache two documents for one agent.
+
+        ``/.well-known/agent.json`` (AdCP's guide) and ``/agent.json`` were both served.
+        Dropping them is safe for discovery because a conforming client falls back --
+        ``@adcp/sdk``'s ``buildCardUrls`` tries both well-known paths and breaks on the
+        first success.
         """
-        bodies = {
-            path: requests.get(f"{card_origin(live_server)}{path}", verify=e2e_ca_bundle(), timeout=5)
-            for path in AGENT_CARD_PATHS
-        }
+        assert AGENT_CARD_PATHS == [CANONICAL_AGENT_CARD_PATH], (
+            f"the card is declared on {AGENT_CARD_PATHS}; A2A fixes "
+            f"{CANONICAL_AGENT_CARD_PATH} (§8.2, §14.3) and this seller serves that one"
+        )
 
-        for path, response in bodies.items():
-            assert response.status_code == 200, f"{path} returned {response.status_code}, expected 200"
-
-        canonical = bodies[CANONICAL_AGENT_CARD_PATH].content
-        for path, response in bodies.items():
-            assert response.content == canonical, (
-                f"{path} body differs from {CANONICAL_AGENT_CARD_PATH}; "
-                f"all declared paths must serve one byte-identical card"
-            )
+        response = requests.get(
+            f"{card_origin(live_server)}{CANONICAL_AGENT_CARD_PATH}", verify=e2e_ca_bundle(), timeout=5
+        )
+        assert response.status_code == 200, f"{CANONICAL_AGENT_CARD_PATH} returned {response.status_code}"
+        assert response.json()["supportedInterfaces"], "the card declares no interface for a client to select"
 
 
 class TestA2AAgentCardCreation:

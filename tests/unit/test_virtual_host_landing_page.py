@@ -48,7 +48,7 @@ class TestVirtualHostLandingPage:
         assert "/mcp" in html_content
         # A2A endpoint is at the root, not /a2a
         assert "https://htmltest.sales-agent.example.com" in html_content
-        assert "/.well-known/agent.json" in html_content
+        assert "/.well-known/agent-card.json" in html_content
         assert "<!DOCTYPE html>" in html_content
 
         # Check for new features
@@ -91,7 +91,7 @@ class TestVirtualHostLandingPage:
         # A2A is at the root, so the origin itself is one of the published endpoints.
         assert "https://prod.sales-agent.example.com/mcp" in html_content
         assert "https://prod.sales-agent.example.com" in html_content
-        assert "https://prod.sales-agent.example.com/.well-known/agent.json" in html_content
+        assert "https://prod.sales-agent.example.com/.well-known/agent-card.json" in html_content
 
     def test_landing_page_urls_use_http_for_a_localhost_host(self):
         """A tenant served on localhost publishes http, and keeps its port."""
@@ -107,7 +107,7 @@ class TestVirtualHostLandingPage:
 
         assert "http://localhost:8080/mcp" in html_content
         assert "http://localhost:8080" in html_content  # A2A endpoint is at root
-        assert "http://localhost:8080/.well-known/agent.json" in html_content
+        assert "http://localhost:8080/.well-known/agent-card.json" in html_content
 
     def test_landing_page_basic_content(self):
         """Test that landing page includes basic content elements."""

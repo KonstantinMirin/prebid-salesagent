@@ -376,7 +376,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
   Scenario: no_tenant — a request naming no seller is refused
     Given no tenant can be resolved from the request context
     When the Buyer Agent calls get_adcp_capabilities
-    Then the response contains error code CONFIGURATION_ERROR
+    Then the response contains error code TENANT_UNDEFINED
     And the error recovery should be "terminal"
     # NOT-IN-SPEC, and deliberately so: the spec has no tenant concept, so what a
     # deployment does when it cannot tell WHICH seller a request addresses is the
