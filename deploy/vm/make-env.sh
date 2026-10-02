@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Write /opt/salesagent/.env once, with every secret generated here. Guide: docs/deployment/vm.md.
 #
-#   DOMAIN=sales.example.com SUPPORT_EMAIL=ops@example.com SUPER_ADMIN_EMAILS=you@example.com \
+#   DOMAIN=agents.example.com SUPPORT_EMAIL=ops@example.com SUPER_ADMIN_EMAILS=you@example.com \
 #   OAUTH_DISCOVERY_URL=https://idp.example.com/.well-known/openid-configuration \
 #   OAUTH_CLIENT_ID=salesagent OAUTH_CLIENT_SECRET=... ./make-env.sh
 #
@@ -16,7 +16,7 @@ if [[ -e .env ]]; then
     exit 1
 fi
 
-: "${DOMAIN:?the apex host, e.g. sales.example.com}"
+: "${DOMAIN:?the apex host, e.g. agents.example.com}"
 : "${SUPPORT_EMAIL:?an operator mailbox; Caddy also registers it with Let's Encrypt}"
 : "${SUPER_ADMIN_EMAILS:?comma-separated emails allowed to administer every tenant}"
 : "${OAUTH_DISCOVERY_URL:?your OIDC provider's /.well-known/openid-configuration URL}"

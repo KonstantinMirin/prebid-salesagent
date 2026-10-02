@@ -35,6 +35,7 @@ The example files are in [`deploy/vm/`](../../deploy/vm/):
 - [Step 6: Build the reference creative agent](#step-6-build-the-reference-creative-agent)
 - [Step 7: Start](#step-7-start)
 - [Step 8: First super-admin login](#step-8-first-super-admin-login)
+- [Tenants and publishers](#tenants-and-publishers)
 - [Step 9: Create the first tenant](#step-9-create-the-first-tenant)
 - [Step 10: Verify the tenant](#step-10-verify-the-tenant)
 - [Step 11: Publisher adagents.json](#step-11-publisher-adagentsjson)
@@ -61,10 +62,10 @@ setting if you edit `compose.yml` or move the app's environment into `.env`.
 
 | Host | Serves |
 |---|---|
-| `<apex>`, for example `sales.example.com` | Sign-up page, Admin UI at `/admin/` |
+| `<apex>`, for example `agents.example.com` | Sign-up page, Admin UI at `/admin/` |
 | `admin.<apex>` | Admin UI |
-| `<tenant>.<apex>` | One tenant: `/mcp/`, `/a2a`, `/.well-known/agent-card.json`, `/.well-known/jwks.json` |
-| A tenant's own domain, for example `ads.publisher.com` | The same, for a tenant that declares it |
+| A tenant's host on the seller's domain, for example `sales.acme.com` | One tenant: `/mcp/`, `/a2a`, `/.well-known/agent-card.json`, `/.well-known/jwks.json` |
+| `<tenant>.<apex>` | The same, for a tenant that declares a host under the apex |
 
 ## Step 1: Create the VM
 
@@ -84,19 +85,19 @@ Point these at the VM's public address:
 |---|---|
 | `A <apex>` | Sign-up page and Admin UI |
 | `A admin.<apex>` | Admin UI host |
-| `A <tenant>.<apex>`, one per tenant, or one `A *.<apex>` | Tenant hosts |
+| `A <tenant>.<apex>`, one per tenant, or one `A *.<apex>` | Tenant hosts under the apex |
 
 A wildcard record is safe: Caddy still asks the app before it requests a certificate, and the app
 answers yes only for hosts that an active tenant declares. Without a wildcard, add one record per
 tenant before you create it.
 
-A tenant on its own domain (for example `ads.publisher.com`) points that name at the VM, with an `A`
-record or a `CNAME` to `<tenant>.<apex>`, and declares it as its host (step 9).
+A tenant on the seller's own domain (for example `sales.acme.com`) points that name at the VM, with
+an `A` record or a `CNAME` to `<apex>`, and declares it as its host (step 9).
 
 Check before you continue. Every name must resolve to the VM:
 
 ```bash
-dig +short sales.example.com admin.sales.example.com t1.sales.example.com
+dig +short agents.example.com admin.agents.example.com sales.acme.com
 ```
 
 ## Step 3: Install Docker
@@ -156,7 +157,7 @@ Microsoft Entra, Google, or another):
 Then write `.env`:
 
 ```bash
-DOMAIN=sales.example.com \
+DOMAIN=agents.example.com \
 SUPPORT_EMAIL=ops@example.com \
 SUPER_ADMIN_EMAILS=you@example.com \
 OAUTH_DISCOVERY_URL=https://idp.example.com/.well-known/openid-configuration \
@@ -218,9 +219,9 @@ Check from your workstation. The first request to each host takes a few seconds 
 certificate:
 
 ```bash
-curl -s https://sales.example.com/health                         # {"status":"healthy",...}
-curl -sI https://admin.sales.example.com/ | grep -i '^location'  # .../login
-curl -s https://sales.example.com/api/creative-agent/health      # creative agent, if enabled
+curl -s https://agents.example.com/health                         # {"status":"healthy",...}
+curl -sI https://admin.agents.example.com/ | grep -i '^location'  # .../login
+curl -s https://agents.example.com/api/creative-agent/health      # creative agent, if enabled
 ```
 
 ## Step 8: First super-admin login
@@ -231,30 +232,51 @@ Open `https://admin.<apex>/` and sign in through your OIDC provider with an addr
 If the login loops or says the email is missing, check the redirect URI and that the ID token
 carries `email` (step 5).
 
+## Tenants and publishers
+
+A tenant is a seller: one sales agent, served at one URL. The URL's host is the tenant's virtual
+host, which the Admin UI calls **Custom Domain** and the setup script takes as `--virtual-host`.
+
+A tenant is not a publisher. One tenant sells for many publisher sites, hundreds in production.
+Each site authorizes the tenant by serving `/.well-known/adagents.json` on its own domain, with an
+entry that names the tenant's URL (step 11). The tenant holds the site as an authorized property
+and verifies it against that file.
+
+Put the tenant's host on the seller's own domain, for example `sales.acme.com`. A host under the
+apex, such as `acme.<apex>`, also works.
+
+- Adding a tenant takes one DNS record for its host (none under the apex if you have the wildcard
+  record) and the virtual host on the tenant.
+- Adding a publisher site to a tenant changes no DNS record and no certificate for the agent.
+
+The app finds the tenant from the request's host. With #2191 it matches the virtual host only.
+Current main also matches a host under the apex by its first label against the tenant's
+**Subdomain**, so give such a tenant the matching subdomain too (`acme` for `acme.<apex>`).
+
 ## Step 9: Create the first tenant
 
 The tenant's host must already resolve to the VM (step 2).
 
-**In the Admin UI:** **Create New Account**, then enter a name, a **Subdomain** (for example `t1`) and
-the **Custom Domain**, which is the host the tenant is served at: `t1.<apex>`, or the tenant's own
-domain. Pick the ad server adapter.
+**In the Admin UI:** **Create New Account**, then enter a name, a **Subdomain** (for example `acme`)
+and the **Custom Domain**, which is the host the tenant is served at: `sales.acme.com`, or
+`acme.<apex>`. Pick the ad server adapter.
 
 **From the shell:**
 
 ```bash
 cd /opt/salesagent
-docker compose exec app python -m scripts.setup.setup_tenant "Tenant One" \
-  --tenant-id t1 --subdomain t1 --virtual-host t1.sales.example.com --adapter mock
+docker compose exec app python -m scripts.setup.setup_tenant "Acme" \
+  --tenant-id acme --subdomain acme --virtual-host sales.acme.com --adapter mock
 ```
 
-The script prints an access token for a first advertiser (principal `t1_default`). It is shown
+The script prints an access token for a first advertiser (principal `acme_default`). It is shown
 once; store it. More advertisers and tokens: Admin UI, **Advertisers**.
 
 Give the tenant a request-signing key. Its public half is published at `/.well-known/jwks.json` and
 in the tenant's `adagents.json` entries (step 11):
 
 ```bash
-docker compose exec app python scripts/ops/provision_signing_key.py --tenant-id t1
+docker compose exec app python scripts/ops/provision_signing_key.py --tenant-id acme
 ```
 
 Then finish the tenant in the Admin UI: the setup checklist on its dashboard lists what is missing
@@ -266,15 +288,15 @@ Manager (see [GAM service account setup](../adapters/gam/service-account-setup.m
 ## Step 10: Verify the tenant
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' https://t1.sales.example.com/.well-known/agent-card.json   # 200
-curl -s https://t1.sales.example.com/.well-known/agent-card.json | grep -o '"url": *"[^"]*"' | head -3
+curl -s -o /dev/null -w '%{http_code}\n' https://sales.acme.com/.well-known/agent-card.json   # 200
+curl -s https://sales.acme.com/.well-known/agent-card.json | grep -o '"url": *"[^"]*"' | head -3
 ```
 
-The card's URLs must name `https://t1.<apex>`. Then call a tool over MCP, from the app container,
+The card's URLs must name `https://sales.acme.com`. Then call a tool over MCP, from the app container,
 which has an MCP client installed:
 
 ```bash
-docker compose exec -T -e TOKEN='<token from step 9>' -e URL=https://t1.sales.example.com/mcp/ app python - <<'EOF'
+docker compose exec -T -e TOKEN='<token from step 9>' -e URL=https://sales.acme.com/mcp/ app python - <<'EOF'
 import asyncio, os
 from fastmcp.client import Client
 from fastmcp.client.transports import StreamableHttpTransport
@@ -298,14 +320,14 @@ routing, the tenant, the token and the creative agent. The app log names the age
 
 A buyer trusts that this agent may sell a publisher's inventory only when the publisher says so at
 `https://<publisher-domain>/.well-known/adagents.json`. The entry names the tenant's agent URL,
-which is its origin (`https://t1.<apex>`), and the properties it sells:
+which is its origin (`https://sales.acme.com`), and the properties it sells:
 
 ```json
 {
   "$schema": "https://adcontextprotocol.org/schemas/3.1.1/adagents.json",
   "authorized_agents": [
     {
-      "url": "https://t1.sales.example.com",
+      "url": "https://sales.acme.com",
       "authorized_for": "Display inventory on publisher.com",
       "authorization_type": "property_tags",
       "property_tags": ["all_inventory"]
@@ -325,10 +347,11 @@ which is its origin (`https://t1.<apex>`), and the properties it sells:
 ```
 
 To pin the tenant's webhook signing key as well, add a `signing_keys` array to the entry holding
-the keys from `https://t1.<apex>/.well-known/jwks.json`, and update it after every key rotation.
+the keys from `https://sales.acme.com/.well-known/jwks.json`, and update it after every key rotation.
 
 Then, in the Admin UI, add the publisher's properties (**Authorized Properties**) and verify them.
-Verification fetches the publisher's `adagents.json` and looks for the tenant's agent URL.
+Verification fetches the publisher's `adagents.json` and looks for the tenant's agent URL. Repeat
+both for every publisher site the tenant sells.
 
 ## Backups
 
