@@ -598,6 +598,9 @@ def integration_db():
         f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}",
         echo=False,
         json_serializer=_pydantic_json_serializer,
+        # As production's get_engine() does for a direct connection: a pooled connection
+        # the server closed is replaced on checkout instead of failing the first statement.
+        pool_pre_ping=True,
     )
 
     # Ensure all model classes are imported and registered with Base.metadata

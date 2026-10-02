@@ -97,6 +97,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
+    "tests.bdd.steps.domain.database_fail_fast",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -6079,6 +6080,14 @@ ENV_ROUTES: list[EnvRoute] = [
         # the branch's default one, because a single-tenant database cannot exhibit the leak
         # it is looking for.
         when=lambda m: any(t.startswith("T-SECURITY-002") for t in m),
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="database-fail-fast",
+        # The process-wide fail-fast in get_db_session must refuse every tenant only when the
+        # database cannot be reached. The claim is about the OTHER tenant, so it reuses
+        # BR-SECURITY-002's two-tenant seeding and dispatches get_products like it does.
+        when=lambda m: any(t.startswith("T-DBFAILFAST") for t in m),
         env_builder=_build_product_env,
     ),
     EnvRoute(

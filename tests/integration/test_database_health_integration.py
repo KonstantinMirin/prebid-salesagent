@@ -13,12 +13,9 @@ to improve test coverage and catch real bugs.
 from unittest.mock import patch
 
 import pytest
-from sqlalchemy import create_engine, func, select, text
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import scoped_session, sessionmaker
+from sqlalchemy import func, select, text
 
-import src.core.database.database_session as db_session_module
-from src.core.database.database_session import get_db_session, get_engine, reset_health_state
+from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.health_check import check_database_health, print_health_report
 from src.core.database.models import Base, Product, Tenant
 
@@ -241,54 +238,3 @@ class TestDatabaseHealthIntegration:
 
             if not tenant_table_exists:
                 assert "tenants" in health["missing_tables"], "Should detect missing tenants table"
-
-
-class TestDatabaseFailFast:
-    """``get_db_session``'s process-wide fail-fast trips when the server never answers, and on nothing else.
-
-    One trip turns every session the process opens for the next 10 seconds into
-    ``RuntimeError("Database is unhealthy")``, which every transport answers as
-    INTERNAL_ERROR. A cancelled statement is the server answering on a live connection,
-    and one dropped connection is discarded by SQLAlchemy; tripping on either took every
-    tenant down for 10 seconds with the database up.
-    """
-
-    @pytest.mark.parametrize(
-        ("statements", "error"),
-        [
-            pytest.param(
-                ["SET LOCAL statement_timeout = '1ms'", "SELECT pg_sleep(1)"], "statement timeout", id="cancelled"
-            ),
-            pytest.param(["SELECT pg_terminate_backend(pg_backend_pid())"], "closed the connection", id="terminated"),
-        ],
-    )
-    def test_a_failure_the_server_answered_does_not_fail_later_sessions(self, integration_db, statements, error):
-        try:
-            with pytest.raises(OperationalError, match=error):
-                with get_db_session() as session:
-                    for statement in statements:
-                        session.execute(text(statement))
-            with get_db_session() as session:
-                assert session.execute(text("SELECT 1")).scalar() == 1
-        finally:
-            reset_health_state()
-
-    def test_a_refused_connect_fails_later_sessions_fast(self):
-        # Port 1 on loopback has no listener, so the connect is refused without a server reply.
-        unreachable = create_engine("postgresql://nobody@127.0.0.1:1/none", connect_args={"connect_timeout": 1})
-        factory = sessionmaker(bind=unreachable)
-        try:
-            with (
-                patch.object(db_session_module, "_engine", unreachable),
-                patch.object(db_session_module, "_session_factory", factory),
-                patch.object(db_session_module, "_scoped_session", scoped_session(factory)),
-            ):
-                with pytest.raises(OperationalError, match="Connection refused"):
-                    with get_db_session() as session:
-                        session.execute(text("SELECT 1"))
-                with pytest.raises(RuntimeError, match="Database is unhealthy"):
-                    with get_db_session():
-                        pass
-        finally:
-            reset_health_state()
-            unreachable.dispose()
