@@ -803,7 +803,8 @@ class BaseTestEnv:
         self._database_url = database_url or (e2e_config.postgres_url if e2e_config else None)
         self.e2e_config: E2EConfig | None = e2e_config
         self._e2e_engine: Any = None
-        #: Tenant ids this env's session persisted; ``_ensure_tenant_for_audit`` reads it.
+        #: Tenant ids this env's session persisted and has not deleted; ``_ensure_tenant_for_audit``
+        #: reads it.
         self._persisted_tenant_ids: set[str] = set()
         self._tenant_overrides = tenant_overrides
         self.mock: dict[str, MagicMock] = {}
@@ -2755,11 +2756,17 @@ class BaseTestEnv:
         if self.use_real_db:
             self._ensure_tenant_for_audit(tenant_id)
 
-    def _note_persisted_tenant(self, _session: Any, instance: Any) -> None:
+    def _track_persisted_tenant(self, _session: Any, instance: Any) -> None:
+        """Session event hook: a Tenant became persistent (add) or was deleted (discard)."""
+        from sqlalchemy import inspect
+
         from src.core.database.models import Tenant
 
         if isinstance(instance, Tenant):
-            self._persisted_tenant_ids.add(instance.tenant_id)
+            if inspect(instance).deleted:
+                self._persisted_tenant_ids.discard(instance.tenant_id)
+            else:
+                self._persisted_tenant_ids.add(instance.tenant_id)
 
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).
@@ -2835,7 +2842,8 @@ class BaseTestEnv:
 
                 self._session = SASession(bind=engine)
                 self._guard("db_session", self._close_session)
-                event.listen(self._session, "pending_to_persistent", self._note_persisted_tenant)
+                for transition in ("pending_to_persistent", "persistent_to_deleted"):
+                    event.listen(self._session, transition, self._track_persisted_tenant)
 
                 for f in ALL_FACTORIES:
                     f._meta.sqlalchemy_session = self._session
