@@ -241,7 +241,7 @@ def test_updating_profile_properties_affects_all_products(integration_db, sample
         stmt = select(Product).where(Product.tenant_id == sample_tenant["tenant_id"])
         db_products = session.scalars(stmt).all()
         for product in db_products:
-            effective_props = product.effective_properties
+            effective_props = product.resolve_publisher_properties([])
             assert len(effective_props) == 1
             assert effective_props[0]["publisher_domain"] == "original.com"
             assert effective_props[0]["property_type"] == "website"
@@ -273,7 +273,7 @@ def test_updating_profile_properties_affects_all_products(integration_db, sample
         assert len(db_products) == 3
 
         for product in db_products:
-            effective_props = product.effective_properties
+            effective_props = product.resolve_publisher_properties([])
             assert len(effective_props) == 2
 
             # Check first property

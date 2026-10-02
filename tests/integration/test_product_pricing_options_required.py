@@ -21,6 +21,7 @@ from src.core.schemas import Product as ProductSchema
 from src.core.tools.products import get_product_catalog
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
+from tests.factories.product import default_publisher_properties
 
 
 @pytest.mark.requires_db
@@ -67,7 +68,9 @@ def test_get_product_catalog_loads_pricing_options(integration_db):
             format_ids=[{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250"}],
             targeting_template={},
             delivery_type="guaranteed",
-            property_tags=["all_inventory"],
+            # Names its publisher explicitly: a legacy property_tags row with no authorized
+            # property behind it is not offered (#1845), and this test grades pricing.
+            properties=default_publisher_properties(),
             delivery_measurement={"provider": "publisher", "notes": "Test measurement"},
         )
         session.add(product)

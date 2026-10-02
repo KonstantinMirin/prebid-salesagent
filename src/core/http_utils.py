@@ -134,11 +134,11 @@ def hostname_of(host: str) -> str:
     So the port is dropped where a HOSTNAME is what the reader needs, and nowhere else.
     Two readers need one: the tenant routing lookups in ``TenantLookupRepository``, which
     compare host to host so a request naming either form resolves; and
-    ``Tenant.primary_domain``, which feeds ``publisher_properties[].publisher_domain`` --
+    ``Tenant.host_name``, for a reader that wants the agent host as a bare name. The port
+    first had to come off when that host fed ``publisher_properties[].publisher_domain`` --
     a field AdCP constrains to ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no
-    colon. Feeding the port into that pattern failed every product of such a tenant and
-    answered INTERNAL_ERROR for the whole catalogue, which is the defect that first named
-    these two jobs.
+    colon -- and failed every product of such a tenant. Products no longer name the agent
+    host at all (#1845); the projection stays for the readers that still want the name.
 
     Projecting a stored origin onto a hostname is not the defensive re-validation the
     architecture forbids: the column's contents are trusted exactly as stored, and what

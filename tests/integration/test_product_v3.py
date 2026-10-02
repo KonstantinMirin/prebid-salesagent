@@ -1521,7 +1521,7 @@ class TestProductRepository:
             assert uow.products is not None
             products = uow.products.list_all()
             for product in products:
-                schema = convert_product_model_to_schema(product)
+                schema = convert_product_model_to_schema(product, authorized_properties=[])
                 assert schema.product_id == product.product_id
                 assert schema.name == product.name
                 assert len(schema.pricing_options) > 0

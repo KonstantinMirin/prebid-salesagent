@@ -13,6 +13,16 @@ from tests.factories.core import TenantFactory
 from tests.factories.request import _RequestFactory
 
 
+def default_publisher_properties() -> list[dict]:
+    """The explicit selector a test product carries unless it asks for the legacy columns.
+
+    The shape the admin product form stores: it names its publisher, so the product is
+    offered without an authorized-property row. A legacy ``property_tags`` product names
+    none and resolves against the tenant's authorized properties instead (#1845).
+    """
+    return [{"publisher_domain": "publisher.example.com", "selection_type": "all"}]
+
+
 class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     class Meta:
         model = Product
@@ -33,7 +43,14 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     )
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
-    property_tags = factory.LazyFunction(lambda: ["all_inventory"])
+    #: ``default_publisher_properties()`` unless the test names a legacy column, which then
+    #: comes with ``properties=None``: the table holds exactly one of ``properties`` /
+    #: ``property_tags`` (``ck_product_properties_xor``).
+    property_tags = None
+    property_ids = None
+    properties = LazyAttribute(
+        lambda o: None if o.property_tags is not None or o.property_ids is not None else default_publisher_properties()
+    )
     delivery_measurement = factory.LazyFunction(lambda: {"provider": "publisher"})
 
 

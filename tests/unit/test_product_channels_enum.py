@@ -114,7 +114,7 @@ class TestProductChannelsConversion:
         from src.core.product_conversion import convert_product_model_to_schema
 
         product_model = self._make_db_product(channels=["display", "olv"])
-        product = convert_product_model_to_schema(product_model)
+        product = convert_product_model_to_schema(product_model, authorized_properties=[])
         assert product.channels is not None
         assert all(isinstance(c, MediaChannel) for c in product.channels)
         assert product.channels[0] == MediaChannel.display
@@ -127,7 +127,7 @@ class TestProductChannelsConversion:
         product_model = self._make_db_product(channels=["display", "invalid_channel_xyz", "olv"])
 
         # Should not raise -- invalid channels are skipped
-        product = convert_product_model_to_schema(product_model)
+        product = convert_product_model_to_schema(product_model, authorized_properties=[])
         assert product.channels is not None
         # Only valid channels should be present
         assert len(product.channels) == 2
@@ -139,5 +139,5 @@ class TestProductChannelsConversion:
         from src.core.product_conversion import convert_product_model_to_schema
 
         product_model = self._make_db_product(channels=None)
-        product = convert_product_model_to_schema(product_model)
+        product = convert_product_model_to_schema(product_model, authorized_properties=[])
         assert product.channels is None

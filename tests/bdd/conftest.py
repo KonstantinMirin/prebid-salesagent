@@ -90,6 +90,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_publisher_domain",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -6076,6 +6077,15 @@ ENV_ROUTES: list[EnvRoute] = [
         # carries its own identity tag rather than @inventory_profile, so detect_uc
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-publisher-domain",
+        # BR-UC-GET-PRODUCTS publisher_domain resolution (#1845): stores real authorized
+        # properties and products and reads publisher_properties back off get_products, so
+        # it takes the UC-GET-PRODUCTS branch. Like the pricing row above it carries its own
+        # identity tag, so detect_uc returns None for it and no coarse bucket claims it.
+        when=lambda m: "publisher_domain_resolution" in m,
         env_builder=_build_product_env,
     ),
     EnvRoute(

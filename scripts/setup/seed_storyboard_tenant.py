@@ -53,8 +53,8 @@ STORYBOARD_SUBDOMAIN = "storyboard"
 #: client connects to what the card says: advertising ``https://storyboard.adcp.test/a2a``
 #: for an agent listening on 8443 points every client at a closed port, which took the A2A
 #: conformance axis from 27 passing checks to zero. The port comes off at the two reads
-#: that want a hostname -- the tenant lookup and ``Tenant.primary_domain``, whose
-#: ``publisher_domain`` pattern admits no colon (``config_loader.hostname_of``).
+#: that want a hostname -- the tenant lookup and ``Tenant.host_name``
+#: (``http_utils.hostname_of``).
 STORYBOARD_VIRTUAL_HOST = "storyboard.adcp.test:8443"
 
 #: The credential the runner presents. Distinct from the CI token because a principal
