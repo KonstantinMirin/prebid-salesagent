@@ -2,7 +2,7 @@
 
 Covers:
 - UC-005-MAIN-MCP-02: Authentication optional for discovery
-- UC-005-EXT-A-01: Tenant resolution failure returns REFERENCE_NOT_FOUND
+- UC-005-EXT-A-01: Tenant resolution failure returns TENANT_UNDEFINED
 
 The list_creative_formats endpoint is a discovery/catalog endpoint.
 While tenant context is required to resolve the format catalog, an
@@ -157,7 +157,7 @@ class TestAuthOptionalForDiscovery:
 
 # There is no tenant-less identity to test this tool with: ``PublicIdentity`` declares
 # ``tenant`` required, because a request naming no seller this deployment serves is refused
-# REFERENCE_NOT_FOUND by the resolver before any identity is built (``_addressed_tenant``).
+# TENANT_UNDEFINED by the resolver before any identity is built (``_addressed_tenant``).
 # So UC-005-EXT-A-01 ("no hostname mapping resolves to a tenant -> error") is graded where
 # the refusal happens -- on the wire, with no resolvable host -- not here with a fixture:
 # BR-UC-010 @T-UC-010-ext-a and local-tenant-identification-routes.feature.

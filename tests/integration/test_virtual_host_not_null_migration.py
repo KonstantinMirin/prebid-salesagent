@@ -91,6 +91,42 @@ def test_the_upgrade_refuses_and_names_the_rows_it_cannot_fix(migration_db):
         )
 
 
+@pytest.mark.parametrize(
+    ("stored", "why"),
+    [
+        ("https://evil.com", "a scheme"),
+        ("user@host.com", "userinfo"),
+        ("evil.com/path", "a path"),
+        ("", "blank"),
+        ("[::1", "an unterminated IPv6 bracket"),
+        ("a b.com", "whitespace"),
+        ("host.example.com:", "a trailing colon"),
+    ],
+)
+def test_the_upgrade_refuses_a_stored_host_that_is_not_a_host(migration_db, stored, why):
+    """A malformed origin stops the upgrade and is NAMED, like a NULL one.
+
+    Shape has to be refused because this revision derives the routing key from this column,
+    and a derived name makes the row REACHABLE: ``user@host.com`` derives ``host.com``, so a
+    request naming that host would be served a card advertising ``https://user@host.com/a2a``.
+    Before the derived column such a row was unroutable and therefore harmless.
+
+    The unterminated-bracket case is here for a second reason: ``urlsplit`` raises its own
+    ``ValueError`` for it, which would abort the upgrade with urllib's text and no tenant
+    named — a refusal an operator cannot act on.
+    """
+    engine, db_url = _at_previous(migration_db)
+    tenant_id = f"vh_shape_{abs(hash(stored)) % 10**6}"
+    _insert_tenant(engine, tenant_id, stored)
+
+    with pytest.raises(RuntimeError) as raised:
+        run_alembic_upgrade(db_url, _REVISION)
+
+    message = str(raised.value)
+    assert tenant_id in message, f"the refusal did not name the tenant holding {stored!r} ({why}): {message}"
+    assert _is_nullable(engine), f"the column was made NOT NULL despite a row holding {stored!r}"
+
+
 def test_the_upgrade_invents_no_host_for_the_row_it_refuses(migration_db):
     """After the refusal the NULL is still NULL — nothing was derived into it.
 

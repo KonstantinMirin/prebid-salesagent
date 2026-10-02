@@ -6,7 +6,7 @@ import os
 from adcp import get_adcp_spec_version
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from src.core.agent_identity import AGENT_ENDPOINT_PATHS
+from src.core.agent_identity import AGENT_CARD_PATH, AGENT_ENDPOINT_PATHS
 from src.core.tenant_context import TenantContext
 from src.core.version import get_version
 
@@ -194,7 +194,7 @@ def generate_tenant_landing_page(tenant_row: dict) -> str:
     # origin where A2A answers at "/a2a", gets sent somewhere that is not the endpoint.
     mcp_url = f"{base_url}{AGENT_ENDPOINT_PATHS['mcp']}"
     a2a_url = f"{base_url}{AGENT_ENDPOINT_PATHS['a2a']}"
-    agent_card_url = f"{base_url}/.well-known/agent.json"
+    agent_card_url = f"{base_url}{AGENT_CARD_PATH}"
     admin_url = f"{base_url}/admin/"
 
     # Prepare template context
