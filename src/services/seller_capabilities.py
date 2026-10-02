@@ -451,7 +451,7 @@ def describe_seller(identity: PublicIdentity) -> SellerCapabilities:
     """This seller's capabilities for *identity*'s tenant.
 
     There is always a tenant: a request naming no seller this deployment serves is refused
-    REFERENCE_NOT_FOUND before an identity exists (``_addressed_tenant``), so there is no
+    CONFIGURATION_ERROR before an identity exists (``_addressed_tenant``), so there is no
     minimal "unrouted host" description to fall back to. BR-UC-010 T-UC-010-ext-a grades
     that refusal.
     """

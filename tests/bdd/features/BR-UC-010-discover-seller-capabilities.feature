@@ -376,23 +376,21 @@ Feature: BR-UC-010 Discover Seller Capabilities
   Scenario: no_tenant — a request naming no seller is refused
     Given no tenant can be resolved from the request context
     When the Buyer Agent calls get_adcp_capabilities
-    Then the response contains error code REFERENCE_NOT_FOUND
-    And the error recovery should be "correctable"
+    Then the response contains error code TENANT_UNDEFINED
+    And the error recovery should be "terminal"
     # NOT-IN-SPEC, and deliberately so: the spec has no tenant concept, so what a
     # deployment does when it cannot tell WHICH seller a request addresses is the
     # seller's own contract. This one refuses. A request that names neither a host this
     # deployment serves nor a tenant it knows has no seller behind it, and therefore no
     # rule of that seller's to apply -- including the rule that would answer minimally.
-    # It addressed something that does not exist here, so the code is the pinned enum's
-    # fallback for "a referenced identifier ... or other resource that does not exist",
-    # REFERENCE_NOT_FOUND (correctable), not CONFIGURATION_ERROR, which the same enum
-    # reserves for a misconfigured seller deployment.
+    # CONFIGURATION_ERROR is what the pinned enum gives a seller-side deployment fault and
+    # it classifies it terminal: the buyer has no lever and MUST NOT auto-retry.
     #
     # A MINIMAL CAPABILITIES response -- adcp and supported_protocols with no account
     # block -- would answer a discovery request with a document describing nobody, which
     # reads as "this agent exists and offers nothing" rather than "you have not said who
     # you are asking".
-    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumDescriptions/REFERENCE_NOT_FOUND
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enum
 
   @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary
   Scenario Outline: Graceful degradation when dependencies fail
