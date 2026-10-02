@@ -95,7 +95,7 @@ fly ips list --app your-app-name
 
 - **Fly.io**: Automatic wildcard SSL
 - **Cloud Run**: Use Cloud Load Balancer with managed certificates
-- **Docker**: Use Caddy, nginx with certbot, or a reverse proxy with a wildcard certificate
+- **Docker**: Use Caddy, nginx with certbot, or a reverse proxy with a wildcard certificate. The [single VM walkthrough](vm.md) is a complete Caddy setup.
 
 #### Caddy on-demand TLS (no wildcard certificate)
 
