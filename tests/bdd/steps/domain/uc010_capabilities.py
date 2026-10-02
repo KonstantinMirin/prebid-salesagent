@@ -34,6 +34,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_lookup,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.bdd.steps.generic._table import comma_list
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
@@ -103,10 +104,7 @@ def _config(ctx: dict) -> dict:
 
 def _quoted_list(text: str) -> list[str]:
     """Parse '"a", "b"' / 'display, social' step fragments into a list."""
-    quoted = re.findall(r'"([^"]+)"', text)
-    if quoted:
-        return quoted
-    return [part.strip() for part in text.split(",") if part.strip()]
+    return re.findall(r'"([^"]+)"', text) or comma_list(text)
 
 
 def _assert_schema_valid(ctx: dict) -> None:
@@ -894,7 +892,7 @@ def then_supported_billing_nonempty(ctx: dict) -> None:
 
 @then(parsers.parse("account.supported_billing should equal {expected_set}"))
 def then_supported_billing_equals(ctx: dict, expected_set: str) -> None:
-    expected = [part.strip() for part in expected_set.strip("[]").split(",") if part.strip()]
+    expected = comma_list(expected_set.strip("[]"))
     value = wire_field(ctx, "account.supported_billing")
     assert sorted(value) == sorted(expected), f"supported_billing {value!r} != {expected!r}"
 
@@ -1687,10 +1685,7 @@ _VENDOR_METRIC_ID_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 def _parse_bracket_list(token: str) -> list[str]:
     """Parse a Gherkin '[a, b]' fragment into a list of bare string tokens."""
-    inner = token.strip().removeprefix("[").removesuffix("]").strip()
-    if not inner:
-        return []
-    return [part.strip() for part in inner.split(",") if part.strip()]
+    return comma_list(token.strip().removeprefix("[").removesuffix("]"))
 
 
 def _grade_array_or_absent(ctx: dict, path: str, expected: str) -> None:

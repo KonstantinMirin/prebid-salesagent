@@ -15,12 +15,8 @@ import json
 from pytest_bdd import given, parsers, then
 
 from tests.bdd.steps._outcome_helpers import wire_entry, wire_field
+from tests.bdd.steps.generic._table import comma_list
 from tests.factories import AuthorizedPropertyFactory, InventoryProfileFactory, PricingOptionFactory, ProductFactory
-
-
-def _split(cell: str) -> list[str]:
-    """A comma-separated list from a step argument."""
-    return [item.strip() for item in cell.split(",") if item.strip()]
 
 
 def _offer(ctx: dict, product_id: str, property_tags: list[str]) -> None:
@@ -53,7 +49,7 @@ def given_pending_property(ctx: dict, property_id: str, domain: str, tag: str) -
 
 @given(parsers.parse('the seller offers product "{product_id}" selecting property tags "{tags}"'))
 def given_product_by_tags(ctx: dict, product_id: str, tags: str) -> None:
-    _offer(ctx, product_id, property_tags=_split(tags))
+    _offer(ctx, product_id, property_tags=comma_list(tags))
 
 
 @given(parsers.parse('the seller offers product "{product_id}" selecting no properties'))
@@ -90,7 +86,7 @@ def given_operator_saved_profile(ctx: dict, profile_id: str, property_ids: str) 
     """Save the profile through the real admin form, and hold the row it stored."""
     env = ctx["env"]
     page = env.create_inventory_profile(
-        profile_id, property_mode="property_ids", selected_property_ids=_split(property_ids)
+        profile_id, property_mode="property_ids", selected_property_ids=comma_list(property_ids)
     )
     profile = env.stored_inventory_profile(profile_id)
     assert profile is not None, f"the form stored no profile {profile_id!r}; it answered {page.status_code}"
@@ -109,4 +105,4 @@ def then_product_announces(ctx: dict, product_id: str, expected: str) -> None:
 @then(parsers.parse('the buyer receives exactly the products "{product_ids}"'))
 def then_exact_products(ctx: dict, product_ids: str) -> None:
     received = sorted(product["product_id"] for product in wire_field(ctx, "products"))
-    assert received == sorted(_split(product_ids)), f"received products {received!r}"
+    assert received == sorted(comma_list(product_ids)), f"received products {received!r}"

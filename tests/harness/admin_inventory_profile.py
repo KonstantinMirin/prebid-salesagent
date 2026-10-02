@@ -1,8 +1,8 @@
 """Harness for the admin pages that decide which publishers a product names (#1845).
 
 Sibling of :mod:`tests.harness.admin_accounts` and :mod:`tests.harness.admin_principal`: the
-operator's inventory-profile form, and the products page that marks a product buyers are
-not offered. A :class:`tests.harness.product.ProductEnv` rather than a standalone env,
+operator's inventory-profile form, the product add and edit forms, and the products page
+that marks a product buyers are not offered. A :class:`tests.harness.product.ProductEnv` rather than a standalone env,
 because a profile the operator saves is only half the behavior: the other
 half is what ``get_products`` then announces for a product linked to it. One env carries
 both, so a scenario saves the profile through the real form and reads it back off the wire
@@ -23,7 +23,7 @@ import json
 from typing import Any
 from urllib.parse import urljoin
 
-from src.core.database.models import InventoryProfile
+from src.core.database.models import InventoryProfile, Product
 from tests.harness.admin_accounts import _AdminResponse
 from tests.harness.product import ProductEnv
 from tests.helpers.admin_session import admin_auth_session, authenticate_http_session, drop_stated_session_cookie
@@ -49,6 +49,14 @@ class AdminInventoryProfileEnv(ProductEnv):
         assert stored is not None, f"no inventory profile {profile_id!r} to edit"
         return self._admin_request(f"inventory-profiles/{stored.id}/edit", self._profile_form(profile_id, **selection))
 
+    def create_product(self, product_id: str, **selection: Any) -> _AdminResponse:
+        """POST the product add form for *product_id* with a ``tags`` or ``property_ids`` *selection*."""
+        return self._admin_request("products/add", self._product_form(product_id, **selection))
+
+    def edit_product(self, product_id: str, **selection: Any) -> _AdminResponse:
+        """POST the edit form of the stored product *product_id* with a new *selection*."""
+        return self._admin_request(f"products/{product_id}/edit", self._product_form(product_id, **selection))
+
     def admin_page(self, path: str) -> _AdminResponse:
         """GET ``/tenant/<tenant>/<path>``."""
         return self._admin_request(path)
@@ -57,8 +65,15 @@ class AdminInventoryProfileEnv(ProductEnv):
 
     def stored_inventory_profile(self, profile_id: str) -> InventoryProfile | None:
         """The profile row as the form left it, read fresh from the env's database."""
+        return self._stored(InventoryProfile, profile_id=profile_id)
+
+    def stored_product(self, product_id: str) -> Product | None:
+        """The product row as the form left it, read fresh from the env's database."""
+        return self._stored(Product, product_id=product_id)
+
+    def _stored(self, model: type[Any], **key: str) -> Any:
         self.get_session().expire_all()
-        return self.get_one(InventoryProfile, tenant_id=self.tenant_id, profile_id=profile_id)
+        return self.get_one(model, tenant_id=self.tenant_id, **key)
 
     # ── internals ──────────────────────────────────────────────────────────
 
@@ -70,6 +85,21 @@ class AdminInventoryProfileEnv(ProductEnv):
             "targeted_ad_unit_ids": "[]",
             "targeted_placement_ids": "[]",
             "formats": _PROFILE_FORMATS,
+            **selection,
+        }
+
+    @staticmethod
+    def _product_form(product_id: str, **selection: Any) -> dict[str, Any]:
+        # One fixed-CPM pricing option, which both forms require, and a measurement
+        # provider, without which the edit form clears the NOT NULL delivery_measurement.
+        return {
+            "name": f"Product {product_id}",
+            "product_id": product_id,
+            "formats": "[]",
+            "delivery_measurement_provider": "publisher",
+            "pricing_model_0": "cpm_fixed",
+            "currency_0": "USD",
+            "rate_0": "10.00",
             **selection,
         }
 

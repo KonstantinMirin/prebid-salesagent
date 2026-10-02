@@ -23,9 +23,8 @@ from src.core.database.repositories.authorized_property import AuthorizedPropert
 from src.core.database.repositories.media_buy import MediaBuyRepository
 from src.core.database.repositories.principal import PrincipalRepository
 from src.core.helpers.publisher_property_helpers import (
-    by_id_selectors,
-    by_tag_selectors_per_publisher,
-    tags_by_publisher,
+    id_selection,
+    publisher_tag_selection,
 )
 from src.core.schemas import Format
 from src.services.gam_product_config_service import GAMProductConfigService
@@ -630,6 +629,24 @@ def list_products(tenant_id):
         return redirect(url_for("tenants.dashboard", tenant_id=tenant_id))
 
 
+#: The form field holding the choices of each property mode that builds selectors.
+_SELECTION_FIELDS = {"tags": "selected_property_tags", "property_ids": "selected_property_ids"}
+
+
+def _selectors_from_product_form(db_session, tenant_id: str, property_mode: str) -> tuple[list[dict], str | None]:
+    """The product form's ``tags`` (``domain:tag``) or ``property_ids`` choices as selectors, or why not.
+
+    Checked against the seller's VERIFIED properties by the validators the inventory-profile
+    form uses (``publisher_property_helpers.tag_selection`` / ``id_selection``), because a
+    selection only a pending property backs is one ``get_products`` would not sell.
+    """
+    authorized = AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+    choices = request.form.getlist(_SELECTION_FIELDS[property_mode])
+    if property_mode == "tags":
+        return publisher_tag_selection(choices, authorized)
+    return id_selection(choices, authorized)
+
+
 def _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data=None):
     """Helper to render add product form with optional preserved form data.
 
@@ -1052,73 +1069,12 @@ def add_product(tenant_id):
                 # Handle property authorization (AdCP requirement)
                 # Default to empty property_tags if not specified (satisfies DB constraint)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
-                    # Get selected property tags (format: "domain:tag")
-                    selected_tags = request.form.getlist("selected_property_tags")
-
-                    if not selected_tags:
-                        flash("Please select at least one property tag", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    tags_by_domain, refusal = tags_by_publisher(selected_tags)
+                if property_mode in _SELECTION_FIELDS:
+                    selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
                     if refusal:
                         flash(refusal, "error")
                         return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # Validate that tags exist for properties from these publishers
-                    from src.core.database.models import AuthorizedProperty
-
-                    for domain, tags in tags_by_domain.items():
-                        # Check that properties with these tags exist for this publisher
-                        props_with_tags = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.tenant_id == tenant_id,
-                                AuthorizedProperty.publisher_domain == domain,
-                            )
-                        ).all()
-
-                        available_tags = set()
-                        for prop in props_with_tags:
-                            if prop.tags:
-                                available_tags.update(prop.tags)
-
-                        missing_tags = set(tags) - available_tags
-                        if missing_tags:
-                            flash(
-                                f"Tags not found for publisher {domain}: {', '.join(missing_tags)}",
-                                "error",
-                            )
-                            return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # One by_tag selector per publisher, in the properties field
-                    product_kwargs["properties"] = by_tag_selectors_per_publisher(tags_by_domain)
-                elif property_mode == "property_ids":
-                    # Get selected property IDs and store in AdCP discriminated union format
-                    # grouped by publisher_domain
-                    property_ids_list = request.form.getlist("selected_property_ids")
-
-                    if not property_ids_list:
-                        flash("Please select at least one property", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    from src.core.database.models import AuthorizedProperty
-
-                    # Query by property_id (string), not integer id
-                    properties = db_session.scalars(
-                        select(AuthorizedProperty).filter(
-                            AuthorizedProperty.property_id.in_(property_ids_list),
-                            AuthorizedProperty.tenant_id == tenant_id,
-                        )
-                    ).all()
-
-                    # Verify all requested IDs were found (prevent TOCTOU)
-                    if len(properties) != len(property_ids_list):
-                        flash("One or more selected properties not found or not authorized", "error")
-                        return _render_add_product_form(tenant_id, tenant, adapter_type, currencies, form_data)
-
-                    # One by_id selector per publisher: property IDs are publisher-scoped
-                    product_kwargs["properties"] = by_id_selectors(properties)
-
+                    product_kwargs["properties"] = selectors
                 elif property_mode == "full":
                     # Get selected property IDs and load full property objects (legacy mode)
                     property_ids_list = request.form.getlist("full_property_ids")
@@ -1467,46 +1423,19 @@ def edit_product(tenant_id, product_id):
 
                 # Handle publisher properties (AdCP requirement)
                 property_mode = form_data.get("property_mode", "tags")
-                if property_mode == "tags":
-                    # Get selected property tags (format: "domain:tag")
-                    selected_tags = request.form.getlist("selected_property_tags")
-                    if selected_tags:
-                        tags_by_domain, refusal = tags_by_publisher(selected_tags)
+                if property_mode in _SELECTION_FIELDS:
+                    # An empty selection leaves the stored one as it is.
+                    if request.form.getlist(_SELECTION_FIELDS[property_mode]):
+                        selectors, refusal = _selectors_from_product_form(db_session, tenant_id, property_mode)
                         if refusal:
                             flash(refusal, "error")
                             return redirect(
                                 url_for("products.edit_product", tenant_id=tenant_id, product_id=product_id)
                             )
-                        publisher_properties = by_tag_selectors_per_publisher(tags_by_domain)
-
-                        if publisher_properties:
-                            product.properties = publisher_properties
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
-
-                elif property_mode == "property_ids":
-                    # Get selected property IDs
-                    property_ids_list = request.form.getlist("selected_property_ids")
-                    if property_ids_list:
-                        from src.core.database.models import AuthorizedProperty
-
-                        # Query properties to get their publisher_domain
-                        properties = db_session.scalars(
-                            select(AuthorizedProperty).filter(
-                                AuthorizedProperty.property_id.in_(property_ids_list),
-                                AuthorizedProperty.tenant_id == tenant_id,
-                            )
-                        ).all()
-
-                        # One by_id selector per publisher: property IDs are publisher-scoped
-                        publisher_properties = by_id_selectors(properties)
-
-                        if publisher_properties:
-                            product.properties = publisher_properties
-                            product.property_tags = None
-                            product.property_ids = None
-                            attributes.flag_modified(product, "properties")
+                        product.properties = selectors
+                        product.property_tags = None
+                        product.property_ids = None
+                        attributes.flag_modified(product, "properties")
 
                 elif property_mode == "full":
                     # Get selected full property IDs (legacy mode)
@@ -1924,8 +1853,11 @@ def edit_product(tenant_id, product_id):
                 for p in authorized_properties_query
             ]
 
-            # Get current publisher properties from product (for pre-selecting in edit form)
-            selected_publisher_properties = product.resolve_publisher_properties(authorized_properties_query)
+            # Pre-select what the product sells: its selectors resolved against the VERIFIED
+            # properties, as list_products and get_products resolve them.
+            selected_publisher_properties = product.resolve_publisher_properties(
+                AuthorizedPropertyRepository(db_session, tenant_id).list_refs()
+            )
 
             # Show adapter-specific form
             if adapter_type == "google_ad_manager":

@@ -54,19 +54,11 @@ def _ensure_example_property(session, tenant_id: str) -> None:
     The setup checklist counts authorized properties, and a product names only the
     publishers of verified rows on the wire (#1845).
     """
-    from sqlalchemy import select
+    from scripts.setup.seed_products import seed_verified_website
 
-    from src.core.database.models import AuthorizedProperty
-
-    stmt = select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id="example_com")
-    if session.scalars(stmt).first():
+    if not seed_verified_website(session, tenant_id, "example.com", name="Example Website"):
         print("  ℹ️  Authorized property already exists: example.com")
         return
-    session.add(
-        AuthorizedProperty.verified_website(
-            tenant_id=tenant_id, property_id="example_com", domain="example.com", name="Example Website"
-        )
-    )
     session.commit()
     print("  ✓ Created authorized property: example.com")
 

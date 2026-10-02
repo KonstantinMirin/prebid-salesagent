@@ -18,6 +18,11 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
   # all_inventory is the seller's tag, which a publisher's adagents.json does not carry,
   # so selecting it selects each publisher whole.
   #
+  # The product add and edit forms store selectors the same way and refuse a selection
+  # the same way, through the one validator the profile form uses: a tag or property only
+  # a pending property backs is refused, because get_products would not sell it. The
+  # edit form preselects what the product sells, the verified publishers only.
+  #
   # The products page marks a product get_products leaves out because it names no
   # verified publisher, so the operator sees the gap rather than only a server log line.
   #
@@ -78,3 +83,50 @@ Feature: BR-ADMIN-INVENTORY-PROFILE-publishers Which publishers the operator's s
     And the seller offers product "orphan" selecting property tags "podcast"
     When the operator opens the products page
     Then the products page marks exactly the products "orphan" as not offered to buyers
+
+  @T-ADMIN-INVPROFILE-009 @admin_inventory_profile @requires_db
+  Scenario: the product form stores a tag selection under its publishers
+    When the operator creates product "premium_sites" selecting tags "news.example:premium, sports.example:premium"
+    Then product "premium_sites" stores publisher_properties [{"publisher_domain": "news.example", "property_tags": ["premium"], "selection_type": "by_tag"}, {"publisher_domain": "sports.example", "property_tags": ["premium"], "selection_type": "by_tag"}]
+
+  @T-ADMIN-INVPROFILE-010 @admin_inventory_profile @requires_db
+  Scenario: the product form groups selected properties under their publishers
+    When the operator creates product "home_pages" selecting properties "news_home, weather_home"
+    Then product "home_pages" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "weather.example", "property_ids": ["weather_home"], "selection_type": "by_id"}]
+
+  @T-ADMIN-INVPROFILE-011 @admin_inventory_profile @requires_db
+  Scenario: the product form refuses a tag only a property awaiting verification carries
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    When the operator creates product "podcasts" selecting tags "podcast.example:podcast"
+    Then the page contains "No verified authorized property carries the tags: podcast"
+    And no product "podcasts" is stored
+
+  @T-ADMIN-INVPROFILE-012 @admin_inventory_profile @requires_db
+  Scenario: the product form refuses a property awaiting verification
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    When the operator creates product "podcasts" selecting properties "news_home, podcast_home"
+    Then the page contains "Not verified authorized properties: podcast_home"
+    And no product "podcasts" is stored
+
+  @T-ADMIN-INVPROFILE-013 @admin_inventory_profile @requires_db
+  Scenario: the product edit form refuses a tag only a property awaiting verification carries
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator edits product "news" to select tags "podcast.example:podcast"
+    Then the page contains "No verified authorized property carries the tags: podcast"
+    And product "news" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+
+  @T-ADMIN-INVPROFILE-014 @admin_inventory_profile @requires_db
+  Scenario: the product edit form refuses a property awaiting verification
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    And the seller offers product "news" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+    When the operator edits product "news" to select properties "podcast_home"
+    Then the page contains "Not verified authorized properties: podcast_home"
+    And product "news" stores publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}]
+
+  @T-ADMIN-INVPROFILE-015 @admin_inventory_profile @requires_db
+  Scenario: the product edit form preselects only the properties the product sells
+    Given the seller's property "podcast_home" of publisher "podcast.example" tagged "podcast" awaits verification
+    And the seller offers product "mixed" naming publisher_properties [{"publisher_domain": "news.example", "property_ids": ["news_home"], "selection_type": "by_id"}, {"publisher_domain": "podcast.example", "property_ids": ["podcast_home"], "selection_type": "by_id"}]
+    When the operator opens the edit form of product "mixed"
+    Then the form preselects exactly the properties "news_home"

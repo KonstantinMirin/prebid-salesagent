@@ -195,13 +195,12 @@ def seed_storyboard_tenant() -> str:
     from adcp.types import BrandReference
     from sqlalchemy import select
 
-    from scripts.setup.seed_products import seed_product
+    from scripts.setup.seed_products import seed_product, seed_verified_website
     from src.core.credentials import hash_token
     from src.core.database.database_session import get_db_session
     from src.core.database.models import (
         Account,
         AgentAccountAccess,
-        AuthorizedProperty,
         CurrencyLimit,
         Product,
         PropertyTag,
@@ -356,15 +355,7 @@ def seed_storyboard_tenant() -> str:
             )
 
         for domain in domains:
-            property_id = domain.replace(".", "_")
-            if not session.scalars(
-                select(AuthorizedProperty).filter_by(tenant_id=tenant_id, property_id=property_id)
-            ).first():
-                session.add(
-                    AuthorizedProperty.verified_website(
-                        tenant_id=tenant_id, property_id=property_id, domain=domain, name=domain
-                    )
-                )
+            seed_verified_website(session, tenant_id, domain)
 
         try:
             session.commit()

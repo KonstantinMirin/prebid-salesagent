@@ -31,7 +31,7 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.database.repositories.authorized_property import AuthorizedPropertyRepository
-from src.core.helpers.publisher_property_helpers import by_id_selectors, by_tag_selectors, refuse_property_tag
+from src.core.helpers.publisher_property_helpers import id_selection, tag_selection
 
 logger = logging.getLogger(__name__)
 
@@ -63,35 +63,16 @@ def _selectors_from_form(session: Session, tenant_id: str, property_mode: str) -
     never the tenant's own host: a tenant is a seller representing many publishers (#1845),
     and AdCP 3.1.1 ``core/publisher-property-selector.json`` makes property IDs
     publisher-scoped. A pending property is not selectable, because a product would not
-    sell it (``AuthorizedPropertyRepository.list_refs``).
+    sell it (``AuthorizedPropertyRepository.list_refs``). The product forms validate through
+    the same ``tag_selection`` / ``id_selection``.
 
     Returns ``(selectors, None)``, or ``([], message)`` when the selection is unusable.
     """
     authorized = AuthorizedPropertyRepository(session, tenant_id).list_refs()
-
     if property_mode == "tags":
-        property_tags = [
-            tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag
-        ]
-        if not property_tags:
-            return [], "At least one valid property tag is required"
-        refusal = next(filter(None, map(refuse_property_tag, property_tags)), None)
-        if refusal:
-            return [], refusal
-        selectors = by_tag_selectors(property_tags, authorized)
-        if not selectors:
-            return [], f"No verified authorized property carries the tags: {', '.join(property_tags)}"
-        return selectors, None
-
-    selected_property_ids = request.form.getlist("selected_property_ids")
-    if not selected_property_ids:
-        return [], "At least one property must be selected"
-    wanted = set(selected_property_ids)
-    chosen = [p for p in authorized if p.property_id in wanted]
-    unknown_ids = wanted - {p.property_id for p in chosen}
-    if unknown_ids:
-        return [], f"Not verified authorized properties: {', '.join(sorted(unknown_ids))}"
-    return by_id_selectors(chosen), None
+        tags = [tag for tag in (t.strip().lower() for t in request.form.get("property_tags", "").split(",")) if tag]
+        return tag_selection(tags, authorized)
+    return id_selection(request.form.getlist("selected_property_ids"), authorized)
 
 
 def _get_inventory_summary(inventory_config: dict) -> str:

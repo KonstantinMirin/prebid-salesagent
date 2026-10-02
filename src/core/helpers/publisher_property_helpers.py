@@ -199,20 +199,69 @@ def refuse_property_tag(tag: str) -> str | None:
     return f"Invalid tag '{tag}': use only lowercase letters, numbers, and underscores"
 
 
-def tags_by_publisher(selections: Iterable[str]) -> tuple[dict[str, list[str]], str | None]:
-    """The admin product form's ``domain:tag`` choices grouped by publisher, or why not.
+def tag_selection(tags: Sequence[str], authorized: Sequence[SelectableProperty]) -> tuple[list[dict], str | None]:
+    """An admin form's tag choice as selectors over the seller's *authorized* properties, or why not.
 
-    Returns ``(tags_by_domain, None)``, or ``({}, refusal)`` at the first malformed choice.
+    *authorized* are the VERIFIED properties (``AuthorizedPropertyRepository.list_refs``),
+    which is what ``get_products`` sells, so a tag only a pending property carries is
+    refused rather than stored and then silently not offered. Every requested tag must be
+    carried; ``all_inventory`` is the seller's own and is carried whenever any property is.
+
+    Returns ``(selectors, None)``, or ``([], refusal)``.
     """
-    grouped: dict[str, list[str]] = {}
+    if not tags:
+        return [], "At least one valid property tag is required"
+    refusal = next(filter(None, map(refuse_property_tag, tags)), None)
+    if refusal:
+        return [], refusal
+    carried = set().union(*(p.tags or () for p in authorized), {ALL_INVENTORY_TAG} if authorized else ())
+    missing = [tag for tag in tags if tag not in carried]
+    if missing:
+        return [], f"No verified authorized property carries the tags: {', '.join(missing)}"
+    return by_tag_selectors(tags, authorized), None
+
+
+def publisher_tag_selection(
+    selections: Sequence[str], authorized: Sequence[SelectableProperty]
+) -> tuple[list[dict], str | None]:
+    """The product form's ``domain:tag`` choices as selectors, each publisher's tags checked by :func:`tag_selection`.
+
+    Returns ``(selectors, None)``, or ``([], refusal)`` at the first unusable choice.
+    """
+    tags_by_domain: dict[str, list[str]] = {}
     for selection in selections:
         domain, separator, tag = selection.partition(":")
         if not separator:
-            return {}, f"Invalid tag selection format: {selection}"
-        refusal = refuse_property_tag(tag)
-        if refusal:
-            return {}, refusal
-        tags = grouped.setdefault(domain, [])
+            return [], f"Invalid tag selection format: {selection}"
+        tags = tags_by_domain.setdefault(domain, [])
         if tag not in tags:
             tags.append(tag)
-    return grouped, None
+    if not tags_by_domain:
+        return [], "At least one valid property tag is required"
+    selectors: list[dict] = []
+    for domain, tags in tags_by_domain.items():
+        chosen, refusal = tag_selection(tags, [p for p in authorized if p.publisher_domain == domain])
+        if refusal:
+            return [], f"{domain}: {refusal}"
+        selectors.extend(chosen)
+    return selectors, None
+
+
+def id_selection(
+    property_ids: Sequence[str], authorized: Sequence[SelectableProperty]
+) -> tuple[list[dict], str | None]:
+    """An admin form's property choice as ``by_id`` selectors over the seller's *authorized* properties, or why not.
+
+    *authorized* are the VERIFIED properties, as for :func:`tag_selection`: an ID that names
+    no verified property of this seller (unknown, another tenant's, or pending) is refused.
+
+    Returns ``(selectors, None)``, or ``([], refusal)``.
+    """
+    if not property_ids:
+        return [], "At least one property must be selected"
+    wanted = set(property_ids)
+    chosen = [p for p in authorized if p.property_id in wanted]
+    unknown = wanted - {p.property_id for p in chosen}
+    if unknown:
+        return [], f"Not verified authorized properties: {', '.join(sorted(unknown))}"
+    return by_id_selectors(chosen), None
