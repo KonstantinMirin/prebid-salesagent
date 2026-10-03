@@ -26,7 +26,12 @@ from urllib.parse import urljoin
 from src.core.database.models import InventoryProfile, Product
 from tests.harness.admin_accounts import _AdminResponse
 from tests.harness.product import ProductEnv
-from tests.helpers.admin_session import admin_auth_session, authenticate_http_session, drop_stated_session_cookie
+from tests.helpers.admin_session import (
+    admin_auth_session,
+    admin_test_app,
+    authenticate_http_session,
+    drop_stated_session_cookie,
+)
 
 #: A format the profile form requires. Any id serves: the form stores it verbatim.
 _PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}])
@@ -105,12 +110,7 @@ class AdminInventoryProfileEnv(ProductEnv):
 
     def _flask_app(self) -> Any:
         if self._admin_app is None:
-            from src.admin.app import create_app
-
-            app = create_app()
-            app.config["TESTING"] = True
-            app.config["WTF_CSRF_ENABLED"] = False
-            self._admin_app = app
+            self._admin_app = admin_test_app()
         return self._admin_app
 
     def _admin_request(self, path: str, form: dict[str, Any] | None = None) -> _AdminResponse:
