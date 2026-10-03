@@ -447,16 +447,19 @@ class CapabilitiesEnv(IntegrationEnv):
         """
         self.mock["adapter"].side_effect = Exception("adapter unavailable (harness)")
 
-    @realize_e2e(
-        e2e_unsupported(
-            "the fault is 'iterating the adapter's default_channels raises', which is a property of "
-            "the in-process adapter object. Unlike 'unavailable' -- which get_adapter_class_for_tenant "
-            "honours from AdapterConfig.test_behavior -- production has no read that could make channel "
-            "ENUMERATION fail on a real adapter, and adding one would put a fault-injection branch in "
-            "production for a test's benefit. The non-cascade it grades is transport-independent "
-            "(one function's control flow in capabilities.py), so the in-process transports grade it fully"
-        )
-    )
+    def _realize_channel_enumeration_failure(self) -> None:
+        """E2E realization: the portfolio's channels cannot be enumerated, the adapter still resolves.
+
+        The channels are the union over the tenant's product catalog
+        (``_map_portfolio_channels``), so a failed catalog read is a channel-enumeration
+        failure the live server reaches with no production hook, while the adapter class
+        that also feeds pricing models and targeting resolves untouched.
+        """
+        from src.core.database.models import Product
+
+        self._fail_table_for_scenario(Product.__tablename__)
+
+    @realize_e2e(_realize_channel_enumeration_failure)
     def make_adapter_channel_enumeration_fail(self) -> None:
         """The adapter RESOLVES, but reading its channels raises.
 
@@ -550,9 +553,42 @@ class CapabilitiesEnv(IntegrationEnv):
         self.mock["idempotency_posture"] = patcher.start()
         self._guard("patch:idempotency_posture", patcher.stop)
 
-    @realize_e2e(
-        e2e_unsupported("no production DB fault hook; TenantConfigUoW read failure cannot be injected over real HTTP")
-    )
+    def _fail_table_for_scenario(self, table: str) -> None:
+        """Make every live-server read of *table* fail until env teardown: a real database fault.
+
+        E2E only. The table is renamed, so the live server's next read of it raises
+        ``UndefinedTable`` and aborts its transaction, the way a deployment whose database
+        lost the table fails, with no production hook. It is renamed back on env teardown
+        (``_guard``), so the fault cannot outlive the scenario. ``lock_timeout`` makes a
+        rename that would wait on another backend fail loudly instead of hanging; it takes
+        one lock on one table, so it cannot join a lock cycle.
+        """
+        from sqlalchemy import text
+
+        renamed = f"{table}__harness_fault"
+        session = self.get_session()
+
+        def _rename(source: str, target: str) -> None:
+            session.rollback()
+            session.execute(text("SET LOCAL lock_timeout = '10s'"))
+            session.execute(text(f"ALTER TABLE {source} RENAME TO {target}"))
+            session.commit()
+
+        _rename(table, renamed)
+        self._guard(f"db:{table} renamed", lambda: _rename(renamed, table))
+
+    def _realize_tenant_config_db_failure(self) -> None:
+        """E2E realization: the capabilities session's first read fails in the database.
+
+        The publisher-partner read is the first in that session, so its failure aborts the
+        transaction and every read after it fails too: the state the in-process patch
+        describes, reached in the live server's own database.
+        """
+        from src.core.database.models import PublisherPartner
+
+        self._fail_table_for_scenario(PublisherPartner.__tablename__)
+
+    @realize_e2e(_realize_tenant_config_db_failure)
     def break_tenant_config_db(self) -> None:
         """Make the capabilities DB reads fail — production omits portfolio.
 
@@ -562,8 +598,8 @@ class CapabilitiesEnv(IntegrationEnv):
         signing-key backing (keyless posture, no identity block). Registered with
         ``_guard``, so it is stopped on ctx-independent env teardown along with
         everything else — including when a later ``__enter__`` step raises.
-        In-process only — no server-side DB-fault-injection surface exists (e2e branch
-        declares E2EUnsupportedSetup).
+        E2E: :meth:`_realize_tenant_config_db_failure` fails the live server's read in
+        its database instead.
         """
         patcher = patch(
             "src.services.seller_capabilities.TrustRootUoW",

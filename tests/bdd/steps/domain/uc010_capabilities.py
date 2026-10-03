@@ -1602,22 +1602,6 @@ def _deg_display_default(ctx: dict) -> None:
         wire_absent(ctx, path)
 
 
-@then(parsers.re(r"(?P<path>media_buy(?:\.[a-z_]+)+) should be omitted"))
-def then_media_buy_path_omitted(ctx: dict, path: str) -> None:
-    """The member is absent from the wire: omitted, never a serialized null.
-
-    ``media_buy.portfolio``: publisher_domains is REQUIRED+minItems:1 (pinned v3.1.1
-    get-adcp-capabilities-response.json) whenever portfolio is present, and media_buy has
-    no required fields -- so a seller with no verified publisher, or one whose lookup
-    failed, has no spec-legal portfolio to emit. Production used to fill the gap with a
-    fabricated '<subdomain>.example.com' (salesagent-piyo) and later with the seller's own
-    host; neither is a publisher. ``media_buy.portfolio.advertising_policies``: the pinned
-    member is ``{"type": "string"}`` with no null arm, and portfolio requires only
-    ``publisher_domains``.
-    """
-    wire_absent(ctx, path)
-
-
 def _deg_adapter_and_db_fail(ctx: dict) -> None:
     for path in ("media_buy.portfolio", "media_buy.audience_targeting", "media_buy.conversion_tracking"):
         wire_absent(ctx, path)
