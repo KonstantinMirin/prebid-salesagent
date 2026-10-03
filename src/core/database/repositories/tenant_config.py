@@ -12,12 +12,13 @@ is set at construction time and injected into all queries automatically.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any, Literal
 from typing import cast as type_cast
 
+from sqlalchemy import ColumnElement, literal, select, update
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy import literal, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import func
@@ -28,6 +29,26 @@ from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
 RemoveOutcome = Literal["removed", "absent", "missing_tenant"]
+
+
+def _partner_verified(verified: bool) -> ColumnElement[bool]:
+    """The one spelling of "this publisher partner's adagents.json check did (or did not) succeed"."""
+    return PublisherPartner.is_verified == verified
+
+
+def count_verified_publisher_partners_by_tenant(session: Session, tenant_ids: Iterable[str]) -> dict[str, int]:
+    """How many verified publisher partners each of *tenant_ids* holds, keyed by tenant_id.
+
+    Cross-tenant by design, like ``count_principals_by_tenant``: the bulk setup checklist
+    grades many tenants in one grouped query. A tenant with none is absent from the result.
+    The predicate is the one ``TenantConfigRepository.list_publisher_partners`` uses.
+    """
+    stmt = (
+        select(PublisherPartner.tenant_id, func.count())
+        .where(PublisherPartner.tenant_id.in_(list(tenant_ids)), _partner_verified(True))
+        .group_by(PublisherPartner.tenant_id)
+    )
+    return dict(session.execute(stmt).tuples().all())
 
 
 class TenantConfigRepository:
@@ -101,7 +122,7 @@ class TenantConfigRepository:
         """The tenant's publisher partners; with *verified*, only those whose adagents.json check did (or did not) succeed."""
         stmt = select(PublisherPartner).filter_by(tenant_id=self._tenant_id)
         if verified is not None:
-            stmt = stmt.filter_by(is_verified=verified)
+            stmt = stmt.where(_partner_verified(verified))
         return list(self._session.scalars(stmt).all())
 
     # ------------------------------------------------------------------
