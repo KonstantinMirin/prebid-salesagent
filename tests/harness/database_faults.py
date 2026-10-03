@@ -31,15 +31,14 @@ from typing import TYPE_CHECKING
 import psycopg2
 from sqlalchemy.engine import URL
 
-from src.core.database.database_session import reset_health_state
+from src.core.database.database_session import FAIL_FAST_WINDOW_S, reset_health_state
 from tests.harness._realize import realize_e2e
+from tests.helpers.postgres_admin import terminate_backends
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 _WAIT_FOR_WAITER_S = 15.0
-#: How long get_db_session refuses every session once it trips (its ``time_since_check < 10``).
-_FAIL_FAST_WINDOW_S = 10
 
 
 def _connect(url: URL, *, autocommit: bool = False):
@@ -98,7 +97,7 @@ def _wait_out_fail_fast(self: DatabaseFaultMixin) -> None:
     reset, so the scenario waits out the window from the moment the database accepted
     connections again: nothing could trip it after that.
     """
-    remaining = self._connections_restored_at + _FAIL_FAST_WINDOW_S + 1 - time.monotonic()
+    remaining = self._connections_restored_at + FAIL_FAST_WINDOW_S + 1 - time.monotonic()
     if remaining > 0:
         time.sleep(remaining)
 
@@ -152,10 +151,7 @@ class DatabaseFaultMixin:
             cur = admin.cursor()
             cur.execute(f'ALTER DATABASE "{url.database}" WITH ALLOW_CONNECTIONS {str(allow).lower()}')
             if not allow:
-                cur.execute(
-                    "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
-                    (url.database,),
-                )
+                terminate_backends(cur, url.database)
         finally:
             admin.close()
 

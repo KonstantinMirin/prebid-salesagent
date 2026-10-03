@@ -31,6 +31,7 @@ from tests.e2e.conftest import (
     GAM_TEST_NETWORK_CODE,
 )
 from tests.factories.principal import plaintext_token_for
+from tests.helpers.postgres_admin import drop_database
 
 GAM_LIFECYCLE_TENANT_ID = "gam_lifecycle_test"
 
@@ -185,16 +186,7 @@ def gam_lifecycle_db(gam_service_account_json):
 
     # Drop the test database
     try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{unique_db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{unique_db_name}"')
-        cur.close()
-        conn.close()
+        drop_database(psycopg2.connect(**conn_params), unique_db_name)
     except Exception:
         pass
 

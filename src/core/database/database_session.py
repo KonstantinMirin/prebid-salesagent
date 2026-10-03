@@ -30,6 +30,8 @@ _scoped_session = None
 _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
+#: Seconds get_db_session refuses every session after a connect the server never answered.
+FAIL_FAST_WINDOW_S = 10
 
 
 def _pydantic_json_serializer(obj: Any) -> str:
@@ -196,9 +198,9 @@ def get_scoped_session():
 def _server_never_answered(e: SQLAlchemyError) -> bool:
     """Whether *e* is a connect the server never answered, the one failure that trips the fail-fast.
 
-    The fail-fast below refuses EVERY session in the process for 10 seconds. It exists for
-    a database that cannot be reached, where each new connect would otherwise hold a worker
-    for the connect timeout. Nothing else trips it:
+    The fail-fast below refuses EVERY session in the process for ``FAIL_FAST_WINDOW_S``
+    seconds. It exists for a database that cannot be reached, where each new connect would
+    otherwise hold a worker for the connect timeout. Nothing else trips it:
 
     - A deadlock victim, a statement_timeout cancel or a lock timeout is the server answering
       on a live connection; the error carries the server's SQLSTATE.
@@ -241,7 +243,7 @@ def get_db_session() -> Generator[Session, None, None]:
     # Check if we should fail fast due to repeated database failures
     if not _is_healthy:
         time_since_check = time.time() - _last_health_check
-        if time_since_check < 10:  # Fail fast for 10 seconds after unhealthy check
+        if time_since_check < FAIL_FAST_WINDOW_S:
             raise RuntimeError("Database is unhealthy - failing fast to prevent cascading failures")
 
     scoped = get_scoped_session()
