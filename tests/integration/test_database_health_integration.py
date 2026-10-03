@@ -14,9 +14,8 @@ from unittest.mock import patch
 
 import pytest
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import OperationalError
 
-from src.core.database.database_session import execute_with_retry, get_db_session, get_engine, reset_health_state
+from src.core.database.database_session import get_db_session, get_engine
 from src.core.database.health_check import check_database_health, print_health_report
 from src.core.database.models import Base, Product, Tenant
 
@@ -241,38 +240,3 @@ class TestDatabaseHealthIntegration:
 
             if not tenant_table_exists:
                 assert "tenants" in health["missing_tables"], "Should detect missing tenants table"
-
-
-class TestDatabaseFailFast:
-    """``get_db_session``'s process-wide fail-fast trips on a lost database, not a failed statement.
-
-    One trip turns every session the process opens for the next 10 seconds into
-    ``RuntimeError("Database is unhealthy")``, which every transport answers as
-    INTERNAL_ERROR. A deadlock victim or a cancelled statement is the server answering
-    on a live connection, and tripping on it took the whole server down for 10 seconds
-    whenever a best-effort ``webhook_delivery_log`` write lost a deadlock.
-    """
-
-    def test_a_cancelled_statement_does_not_fail_later_sessions(self, integration_db):
-        def cancelled(session):
-            session.execute(text("SET LOCAL statement_timeout = '1ms'"))
-            session.execute(text("SELECT pg_sleep(1)"))
-
-        try:
-            with pytest.raises(OperationalError, match="statement timeout"):
-                execute_with_retry(cancelled, max_retries=1)
-            assert execute_with_retry(lambda session: session.execute(text("SELECT 1")).scalar()) == 1
-        finally:
-            reset_health_state()
-
-    def test_a_lost_connection_still_fails_later_sessions_fast(self, integration_db):
-        try:
-            with pytest.raises(OperationalError, match="closed the connection"):
-                execute_with_retry(
-                    lambda session: session.execute(text("SELECT pg_terminate_backend(pg_backend_pid())")),
-                    max_retries=1,
-                )
-            with pytest.raises(RuntimeError, match="Database is unhealthy"):
-                execute_with_retry(lambda session: session.execute(text("SELECT 1")).scalar())
-        finally:
-            reset_health_state()

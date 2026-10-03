@@ -20,6 +20,7 @@ from src.admin.app import create_app
 # name rather than star-imported: the one star import in tests/conftest.py is an
 # allowlisted exception, not the pattern.
 from tests.helpers.ledger import load_ledger_nodeids
+from tests.helpers.postgres_admin import drop_database
 from tests.integration.conftest_ci_seed import ci_test_principal  # noqa: F401
 
 admin_app = create_app()
@@ -710,16 +711,7 @@ def migration_db():
 
     engine.dispose()
     try:
-        conn = psycopg2.connect(**conn_params)
-        conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-        cur = conn.cursor()
-        cur.execute(
-            f"SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-            f"WHERE datname = '{db_name}' AND pid <> pg_backend_pid()"
-        )
-        cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
-        cur.close()
-        conn.close()
+        drop_database(psycopg2.connect(**conn_params), db_name)
     except Exception:
         pass
 

@@ -30,6 +30,8 @@ _scoped_session = None
 _last_health_check: float = 0.0
 _health_check_interval = 60  # Check health every 60 seconds
 _is_healthy = True
+#: Seconds get_db_session refuses every session after a connect the server never answered.
+FAIL_FAST_WINDOW_S = 10
 
 
 def _pydantic_json_serializer(obj: Any) -> str:
@@ -193,18 +195,27 @@ def get_scoped_session():
     return _scoped_session
 
 
-def _is_connection_failure(e: OperationalError | DisconnectionError) -> bool:
-    """Whether *e* means the database could not be reached, rather than one statement failing.
+def _server_never_answered(e: SQLAlchemyError) -> bool:
+    """Whether *e* is a connect the server never answered, the one failure that trips the fail-fast.
 
-    Only the first trips the fail-fast below, which refuses EVERY session in the process
-    for 10 seconds. A deadlock victim, a statement_timeout cancel or a lock timeout is
-    the server answering on a live connection: the error carries a SQLSTATE (``pgcode``)
-    and the connection is still good. A refused connect has no SQLSTATE, and a dropped
-    one is flagged ``connection_invalidated`` by SQLAlchemy's disconnect detection.
+    The fail-fast below refuses EVERY session in the process for ``FAIL_FAST_WINDOW_S``
+    seconds. It exists for a database that cannot be reached, where each new connect would
+    otherwise hold a worker for the connect timeout. Nothing else trips it:
+
+    - A deadlock victim, a statement_timeout cancel or a lock timeout is the server answering
+      on a live connection; the error carries the server's SQLSTATE.
+    - A connection that dropped (an admin terminate, ``idle_session_timeout``, PgBouncer
+      closing a client) is flagged ``connection_invalidated``. SQLAlchemy has already
+      discarded it and the next checkout reconnects, so one dead connection is not an outage.
+      A ``DisconnectionError`` is the pool's own signal of the same thing.
+
+    The SQLSTATE is read under both drivers' names: psycopg2 calls it ``pgcode``, psycopg 3
+    ``sqlstate``. Reading only one would make every error under the other driver look
+    unanswered and trip the fail-fast on every failed statement again.
     """
-    if isinstance(e, DisconnectionError) or e.connection_invalidated:
-        return True
-    return getattr(e.orig, "pgcode", None) is None
+    if not isinstance(e, OperationalError) or e.connection_invalidated:
+        return False
+    return getattr(e.orig, "pgcode", None) is None and getattr(e.orig, "sqlstate", None) is None
 
 
 @contextmanager
@@ -232,28 +243,19 @@ def get_db_session() -> Generator[Session, None, None]:
     # Check if we should fail fast due to repeated database failures
     if not _is_healthy:
         time_since_check = time.time() - _last_health_check
-        if time_since_check < 10:  # Fail fast for 10 seconds after unhealthy check
+        if time_since_check < FAIL_FAST_WINDOW_S:
             raise RuntimeError("Database is unhealthy - failing fast to prevent cascading failures")
 
     scoped = get_scoped_session()
     session = scoped()
     try:
         yield session
-    except (OperationalError, DisconnectionError) as e:
-        session.rollback()
-        # Remove session from registry to force reconnection
-        scoped.remove()
-        if _is_connection_failure(e):
-            logger.error(f"Database connection error: {e}")
-            # Mark as unhealthy for circuit breaker
-            _is_healthy = False
-            _last_health_check = time.time()
-        else:
-            logger.error(f"Database error: {e}")
-        raise
     except SQLAlchemyError as e:
         logger.error(f"Database error: {e}")
         session.rollback()
+        if _server_never_answered(e):
+            _is_healthy = False
+            _last_health_check = time.time()
         raise
     finally:
         session.close()
