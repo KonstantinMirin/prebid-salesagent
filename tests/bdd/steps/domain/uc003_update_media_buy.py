@@ -1117,19 +1117,6 @@ def then_response_has_sandbox(ctx: dict) -> None:
     assert isinstance(sandbox, bool), f"Expected sandbox to be bool, got {type(sandbox).__name__}: {sandbox!r}"
 
 
-@then('the response should NOT contain an "errors" field')
-def then_no_errors_field(ctx: dict) -> None:
-    """Assert the response does not contain an 'errors' field at all.
-
-    Step text says 'NOT contain' — the key must be ABSENT, not merely null: an empty list
-    or a serialized null both mean the field exists. wire_absent encodes that distinction.
-
-    Asserted on the WIRE rather than on resp.model_dump(): a round-trip through the model
-    proves the serializer is self-consistent, not what the buyer actually received.
-    """
-    wire_absent(ctx, "errors")
-
-
 # Step 'the response should contain an "errors" array' is owned by
 # tests/bdd/steps/generic/then_media_buy.py, which grades the WIRE rejection
 # (``ctx["result"].assert_wire_error_is_schema_conformant()`` against pinned
