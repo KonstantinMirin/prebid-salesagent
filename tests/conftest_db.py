@@ -14,6 +14,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session as SASession
 
+from tests.helpers.postgres_admin import drop_database
+
 # Set test mode before any imports
 os.environ["PYTEST_CURRENT_TEST"] = "true"
 
@@ -600,6 +602,9 @@ def integration_db():
         f"postgresql://{user}:{password}@{host}:{postgres_port}/{unique_db_name}",
         echo=False,
         json_serializer=_pydantic_json_serializer,
+        # As production's get_engine() does for a direct connection: a pooled connection
+        # the server closed is replaced on checkout instead of failing the first statement.
+        pool_pre_ping=True,
     )
 
     # Ensure all model classes are imported and registered with Base.metadata
@@ -707,21 +712,7 @@ def integration_db():
     # persistent Postgres (agent-db / local dev).
     if not _skip_clone_drop():
         try:
-            conn = _connect_with_retry(conn_params)
-            conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
-            cur = conn.cursor()
-            # Terminate connections to the test database
-            cur.execute(
-                f"""
-                SELECT pg_terminate_backend(pg_stat_activity.pid)
-                FROM pg_stat_activity
-                WHERE pg_stat_activity.datname = '{db_path}'
-                AND pid <> pg_backend_pid()
-                """
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{db_path}"')
-            cur.close()
-            conn.close()
+            drop_database(_connect_with_retry(conn_params), db_path)
         except Exception:
             pass  # Ignore cleanup errors
 
