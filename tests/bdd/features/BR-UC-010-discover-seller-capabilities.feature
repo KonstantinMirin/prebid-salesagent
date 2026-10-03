@@ -395,28 +395,37 @@ Feature: BR-UC-010 Discover Seller Capabilities
   @T-UC-010-ext-b-degradation @extension @ext-b @degradation @invariant @partition @boundary
   Scenario Outline: Graceful degradation when dependencies fail
     Given a tenant is resolvable from the request context
-    And the adapter is in <adapter_state> state
-    And the database is in <db_state> state
+    And the tenant has <partnership_state> publisher partnerships with domains "news.com", "sports.com"
+    And <dependency_state>
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And the response should pass schema validation for get-adcp-capabilities-response
-    And primary_channels should be <expected_channels>
-    And publisher_domains should be <expected_domains>
+    And <portfolio_outcome>
     # NOT-IN-SPEC: degradation policy is spec-silent — production authoritative; the one hard
     # spec invariant is that every response still validates against the response schema.
-    # Symbolic expectations concretized 2026-07-13: fixture seeds channels
-    # "display, social, ctv" on the adapter and domains "news.com, sports.com" in the DB;
-    # placeholder domain is "example.com" (pin to production's actual placeholder on wiring).
-    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/capability-discovery.yaml pointer=/steps/0/validations (response_schema)
+    # What a failed dependency does to media_buy.portfolio is graded on the wire. An adapter
+    # failure or a missing principal leaves the publisher lookup intact, so the verified
+    # publishers are still named (INV-4: an anonymous caller is served the same data). With
+    # the database down no verified publisher can be read, and with none verified there is
+    # none to name: publisher_domains is REQUIRED+minItems:1 whenever portfolio is present,
+    # so portfolio is omitted. No placeholder domain and never the seller's own host: a
+    # tenant is a sales agent, its host is not a publisher.
+    # Channels are not graded here. primary_channels is the union over the product catalog
+    # and the adapter's defaults are only the fallback for an empty one, so the adapter
+    # column does not move it while a catalog exists; the adapter-failure [display] fallback
+    # is graded by @T-UC-010-degradation-partitions and the no-cascade rule by
+    # @T-UC-010-degradation-no-cascade.
+    # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/universal/capability-discovery.yaml pointer=/phases/0/steps/0/validations (check: response_schema)
+    # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/media_buy/properties/portfolio/properties/publisher_domains (required, minItems 1)
 
     Examples:
-      | partition_boundary                                         | adapter_state | db_state  | expected_channels    | expected_domains       |
-      | full_response tenant resolved adapter succeeds DB succeeds | available     | available | display, social, ctv | news.com, sports.com   |
-      | adapter_fail adapter fails                                 | unavailable   | available | display              | news.com, sports.com   |
-      | db_fail DB fails                                           | available     | failure   | display, social, ctv | example.com            |
-      | adapter_and_db_fail adapter AND DB fail                    | unavailable   | failure   | display              | example.com            |
-      | no_principal no auth principal available                   | no_principal  | available | display              | news.com, sports.com   |
-      | db_empty adapter fails DB has no partnerships              | unavailable   | empty     | display              | example.com            |
+      | partition_boundary                                         | partnership_state | dependency_state                                        | portfolio_outcome                                                                         |
+      | full_response tenant resolved adapter succeeds DB succeeds | verified          | the adapter is in available state                       | the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com" |
+      | adapter_fail adapter fails                                 | verified          | the adapter is in unavailable state                     | the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com" |
+      | db_fail DB fails                                           | verified          | the database query fails                                | media_buy.portfolio should be omitted                                                     |
+      | adapter_and_db_fail adapter AND DB fail                    | verified          | a tenant is resolvable but both adapter and DB fail     | media_buy.portfolio should be omitted                                                     |
+      | no_principal no auth principal available                   | verified          | a tenant is resolvable but no auth principal available  | the response should include media_buy.portfolio with publisher_domains "news.com", "sports.com" |
+      | db_empty adapter fails DB has no verified partnerships     | unverified        | the adapter is in unavailable state                     | media_buy.portfolio should be omitted                                                     |
 
   @T-UC-010-ext-b-schema-valid @extension @ext-b @degradation @invariant
   Scenario: Degraded response is always schema-valid

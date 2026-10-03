@@ -4717,6 +4717,8 @@ def _uc010_wired_tags() -> frozenset[str]:
             "T-UC-010-conversion-caps",
             "T-UC-010-creative-caps",
             "T-UC-010-ext-b-schema-valid",
+            # portfolio under each failed dependency: named, or omitted, never a placeholder
+            "T-UC-010-ext-b-degradation",
             "T-UC-010-ext-a",
             "T-UC-010-account-require-operator-auth",
             "T-UC-010-account-authorization-endpoint",
