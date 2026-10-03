@@ -9,29 +9,22 @@ both, so a scenario saves the profile through the real form and reads it back of
 on every buyer transport, and the factories, the database and the e2e realization are
 ProductEnv's.
 
-The admin transport follows the env's own. In process it is a Flask test client against
-the same database the factories write; over e2e it is a ``requests`` session against the
-live stack at ``e2e_config.base_url``, authenticated with the signed cookie
-``authenticate_http_session`` states, exactly as ``AdminAccountEnv`` does. Neither mode
-needs releasing: each request opens and closes its own client, so the env adds no
-``__enter__`` (``tests/harness/test_harness_base.py`` keeps that list closed).
+The admin transport follows the env's own, through the shared
+:class:`tests.harness.admin_client.AdminClient`: in process a Flask test client against the
+same database the factories write, over e2e a ``requests`` session against the live stack
+at ``e2e_config.base_url``. The client opens on the first admin request and the env's
+cleanup registry closes it, so the env adds no ``__enter__``
+(``tests/harness/test_harness_base.py`` keeps that list closed).
 """
 
 from __future__ import annotations
 
 import json
 from typing import Any
-from urllib.parse import urljoin
 
 from src.core.database.models import InventoryProfile, Product
-from tests.harness.admin_accounts import _AdminResponse
+from tests.harness.admin_client import AdminClient, AdminResponse, guarded_admin_client
 from tests.harness.product import ProductEnv
-from tests.helpers.admin_session import (
-    admin_auth_session,
-    admin_test_app,
-    authenticate_http_session,
-    drop_stated_session_cookie,
-)
 
 #: A format the profile form requires. Any id serves: the form stores it verbatim.
 _PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}])
@@ -40,29 +33,29 @@ _PROFILE_FORMATS = json.dumps([{"agent_url": "https://creative.adcontextprotocol
 class AdminInventoryProfileEnv(ProductEnv):
     """``ProductEnv`` plus the operator's inventory-profile form and products page."""
 
-    _admin_app: Any = None
+    _admin: AdminClient | None = None
 
     # ── requests ───────────────────────────────────────────────────────────
 
-    def create_inventory_profile(self, profile_id: str, **selection: Any) -> _AdminResponse:
+    def create_inventory_profile(self, profile_id: str, **selection: Any) -> AdminResponse:
         """POST the add form for *profile_id* with a ``tags`` or ``property_ids`` *selection*."""
         return self._admin_request("inventory-profiles/add", self._profile_form(profile_id, **selection))
 
-    def edit_inventory_profile(self, profile_id: str, **selection: Any) -> _AdminResponse:
+    def edit_inventory_profile(self, profile_id: str, **selection: Any) -> AdminResponse:
         """POST the edit form of the stored profile *profile_id* with a new *selection*."""
         stored = self.stored_inventory_profile(profile_id)
         assert stored is not None, f"no inventory profile {profile_id!r} to edit"
         return self._admin_request(f"inventory-profiles/{stored.id}/edit", self._profile_form(profile_id, **selection))
 
-    def create_product(self, product_id: str, **selection: Any) -> _AdminResponse:
+    def create_product(self, product_id: str, **selection: Any) -> AdminResponse:
         """POST the product add form for *product_id* with a ``tags`` or ``property_ids`` *selection*."""
         return self._admin_request("products/add", self._product_form(product_id, **selection))
 
-    def edit_product(self, product_id: str, **selection: Any) -> _AdminResponse:
+    def edit_product(self, product_id: str, **selection: Any) -> AdminResponse:
         """POST the edit form of the stored product *product_id* with a new *selection*."""
         return self._admin_request(f"products/{product_id}/edit", self._product_form(product_id, **selection))
 
-    def admin_page(self, path: str) -> _AdminResponse:
+    def admin_page(self, path: str) -> AdminResponse:
         """GET ``/tenant/<tenant>/<path>``."""
         return self._admin_request(path)
 
@@ -108,34 +101,12 @@ class AdminInventoryProfileEnv(ProductEnv):
             **selection,
         }
 
-    def _flask_app(self) -> Any:
-        if self._admin_app is None:
-            self._admin_app = admin_test_app()
-        return self._admin_app
-
-    def _admin_request(self, path: str, form: dict[str, Any] | None = None) -> _AdminResponse:
+    def _admin_request(self, path: str, form: dict[str, Any] | None = None) -> AdminResponse:
         """GET *path*, or POST *form* to it and follow the redirect to the page showing its flash."""
         url = f"/tenant/{self.tenant_id}/{path}"
         if form is not None:
             self._commit_factory_data()
-        if self.e2e_config is None:
-            with self._flask_app().test_client() as client:
-                admin_auth_session(client, self.tenant_id)
-                answer = client.get(url) if form is None else client.post(url, data=form, follow_redirects=True)
-                return _AdminResponse.from_flask(answer)
-
-        import requests
-
-        base_url = self.e2e_config.base_url
-        with requests.Session() as session:
-            authenticate_http_session(session, base_url, self.tenant_id)
-            if form is None:
-                response = session.get(base_url + url, allow_redirects=False)
-            else:
-                response = session.post(base_url + url, data=form, allow_redirects=False)
-                location = response.headers.get("location")
-                if location:
-                    # The flash lives in the session the server just wrote; see the helper.
-                    drop_stated_session_cookie(session)
-                    response = session.get(urljoin(base_url + "/", location), allow_redirects=False)
-            return _AdminResponse.from_requests(response)
+        if self._admin is None:
+            base_url = self.e2e_config.base_url if self.e2e_config is not None else None
+            self._admin = guarded_admin_client(self._guard, base_url, self.tenant_id)
+        return self._admin.request("get", url) if form is None else self._admin.submit(url, form)
