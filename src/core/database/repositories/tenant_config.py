@@ -25,6 +25,7 @@ from sqlalchemy.sql import func
 
 from src.core.database.jsonb_append import jsonb_list
 from src.core.database.models import AdapterConfig, PublisherPartner, Tenant
+from src.core.database.repositories.tenant_counts import count_by_tenant
 
 AuthorizedListColumn = Literal["authorized_domains", "authorized_emails"]
 AddOutcome = Literal["added", "duplicate", "missing_tenant"]
@@ -39,16 +40,11 @@ def _partner_verified(verified: bool) -> ColumnElement[bool]:
 def count_verified_publisher_partners_by_tenant(session: Session, tenant_ids: Iterable[str]) -> dict[str, int]:
     """How many verified publisher partners each of *tenant_ids* holds, keyed by tenant_id.
 
-    Cross-tenant by design, like ``count_principals_by_tenant``: the bulk setup checklist
+    Cross-tenant by design (``tenant_counts.count_by_tenant``): the bulk setup checklist
     grades many tenants in one grouped query. A tenant with none is absent from the result.
     The predicate is the one ``TenantConfigRepository.list_publisher_partners`` uses.
     """
-    stmt = (
-        select(PublisherPartner.tenant_id, func.count())
-        .where(PublisherPartner.tenant_id.in_(list(tenant_ids)), _partner_verified(True))
-        .group_by(PublisherPartner.tenant_id)
-    )
-    return dict(session.execute(stmt).tuples().all())
+    return count_by_tenant(session, PublisherPartner.tenant_id, tenant_ids, _partner_verified(True))
 
 
 class TenantConfigRepository:

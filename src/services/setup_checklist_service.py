@@ -20,11 +20,13 @@ from src.core.database.models import (
     Product,
     Tenant,
 )
+from src.core.database.repositories.principal_lookup import count_principals_by_tenant
 from src.core.database.repositories.signing_key import SigningKeyRepository
 from src.core.database.repositories.tenant_config import (
     TenantConfigRepository,
     count_verified_publisher_partners_by_tenant,
 )
+from src.core.database.repositories.tenant_counts import count_by_tenant
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
 
@@ -182,62 +184,18 @@ class SetupChecklistService:
         with get_db_session() as session:
             tenants = TenantLookupRepository(session).find_by_ids(uncached_ids)
 
-            # Bulk count queries for all metrics (only for uncached tenants)
-            # Currency limits per tenant
-            currency_stmt = (
-                select(CurrencyLimit.tenant_id, func.count())
-                .where(CurrencyLimit.tenant_id.in_(uncached_ids))
-                .group_by(CurrencyLimit.tenant_id)
+            # One grouped count per metric, for the uncached tenants only
+            currency_counts = count_by_tenant(session, CurrencyLimit.tenant_id, uncached_ids)
+            budget_limit_counts = count_by_tenant(
+                session,
+                CurrencyLimit.tenant_id,
+                uncached_ids,
+                CurrencyLimit.max_daily_package_spend.isnot(None),
             )
-            currency_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(currency_stmt).all()
-            }
-
-            # Currency limits with budget controls per tenant
-            budget_stmt = (
-                select(CurrencyLimit.tenant_id, func.count())
-                .where(CurrencyLimit.tenant_id.in_(uncached_ids))
-                .where(CurrencyLimit.max_daily_package_spend.isnot(None))
-                .group_by(CurrencyLimit.tenant_id)
-            )
-            budget_limit_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(budget_stmt).all()
-            }
-
-            # Authorized properties per tenant
-            property_stmt = (
-                select(AuthorizedProperty.tenant_id, func.count())
-                .where(AuthorizedProperty.tenant_id.in_(uncached_ids))
-                .group_by(AuthorizedProperty.tenant_id)
-            )
-            property_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(property_stmt).all()
-            }
-
-            # GAM inventory per tenant
-            gam_stmt = (
-                select(GAMInventory.tenant_id, func.count())
-                .where(GAMInventory.tenant_id.in_(uncached_ids))
-                .group_by(GAMInventory.tenant_id)
-            )
-            gam_inventory_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(gam_stmt).all()
-            }
-
-            # Products per tenant
-            product_stmt = (
-                select(Product.tenant_id, func.count())
-                .where(Product.tenant_id.in_(uncached_ids))
-                .group_by(Product.tenant_id)
-            )
-            product_counts: dict[str, int] = {  # noqa: C416
-                tid: count for tid, count in session.execute(product_stmt).all()
-            }
-
-            # Principals per tenant
-            from src.core.database.repositories.principal_lookup import count_principals_by_tenant
-
-            principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
+            property_counts = count_by_tenant(session, AuthorizedProperty.tenant_id, uncached_ids)
+            gam_inventory_counts = count_by_tenant(session, GAMInventory.tenant_id, uncached_ids)
+            product_counts = count_by_tenant(session, Product.tenant_id, uncached_ids)
+            principal_counts = count_principals_by_tenant(session, uncached_ids)
             verified_publisher_counts = count_verified_publisher_partners_by_tenant(session, uncached_ids)
 
             # Build status for each uncached tenant using pre-fetched data
