@@ -33,8 +33,7 @@ from src.core.config import get_settings
 from src.core.database.models import AuthorizedProperty, PublisherPartner
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import realize_e2e
-from tests.harness.admin_accounts import _AdminResponse
-from tests.helpers.admin_session import admin_auth_session, admin_test_app, authenticate_http_session
+from tests.harness.admin_client import AdminClient, AdminResponse
 
 if TYPE_CHECKING:
     from tests.harness.transport import E2EConfig
@@ -63,20 +62,10 @@ def _publisher_origin_address(env: PublisherAdagentsMixin, publisher: str) -> st
     """E2E: the address of the TLS origin serving *publisher*, started on first use."""
     origin = env._publisher_origins.get(publisher)
     if origin is None:
-        from tests.helpers.local_http_origin import run_local_origin
-        from tests.helpers.tls_material import load_gen_test_tls, server_ssl_context
+        from tests.helpers.tls_material import start_tls_origin
 
-        gen_test_tls = load_gen_test_tls()
-        gen_test_tls.ensure_test_tls()
         # 0.0.0.0, not loopback: the server dialing it is another container.
-        context = run_local_origin(listen_host="0.0.0.0", ssl_context=server_ssl_context(gen_test_tls))
-        origin = context.__enter__()
-
-        def close() -> None:
-            # A cleanup returns nothing: __exit__'s verdict would read as "suppressed".
-            context.__exit__(None, None, None)
-
-        env._guard(f"publisher_origin:{publisher}", close)
+        origin = start_tls_origin(env._guard, f"publisher_origin:{publisher}", listen_host="0.0.0.0")
         env._publisher_origins[publisher] = origin
     return f"{PUBLISHER_ORIGIN_HOST}:{origin.port}"
 
@@ -169,8 +158,9 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
 
     def __init__(self, *, e2e_config: E2EConfig | None = None, **kwargs: Any) -> None:
         super().__init__(e2e_config=e2e_config, **kwargs)
-        self._admin_app: Any = None
-        self._admin_base_url = e2e_config.base_url if e2e_config is not None else ""
+        self._admin: AdminClient | None = None
+        # None drives the admin app in this process; a URL drives that live server.
+        self._admin_base_url: str | None = e2e_config.base_url if e2e_config is not None else None
 
     # ── deployment and tenant state ───────────────────────────────────────
 
@@ -206,13 +196,13 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
 
     # ── the operator's actions ────────────────────────────────────────────
 
-    def sync_publisher_partners(self) -> _AdminResponse:
+    def sync_publisher_partners(self) -> AdminResponse:
         return self._admin_request("post", "publisher-partners/sync")
 
-    def verify_pending_properties(self) -> _AdminResponse:
+    def verify_pending_properties(self) -> AdminResponse:
         return self._admin_request("post", "authorized-properties/verify-all")
 
-    def open_partner_properties(self, publisher: str) -> _AdminResponse:
+    def open_partner_properties(self, publisher: str) -> AdminResponse:
         partner = self.partner(publisher)
         return self._admin_request("get", f"publisher-partners/{partner.id}/properties")
 
@@ -240,26 +230,14 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         self.get_session().expire_all()
         return self.query(model, tenant_id=self._tenant_id, **filters)
 
-    def _admin_request(self, method: str, path: str) -> _AdminResponse:
+    def _admin_request(self, method: str, path: str) -> AdminResponse:
         """One authenticated request to the tenant's admin route at *path*, on either transport."""
         self._commit_factory_data()
         self.serve_adagents()
-        if self.is_e2e:
-            return self._live_admin_request(method, path)
-        if self._admin_app is None:
-            self._admin_app = admin_test_app()
-        with self._admin_app.test_client() as client:
-            admin_auth_session(client, self._tenant_id)
-            # Over https, because a production app marks its session cookie Secure.
-            response = getattr(client, method)(f"/tenant/{self._tenant_id}/{path}", base_url="https://localhost")
-        return _AdminResponse.from_flask(response)
-
-    def _live_admin_request(self, method: str, path: str) -> _AdminResponse:
-        import requests
-
-        with requests.Session() as session:
-            authenticate_http_session(session, self._admin_base_url, self._tenant_id)
-            response = session.request(
-                method, f"{self._admin_base_url}/tenant/{self._tenant_id}/{path}", allow_redirects=False, timeout=60
-            )
-        return _AdminResponse.from_requests(response)
+        if self._admin is None:
+            # Opened on the first action, after every Given: the in-process app is composed
+            # under the deployment a Given chose, and the live one is the server it named.
+            self._admin = AdminClient(self._admin_base_url)
+            self._guard("admin_client", self._admin.close)
+            self._admin.authenticate(self._tenant_id)
+        return self._admin.request(method, f"/tenant/{self._tenant_id}/{path}")
