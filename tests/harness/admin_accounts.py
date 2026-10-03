@@ -213,12 +213,9 @@ class AdminAccountEnv:
 
     def _setup_integration(self) -> None:
         """Set up Flask test_client for integration transport."""
-        from src.admin.app import create_app
+        from tests.helpers.admin_session import admin_test_app
 
-        self._app = create_app()
-        self._app.config["TESTING"] = True
-        self._app.config["WTF_CSRF_ENABLED"] = False
-        self._app.config["SESSION_COOKIE_PATH"] = "/"
+        self._app = admin_test_app()
         self._flask_client = self._app.test_client().__enter__()
 
     def _setup_e2e(self) -> None:

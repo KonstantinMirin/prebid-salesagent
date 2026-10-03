@@ -288,7 +288,7 @@ def _seed_publisher_partners(ctx: dict, domains: list[str], *, verified: bool) -
     for domain in domains:
         PublisherPartnerFactory(
             tenant=ctx["tenant"],
-            publisher_domain=domain,
+            publisher_domain=ctx["env"].publisher_address(domain),
             is_verified=verified,
             sync_status="success" if verified else "pending",
         )
