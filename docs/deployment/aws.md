@@ -69,7 +69,6 @@ from a branch that carries them:
 | [#2310](https://github.com/prebid/salesagent/pull/2310) | The image's nginx can start as the non-root `app` user, and the crontab names the right script. Without it port 8000 never opens and the ALB marks the task unhealthy. |
 | [#2315](https://github.com/prebid/salesagent/pull/2315) | `CREATIVE_AGENT_URL` can be the agent's base URL; the client falls back to `<url>/mcp`. |
 | [#2305](https://github.com/prebid/salesagent/pull/2305) | Pins the reference creative agent to adcp v3.1.25 and keeps `canonical_parameters.format_kind` and `params` in the format list. |
-| [#2191](https://github.com/prebid/salesagent/pull/2191) | Tenants are found by `virtual_host` alone; `setup_tenant.py` takes `--virtual-host`. Without it, use `--subdomain` (see [Step 6](#step-6-create-a-tenant)). |
 | [#2313](https://github.com/prebid/salesagent/pull/2313) | Only for the Caddy option in [Tenant TLS](#tenant-tls-and-custom-domains): the `/tls/ask` endpoint, mounted only when `TLS_ASK_ENABLED=true`. |
 
 ## Before you start
@@ -204,9 +203,7 @@ never go in it.
   tenant takes only the `virtual_host`: the wildcard record and certificate cover it.
 - Adding a publisher site to a tenant changes no DNS record, no certificate and no Terraform.
 
-The app finds the tenant from the request's host. With #2191 it matches `virtual_host` only.
-Current main also matches a host under `<domain>` by its first label against the tenant's
-subdomain, which is why Step 6 passes `--subdomain` when #2191 is absent.
+The app finds the tenant by matching the request's host against its `virtual_host`.
 
 ## Step 6: Create a tenant
 
@@ -224,10 +221,6 @@ command but not the entrypoint.
 ../run-task.sh app python scripts/setup/setup_tenant.py "AWS Glossary Shop" \
   --tenant-id awsglossary --virtual-host shop.awsglossary.noetis.dev --adapter mock
 ```
-
-Without #2191, `setup_tenant.py` has no `--virtual-host`: pass `--subdomain t1` and the
-tenant answers at `t1.<domain>`, and set a custom domain in the Admin UI (**Settings >
-Account**).
 
 The script creates the tenant, its USD/EUR/GBP limits and a principal, and prints the
 principal's token. **The token goes to the task's log, so it is stored in CloudWatch.**
