@@ -803,6 +803,9 @@ class BaseTestEnv:
         self._database_url = database_url or (e2e_config.postgres_url if e2e_config else None)
         self.e2e_config: E2EConfig | None = e2e_config
         self._e2e_engine: Any = None
+        #: Tenant ids this env's session persisted and has not deleted; ``_ensure_tenant_for_audit``
+        #: reads it.
+        self._persisted_tenant_ids: set[str] = set()
         self._tenant_overrides = tenant_overrides
         self.mock: dict[str, MagicMock] = {}
         self._enter_cleanups: list[tuple[str, Callable[[], None]]] = []
@@ -1139,7 +1142,10 @@ class BaseTestEnv:
 
         signed = realization(signed)
 
-        kwargs.setdefault("credential", self.credential())
+        # Not ``setdefault``: its argument is evaluated even when a credential was passed,
+        # and reading the env principal's token is a database read the dispatch never used.
+        if "credential" not in kwargs:
+            kwargs["credential"] = self.credential()
 
         dispatcher = DISPATCHERS[transport]
         # No wire capture to reset: the success-path wire rides the RETURN VALUE
@@ -2801,6 +2807,18 @@ class BaseTestEnv:
         if self.use_real_db:
             self._ensure_tenant_for_audit(tenant_id)
 
+    def _track_persisted_tenant(self, _session: Any, instance: Any) -> None:
+        """Session event hook: a Tenant became persistent (add) or was deleted (discard)."""
+        from sqlalchemy import inspect
+
+        from src.core.database.models import Tenant
+
+        if isinstance(instance, Tenant):
+            if inspect(instance).deleted:
+                self._persisted_tenant_ids.discard(instance.tenant_id)
+            else:
+                self._persisted_tenant_ids.add(instance.tenant_id)
+
     def _ensure_tenant_for_audit(self, tenant_id: str) -> None:
         """Create a minimal tenant record if none exists (idempotent).
 
@@ -2809,7 +2827,9 @@ class BaseTestEnv:
         need a tenant for their logic, but the handler's post-invocation audit
         logging does. This creates a stub tenant so audit logging doesn't fail.
 
-        Uses ``self._session`` (env-managed), not ``get_db_session()``.
+        Uses ``self._session`` (env-managed), not ``get_db_session()``. A tenant this env's
+        session persisted exists without a read, so the seller's own statement is the first
+        one a dispatch sends.
         """
         if not self._session:
             return
@@ -2817,6 +2837,8 @@ class BaseTestEnv:
 
         from src.core.database.models import Tenant
 
+        if tenant_id in self._persisted_tenant_ids:
+            return
         exists = self._session.scalars(select(Tenant).filter_by(tenant_id=tenant_id)).first()
         if not exists:
             from tests.factories import TenantFactory
@@ -2846,6 +2868,7 @@ class BaseTestEnv:
             #    engine and the session are resources, and a SASession(bind=...)
             #    failure used to leak the engine's connection pool.
             if self.use_real_db:
+                from sqlalchemy import event
                 from sqlalchemy.orm import Session as SASession
 
                 from src.core.database.database_session import get_engine
@@ -2870,6 +2893,8 @@ class BaseTestEnv:
 
                 self._session = SASession(bind=engine)
                 self._guard("db_session", self._close_session)
+                for transition in ("pending_to_persistent", "persistent_to_deleted"):
+                    event.listen(self._session, transition, self._track_persisted_tenant)
 
                 for f in ALL_FACTORIES:
                     f._meta.sqlalchemy_session = self._session
