@@ -477,7 +477,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And media_buy.portfolio should be omitted
-    And the response should NOT contain an "errors" field
+    And the response should NOT contain "errors" field
     # A seller that represents no verified publisher has no value publisher_domains can
     # hold (REQUIRED, minItems 1), so portfolio is omitted. The seller's own host is not a
     # substitute: a tenant is a sales agent, and its host is not a publisher. This is the

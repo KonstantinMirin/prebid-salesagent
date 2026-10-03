@@ -21,7 +21,10 @@ from src.core.database.models import (
     Tenant,
 )
 from src.core.database.repositories.signing_key import SigningKeyRepository
-from src.core.database.repositories.tenant_config import TenantConfigRepository
+from src.core.database.repositories.tenant_config import (
+    TenantConfigRepository,
+    count_verified_publisher_partners_by_tenant,
+)
 from src.core.database.repositories.tenant_lookup import TenantLookupRepository
 from src.core.signing.posture import KeyBacking, signing_key_backed
 
@@ -177,7 +180,7 @@ class SetupChecklistService:
         now_utc = datetime.now(UTC)
 
         with get_db_session() as session:
-            tenant_lookup = TenantLookupRepository(session)
+            tenants = TenantLookupRepository(session).find_by_ids(uncached_ids)
 
             # Bulk count queries for all metrics (only for uncached tenants)
             # Currency limits per tenant
@@ -235,13 +238,11 @@ class SetupChecklistService:
             from src.core.database.repositories.principal_lookup import count_principals_by_tenant
 
             principal_counts: dict[str, int] = count_principals_by_tenant(session, uncached_ids)
+            verified_publisher_counts = count_verified_publisher_partners_by_tenant(session, uncached_ids)
 
             # Build status for each uncached tenant using pre-fetched data
             for tenant_id in uncached_ids:
-                # The tenant row and its verified partners come through the repositories, one
-                # tenant at a time, like the signing-key read below: a primary-key get and one
-                # tenant-scoped select each, which a dashboard of tenants affords.
-                tenant = tenant_lookup.find_by_id(tenant_id)
+                tenant = tenants.get(tenant_id)
                 if not tenant:
                     continue
 
@@ -252,7 +253,7 @@ class SetupChecklistService:
                     currency_count=currency_counts.get(tenant_id, 0),
                     budget_limit_count=budget_limit_counts.get(tenant_id, 0),
                     property_count=property_counts.get(tenant_id, 0),
-                    verified_publisher_count=_verified_publisher_count(session, tenant_id),
+                    verified_publisher_count=verified_publisher_counts.get(tenant_id, 0),
                     gam_inventory_count=gam_inventory_counts.get(tenant_id, 0),
                     product_count=product_counts.get(tenant_id, 0),
                     principal_count=principal_counts.get(tenant_id, 0),
