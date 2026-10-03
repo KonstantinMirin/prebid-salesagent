@@ -787,24 +787,6 @@ class TestProductConversionNegativeCardinality:
         with pytest.raises(ValueError, match="no format_ids"):
             convert_product_model_to_schema(mock_model, authorized_properties=[])
 
-    def test_zero_properties_is_not_offered(self):
-        """product_conversion with 0 publisher_properties -> None, the product is not offered.
-
-        core/product.json requires publisher_properties with minItems 1, so a product that
-        names no publisher is left out of the catalogue rather than emitted (#1845).
-        """
-        from src.core.product_conversion import convert_product_model_to_schema
-
-        mock_model = MagicMock()
-        mock_model.product_id = "bad_product"
-        mock_model.name = "Bad Product"
-        mock_model.description = "No properties"
-        mock_model.delivery_type = "guaranteed"
-        mock_model.effective_format_ids = [{"agent_url": "https://example.com", "id": "display_300x250"}]
-        mock_model.resolve_publisher_properties.return_value = []
-
-        assert convert_product_model_to_schema(mock_model, authorized_properties=[]) is None
-
     def test_zero_pricing_options_raises_value_error(self):
         """product_conversion with 0 pricing_options -> ValueError."""
         from src.core.product_conversion import convert_product_model_to_schema

@@ -386,19 +386,19 @@ def convert_product_model_to_schema(
         adapter_type: Adapter type for the tenant (e.g., "google_ad_manager", "mock").
             Used to determine the default delivery_measurement when the product
             does not have one configured. If None, falls back to generic "publisher".
-        authorized_properties: The tenant's authorized properties, loaded ONCE per request
-            (``AuthorizedPropertyRepository.list_refs``). A product selecting by the legacy
-            tag/ID columns names the publishers of the properties it matches here.
+        authorized_properties: The tenant's verified authorized properties, loaded ONCE per
+            request (``AuthorizedPropertyRepository.list_refs``). A product names only the
+            publishers of these properties (``Product.resolve_publisher_properties``).
 
     Returns:
-        Product schema object, or ``None`` when the product names no publisher the seller is
-        authorized to represent. AdCP 3.1.1 ``core/product.json`` requires
+        Product schema object, or ``None`` when the product names no publisher the seller
+        holds a verified authorized property of. AdCP 3.1.1 ``core/product.json`` requires
         ``publisher_properties`` with ``minItems: 1``, and each entry names the publisher
         whose adagents.json a buyer verifies the seller against
         (``governance/property/authorized-properties.mdx``), so such a product has no entry
-        it can truthfully make. It is a seller-side configuration gap: logged for the
-        operator, and the caller leaves the product out, as it leaves out a product hidden
-        from a principal.
+        it can truthfully make. It is a seller-side configuration gap: logged, marked "Not
+        offered to buyers" on the admin products page, and the caller leaves the product out,
+        as it leaves out a product hidden from a principal.
 
     Raises:
         ValueError: In non-production environments, if delivery_measurement is missing
@@ -428,8 +428,8 @@ def convert_product_model_to_schema(
     publisher_properties = product_model.resolve_publisher_properties(authorized_properties)
     if not publisher_properties:
         logger.warning(
-            "Product %s is not offered: its property selection names no publisher this seller is "
-            "authorized to represent. Add the publisher's properties under Authorized Properties.",
+            "Product %s is not offered: its property selection names no publisher this seller holds a "
+            "verified authorized property of. Add and verify the publisher's properties under Authorized Properties.",
             product_model.product_id,
         )
         return None

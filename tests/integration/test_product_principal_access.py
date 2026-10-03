@@ -16,7 +16,7 @@ from src.core.database.models import (
 from src.core.product_conversion import convert_product_model_to_schema
 from tests.factories import PricingOptionFactory
 from tests.factories.principal import plaintext_token_for
-from tests.helpers.adcp_factories import ONE_AUTHORIZED_PROPERTY
+from tests.factories.product import ONE_AUTHORIZED_PROPERTY
 from tests.utils.database_helpers import seed_tenant_with_product_prerequisites, vhost_for
 
 

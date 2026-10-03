@@ -102,15 +102,18 @@ class AuthorizedPropertyRepository:
         prop.updated_at = now
 
     def list_refs(self) -> list[AuthorizedPropertyRef]:
-        """Every property this tenant is authorized to represent, as values, by publisher.
+        """This tenant's VERIFIED properties, as values, by publisher.
 
-        What a product's legacy selectors resolve against (#1845): a product names the
-        publishers these rows belong to, never the tenant's own host. Values rather than
-        rows because ``get_products`` reads them again after its session has closed.
+        What a product's selectors resolve against (#1845): a product names the publishers
+        these rows belong to, never the tenant's own host. Composes :meth:`_verified`, so a
+        product names exactly the publishers the capabilities portfolio names; a pending
+        property from the add form or an upload is not sold until its publisher is seen to
+        authorize this agent. Values rather than rows because ``get_products`` reads them
+        again after its session has closed.
         """
         stmt = (
             select(AuthorizedProperty)
-            .where(*self._scope_prefix())
+            .where(*self._verified())
             .order_by(AuthorizedProperty.publisher_domain.asc(), AuthorizedProperty.property_id.asc())
         )
         return [
