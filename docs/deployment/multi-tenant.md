@@ -95,7 +95,8 @@ fly ips list --app your-app-name
 
 - **Fly.io**: Automatic wildcard SSL
 - **Cloud Run**: Use Cloud Load Balancer with managed certificates
-- **Docker**: Use Caddy, nginx with certbot, or a reverse proxy with a wildcard certificate
+- **AWS**: ACM wildcard certificate on the ALB, plus one certificate per custom domain; see the [AWS guide](aws.md#tenant-tls-and-custom-domains)
+- **Docker**: Use Caddy, nginx with certbot, or a reverse proxy with a wildcard certificate. The [single VM walkthrough](vm.md) is a complete Caddy setup.
 
 ## Step 4: Optional: custom domains with Approximated
 
@@ -288,6 +289,7 @@ Check the setup checklist in the Admin UI:
 ## Related documentation
 
 - [Single-tenant deployment](single-tenant.md) - standard deployment guide
+- [AWS deployment](aws.md) - multi-tenant on ECS Fargate, RDS and an ALB, with Terraform
 - [Environment variables reference](environment-variables.md) - all domain and multi-tenant variables
 - [Architecture guide](../development/architecture.md#multi-tenancy) - how tenant isolation works
 - [Security and authentication](../security.md) - sessions, authentication, and tenant isolation
