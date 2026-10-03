@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 import pydantic_core
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.exc import DisconnectionError, OperationalError, SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, DisconnectionError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session, scoped_session, sessionmaker
 
 from src.core.config import get_settings
@@ -195,6 +195,27 @@ def get_scoped_session():
     return _scoped_session
 
 
+def _sqlstate(e: SQLAlchemyError) -> str | None:
+    """The SQLSTATE the server answered *e* with, or ``None`` when it answered nothing.
+
+    Read under both drivers' names: psycopg2 calls it ``pgcode``, psycopg 3 ``sqlstate``.
+    Reading only one would make every error under the other driver look unanswered.
+    """
+    orig = getattr(e, "orig", None)
+    return getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+
+
+def _connection_lost(e: SQLAlchemyError) -> bool:
+    """Whether *e* is a connection that dropped (an admin terminate, ``idle_session_timeout``,
+    PgBouncer closing a client).
+
+    SQLAlchemy flags it ``connection_invalidated`` and has already discarded the connection,
+    so the next checkout reconnects. A ``DisconnectionError`` is the pool's own signal of
+    the same thing.
+    """
+    return isinstance(e, DisconnectionError) or (isinstance(e, DBAPIError) and e.connection_invalidated)
+
+
 def _server_never_answered(e: SQLAlchemyError) -> bool:
     """Whether *e* is a connect the server never answered, the one failure that trips the fail-fast.
 
@@ -204,18 +225,24 @@ def _server_never_answered(e: SQLAlchemyError) -> bool:
 
     - A deadlock victim, a statement_timeout cancel or a lock timeout is the server answering
       on a live connection; the error carries the server's SQLSTATE.
-    - A connection that dropped (an admin terminate, ``idle_session_timeout``, PgBouncer
-      closing a client) is flagged ``connection_invalidated``. SQLAlchemy has already
-      discarded it and the next checkout reconnects, so one dead connection is not an outage.
-      A ``DisconnectionError`` is the pool's own signal of the same thing.
-
-    The SQLSTATE is read under both drivers' names: psycopg2 calls it ``pgcode``, psycopg 3
-    ``sqlstate``. Reading only one would make every error under the other driver look
-    unanswered and trip the fail-fast on every failed statement again.
+    - A connection that dropped is one dead connection, not an outage (``_connection_lost``).
     """
-    if not isinstance(e, OperationalError) or e.connection_invalidated:
-        return False
-    return getattr(e.orig, "pgcode", None) is None and getattr(e.orig, "sqlstate", None) is None
+    return isinstance(e, OperationalError) and not _connection_lost(e) and _sqlstate(e) is None
+
+
+def _worth_retrying(e: SQLAlchemyError) -> bool:
+    """Whether ``execute_with_retry`` re-runs the transaction *e* ended, read off the same signal.
+
+    - A dropped connection: the retry runs on a new one.
+    - SQLSTATE class 40 (40P01 deadlock victim, 40001 serialization failure): the server
+      rolled the transaction back so that it can be run again.
+
+    Nothing else. A statement the server cancelled (57014: a statement_timeout, or an
+    operator's ``pg_cancel_backend``) would take as long again, and the timeout usually means
+    the server is short of capacity, so re-running it adds load when there is least to spare.
+    A connect the server never answered trips the fail-fast, which refuses the retry anyway.
+    """
+    return _connection_lost(e) or (_sqlstate(e) or "").startswith("40")
 
 
 @contextmanager
@@ -262,21 +289,22 @@ def get_db_session() -> Generator[Session, None, None]:
         scoped.remove()
 
 
-def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (OperationalError, DisconnectionError)) -> Any:
+def execute_with_retry(func, max_retries: int = 3) -> Any:
     """
-    Execute a database operation with retry logic for connection issues.
+    Run *func* in its own session and commit, re-running it when the failure is worth retrying.
 
     Args:
         func: Function that takes a session as its first argument
-        max_retries: Maximum number of retry attempts
-        retry_on: Tuple of exception types to retry on (defaults to connection errors)
+        max_retries: Maximum number of attempts
 
     Returns:
         The result of the function
+
+    Which failures are re-run is ``_worth_retrying``: a dropped connection and a
+    transaction the server rolled back to be run again (SQLSTATE class 40). Everything else
+    is raised from the first attempt.
     """
     import time
-
-    last_exception = None
 
     for attempt in range(max_retries):
         try:
@@ -284,25 +312,13 @@ def execute_with_retry(func, max_retries: int = 3, retry_on: tuple = (Operationa
                 result = func(session)
                 session.commit()
                 return result
-        except retry_on as e:
-            last_exception = e
-            logger.warning(f"Database connection attempt {attempt + 1}/{max_retries} failed: {e}")
-            if attempt < max_retries - 1:
-                # Exponential backoff: 0.5s, 1s, 2s
-                wait_time = 0.5 * (2**attempt)
-                logger.info(f"Waiting {wait_time}s before retry...")
-                time.sleep(wait_time)
-                scoped = get_scoped_session()
-                scoped.remove()  # Clear the session registry
-                continue
-            raise
         except SQLAlchemyError as e:
-            # Don't retry non-connection errors
-            logger.error(f"Non-retryable database error: {e}")
-            raise
-
-    if last_exception:
-        raise last_exception
+            if attempt == max_retries - 1 or not _worth_retrying(e):
+                raise
+            # Exponential backoff: 0.5s, 1s, 2s
+            wait_time = 0.5 * (2**attempt)
+            logger.warning(f"Database attempt {attempt + 1}/{max_retries} failed, retrying in {wait_time}s: {e}")
+            time.sleep(wait_time)
 
 
 class DatabaseManager:

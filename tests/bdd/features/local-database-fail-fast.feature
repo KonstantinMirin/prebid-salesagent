@@ -16,6 +16,10 @@
 # - a connect the server refuses before answering any SQL trips the fail-fast, so the
 #   next request is refused even after the database is back.
 #
+# The credential lookup every request makes first runs under execute_with_retry, which reads
+# the same signal: a dropped connection is retried on a new one, and a statement the server
+# cancelled is not re-run.
+#
 # HOW: the env's database-fault methods (tests/harness/database_faults.py) make Postgres do
 # each of those to the seller; nothing in the seller is patched. Two tenants, because the
 # claim is about the tenant whose request did nothing wrong.
@@ -52,4 +56,19 @@ Feature: One failed statement does not take the seller down (local)
     Then the response contains error code INTERNAL_ERROR
     When the database accepts new connections again
     And the buyer requests products with tenant "B" credentials
+    Then the response contains error code INTERNAL_ERROR
+
+  # Attempt 2 runs on a new connection after the lock is gone, so it is served.
+  @T-DBFAILFAST-lookup-dropped-connection
+  Scenario: A credential lookup whose connection the database drops is retried
+    Given the database will drop the connection serving the seller's credential lookup for tenant "A"
+    When the buyer requests products with tenant "A" credentials
+    Then the response contains tenant "A" products
+
+  # The lock is gone after the cancel, so a retry would be served: the error is the
+  # proof that the cancelled lookup ran once.
+  @T-DBFAILFAST-lookup-cancelled-statement
+  Scenario: A credential lookup the database cancels is not retried
+    Given the database will cancel the seller's credential lookup for tenant "A"
+    When the buyer requests products with tenant "A" credentials
     Then the response contains error code INTERNAL_ERROR
