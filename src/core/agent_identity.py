@@ -38,6 +38,7 @@ from urllib.parse import urlsplit
 
 from src.core.config import get_settings
 from src.core.domain_config import _get_protocol_for_domain
+from src.core.signing.canonical import origin_of
 
 # The paths a counterparty actually reaches this agent at, keyed by transport.
 # Values are what the running app resolves to AFTER any redirect it issues —
@@ -142,20 +143,23 @@ def identifies_agent(entry_url: object, agent_url: str) -> bool:
 
     Each side goes through ``src.core.schemas.canonical_agent_url``, the one
     implementation of the canonicalization algorithm. An entry it refuses (no host, a
-    malformed authority) or a value that is not a string names nobody.
+    malformed authority) or a value that is not a string names nobody. A tenant
+    *agent_url* it refuses is not a publisher's mistake, so it raises ``ValueError``
+    rather than reading as "not authorized".
     """
     from src.core.schemas import canonical_agent_url as canonical_url
 
-    if not isinstance(entry_url, str) or not entry_url:
-        return False
-    parts = urlsplit(agent_url)
-    origin = f"{parts.scheme}://{parts.netloc}"
-    served = [agent_url, origin]
+    origin = origin_of(agent_url)
+    if origin is None:
+        raise ValueError(f"agent_url {agent_url!r} has no origin to compare adagents.json entries against")
+    served = {canonical_url(agent_url), canonical_url(origin)}
     for endpoint in _endpoint_urls_at(origin).values():
         bare = endpoint.rstrip("/")
-        served += [bare, bare + "/"]
+        served |= {canonical_url(bare), canonical_url(bare + "/")}
+    if not isinstance(entry_url, str) or not entry_url:
+        return False
     try:
-        return canonical_url(entry_url) in {canonical_url(url) for url in served}
+        return canonical_url(entry_url) in served
     except ValueError:
         return False
 
