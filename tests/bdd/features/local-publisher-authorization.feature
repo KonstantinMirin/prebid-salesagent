@@ -23,17 +23,21 @@
 # replaced piece is the publisher's origin (the SDK refuses to dial a private address,
 # and an in-process origin has nothing else). e2e_admin drives them on the live stack,
 # whose server dials a real TLS origin the runner serves on the stack's non-private
-# subnet, and "the seller is deployed in production" is the stack's production server.
+# subnet.
 #
 # SPELLINGS. "{origin}" is the tenant's agent_url, "{ORIGIN}" the same string upper-cased,
-# "{host}" its host alone. Each scenario's tenant runs in production, because anywhere
-# else partner sync verifies every partner without reading its file.
+# "{host}" its host alone.
+#
+# AUTO-VERIFY. Each scenario's seller runs with PUBLISHER_AUTO_VERIFY=false, because when it
+# is unset partner sync verifies every partner without reading its file anywhere but
+# production. admin_integration sets the settings field; the e2e stack's servers are
+# started with it.
 
 @pubauth
 Feature: A publisher's adagents.json authorizes this agent by its origin or an endpoint it serves
 
   Background:
-    Given the seller is deployed in production
+    Given the seller does not auto-verify publisher partners
     And the publisher "pub.example" lists property "front_page" named "Front page" in its adagents.json
 
   @T-ADMIN-PUBAUTH-sync

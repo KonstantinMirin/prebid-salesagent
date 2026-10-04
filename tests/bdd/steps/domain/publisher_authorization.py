@@ -35,9 +35,9 @@ def _spell(template: str, agent_url: str) -> str:
 # ── Given ─────────────────────────────────────────────────────────────────
 
 
-@given("the seller is deployed in production")
-def given_production(ctx: dict) -> None:
-    _env(ctx).deploy_in_production()
+@given("the seller does not auto-verify publisher partners")
+def given_no_publisher_auto_verify(ctx: dict) -> None:
+    _env(ctx).disable_publisher_auto_verify()
 
 
 @given(parsers.parse('the tenant runs the "{adapter_type}" ad server'))
