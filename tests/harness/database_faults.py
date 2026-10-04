@@ -5,13 +5,17 @@ incident does, against whichever database the env talks to: the per-test databas
 in process, the live server's database over e2e. The seller's own ``get_db_session``
 then handles exactly the driver error it would handle in production.
 
-- :meth:`DatabaseFaultMixin.interrupt_next_statement` holds an ACCESS EXCLUSIVE lock on
-  ``products`` from a harness connection, so the seller's product query waits on it. A
-  harness thread watches ``pg_stat_activity`` for a backend blocked by that lock and
-  cancels it (SQLSTATE 57014 on a live connection, what a deadlock victim or a
-  statement_timeout receives) or terminates it (a dropped connection), then releases the
-  lock. ``products`` rather than ``tenants``: the credential path reads tenants and
-  principals first, and only the tool's own query reads products.
+- :meth:`DatabaseFaultMixin.interrupt_next_statement` holds an ACCESS EXCLUSIVE lock on a
+  table from a harness connection, so the seller's next statement on it waits. A harness
+  thread watches ``pg_stat_activity`` for a backend blocked by that lock and cancels it
+  (SQLSTATE 57014 on a live connection, what a statement_timeout or an operator's
+  ``pg_cancel_backend`` produces) or terminates it (a dropped connection), then releases
+  the lock. ``products`` (the default) is read only by the tool's own query: the credential
+  path reads tenants and principals first. ``principals`` is read first by the credential
+  lookup, which runs under ``execute_with_retry``; there the victim must also send a given
+  text (the presented token's hash), because on the live server anything else that reads
+  ``principals`` while the lock is held (a server-initiated job resolving a stored owner
+  through ``get_principal_by_id``) would otherwise be the backend interrupted.
 - :meth:`DatabaseFaultMixin.refuse_new_connections` stops the database accepting
   connections and terminates its open ones, so the seller's next checkout fails its
   pre-ping (the per-test engine pre-pings, as production's does) and its reconnect is
@@ -39,6 +43,9 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 _WAIT_FOR_WAITER_S = 15.0
+#: How long the harness waits for its own table lock before failing the scenario. A lock it
+#: cannot take means a transaction holds that table, and an unbounded LOCK would hang the test.
+_LOCK_TIMEOUT = "5s"
 
 
 def _connect(url: URL, *, autocommit: bool = False):
@@ -48,12 +55,18 @@ def _connect(url: URL, *, autocommit: bool = False):
 
 
 class _NextStatementInterrupter:
-    """Cancel or terminate the first backend blocked by the lock this object holds."""
+    """Cancel or terminate the first backend blocked by the lock this object holds.
 
-    def __init__(self, url: URL, *, terminate: bool) -> None:
+    With *sending*, only a blocked backend whose current statement contains that text.
+    """
+
+    def __init__(self, url: URL, *, table: str, terminate: bool, sending: str = "") -> None:
         self._signal = "pg_terminate_backend" if terminate else "pg_cancel_backend"
+        self._sending = f"%{sending}%"
         self._lock_conn = _connect(url)
-        self._lock_conn.cursor().execute("LOCK TABLE products IN ACCESS EXCLUSIVE MODE")
+        cur = self._lock_conn.cursor()
+        cur.execute(f"SET lock_timeout = '{_LOCK_TIMEOUT}'")
+        cur.execute(f'LOCK TABLE "{table}" IN ACCESS EXCLUSIVE MODE')
         self._lock_pid = self._lock_conn.get_backend_pid()
         self._admin = _connect(url, autocommit=True)
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -61,8 +74,9 @@ class _NextStatementInterrupter:
 
     def _blocked_pids(self, cur) -> set[int]:
         cur.execute(
-            "SELECT pid FROM pg_stat_activity WHERE datname = current_database() AND %s = ANY(pg_blocking_pids(pid))",
-            (self._lock_pid,),
+            "SELECT pid FROM pg_stat_activity WHERE datname = current_database() "
+            "AND %s = ANY(pg_blocking_pids(pid)) AND query LIKE %s",
+            (self._lock_pid, self._sending),
         )
         return {row[0] for row in cur.fetchall()}
 
@@ -122,9 +136,16 @@ class DatabaseFaultMixin:
     def _fault_target_url(self) -> URL:
         return self.get_session().get_bind().url
 
-    def interrupt_next_statement(self, *, terminate: bool) -> None:
-        """Make the database cancel (or, with *terminate*, drop) the seller's next product query."""
-        interrupter = _NextStatementInterrupter(self._fault_target_url(), terminate=terminate)
+    def interrupt_next_statement(self, *, terminate: bool, table: str = "products", sending: str = "") -> None:
+        """Make the database cancel (or, with *terminate*, drop) the seller's next statement on *table*.
+
+        The env's own seeding is committed first: an open transaction on the env session holds
+        a lock on every table it read, which the harness's ACCESS EXCLUSIVE lock would wait on.
+        """
+        self._commit_factory_data()
+        interrupter = _NextStatementInterrupter(
+            self._fault_target_url(), table=table, terminate=terminate, sending=sending
+        )
         self._guard("db_fault:interrupter", interrupter.close)
 
     def refuse_new_connections(self) -> None:
