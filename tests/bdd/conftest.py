@@ -95,6 +95,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
+    "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -5992,6 +5993,16 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="agentcard",
         when=lambda m: "agentcard" in m,
         env_builder=_build_capabilities_env,
+        seed=_seed_tenant_and_principal,
+    ),
+    # ── @pubauth (local publisher-authorization feature) ────────────────────
+    # A `when` row because its scenarios carry T-ADMIN-PUBAUTH-* tags, which detect_uc
+    # files under the ADMIN bucket -- whose env drives the accounts pages and serves no
+    # publisher's file. The seed is the tenant whose agent_url the publisher names.
+    EnvRoute(
+        tag="pubauth",
+        when=lambda m: "pubauth" in m,
+        env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
         seed=_seed_tenant_and_principal,
     ),
     EnvRoute(
