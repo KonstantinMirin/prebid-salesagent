@@ -137,20 +137,14 @@ class PublisherAdagentsMixin:
         return document
 
 
-def _serve_from_production_deployment(env: PublisherAuthorizationEnv) -> None:
-    """E2E: send the admin actions to the stack's production deployment.
+def _auto_verify_off_on_the_live_stack(env: PublisherAuthorizationEnv) -> None:
+    """E2E: already realized. The live stack's posture is fixed where it starts.
 
-    The live server's posture is set where it starts, so a scenario cannot switch it. The
-    e2e stack runs a second server with ``PRODUCTION=true`` against the same database, and
-    "the seller is deployed in production" is that server answering.
+    ``docker-compose.e2e.yml`` sets ``PUBLISHER_AUTO_VERIFY=false`` on adcp-server, which
+    the storyboard server and every per-worker server inherit, so the server under test
+    reads the publisher's file and asking for that is a true no-op. Without this function
+    the e2e branch would patch a settings object in a process that is not the server's.
     """
-    config = env.e2e_config
-    assert config is not None and config.production_base_url, (
-        "the e2e stack names no production deployment (E2EConfig.production_base_url); "
-        "docker-compose.e2e.yml's adcp-server-production and run_all_tests.sh's per-worker "
-        "production servers supply it"
-    )
-    env._admin_base_url = config.production_base_url
 
 
 class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
@@ -162,20 +156,20 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         # None drives the admin app in this process; a URL drives that live server.
         self._admin_base_url: str | None = e2e_config.base_url if e2e_config is not None else None
 
-    # ── deployment and tenant state ───────────────────────────────────────
+    # ── seller and tenant state ───────────────────────────────────────────
 
-    @realize_e2e(_serve_from_production_deployment)
-    def deploy_in_production(self) -> None:
-        """Run as a production deployment for this env's lifetime.
+    @realize_e2e(_auto_verify_off_on_the_live_stack)
+    def disable_publisher_auto_verify(self) -> None:
+        """Read every publisher partner's file for this env's lifetime (``PUBLISHER_AUTO_VERIFY=false``).
 
-        Anywhere else partner sync verifies every partner without reading its file
-        (``Settings.publisher_auto_verify_allowed``), so the check under test only runs
-        in production. In process the settings field is patched on the object every
-        reader reads, which is the object :func:`admin_test_app` composes the app from.
+        Left unset, partner sync verifies every partner without reading its file anywhere
+        but production (``Settings.publisher_auto_verify_allowed``), so the check under test
+        would not run. In process the settings field is patched on the object every reader
+        reads, which is the object :func:`admin_test_app` composes the app from.
         """
-        patcher = patch.object(get_settings().runtime, "production", True)
+        patcher = patch.object(get_settings().runtime, "publisher_auto_verify", False)
         patcher.start()
-        self._guard("production", patcher.stop)
+        self._guard("publisher_auto_verify", patcher.stop)
 
     def run_ad_server(self, adapter_type: str) -> None:
         """Give the tenant an adapter configuration of *adapter_type*."""
@@ -236,7 +230,7 @@ class PublisherAuthorizationEnv(PublisherAdagentsMixin, IntegrationEnv):
         self.serve_adagents()
         if self._admin is None:
             # Opened on the first action, after every Given: the in-process app is composed
-            # under the deployment a Given chose, and the live one is the server it named.
+            # under the settings a Given chose.
             self._admin = AdminClient(self._admin_base_url)
             self._guard("admin_client", self._admin.close)
             self._admin.authenticate(self._tenant_id)
