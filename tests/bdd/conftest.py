@@ -90,6 +90,8 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_publisher_domain",
+    "tests.bdd.steps.domain.admin_inventory_profiles",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -5359,6 +5361,19 @@ def _build_product_env(e2e_config: object | None) -> AbstractContextManager:
     return ProductEnv(e2e_config=e2e_config)
 
 
+def _build_admin_inventory_profile_env(e2e_config: object | None) -> AbstractContextManager:
+    """ProductEnv plus the operator's inventory-profile form and products page (#1845).
+
+    Serves both the admin feature (admin_integration / e2e_admin) and the publisher-domain
+    scenarios that save a profile through the form and read the product off get_products
+    on every buyer transport. The admin requests follow the env's own transport: in
+    process without ``e2e_config``, over the live stack with it.
+    """
+    from tests.harness.admin_inventory_profile import AdminInventoryProfileEnv
+
+    return AdminInventoryProfileEnv(e2e_config=e2e_config)
+
+
 def _build_capabilities_env(e2e_config: object | None) -> AbstractContextManager:
     """UC-010 get_adcp_capabilities. Named rather than ``_env(...)``-generated so
     the parked/wired/not-wired rows below — and ``_uc010_dormancy_rows()`` above —
@@ -6122,6 +6137,24 @@ ENV_ROUTES: list[EnvRoute] = [
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-publisher-domain",
+        # BR-UC-GET-PRODUCTS publisher_domain resolution (#1845): stores real authorized
+        # properties and products and reads publisher_properties back off get_products, so
+        # it takes the UC-GET-PRODUCTS branch. Like the pricing row above it carries its own
+        # identity tag, so detect_uc returns None for it and no coarse bucket claims it.
+        when=lambda m: "publisher_domain_resolution" in m,
+        env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="admin-inventory-profile-publishers",
+        # BR-ADMIN-INVENTORY-PROFILE-publishers (#1845): the inventory-profile form and the
+        # products page. Its T-ADMIN- tags parametrize it over the admin transports, and
+        # this row claims it before the ADMIN bucket, whose AdminAccountEnv has no
+        # factories or products.
+        when=lambda m: "admin_inventory_profile" in m,
+        env_builder=_build_admin_inventory_profile_env,
     ),
     EnvRoute(
         tag="security-wire-error-safety",

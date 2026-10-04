@@ -135,12 +135,14 @@ def hostname_of(host: str) -> str:
     The ``Tenant.virtual_host`` validator stores this once as ``virtual_host_name``, and the
     readers that need a hostname read that column or derive it here: the tenant routing
     lookups in ``TenantLookupRepository``, which compare host to host so a request naming
-    either form resolves; the adagents.json route, which finds the properties on the
-    tenant's own host by it; and ``Tenant.primary_domain``, which feeds
+    either form resolves; and the adagents.json route, which finds the properties on the
+    tenant's own host by it. The port first had to come off when the agent host fed
     ``publisher_properties[].publisher_domain`` -- a field AdCP constrains to
     ``^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[...])*$``, admitting no colon. Feeding the port into
     that pattern failed every product of such a tenant and answered INTERNAL_ERROR for the
-    whole catalogue, which is the defect that first named this job.
+    whole catalogue, which is the defect that first named this job. Products no longer name
+    the agent host at all (#1845): a publisher domain comes from the tenant's verified
+    authorized properties.
 
     Projecting a stored origin onto a hostname is not the defensive re-validation the
     architecture forbids: the column's contents are trusted exactly as stored, and what

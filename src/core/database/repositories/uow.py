@@ -236,7 +236,8 @@ class MediaBuyUoW(BaseUoW):
 class ProductUoW(BaseUoW):
     """Unit of Work for Product operations.
 
-    Wraps a database session and provides a tenant-scoped ProductRepository.
+    Wraps a database session and provides a tenant-scoped ProductRepository, plus the
+    authorized properties a product's legacy selectors resolve against (#1845).
     Auto-commits on clean exit, rolls back on exception.
 
     Args:
@@ -244,13 +245,16 @@ class ProductUoW(BaseUoW):
     """
 
     products: ProductRepository | None
+    authorized_properties: AuthorizedPropertyRepository | None
 
     def _init_repos(self) -> None:
         assert self._session is not None
         self.products = ProductRepository(self._session, self._tenant_id)
+        self.authorized_properties = AuthorizedPropertyRepository(self._session, self._tenant_id)
 
     def _clear_repos(self) -> None:
         self.products = None
+        self.authorized_properties = None
 
 
 class WorkflowUoW(BaseUoW):
