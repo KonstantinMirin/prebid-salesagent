@@ -76,6 +76,7 @@ docs/
 │   ├── multi-tenant.md         # Multi-tenant configuration
 │   ├── vm.md                   # Single VM: Docker Compose + Caddy
 │   ├── aws.md                  # AWS: ECS Fargate, RDS, ALB (Terraform)
+│   ├── vm.md                   # Single VM: Docker Compose + Caddy
 │   └── walkthroughs/
 │       ├── gcp.md              # Google Cloud Run
 │       └── fly.md              # Fly.io
