@@ -19,6 +19,7 @@ scenario passes with the flag off and grades the wrong arm.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 #: Values that mean true in a Gherkin cell. Anything else is false, EXCEPT the
@@ -92,3 +93,8 @@ def comma_list(cell: str) -> list[str]:
     unquoted branch).
     """
     return [item.strip() for item in cell.split(",") if item.strip()]
+
+
+def quoted_list(text: str) -> list[str]:
+    """Parse '"a", "b"' / 'display, social' step fragments into a list."""
+    return re.findall(r'"([^"]+)"', text) or comma_list(text)

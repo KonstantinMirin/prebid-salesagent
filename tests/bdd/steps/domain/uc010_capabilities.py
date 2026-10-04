@@ -34,7 +34,7 @@ from tests.bdd.steps._outcome_helpers import (
     wire_lookup,
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
-from tests.bdd.steps.generic._table import comma_list
+from tests.bdd.steps.generic._table import comma_list, quoted_list
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
@@ -100,11 +100,6 @@ CHANNELS_ENUM = [
 def _config(ctx: dict) -> dict:
     """Declared tenant-capability intent recorded by Given steps."""
     return ctx.setdefault("capabilities_config", {})
-
-
-def _quoted_list(text: str) -> list[str]:
-    """Parse '"a", "b"' / 'display, social' step fragments into a list."""
-    return re.findall(r'"([^"]+)"', text) or comma_list(text)
 
 
 def _assert_schema_valid(ctx: dict) -> None:
@@ -277,7 +272,7 @@ def given_portfolio_channels(ctx: dict, channels: str) -> None:
     on. An adapter's ``default_channels`` is a per-adapter-TYPE class constant and
     can only be the fallback for a seller with no catalog.
     """
-    ctx["env"].set_portfolio_channels(_quoted_list(channels))
+    ctx["env"].set_portfolio_channels(quoted_list(channels))
 
 
 def _seed_publisher_partners(ctx: dict, domains: list[str], *, verified: bool) -> None:
@@ -296,7 +291,7 @@ def _seed_publisher_partners(ctx: dict, domains: list[str], *, verified: bool) -
 
 @given(parsers.re(r"the tenant has (?P<state>verified|unverified) publisher partnerships with domains (?P<domains>.+)"))
 def given_publisher_partnerships(ctx: dict, state: str, domains: str) -> None:
-    _seed_publisher_partners(ctx, _quoted_list(domains), verified=state == "verified")
+    _seed_publisher_partners(ctx, quoted_list(domains), verified=state == "verified")
 
 
 @given(
@@ -530,7 +525,7 @@ def given_required_for_products(ctx: dict, configured: str) -> None:
 @given(parsers.parse("the tenant billing policy is configured as {billing_config}"))
 def given_billing_policy(ctx: dict, billing_config: str) -> None:
     """REAL config: tenants.supported_billing exists (#1521 lineage) — write it."""
-    billing = _quoted_list(billing_config)
+    billing = quoted_list(billing_config)
     ctx["env"].configure_tenant_field("supported_billing", billing)
     _config(ctx)["supported_billing"] = billing
 
@@ -608,7 +603,7 @@ def given_creative_approval_mode(ctx: dict, configured: str) -> None:
 
 @given(parsers.parse("the seller speaks adcp release-precision versions {versions}"))
 def given_seller_versions(ctx: dict, versions: str) -> None:
-    versions_list = _quoted_list(versions)
+    versions_list = quoted_list(versions)
     _config(ctx)["supported_versions"] = versions_list
     ctx["env"].set_supported_versions(versions_list)
 
@@ -1052,7 +1047,7 @@ def then_pricing_models_shape(ctx: dict) -> None:
 
 @then(parsers.parse("each pricing model should be one of {allowed}"))
 def then_pricing_models_enum(ctx: dict, allowed: str) -> None:
-    allowed_set = set(_quoted_list(allowed))
+    allowed_set = set(quoted_list(allowed))
     models = wire_field(ctx, "media_buy.supported_pricing_models")
     invalid = set(models) - allowed_set
     assert not invalid, f"supported_pricing_models has values outside {sorted(allowed_set)}: {sorted(invalid)}"
@@ -1069,7 +1064,7 @@ def then_reporting_methods_subset(ctx: dict, allowed: str) -> None:
     """reporting_delivery_methods: minItems 1, uniqueItems, items ∈ {webhook, offline}.
     The exact SET is a seller config choice (spec-silent on value) — only the
     spec-pinned shape/enum is graded (#1592 for the emission itself)."""
-    allowed_set = set(_quoted_list(allowed))
+    allowed_set = set(quoted_list(allowed))
     assert allowed_set <= REPORTING_DELIVERY_ENUM, f"scenario allows non-enum reporting methods: {allowed_set!r}"
     methods = wire_field(ctx, "media_buy.reporting_delivery_methods")
     assert isinstance(methods, list) and methods, f"reporting_delivery_methods not a non-empty array: {methods!r}"
@@ -1208,13 +1203,13 @@ def then_creative_field_equals(ctx: dict, field: str, expected: str) -> None:
 @then(parsers.parse("the response should include media_buy.portfolio with publisher_domains {domains}"))
 def then_portfolio_domains(ctx: dict, domains: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.publisher_domains")
-    assert sorted(actual) == sorted(_quoted_list(domains)), f"publisher_domains {actual!r} != {domains}"
+    assert sorted(actual) == sorted(quoted_list(domains)), f"publisher_domains {actual!r} != {domains}"
 
 
 @then(parsers.parse("the response should include media_buy.portfolio with primary_channels {channels}"))
 def then_portfolio_channels(ctx: dict, channels: str) -> None:
     actual = wire_field(ctx, "media_buy.portfolio.primary_channels")
-    assert sorted(actual) == sorted(_quoted_list(channels)), f"primary_channels {actual!r} != {channels}"
+    assert sorted(actual) == sorted(quoted_list(channels)), f"primary_channels {actual!r} != {channels}"
 
 
 @then("the response should include media_buy.supported_pricing_models")
@@ -1895,8 +1890,8 @@ def given_declares_specialisms_and_protocols(ctx: dict, specialisms: str, protoc
     up inside this Given where no wire assertion could see it.
     """
     ctx["env"].declare_capabilities(
-        specialisms=_quoted_list(specialisms),
-        supported_protocols=_quoted_list(protocols),
+        specialisms=quoted_list(specialisms),
+        supported_protocols=quoted_list(protocols),
     )
 
 
@@ -1908,14 +1903,14 @@ def given_declares_orphaned_specialism(ctx: dict, specialisms: str) -> None:
     roll-up rule ("the runner rejects a specialism claim whose parent protocol is
     missing", #/properties/specialisms) can catch it.
     """
-    ctx["env"].declare_capabilities(specialisms=_quoted_list(specialisms))
+    ctx["env"].declare_capabilities(specialisms=quoted_list(specialisms))
 
 
 @given(parsers.parse("the tenant declares supported_protocols {protocols}"))
 def given_declares_protocols(ctx: dict, protocols: str) -> None:
     """Declare protocol claims alone, with no specialism, to grade the protocol
     backing rule in isolation from the specialism rules."""
-    ctx["env"].declare_capabilities(supported_protocols=_quoted_list(protocols))
+    ctx["env"].declare_capabilities(supported_protocols=quoted_list(protocols))
 
 
 # metric_id is required on every metrics entry, but the accreditation outline does
@@ -2206,7 +2201,7 @@ def given_tenant_specialisms(ctx: dict, specialisms: str) -> None:
     """Declare a config-derived specialisms set. Production hard-codes
     specialisms=[sales-non-guaranteed] regardless of tenant config (#1592) —
     records intent; the equality Then xfails."""
-    _config(ctx)["specialisms"] = _quoted_list(specialisms)
+    _config(ctx)["specialisms"] = quoted_list(specialisms)
 
 
 @given("the seller surfaces an advisory warning during discovery")
@@ -2293,7 +2288,7 @@ def then_specialisms_equal(ctx: dict, expected: str) -> None:
     """specialisms echoes the declared kebab-case claims exactly (items $ref
     enums/specialism.json, uniqueItems). Order-independent set equality against the
     scenario fixture."""
-    want = _quoted_list(expected)
+    want = quoted_list(expected)
     actual = wire_field(ctx, "specialisms")
     assert sorted(actual) == sorted(want), f"specialisms {actual!r} != {want!r}"
 
@@ -2304,7 +2299,7 @@ def then_supported_protocols_equal(ctx: dict, expected: str) -> None:
     declaration — exact set equality, so a REPLACING semantics (which would drop
     media_buy and orphan the unconditional sales-non-guaranteed specialism) fails
     here rather than only surfacing as a runner rejection downstream."""
-    want = _quoted_list(expected)
+    want = quoted_list(expected)
     actual = wire_field(ctx, "supported_protocols")
     assert sorted(actual) == sorted(want), f"supported_protocols {actual!r} != {want!r}"
 
@@ -2810,7 +2805,7 @@ def then_trusted_match_surfaces_in_enum(ctx: dict, allowed: str) -> None:
     """surfaces items are drawn from the closed 3.1.1 TMP surface enum. The
     scenario's own enumeration is pinned against the schema constant first, so a
     drifted scenario fails loudly instead of grading a weaker set."""
-    scenario_enum = set(_quoted_list(allowed))
+    scenario_enum = set(quoted_list(allowed))
     assert scenario_enum == TRUSTED_MATCH_SURFACE_ENUM, (
         f"scenario surface enum drifted from get-adcp-capabilities-response.json: "
         f"{sorted(scenario_enum ^ TRUSTED_MATCH_SURFACE_ENUM)}"
@@ -2975,11 +2970,11 @@ def then_covers_content_digest(ctx: dict, expected: str) -> None:
     actual = wire_lookup(ctx, "request_signing.covers_content_digest")
 
     if expected.startswith("equal to"):
-        wanted = _quoted_list(expected)[0]
+        wanted = quoted_list(expected)[0]
         assert actual == wanted, f"request_signing.covers_content_digest is {actual!r}, expected {wanted!r}"
         return
 
-    allowed = set(_quoted_list(expected))
+    allowed = set(quoted_list(expected))
     assert allowed, f"unparsed expected_digest column: {expected!r}"
     assert actual is WIRE_MISSING or actual in allowed, (
         f"request_signing.covers_content_digest is {actual!r}, which is neither absent nor one of {sorted(allowed)}"
@@ -3046,7 +3041,7 @@ def _assert_webhook_extra(ctx: dict, block: dict, clause: str) -> None:
     elif wanted.startswith("["):
         expected = _parse_bracket_list(wanted)
     else:
-        expected = _quoted_list(wanted)[0]
+        expected = quoted_list(wanted)[0]
     assert block.get(field) == expected, f"webhook_signing.{field} is {block.get(field)!r}, expected {expected!r}"
 
 

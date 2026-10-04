@@ -92,6 +92,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_publisher_domain",
     "tests.bdd.steps.domain.admin_inventory_profiles",
+    "tests.bdd.steps.domain.uc_get_products_ranking",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -6156,6 +6157,14 @@ ENV_ROUTES: list[EnvRoute] = [
         # factories or products.
         when=lambda m: "admin_inventory_profile" in m,
         env_builder=_build_admin_inventory_profile_env,
+    ),
+    EnvRoute(
+        tag="get-products-ranking-fail-open",
+        # BR-UC-GET-PRODUCTS ranking fail-open (#2334): get_products against a tenant
+        # whose AI provider cannot be reached. The failure has to come from the REAL
+        # ranking path, so ProductEnv's get_factory patch is not applied.
+        when=lambda m: "ranking_fail_open" in m,
+        env_builder=_env("tests.harness.product.RealRankingProductEnv"),
     ),
     EnvRoute(
         tag="security-wire-error-safety",

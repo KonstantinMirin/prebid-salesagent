@@ -96,6 +96,7 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "get-products-pricing-options",
         "get-products-publisher-domain",
         "admin-inventory-profile-publishers",
+        "get-products-ranking-fail-open",
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",
