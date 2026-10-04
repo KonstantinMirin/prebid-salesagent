@@ -21,7 +21,6 @@ The example files are in [`deploy/vm/`](../../deploy/vm/):
 > - #2315: a creative agent configured by its base URL answers in under a second instead of
 >   hanging or retrying.
 > - #2305: pins the reference creative agent to AdCP v3.1.25.
-> - #2191: tenants declare the host they are served at (`--virtual-host`).
 > - #2311 and #2312 fix the sample format ids and the Admin UI "Verify all" button.
 
 ## Contents
@@ -249,9 +248,7 @@ apex, such as `acme.<apex>`, also works.
   record) and the virtual host on the tenant.
 - Adding a publisher site to a tenant changes no DNS record and no certificate for the agent.
 
-The app finds the tenant from the request's host. With #2191 it matches the virtual host only.
-Current main also matches a host under the apex by its first label against the tenant's
-**Subdomain**, so give such a tenant the matching subdomain too (`acme` for `acme.<apex>`).
+The app finds the tenant by matching the request's host against the tenant's virtual host.
 
 ## Step 9: Create the first tenant
 
