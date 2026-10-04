@@ -74,6 +74,7 @@ docs/
 ├── deployment/
 │   ├── single-tenant.md        # Standard deployment
 │   ├── multi-tenant.md         # Multi-tenant configuration
+│   ├── aws.md                  # AWS: ECS Fargate, RDS, ALB (Terraform)
 │   ├── vm.md                   # Single VM: Docker Compose + Caddy
 │   ├── aws.md                  # AWS: ECS Fargate, RDS, ALB (Terraform)
 │   ├── vm.md                   # Single VM: Docker Compose + Caddy
