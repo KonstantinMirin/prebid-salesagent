@@ -100,6 +100,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
     "tests.bdd.steps.domain.security_tenant_isolation",
+    "tests.bdd.steps.domain.database_fail_fast",
     "tests.bdd.steps.domain.protocol_version_negotiation",
 ]
 
@@ -5103,8 +5104,19 @@ def _reset_e2e_db(e2e_config) -> None:
     in scenario SETUP and never on an assertion (#2048).
 
     DELETE takes a RowExclusiveLock, which does not conflict with AccessShareLock
-    at all, so the reset can neither block nor be blocked by a concurrent reader
-    and the cycle has nowhere to form. Do NOT "fix" a recurrence by retrying or by
+    at all, so that relation-lock cycle has nowhere to form. A ROW-lock cycle
+    remains, with a concurrent writer rather than a reader. The delivery
+    scheduler's ``webhook_delivery_log`` INSERT takes KEY SHARE locks on the rows
+    its foreign keys name -- tenants, then principals, then media_buys -- while
+    the reset deletes rows in ``pg_tables`` order (measured: principals, then
+    media_buys, then tenants). With those orders the server starts waiting first
+    and Postgres picks it as the victim; ``ProtocolWebhookService._conclude``
+    swallows the error and one delivery-log row is lost. When the reset commits
+    first, the INSERT fails its foreign-key check and is swallowed the same way.
+    Neither touches the scenario, and since #2328 neither trips the server's
+    process-wide fail-fast in ``get_db_session``. Nothing enforces the order,
+    though: a ``DeadlockDetected`` back in scenario SETUP means it changed, and
+    #2048 tracks the remaining cycle. Do NOT "fix" a recurrence by retrying or by
     serialising the suite -- both leave the cycle in place.
 
     Emptying every table makes the delete order irrelevant, so FK triggers are
@@ -6104,6 +6116,14 @@ ENV_ROUTES: list[EnvRoute] = [
         # the branch's default one, because a single-tenant database cannot exhibit the leak
         # it is looking for.
         when=lambda m: any(t.startswith("T-SECURITY-002") for t in m),
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="database-fail-fast",
+        # The process-wide fail-fast in get_db_session must refuse every tenant only when the
+        # database cannot be reached. The claim is about the OTHER tenant, so it reuses
+        # BR-SECURITY-002's two-tenant seeding and dispatches get_products like it does.
+        when=lambda m: any(t.startswith("T-DBFAILFAST") for t in m),
         env_builder=_build_product_env,
     ),
     EnvRoute(

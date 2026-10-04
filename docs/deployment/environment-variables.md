@@ -234,7 +234,7 @@ says otherwise) checking a publisher partner's adagents.json.
 | `ADCP_SALES_PORT` | `8080` | Port the unified application listens on (nginx proxies to it) |
 | `ADCP_SALES_HOST` | `0.0.0.0` | Bind address for `scripts/run_server.py` (production always binds all interfaces) |
 | `SKIP_NGINX` | `false` | Skip nginx in deployment scripts |
-| `SKIP_CRON` | `false` | Skip cron job scheduling |
+| `SKIP_CRON` | `false` | Skip cron job scheduling. The scheduled GAM inventory sync authenticates with `SYNC_API_KEY` and exits with an error when it is unset |
 
 Every variable above is read once, by `src/core/config.py`, when a process is composed; an
 empty value means unset. Knobs that only the repo's own scripts read (`ADCP_HOME`,
