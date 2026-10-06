@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://adcontextprotocol.org/schemas/3.2.1/core/macro-resolution-capability.json",
   "title": "Macro Processing Capability",
-  "description": "One exact processing capability for one governed dialect semantic, operation, actor, occurrence context, and encoding set. Entries are intentionally semantic-specific; they do not create a semantics \u00d7 maximum-depth cross-product. Seller-wide capabilities are only a ceiling and the selected product format option is binding.",
+  "description": "One exact processing capability for one governed dialect semantic, operation, actor, occurrence context, and encoding set. Entries are intentionally semantic-specific; they do not create a semantics × maximum-depth cross-product. Seller-wide capabilities are only a ceiling and the selected product format option is binding.",
   "x-adcp-validation": {
     "verifier_constraints": {
       "adcp_semantic_identity": "when dialect is adcp, dialect_semantic must equal universal_semantic",

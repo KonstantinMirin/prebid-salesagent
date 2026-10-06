@@ -76,6 +76,7 @@ if TYPE_CHECKING:
     # upgrade that respells a code must not silently respell a class nobody can see change.
     # The roster is written out so an upstream change arrives as a conflict a human reads.
     class SignatureErrorCode(StrEnum):
+        REQUEST_BODY_MALFORMED = "request_body_malformed"
         REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON = "request_signature_agent_not_in_brand_json"
         REQUEST_SIGNATURE_ALG_NOT_ALLOWED = "request_signature_alg_not_allowed"
         REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS = "request_signature_brand_json_ambiguous"

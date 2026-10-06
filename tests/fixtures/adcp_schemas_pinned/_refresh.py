@@ -308,7 +308,13 @@ def vendor(roots: list[str], *, rev: str, src_prefix: str, id_version: str = "")
         check_id_convention(expected_id(ref, id_version), schema)
         out = FIXTURE_DIR / ref[len("/schemas/") :]
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(schema, indent=2) + "\n")
+        # ``ensure_ascii=False``: upstream writes its prose with real characters (em dashes
+        # in every enumDescription), and the default would re-encode them as ``\\u2014``.
+        # That makes a refresh NON-IDEMPOTENT -- re-running the documented procedure
+        # rewrote the SHA-256-pinned ``enums/error-code.json`` with identical content and
+        # different bytes, tripping test_guards_error_code_fixture_pin for no upstream
+        # change at all. A frozen artifact has to round-trip byte-for-byte.
+        out.write_text(json.dumps(schema, indent=2, ensure_ascii=False) + "\n")
         written += 1
         stack.extend(re.findall(r'"\$ref"\s*:\s*"([^"]+)"', body))
     print(f"vendored {written} schema files from {REPO}@{rev[:9]} into {FIXTURE_DIR}")

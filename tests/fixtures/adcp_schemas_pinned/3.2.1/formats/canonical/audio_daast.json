@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://adcontextprotocol.org/schemas/3.2.1/formats/canonical/audio_daast.json",
   "title": "Canonical Format: DAAST Audio",
-  "description": "DAAST-tag-delivered audio creative (audio analog of VAST). Slot: `daast_tag` (daast asset, URL or inline XML). Tracking model: DAAST events inherent to the spec \u2014 `impression`, `firstQuartile`, `midpoint`, `thirdQuartile`, `complete`, `start`, `pause`, `resume`, `mute`, `unmute`, `clickTracking`, `error`. Distinct from `audio_hosted` (direct file with external tracking).",
+  "description": "DAAST-tag-delivered audio creative (audio analog of VAST). Slot: `daast_tag` (daast asset, URL or inline XML). Tracking model: DAAST events inherent to the spec — `impression`, `firstQuartile`, `midpoint`, `thirdQuartile`, `complete`, `start`, `pause`, `resume`, `mute`, `unmute`, `clickTracking`, `error`. Distinct from `audio_hosted` (direct file with external tracking).",
   "allOf": [
     {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/formats/canonical/_base.json"

@@ -860,6 +860,19 @@ class AdCPRequestSignatureWindowInvalidError(AdCPRequestSignatureError):
     _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID
 
 
+class AdCPRequestBodyMalformedError(AdCPRequestSignatureError):
+    """The signature verified, but the signed body is not strict, unambiguous JSON (401).
+
+    Checklist step 14, and the one code in the family whose name carries no ``signature`` infix because the spec names it that way: the signature IS valid and what is wrong is the document it covers -- duplicate object keys, invalid UTF-8, or not JSON at all. ``recovery: correctable`` in the pin's own ``enums/request-signing-error-code.json``, whose suggestion is "emit strict unambiguous JSON without duplicate keys and re-sign the body".
+
+    New with adcp 9 / AdCP 3.2.1: it is the 29th member of ``REQUEST_TO_WEBHOOK_CODE``, so it earns a class like every other member rather than being named on the base (CLAUDE.md pattern #10 -- a code with no subclass is a gap).
+
+    Wire code ``request_body_malformed``.
+    """
+
+    _code: ClassVar[ErrorCodeT] = SignatureErrorCode.REQUEST_BODY_MALFORMED
+
+
 class AdCPRequestTargetUriMalformedError(AdCPRequestSignatureError):
     """The request's target URI cannot be canonicalized (401).
 
@@ -915,6 +928,7 @@ _SIGNATURE_ERROR_BY_CODE: Final[Mapping[SignatureErrorCode, type[AdCPRequestSign
         SignatureErrorCode.REQUEST_SIGNATURE_REVOCATION_STALE: AdCPRequestSignatureRevocationStaleError,
         SignatureErrorCode.REQUEST_SIGNATURE_TAG_INVALID: AdCPRequestSignatureTagInvalidError,
         SignatureErrorCode.REQUEST_SIGNATURE_WINDOW_INVALID: AdCPRequestSignatureWindowInvalidError,
+        SignatureErrorCode.REQUEST_BODY_MALFORMED: AdCPRequestBodyMalformedError,
         SignatureErrorCode.REQUEST_TARGET_URI_MALFORMED: AdCPRequestTargetUriMalformedError,
     }
 )

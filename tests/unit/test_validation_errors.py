@@ -5,6 +5,7 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import first_validation_error_field, format_validation_error
+from tests.factories.request import PackageRequestFactory
 from tests.helpers import assert_construction_rejects
 
 
@@ -67,7 +68,13 @@ def test_brand_target_audience_must_be_string():
 
     brand = Brand(
         id="test_brand",
-        names=[LocalizedName(name="Test Brand", language="en")],
+        # A LOCALE-KEYED map, which is what ``LocalizedName`` is: a RootModel over
+        # ``dict[str, str]`` holding exactly one locale -> name entry (the spec's own
+        # examples are ``{"en_US": "Tide"}``). The two-key ``name=``/``language=`` form
+        # here read as if it had those FIELDS and never did; adcp 6.6.0 constrained the
+        # dict with ``MinLen(1)`` alone so the wrong shape validated, and 3.2.1 adds
+        # ``MaxLen(1)``, which refuses it.
+        names=[LocalizedName({"en": "Test Brand"})],
         target_audience="spiritual seekers interested in unexplained phenomena",
     )
     assert brand.target_audience == "spiritual seekers interested in unexplained phenomena"
@@ -79,7 +86,13 @@ def test_brand_accepts_extra_fields():
 
     brand = Brand(
         id="test_brand",
-        names=[LocalizedName(name="Test Brand", language="en")],
+        # A LOCALE-KEYED map, which is what ``LocalizedName`` is: a RootModel over
+        # ``dict[str, str]`` holding exactly one locale -> name entry (the spec's own
+        # examples are ``{"en_US": "Tide"}``). The two-key ``name=``/``language=`` form
+        # here read as if it had those FIELDS and never did; adcp 6.6.0 constrained the
+        # dict with ``MinLen(1)`` alone so the wrong shape validated, and 3.2.1 adds
+        # ``MaxLen(1)``, which refuses it.
+        names=[LocalizedName({"en": "Test Brand"})],
         custom_field="custom_value",
     )
     # Brand accepts extra fields with extra="allow"
@@ -96,6 +109,16 @@ def test_create_media_buy_request_invalid_brand_manifest():
         end_time="2026-02-01T00:00:00Z",
         start_time="2026-01-01T00:00:00Z",
         idempotency_key="unit-test-key-invalid-brand-mfst",
+        # ``packages`` is here because create-media-buy-request.json's ROOT requires one of
+        # ``packages`` | ``packages+total_budget+budget_allocation`` | ``proposal_id+total_budget``,
+        # and adcp 9 enforces that group (``enforce_root_required_groups``) where 6.6.0
+        # generated the fields and ignored the root anyOf. A request with neither packages
+        # nor a proposal was never an accepted shape. This test is about ``brand``, so the
+        # packages come from the factory bound to the accepted model rather than hand-rolled.
+        # PackageRequestFactory, NOT ``default_request_packages``: the latter builds the
+        # ``MediaBuy.raw_request`` shape, which carries a ``package_id`` the REQUEST model
+        # does not declare, so strict mode rejects it at ``/packages/0/package_id``.
+        packages=[PackageRequestFactory.payload()],
     )
     assert req.brand is not None
 

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://adcontextprotocol.org/schemas/3.2.1/formats/canonical/video_vast.json",
   "title": "Canonical Format: VAST Video",
-  "description": "VAST-tag-delivered video creative. Slot: `vast_tag` (vast asset, URL or inline XML, VAST 2.x-4.x). Tracking model: VAST events inherent to the spec \u2014 `impression`, `firstQuartile`, `midpoint`, `thirdQuartile`, `complete`, `start`, `pause`, `resume`, `mute`, `unmute`, `expand`, `collapse`, `fullscreen`, `creativeView`, `clickTracking`, `error`. VPAID interactivity via `vpaid_enabled: true` flag. SIMID is carried by the first-class VAST 4.1+ `<InteractiveCreativeFile apiFramework=\"SIMID\">` element on Linear creatives. Orientation is a parameter (vertical / horizontal / square). Distinct from `video_hosted` (direct file with external tracking).",
+  "description": "VAST-tag-delivered video creative. Slot: `vast_tag` (vast asset, URL or inline XML, VAST 2.x-4.x). Tracking model: VAST events inherent to the spec — `impression`, `firstQuartile`, `midpoint`, `thirdQuartile`, `complete`, `start`, `pause`, `resume`, `mute`, `unmute`, `expand`, `collapse`, `fullscreen`, `creativeView`, `clickTracking`, `error`. VPAID interactivity via `vpaid_enabled: true` flag. SIMID is carried by the first-class VAST 4.1+ `<InteractiveCreativeFile apiFramework=\"SIMID\">` element on Linear creatives. Orientation is a parameter (vertical / horizontal / square). Distinct from `video_hosted` (direct file with external tracking).",
   "properties": {
     "slots": {
       "default": [

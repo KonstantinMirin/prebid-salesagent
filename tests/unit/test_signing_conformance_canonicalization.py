@@ -69,6 +69,15 @@ from tests.helpers.signing_vectors import load_canonicalization_cases
 _UPSTREAM_ONLY = {
     "idn-to-punycode",
     "idn-mixed-case-to-punycode",
+    # NEW AT 3.2.1, and the same obligation: a RAW U-label host (``bücher.example.``)
+    # with a trailing DNS root dot. The case's ``expected_target_uri`` asks for the
+    # punycode mapping, which is a SIGNER-side obligation -- step 2 says a host carrying
+    # raw non-ASCII bytes "MUST be rejected by the comparer", so demanding the mapping
+    # here would require behaviour the spec forbids a verifier from performing. Graded by
+    # the blocker test below, alongside the other two. Its A-label twin
+    # (``idn-a-label-root-dot-stripped``) is already ASCII and IS normalized by the seam,
+    # so it stays in the conformance set.
+    "idn-u-label-root-dot-stripped",
 }
 
 _CASES = {case["name"]: case for case in load_canonicalization_cases()}
@@ -158,20 +167,28 @@ def test_the_seam_names_the_spec_code_the_sdk_does_not_define() -> None:
 
 
 def test_every_canonicalization_case_is_accounted_for() -> None:
-    """31 = 29 conformance + 2 named blocker tests. 0 skipped, 0 xfailed."""
-    assert len(_CASES) == 31
-    assert len(_CONFORMANCE) == 29, sorted(_CONFORMANCE)
+    """37 = 34 conformance + 3 named blocker tests. 0 skipped, 0 xfailed.
+
+    Was 31 = 29 + 2 at the 3.1.1 pin. Both numbers are measured from the vendored file
+    and the partition above, not adjusted: the re-vendor added six cases, one of which
+    (``idn-u-label-root-dot-stripped``) is a third raw-U-label comparer obligation and
+    the other five are ordinary conformance cases the seam handles.
+    """
+    assert len(_CASES) == 37
+    assert len(_CONFORMANCE) == 34, sorted(_CONFORMANCE)
     assert _UPSTREAM_ONLY <= set(_CASES)
 
 
 # ---------------------------------------------------------------------------
-# The 2 comparer-obligation cases, as OUR-obligation blocker tests
+# The 3 comparer-obligation cases, as OUR-obligation blocker tests
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("case_name", ["idn-to-punycode", "idn-mixed-case-to-punycode"])
+@pytest.mark.parametrize(
+    "case_name", ["idn-to-punycode", "idn-mixed-case-to-punycode", "idn-u-label-root-dot-stripped"]
+)
 def test_raw_u_label_authority_is_rejected_not_normalized(case_name: str) -> None:
-    """OUR obligation for the two IDN cases: REJECT, never re-normalize.
+    """OUR obligation for the raw-U-label IDN cases: REJECT, never re-normalize.
 
     ``url-canonicalization.mdx`` step 2 — "A host containing raw non-ASCII bytes ...
     MUST be rejected by the comparer — receivers do not silently re-normalize." The

@@ -7,7 +7,7 @@
   "properties": {
     "kid": {
       "type": "string",
-      "description": "Key identifier. Opaque \u2014 MUST NOT encode geographic or deployment information.",
+      "description": "Key identifier. Opaque — MUST NOT encode geographic or deployment information.",
       "maxLength": 8
     },
     "kty": {

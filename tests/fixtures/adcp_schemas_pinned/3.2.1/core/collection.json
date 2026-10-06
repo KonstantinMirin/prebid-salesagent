@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://adcontextprotocol.org/schemas/3.2.1/core/collection.json",
   "title": "Collection",
-  "description": "A recurring inventory container \u2014 a named program, publication, event series, rotation, or programmed channel that produces bookable installments on a defined cadence. The kind field indicates how to interpret this collection: 'series' for TV/podcast programs, 'publication' for print/newsletter titles, 'event_series' for live events, 'rotation' for DOOH scheduling, and 'channel' for continuously programmed audio or video streams regardless of carriage or monetization model. Declared in the publisher's adagents.json and referenced by products via collection selectors.",
+  "description": "A recurring inventory container — a named program, publication, event series, rotation, or programmed channel that produces bookable installments on a defined cadence. The kind field indicates how to interpret this collection: 'series' for TV/podcast programs, 'publication' for print/newsletter titles, 'event_series' for live events, 'rotation' for DOOH scheduling, and 'channel' for continuously programmed audio or video streams regardless of carriage or monetization model. Declared in the publisher's adagents.json and referenced by products via collection selectors.",
   "type": "object",
   "properties": {
     "publisher_domain": {
@@ -52,7 +52,7 @@
     },
     "season": {
       "type": "string",
-      "description": "Current or most recent season identifier (e.g., '3', '2026', 'spring_2026'). A lightweight label \u2014 not a full season object."
+      "description": "Current or most recent season identifier (e.g., '3', '2026', 'spring_2026'). A lightweight label — not a full season object."
     },
     "status": {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/enums/collection-status.json",
@@ -71,11 +71,11 @@
     },
     "special": {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/core/special.json",
-      "description": "When present, this collection is a special \u2014 content anchored to a real-world event or occasion. Individual installments may override with their own event context."
+      "description": "When present, this collection is a special — content anchored to a real-world event or occasion. Individual installments may override with their own event context."
     },
     "limited_series": {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/core/limited-series.json",
-      "description": "When present, this collection is a limited series \u2014 a bounded run with a defined arc, installment count, and end date."
+      "description": "When present, this collection is a limited series — a bounded run with a defined arc, installment count, and end date."
     },
     "distribution": {
       "type": "array",

@@ -2,14 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://adcontextprotocol.org/schemas/3.2.1/formats/canonical/image.json",
   "title": "Canonical Format: Image",
-  "description": "Static image creative format. Slots: `image_main` (image asset, file or hosted URL), optional `headline` (text), `body_text` (text), `cta` (text/enum), `landing_page_url` (url). Tracking model: impression pixel + click URL via universal_macros, with optional viewability pixel. Distinct from `html5` (interactive bundles) and `display_tag` (third-party served). AR/dimensions narrow to specific sizes via product parameters \u2014 covers IAB display sizes (300x250, 728x90, 970x250, etc.) without a separate iab_size enum.",
+  "description": "Static image creative format. Slots: `image_main` (image asset, file or hosted URL), optional `headline` (text), `body_text` (text), `cta` (text/enum), `landing_page_url` (url). Tracking model: impression pixel + click URL via universal_macros, with optional viewability pixel. Distinct from `html5` (interactive bundles) and `display_tag` (third-party served). AR/dimensions narrow to specific sizes via product parameters — covers IAB display sizes (300x250, 728x90, 970x250, etc.) without a separate iab_size enum.",
   "allOf": [
     {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/formats/canonical/_base.json"
     },
     {
       "title": "Size-mode mutex",
-      "description": "Exactly one of: (a) fixed (`width` + `height` both set), (b) multi-size (`sizes` set), (c) responsive (any of `min_width`/`max_width`/`min_height`/`max_height` set), (d) none (no size constraint declared \u2014 accepts any dimensions). Combining modes (e.g., `width` + `sizes`) is rejected at schema layer; same rule on `html5` and `display_tag` canonicals.",
+      "description": "Exactly one of: (a) fixed (`width` + `height` both set), (b) multi-size (`sizes` set), (c) responsive (any of `min_width`/`max_width`/`min_height`/`max_height` set), (d) none (no size constraint declared — accepts any dimensions). Combining modes (e.g., `width` + `sizes`) is rejected at schema layer; same rule on `html5` and `display_tag` canonicals.",
       "oneOf": [
         {
           "title": "fixed",
@@ -237,17 +237,17 @@
           "required": false
         }
       ],
-      "description": "Default slots for image canonical. Buyer ships an image asset (file or hosted URL) plus optional headline, body text, primary text (long-form caption), CTA (typically constrained to an enum via `cta_values`), and clickthrough URL. Products MAY override the default \u2014 make `headline` required, narrow `cta` to a value enum, or remove slots the surface doesn't consume."
+      "description": "Default slots for image canonical. Buyer ships an image asset (file or hosted URL) plus optional headline, body text, primary text (long-form caption), CTA (typically constrained to an enum via `cta_values`), and clickthrough URL. Products MAY override the default — make `headline` required, narrow `cta` to a value enum, or remove slots the surface doesn't consume."
     },
     "width": {
       "type": "integer",
       "minimum": 1,
-      "description": "Logical render width in pixels \u2014 use for fixed-size slots (e.g., a 300\u00d7250 IAB MREC). When `pixel_ratios` is absent, the required image asset width is the same value (1x). When `pixel_ratios` is present, an accepted asset's intrinsic width is `width \u00d7 pixel_ratio`. For multi-size flexible slots, use `sizes[]`; for responsive slots, use the min/max fields. The three size modes are mutually exclusive."
+      "description": "Logical render width in pixels — use for fixed-size slots (e.g., a 300×250 IAB MREC). When `pixel_ratios` is absent, the required image asset width is the same value (1x). When `pixel_ratios` is present, an accepted asset's intrinsic width is `width × pixel_ratio`. For multi-size flexible slots, use `sizes[]`; for responsive slots, use the min/max fields. The three size modes are mutually exclusive."
     },
     "height": {
       "type": "integer",
       "minimum": 1,
-      "description": "Logical render height in pixels. Intrinsic asset height is `height \u00d7 pixel_ratio`, where the ratio defaults to 1 when `pixel_ratios` is absent. See `width` for size-mode mutual exclusion."
+      "description": "Logical render height in pixels. Intrinsic asset height is `height × pixel_ratio`, where the ratio defaults to 1 when `pixel_ratios` is absent. See `width` for size-mode mutual exclusion."
     },
     "sizes": {
       "type": "array",
@@ -270,7 +270,7 @@
         },
         "additionalProperties": false
       },
-      "description": "List of accepted logical (width, height) render pairs for a multi-size flexible slot. The buyer ships an asset matching one logical size multiplied by one accepted `pixel_ratios` entry (or by 1 when `pixel_ratios` is absent). SDKs MUST treat size and density as separate axes: a 600\u00d7500 intrinsic asset at 2x satisfies a logical 300\u00d7250 size; it does not create a logical 600\u00d7500 placement. Mirrors OpenRTB `banner.format[]` semantics. Mutually exclusive with `(width, height)` and with responsive ranges."
+      "description": "List of accepted logical (width, height) render pairs for a multi-size flexible slot. The buyer ships an asset matching one logical size multiplied by one accepted `pixel_ratios` entry (or by 1 when `pixel_ratios` is absent). SDKs MUST treat size and density as separate axes: a 600×500 intrinsic asset at 2x satisfies a logical 300×250 size; it does not create a logical 600×500 placement. Mirrors OpenRTB `banner.format[]` semantics. Mutually exclusive with `(width, height)` and with responsive ranges."
     },
     "pixel_ratios": {
       "type": "array",
@@ -357,7 +357,7 @@
         "publisher_owned_reference"
       ],
       "default": "buyer_uploaded",
-      "description": "Where the rendered asset bytes come from. Single shared enum across all canonicals (`image`, `video_hosted`, `audio_hosted` \u2014 replaces the earlier per-canonical `image_source` / `video_source` / `audio_source` fields). `buyer_uploaded` (default): buyer ships a pre-rendered asset. `publisher_host_recorded`: publisher's host records the asset (audio-specific; podcast host-read pattern). `seller_pre_rendered_from_brief`: buyer ships a brief plus structured copy; seller renders ONE asset at sync_creatives or build_creative time (generative-DSP pattern). `seller_human_designed`: seller's design team renders manually from a brief. `agent_synthesized`: AI synthesis pipeline; pair with `synthesis_nondeterministic: true` when the platform cannot guarantee in-spec output (Veo/Sora/Imagen-class). `publisher_owned_reference`: buyer references an existing post or publisher-owned object via a `published_post` slot; the seller resolves and serves the referenced content after authorization/review rather than receiving uploaded bytes.\n\nNot every value is meaningful on every canonical \u2014 `publisher_host_recorded` is audio-specific; on `image` or `video_hosted` it has no defined behavior. `publisher_owned_reference` is meaningful only when the product's `slots` declaration accepts a reference asset such as `published_post`. Adopters MUST select a value appropriate to the canonical's asset type. The `slots` declaration is the binding contract for what the buyer ships; `asset_source` is informational and lets buyers understand the production model when picking products."
+      "description": "Where the rendered asset bytes come from. Single shared enum across all canonicals (`image`, `video_hosted`, `audio_hosted` — replaces the earlier per-canonical `image_source` / `video_source` / `audio_source` fields). `buyer_uploaded` (default): buyer ships a pre-rendered asset. `publisher_host_recorded`: publisher's host records the asset (audio-specific; podcast host-read pattern). `seller_pre_rendered_from_brief`: buyer ships a brief plus structured copy; seller renders ONE asset at sync_creatives or build_creative time (generative-DSP pattern). `seller_human_designed`: seller's design team renders manually from a brief. `agent_synthesized`: AI synthesis pipeline; pair with `synthesis_nondeterministic: true` when the platform cannot guarantee in-spec output (Veo/Sora/Imagen-class). `publisher_owned_reference`: buyer references an existing post or publisher-owned object via a `published_post` slot; the seller resolves and serves the referenced content after authorization/review rather than receiving uploaded bytes.\n\nNot every value is meaningful on every canonical — `publisher_host_recorded` is audio-specific; on `image` or `video_hosted` it has no defined behavior. `publisher_owned_reference` is meaningful only when the product's `slots` declaration accepts a reference asset such as `published_post`. Adopters MUST select a value appropriate to the canonical's asset type. The `slots` declaration is the binding contract for what the buyer ships; `asset_source` is informational and lets buyers understand the production model when picking products."
     },
     "buyer_asset_acceptance": {
       "type": "string",
@@ -366,11 +366,11 @@
         "rejected"
       ],
       "default": "accepted",
-      "description": "Whether the product accepts buyer-uploaded assets. When `rejected`, the buyer cannot ship pre-rendered bytes directly \u2014 they must use build_creative (or sync_creatives with brief inputs or reference assets) so the seller produces or resolves the asset. Combined with `asset_source`, lets a product declare 'I produce assets from briefs and refuse buyer uploads' (asset_source=`seller_pre_rendered_from_brief`, buyer_asset_acceptance=`rejected`) or 'I accept existing post references, not uploaded bytes' (asset_source=`publisher_owned_reference`, buyer_asset_acceptance=`rejected`)."
+      "description": "Whether the product accepts buyer-uploaded assets. When `rejected`, the buyer cannot ship pre-rendered bytes directly — they must use build_creative (or sync_creatives with brief inputs or reference assets) so the seller produces or resolves the asset. Combined with `asset_source`, lets a product declare 'I produce assets from briefs and refuse buyer uploads' (asset_source=`seller_pre_rendered_from_brief`, buyer_asset_acceptance=`rejected`) or 'I accept existing post references, not uploaded bytes' (asset_source=`publisher_owned_reference`, buyer_asset_acceptance=`rejected`)."
     },
     "ctv_ad_experience": {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/enums/ctv-ad-experience.json",
-      "description": "CTV experience this option serves. On `image` only `pause` and `screensaver` are valid \u2014 the image-plus-copy contract the major pause-ad sellers ingest (seller composites the frame; typical canvas 1920\u00d71080 or a transparent-region overlay). Other experiences route per the matrix in docs/creative/ctv-experiences.mdx."
+      "description": "CTV experience this option serves. On `image` only `pause` and `screensaver` are valid — the image-plus-copy contract the major pause-ad sellers ingest (seller composites the frame; typical canvas 1920×1080 or a transparent-region overlay). Other experiences route per the matrix in docs/creative/ctv-experiences.mdx."
     },
     "motion_level": {
       "$ref": "https://adcontextprotocol.org/schemas/3.2.1/enums/motion-level.json",
