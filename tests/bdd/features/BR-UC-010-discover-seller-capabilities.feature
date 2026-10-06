@@ -930,7 +930,7 @@ Feature: BR-UC-010 Discover Seller Capabilities
     And the tenant has full capabilities configured
     When the Buyer Agent calls get_adcp_capabilities
     Then the response is compliant with the get_adcp_capabilities spec
-    And the response envelope should echo adcp_version "3.1"
+    And the response envelope should echo the release the seller served
     And the response envelope adcp_version should match pattern "^\d+\.\d+(-[a-zA-Z0-9.-]+)?$"
     # The OTHER half of the version-negotiation contract. The sibling scenario above grades
     # adcp.supported_versions in the BODY (what the seller speaks); this grades adcp_version
@@ -946,9 +946,18 @@ Feature: BR-UC-010 Discover Seller Capabilities
     # "additionalProperties: true makes the field invisible to them". So a schema check can
     # never catch a regression here and only this named-field assertion can.
     #
-    # "3.1" is the release the pin serves (adcp==6.6.0 -> AdCP 3.1.1, truncated to
-    # MAJOR.MINOR). A literal on purpose: a version bump SHOULD redden this scenario, and
-    # tests/unit/test_adcp_spec_version.py guards the pin it is derived from.
+    # The expected release is DERIVED from the pin (MAJOR.MINOR of
+    # tests/helpers/adcp_pin.EXPECTED_SPEC_VERSION), not spelled here. It was the literal
+    # "3.1" — adcp==6.6.0 -> AdCP 3.1.1 — on the stated grounds that "a version bump SHOULD
+    # redden this scenario". The bump to 3.2.1 did redden it, and that is the argument
+    # against the literal rather than for it: the failure read as a capabilities-behaviour
+    # regression, while tests/unit/test_adcp_spec_version.py was already failing on the pin
+    # drift specifically and by name. Two alarms for one event, and the vaguer one fired here.
+    # Deriving does not weaken the check, because the two sides remain independent: expected
+    # comes from the hand-authored pin constant (guarded against SDK drift by its own test),
+    # actual from whatever the boundary stamped off adcp.get_adcp_spec_version() at runtime.
+    # It still catches a seller that echoes the ADVERTISED version, stops truncating to
+    # MAJOR.MINOR, or drops the stamp — which is what this assertion is for.
     # POST-S16: Buyer knows which release answered its call
     # @source repo=adcp ref=v3.2.1 path=dist/compliance/3.1.1/universal/version-negotiation.yaml pointer=/phases/0/steps/0/validations
 

@@ -35,6 +35,7 @@ from tests.bdd.steps._outcome_helpers import (
 )
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.harness.capabilities import DERIVE_IDENTITY, OMIT_IDENTITY, IdentityMode
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
 #: 3.1.1 billing-party enum (dist/schemas/3.1.1/enums/billing-party.json).
 BILLING_PARTY_ENUM = {"operator", "agent", "advertiser"}
@@ -810,19 +811,41 @@ def then_supported_versions_pattern(ctx: dict, pattern: str) -> None:
         assert re.fullmatch(pattern, value), f"supported_versions entry {value!r} does not match {pattern!r}"
 
 
-@then(parsers.parse('the response envelope should echo adcp_version "{version}"'))
-def then_envelope_echoes_adcp_version(ctx: dict, version: str) -> None:
+@then("the response envelope should echo the release the seller served")
+def then_envelope_echoes_adcp_version(ctx: dict) -> None:
     """The ENVELOPE root, not the ``adcp`` body block — two different obligations.
 
     ``adcp.supported_versions`` above is what the seller SPEAKS; this is what it SERVED, and
     ``version-negotiation.yaml`` rides both on the one ``get_adcp_capabilities`` call.
     Read through ``wire_field`` off the real body, because no response model declares the
     field: it is stamped by the response seam, so reading a typed payload would grade nothing.
+
+    DERIVED from the pin, not a literal in the scenario. The expected release was spelled
+    ``"3.1"`` with the rationale that "a version bump SHOULD redden this scenario" -- and the
+    bump did redden it, three times, as a capabilities-behaviour failure rather than as the
+    pin move it was. That tripwire is redundant: ``tests/unit/test_adcp_spec_version.py``
+    already fails on pin drift, specifically and by name, and additionally cross-checks the
+    version sentence in CLAUDE.md. A second, vaguer alarm detects nothing the first does not.
+
+    What keeps this an assertion rather than a tautology is that the two sides come from
+    INDEPENDENT places. ``EXPECTED_SPEC_VERSION`` is hand-authored in
+    ``tests/helpers/adcp_pin.py`` (which exists to be shared across suites without a
+    cross-test-module import) and guarded against SDK drift by its own test; the actual value
+    is whatever the boundary stamped, from ``SERVED_ADCP_VERSION`` off
+    ``adcp.get_adcp_spec_version()`` at runtime. So this still fails if production stops
+    truncating to MAJOR.MINOR, stamps the ADVERTISED version instead of the served one, or
+    drops the stamp entirely -- the regressions the named-field assertion exists for. It is
+    the version LITERAL that was carrying no information, not the check.
+
+    The release-precision pattern assertion beside this one is the actually-graded obligation
+    (``envelope_field_pattern``) and is version-independent, so it is untouched.
     """
+    expected = ".".join(EXPECTED_SPEC_VERSION.split(".")[:2])
     echoed = wire_field(ctx, "adcp_version")
-    assert echoed == version, (
-        f"envelope echoed adcp_version={echoed!r}, expected {version!r} — the seller must echo "
-        "the release it actually served (version-negotiation.yaml, envelope_field_present)"
+    assert echoed == expected, (
+        f"envelope echoed adcp_version={echoed!r}, expected {expected!r} — the seller must echo "
+        "the release it actually served, which is the MAJOR.MINOR of the pinned spec version "
+        f"{EXPECTED_SPEC_VERSION!r} (version-negotiation.yaml, envelope_field_present)"
     )
 
 
