@@ -200,18 +200,18 @@ def test_allowlist_has_no_stale_entries() -> None:
         ),
         (
             "  @T-X-storyboard-c @storyboard-v3.1\n  Scenario: x\n"
-            "    # @source repo=adcp ref=v3.1.1 path=protocols/media-buy/scenarios/nope.yaml\n",
+            "    # @source repo=adcp ref=v3.2.1 path=protocols/media-buy/scenarios/nope.yaml\n",
             "does not exist",
         ),
         (
             "  @T-X-storyboard-d @storyboard-v3.1\n  Scenario: x\n"
-            "    # @source repo=adcp ref=v3.1.1 path=protocols/media-buy/index.yaml"
+            "    # @source repo=adcp ref=v3.2.1 path=protocols/media-buy/index.yaml"
             " phases=create_buy,create_media_buy\n",
             "malformed @source footer",
         ),
         (
             "  @T-X-storyboard-e @storyboard-v3.1\n  Scenario: x\n"
-            "    # @source repo=adcp ref=v3.1.1 path=protocols/media-buy/index.yaml"
+            "    # @source repo=adcp ref=v3.2.1 path=protocols/media-buy/index.yaml"
             " phase=create_buy step=not_a_real_step\n",
             "cites step",
         ),

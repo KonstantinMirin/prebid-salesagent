@@ -166,7 +166,7 @@ def test_the_dangling_root_marker_still_matches_a_citation():
     lines that motivated it: the pre-fix BR-UC-010 citation form must match,
     and the two in-scan-root warning forms must not.
     """
-    cited = "    # @source repo=adcp ref=v3.1.1 path=dist/docs/3.1.1/building/implementation/x.mdx (L23)"
+    cited = "    # @source repo=adcp ref=v3.2.1 path=dist/docs/3.1.1/building/implementation/x.mdx (L23)"
     assert _DANGLING_PROSE_ROOT.search(cited), "marker no longer matches a known-bad citation"
 
     for warning in (

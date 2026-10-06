@@ -59,7 +59,7 @@ job downloads), and only falls back to a personal `~/projects/adcp` clone.
 
 ## `status` vs `media_buy_status` on media-buy responses
 
-The SDK **pin** (`adcp==6.6.0`, spec **3.1.1**) fixes the request/response
+The SDK **pin** (`adcp==9.0.0`, spec **3.2.1**) fixes the request/response
 *type shapes* we build against. It does **not** always fix the graded
 *behavior*. One field is worth spelling out: the `media_buy_status` dual-emit
 on create-/update-media-buy responses.
@@ -76,11 +76,11 @@ What the storyboards grade:
 - **Then (3.1.0-beta.3):** the storyboard graded the body `status` as
   `field_value_or_absent` that MUST equal `media_buy_status` — the deprecated
   "both identical" model (#4908). Our wire deliberately diverged from it.
-- **Now (pinned 3.1.1):**
-  `dist/compliance/3.1.1/domains/media-buy/scenarios/pending_creatives_to_start.yaml`
-  grades `media_buy_status` as `field_value` (the DOMAIN status, L146-148) and
+- **Now (pinned 3.2.1):**
+  `dist/compliance/3.2.1/domains/media-buy/scenarios/pending_creatives_to_start.yaml`
+  grades `media_buy_status` as `field_value` (the DOMAIN status, L176-179) and
   separately grades `status` as `field_value` `'completed'` (the PROTOCOL
-  `TaskStatus`, protocol envelope, L150-153). There are ZERO
+  `TaskStatus`, protocol envelope, L180-183). There are ZERO
   `field_value_or_absent` checks in that file — which is the model our wire
   already implements.
 

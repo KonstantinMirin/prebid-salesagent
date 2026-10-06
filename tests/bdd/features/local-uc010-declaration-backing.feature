@@ -15,9 +15,9 @@
 # Reconcile upstream in adcp-req (a "seller rejects an unbacked capability
 # declaration" scenario), then retire this file in favor of the regenerated one.
 #
-# @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/specialisms
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/signal-owned/index.yaml pointer=/required_tools
-# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/protocols/signals/index.yaml pointer=/required_tools
+# @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/specialisms
+# @source repo=adcp ref=v3.2.1 path=dist/compliance/3.1.1/specialisms/signal-owned/index.yaml pointer=/required_tools
+# @source repo=adcp ref=v3.2.1 path=dist/compliance/3.1.1/protocols/signals/index.yaml pointer=/required_tools
 Feature: UC-010 get_adcp_capabilities — capability declarations must be implementation-backed (local)
 
   @T-UC-010-local-backed-specialism @v31 @invariant

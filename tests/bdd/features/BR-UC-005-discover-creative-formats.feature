@@ -95,7 +95,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # OUT OF SCOPE: the v3.1 creative-variant request's `include_pricing` / `account` mechanism
     # (and its "account required when include_pricing=true" constraint) is not part of the
     # media-buy aggregator contract under analysis (see overview scope notes).
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-main-no-pricing @main-flow @post-s5
   Scenario: Formats without vendor pricing carry no pricing_options
@@ -294,7 +294,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # @T-UC-005-inv-049-8-holds, which grades a SUPERSET match
     # (["prominent","footer","overlay"]); this row grades an EXACT match against a partial
     # one.
-    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-8-nofield @UC-005-MAIN-MCP-18 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-8 edge - Format without disclosure positions excluded
@@ -315,7 +315,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # The obligation is core/format.json on supported_disclosure_positions: "When omitted,
     # the format makes no disclosure rendering guarantees -- creative agents SHOULD treat
     # this as incompatible with briefs that require specific disclosure positions."
-    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/format.json
+    # @source repo=adcp ref=v3.2.1 path=static/schemas/source/core/format.json
     # --- INV-9: output_format_ids OR-match (NEW) ---
 
   @T-UC-005-inv-049-8-capabilities @invariant @BR-RULE-049
@@ -327,7 +327,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And only "structured-ad" should be returned
     # BR-RULE-049 INV-8 (v3.1): match against disclosure_capabilities[].position when present
     # --- INV-9: output_format_ids OR-match (NEW) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-9-holds @UC-005-MAIN-MCP-19 @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-9 holds - Output format IDs OR-match filter
@@ -404,7 +404,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the response is compliant with the list_creative_formats spec
     And only "eu-compliant" should be returned
     # BR-RULE-049 INV-11: each requested mode satisfied by >=1 position (AND across modes, existential across positions)
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-11-violated @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-11 violated - Unsatisfiable persistence mode excludes format
@@ -415,7 +415,7 @@ Feature: BR-UC-005 Discover Creative Formats
     Then the response is compliant with the list_creative_formats spec
     And "flex-only" should not be returned
     # BR-RULE-049 INV-11: no position supports "continuous" -> excluded
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-inv-049-11-nofield @invariant @BR-RULE-049
   Scenario: BR-RULE-049 INV-11 edge - Format without disclosure_capabilities excluded
@@ -531,7 +531,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains invalid enum value
     # POST-F3: Suggestion lists valid enum values
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-persistence-empty @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty disclosure persistence array
@@ -545,7 +545,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains minItems violation
     # POST-F3: Suggestion for recovery
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-persistence-dupes @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Duplicate disclosure persistence modes
@@ -560,7 +560,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # POST-F2: Error explains uniqueItems violation
     # POST-F3: Suggestion for recovery
     # --- ext-b: Output Format IDs Validation Errors (NEW) ---
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-ext-b-output-empty @UC-005-EXT-B-13 @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Empty output format IDs array
@@ -655,9 +655,9 @@ Feature: BR-UC-005 Discover Creative Formats
   #                     schema constraints. Recovery: correctable."
   #   VALIDATION_ERROR "Request contains invalid field values or violates business
   #                     rules BEYOND schema validation."
-  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/INVALID_REQUEST
+  # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/INVALID_REQUEST
   # (pinned locally at tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102)
-  # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/media-buy/list-creative-formats-request.json
+  # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/media-buy/list-creative-formats-request.json
   #   pointer=/properties/asset_types/minItems  (minItems=1 also on format_ids,
   #   disclosure_positions, output_format_ids, input_format_ids)
   # This matches the codes the ext-b error scenarios above already assert for the same
@@ -1185,7 +1185,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # v3.1: the asset_types FILTER enum is asset-content-type.json (14 values).
     # vast_tracker / daast_tracker are manifest-payload discriminators in
     # asset-types/index.json (16 keys) — NOT valid filter inputs.
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
     Examples: 14 asset-content-type filter enum values
       | asset_type     |
@@ -1213,7 +1213,7 @@ Feature: BR-UC-005 Discover Creative Formats
     And the response should indicate a validation error
     And the error should indicate "asset_types" must use outer registry discriminators only
     # v3.1: registry forbids sibling entries like vast_url/vast_inline; use vast with inner delivery_type
-    # @source repo=adcp ref=v3.1.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
+    # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/schemas/source/media-buy/list-creative-formats-request.json
 
   @T-UC-005-v31-payload-vs-requirements-separation @main-flow @v3-1 @asset-registry
   Scenario: Format response carries constraints under requirements, not on the asset schema
@@ -1241,7 +1241,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # formats[] means the catalog references a stale or typo'd format that would
     # have failed silently at sync_creatives after the buy was already committed.
     # list_formats_integrity: format_ids advertised on products MUST resolve through list_creative_formats
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=product_discovery step=list_formats_integrity
+    # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=product_discovery step=list_formats_integrity
 
   @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @storyboard-v3.1 @v3-1 @format-id-roundtrip @third-party-agent
   Scenario: Format ID with agent_url pointing at a third-party creative agent is reported as observation, not failure
@@ -1258,7 +1258,7 @@ Feature: BR-UC-005 Discover Creative Formats
     # on_out_of_scope=warn). The seller MUST NOT fabricate a local format entry to
     # cover a third-party reference.
     # list_formats_integrity: third-party format_ids are unverifiable locally and out of scope for graded failure
-    # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=list_formats
+    # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=creative_sync step=list_formats
 
   @T-UC-005-storyboard-baseline-format-id-object-shape @storyboard-v3.1 @v3-1 @format-id-shape @baseline-conformance
   Scenario: Baseline list_creative_formats response carries format_id objects with agent_url and id
@@ -1274,4 +1274,4 @@ Feature: BR-UC-005 Discover Creative Formats
     # discover_formats: format_id object shape is the federation contract
     # The strict "every entry / never a bare string" form is mandated by the schema
     # (core/format-id.json: required [agent_url, id]); the storyboard grades field_present on formats[0].
-    # @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/format-id.json
+    # @source repo=adcp ref=v3.2.1 path=static/schemas/source/core/format-id.json

@@ -373,7 +373,7 @@ def test_guard_catches_a_local_spec_version_regex():
 def test_guard_ignores_prose_mentioning_the_spec_version():
     """Negative meta-test: plain markdown prose (no regex escaping) is fine."""
     benign = """
-DOC = "Prebid Sales Agent targets **AdCP spec version 3.1.1** via the adcp SDK."
+DOC = "Prebid Sales Agent targets **AdCP spec version 3.2.1** via the adcp SDK."
 """
     assert find_spec_version_regex_literals(ast.parse(benign)) == []
 

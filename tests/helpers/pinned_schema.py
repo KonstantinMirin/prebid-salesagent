@@ -121,7 +121,7 @@ from jsonschema.validators import Draft7Validator
 from referencing.jsonschema import DRAFT7
 
 from tests.helpers.adcp_pinned_schema import (
-    _EXCLUDED_TOP_LEVEL_DIR,
+    _EXCLUDED_TOP_LEVEL_DIRS,
     PinnedSchemaError,
     normalize_ref,
     schema_root,
@@ -253,7 +253,7 @@ def _resolve_in_tree(source: _PinnedSource, rel: str, ref: str) -> Path:
             raise PinnedSchemaError(f"Pinned schema not found: {ref} -> {path}")
         return path
 
-    matches = sorted(p for p in root.rglob(rel) if _EXCLUDED_TOP_LEVEL_DIR not in p.relative_to(root).parts)
+    matches = sorted(p for p in root.rglob(rel) if not (_EXCLUDED_TOP_LEVEL_DIRS & set(p.relative_to(root).parts)))
     if not matches:
         raise PinnedSchemaError(f"Pinned schema {ref!r} not found under {root}.")
     if len(matches) > 1:

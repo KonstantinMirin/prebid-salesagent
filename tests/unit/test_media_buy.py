@@ -2987,6 +2987,12 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             # Mock UoW context manager
             mock_uow_inst = MagicMock()
@@ -2994,6 +3000,7 @@ class TestDeliveryImplSingleBuy:
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3039,12 +3046,19 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3101,12 +3115,19 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",
@@ -3165,12 +3186,19 @@ class TestDeliveryImplSingleBuy:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-01-01",
@@ -3204,12 +3232,19 @@ class TestDeliveryImplStatusFilter:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             # No status_filter provided
             req = GetMediaBuyDeliveryRequest(
@@ -3246,12 +3281,19 @@ class TestDeliveryImplStatusFilter:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             # No specific IDs — query all, but status filter yields none
             req = GetMediaBuyDeliveryRequest(
@@ -3287,12 +3329,19 @@ class TestDeliveryImplDateRange:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 start_date="2025-03-01",
@@ -3330,12 +3379,19 @@ class TestDeliveryImplDateRange:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             # No start_date or end_date provided
             req = GetMediaBuyDeliveryRequest()
@@ -3405,12 +3461,19 @@ class TestDeliveryImplErrors:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],
@@ -3441,12 +3504,19 @@ class TestDeliveryImplErrors:
                 f"{_PATCH}._get_pricing_options", side_effect=lambda option_ids, **_: pricing_options_for(option_ids)
             ),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_owned_by_other"],
@@ -3517,12 +3587,19 @@ class TestDeliveryImplPricingLookup:
             patch(f"{_PATCH}._get_target_media_buys", return_value=[("mb_1", buy)]),
             patch(f"{_PATCH}._get_pricing_options", return_value=pricing_options_named(rate="5.00")),
             patch(f"{_PATCH}.MediaBuyUoW") as mock_uow_cls,
+            # ``get_max_sequence_number() -> int``: a mocked UoW hands the repository a
+            # MagicMock session, so an unpatched repo answers a MagicMock where the
+            # response's ``sequence_number: int | None`` takes an int. adcp 6.6.0 coerced
+            # that through ``__int__``; adcp 9's ``Strict(strict=True)`` refuses it, which
+            # the pinned schema's ``integer`` type makes correct.
+            patch(f"{_PATCH}.DeliveryRepository") as mock_delivery_repo_cls,
         ):
             mock_uow_inst = MagicMock()
             mock_uow_inst.__enter__ = MagicMock(return_value=mock_uow_inst)
             mock_uow_inst.__exit__ = MagicMock(return_value=False)
             mock_uow_inst.media_buys = MagicMock()
             mock_uow_cls.return_value = mock_uow_inst
+            mock_delivery_repo_cls.return_value.get_max_sequence_number.return_value = 0
 
             req = GetMediaBuyDeliveryRequest(
                 media_buy_ids=["mb_1"],

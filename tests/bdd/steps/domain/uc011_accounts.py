@@ -161,7 +161,7 @@ def _assert_wire_field_rejection(ctx: dict, field: str, code: str = "INVALID_REQ
     required fields, or violates schema constraints" -- rather than the ACCOUNT
     being unprovisionable, which is what a per-account ``action: "failed"`` result
     reports. VALIDATION_ERROR is for "business rules BEYOND schema validation".
-    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json
       pointer=/INVALID_REQUEST  (pinned: tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102)
     """
     result = ctx.get("result")
@@ -907,7 +907,7 @@ def then_validation_error(ctx: dict) -> None:
     INVALID_REQUEST ("Request is malformed, missing required fields, or violates
     schema constraints"). VALIDATION_ERROR is reserved for "invalid field values
     or violates business rules BEYOND schema validation", which this is not.
-    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/error-code.json
+    @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json
       pointer=/INVALID_REQUEST  (pinned locally at
       tests/fixtures/adcp_schemas_pinned/enums/error-code.json:102 and :149)
 

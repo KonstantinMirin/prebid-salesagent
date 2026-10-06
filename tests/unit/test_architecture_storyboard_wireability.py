@@ -263,7 +263,7 @@ def _min_record(**overrides) -> dict:
         "step_id": "a_step",
         "check_type": "response_schema",
         "ordinal": 0,
-        "citation": "repo=adcp ref=v3.1.1 path=universal/example.yaml",
+        "citation": "repo=adcp ref=v3.2.1 path=universal/example.yaml",
         "tier": "universal",
         "required_tools": [],
         "requires_controller": False,

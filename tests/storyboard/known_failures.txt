@@ -1,5 +1,17 @@
 # Known-failing storyboard-conformance checks.
 #
+# THREE STEPS DROPPED AT THE 3.2.1 PIN (six rows, both protocols): the pinned tree no
+# longer produces ``creative_reception::list_formats``,
+# ``inventory_list_no_match::create_buy_no_match`` or
+# ``measurement_terms_rejected::create_media_buy_relaxed_terms``, so a ledger row for them
+# grades something the pin does not have -- which is what
+# ``test_architecture_storyboard_check_index_liveness`` refuses. Dropped rather than
+# re-pointed, because a known-failure row for a step that cannot run is an exemption with
+# no subject, and dropping it REMOVES an exemption. The rest of this ledger is still seeded
+# from the 3.1.1-era run named above and has NOT been re-measured against 3.2.1: that needs
+# ``tox -e storyboard`` on the stack, and re-seeding from it is outstanding work.
+#
+#
 # RE-SEEDED FROM ONE MEASURED RUN: test-results/innet_180926_2349, an in-network run of this
 # tree, scoring passed=49 failed=16 skipped=235 storyboards_executed=72 on BOTH protocols
 # with zero disparity between them. Every id below is a nodeid that run produced; none was
@@ -113,7 +125,6 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::creative::media_buy_seller/creative_reception::list_formats]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment::assign_creative_to_package]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/dependency_impairment_cardinality::create_buy_two_packages]
@@ -121,15 +132,12 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::medi
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inline_creatives_without_sync::update_buy_with_replacement_legacy_inline_creative]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/invalid_transitions::second_cancel]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_no_match::create_buy_no_match]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/inventory_list_targeting::create_buy_with_lists]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[a2a::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_relaxed_terms]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_lifecycle::sync_accounts_create_paused_notification_config]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::core::read_tool_idempotency::list_creative_formats_with_idempotency_key]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::creative::media_buy_seller/creative_reception::list_formats]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::error_handling::billing_gate_dispatch::sync_accounts_passthrough_rejects_agent]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment::assign_creative_to_package]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/dependency_impairment_cardinality::create_buy_two_packages]
@@ -137,7 +145,5 @@ tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::medi
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::get_products_canonical_format]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inline_creatives_without_sync::update_buy_with_replacement_legacy_inline_creative]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/invalid_transitions::second_cancel]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_no_match::create_buy_no_match]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/inventory_list_targeting::create_buy_with_lists]
 tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_aggressive_terms]
-tests/storyboard/test_storyboard_conformance.py::test_storyboard_check[mcp::media_buy::media_buy_seller/measurement_terms_rejected::create_media_buy_relaxed_terms]

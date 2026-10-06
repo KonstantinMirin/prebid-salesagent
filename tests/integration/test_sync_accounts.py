@@ -64,7 +64,7 @@ class TestSyncAccountsCreate:
         the full billing-party enum — including 'advertiser' — and the DB CHECK
         (ck_accounts_billing) must permit the INSERT; before the #1521 fix a
         spec-valid advertiser entry IntegrityError'd against the 2-value CHECK.
-        @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
+        @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/billing-party.json pointer=/enum
         """
         from src.core.database.repositories.uow import AccountUoW
 

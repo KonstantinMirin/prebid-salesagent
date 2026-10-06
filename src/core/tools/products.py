@@ -80,13 +80,17 @@ def extract_product_property_ids(
 
     property_ids: set[str] = set()
     for selector in publisher_properties:
-        inner = selector.root
-        if inner.selection_type == "all":
+        # No ``.root``: adcp 9 ships PublisherPropertySelector as the union of its three
+        # arms rather than a RootModel over them, so the selector IS the arm.
+        if selector.selection_type == "all":
             # Product covers ALL properties for this domain
             return None
-        elif inner.selection_type == "by_id":
-            for pid in inner.property_ids:
-                property_ids.add(pid.root)
+        elif selector.selection_type == "by_id":
+            for pid in selector.property_ids:
+                # ``PropertyId`` is a ``ScalarStr`` -- a plain ``str`` subclass -- from
+                # adcp 9 on, and it keeps ``.root`` as a compatibility accessor returning
+                # the same string. Read it as the string it is.
+                property_ids.add(str(pid))
         # by_tag: we don't resolve tags to IDs here; tags are excluded from matching
 
     return property_ids

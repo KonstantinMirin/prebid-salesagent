@@ -1408,7 +1408,7 @@ def then_details_supported_versions(ctx: dict) -> None:
     sentence's single meaning
     (``tests/unit/test_architecture_bdd_no_shadowed_steps.py``, GH #1941).
 
-    @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json
+    @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/error-details/version-unsupported.json
         pointer=/required  (supported_versions REQUIRED, minItems 1)
     """
     versions = ctx["result"].wire_error_details("VERSION_UNSUPPORTED").get("supported_versions")

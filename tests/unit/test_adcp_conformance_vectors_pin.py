@@ -109,13 +109,18 @@ def test_every_vendored_file_hashes_to_the_manifest() -> None:
 
 
 def test_vector_counts_are_exactly_the_graded_set() -> None:
-    """12 positive + 28 negative request vectors, 31 canonicalization cases."""
+    """12 positive + 28 negative request vectors, 37 canonicalization cases.
+
+    The canonicalization count moved 31 -> 37 with the 3.2.1 pin; the request-vector
+    counts did not move. Measured from the re-vendored set, not adjusted to make the
+    assertion pass.
+    """
     vectors = load_signing_vectors()
     positives = sorted(v for v in vectors if v.startswith("positive/"))
     negatives = sorted(v for v in vectors if v.startswith("negative/"))
     assert len(positives) == 12, f"expected 12 positive vectors, found {len(positives)}: {positives}"
     assert len(negatives) == 28, f"expected 28 negative vectors, found {len(negatives)}: {negatives}"
-    assert len(load_canonicalization_cases()) == 31
+    assert len(load_canonicalization_cases()) == 37
 
 
 def test_l1_signature_base_set_is_pinned_by_name() -> None:
@@ -130,7 +135,7 @@ def test_l1_signature_base_set_is_pinned_by_name() -> None:
 
 
 def test_canonicalization_internal_version_is_not_the_spec_pin() -> None:
-    """The measured trap: ``canonicalization.json`` self-reports ``"version": "3.0"``.
+    """The measured trap: ``canonicalization.json`` self-reports a version of its own.
 
     Pinned as a fact so a future reader does not "helpfully" wire that field into
     the spec-version assertion above and make the guard pass for the wrong reason.
@@ -138,7 +143,9 @@ def test_canonicalization_internal_version_is_not_the_spec_pin() -> None:
     import json
 
     raw = json.loads((VECTORS_DIR / "canonicalization.json").read_text())
-    assert raw["version"] == "3.0" != adcp.get_adcp_spec_version()
+    # ``"3.2"`` at the 3.2.1 pin, ``"3.0"`` at 3.1.1 -- the field tracks the MAJOR.MINOR
+    # of its own format, never the spec pin, which is the whole point of pinning it here.
+    assert raw["version"] == "3.2" != adcp.get_adcp_spec_version()
 
 
 def test_runner_keys_cover_every_keyid_the_vectors_reference() -> None:
