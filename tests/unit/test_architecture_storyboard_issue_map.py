@@ -116,15 +116,21 @@ def test_wellformedness_check_catches_each_defect(monkeypatch, entry: dict, expe
 
 #: Entries whose storyboard still exists at the pin but is NO LONGER on-path --
 #: the coverage map moved on-path 62 -> 44 and these did not move with it.
-#: Shrink-only. Two of them (`dependency_impairment*`) are the storyboards
-#: round-6 finding 1 argues are on-path after all; if that lands they leave this
-#: list by being classified, not by being deleted.
+#: Shrink-only, and it shrank at the 3.2.1 pin: the two `dependency_impairment*`
+#: rows are gone because those storyboards are on-path again at 3.2.1, which is
+#: the exit this note described -- "they leave this list by being classified,
+#: not by being deleted".
+#:
+#: Six MORE storyboards went off-path at 3.2.1 (create_media_buy_async,
+#: creative_fate_after_cancellation, inventory_list_no_match,
+#: inventory_list_targeting, refine_products, vendor_metric_accountability).
+#: They are NOT here: their issue-map ENTRIES were deleted instead, because an
+#: entry recording a gap in a storyboard the pin no longer grades us on is
+#: recording a gap that does not exist. This list stays shrink-only.
 STALE_TRIAGE_ENTRIES: set[tuple] = {
     ("protocols/media-buy/scenarios/audience_buy_flow.yaml",),
     ("protocols/media-buy/scenarios/clicks_buy_flow.yaml",),
     ("protocols/media-buy/scenarios/completed_views_buy_flow.yaml",),
-    ("protocols/media-buy/scenarios/dependency_impairment.yaml",),
-    ("protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml",),
     ("protocols/media-buy/scenarios/frequency_cap_enforcement.yaml",),
     ("protocols/media-buy/scenarios/performance_buy_flow.yaml",),
     ("protocols/media-buy/scenarios/performance_buy_flow_roas.yaml",),

@@ -165,30 +165,69 @@ def test_every_wired_env_route_is_still_registered() -> None:
 # visible, because a misrouted storyboard leaves it.
 EXPECTED_GATED_STORYBOARDS: frozenset[str] = frozenset(
     {
+        "protocols/media-buy/scenarios/acceptance_policy_discovery.yaml",
+        "protocols/media-buy/scenarios/account_timezone_buyer_selected.yaml",
+        "protocols/media-buy/scenarios/account_timezone_seller_assigned.yaml",
+        "protocols/media-buy/scenarios/account_timezone_seller_fixed.yaml",
+        "protocols/media-buy/scenarios/audience_activation_discovery.yaml",
         "protocols/media-buy/scenarios/audience_buy_flow.yaml",
-        "protocols/media-buy/scenarios/available_actions.yaml",
+        "protocols/media-buy/scenarios/bidding_cost_binding.yaml",
+        "protocols/media-buy/scenarios/bidding_policy_placement.yaml",
+        "protocols/media-buy/scenarios/budget_cap_timezone_account.yaml",
+        "protocols/media-buy/scenarios/budget_cap_timezone_fixed.yaml",
+        "protocols/media-buy/scenarios/budget_cap_timezone_override.yaml",
+        "protocols/media-buy/scenarios/budget_cap_timezone_override_rejected.yaml",
+        "protocols/media-buy/scenarios/catalog_item_availability_updates.yaml",
         "protocols/media-buy/scenarios/clicks_buy_flow.yaml",
+        "protocols/media-buy/scenarios/compact_direct_buy_lifecycle.yaml",
+        "protocols/media-buy/scenarios/compact_product_lifecycle.yaml",
         "protocols/media-buy/scenarios/completed_views_buy_flow.yaml",
-        "protocols/media-buy/scenarios/dependency_impairment.yaml",
-        "protocols/media-buy/scenarios/dependency_impairment_cardinality.yaml",
+        "protocols/media-buy/scenarios/create_media_buy_async.yaml",
+        "protocols/media-buy/scenarios/create_media_buy_async_lifecycle.yaml",
+        "protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml",
+        "protocols/media-buy/scenarios/cross_path_targeting_provenance.yaml",
+        "protocols/media-buy/scenarios/declined_proposal_execution.yaml",
+        "protocols/media-buy/scenarios/declined_proposal_refinement.yaml",
+        "protocols/media-buy/scenarios/demographic_targeting.yaml",
+        "protocols/media-buy/scenarios/dependency_impairment_audience.yaml",
         "protocols/media-buy/scenarios/event_dedup_flow.yaml",
+        "protocols/media-buy/scenarios/expired_proposal_execution.yaml",
+        "protocols/media-buy/scenarios/frequency_cap_capability_updates.yaml",
         "protocols/media-buy/scenarios/frequency_cap_enforcement.yaml",
+        "protocols/media-buy/scenarios/geo_place_targeting.yaml",
+        "protocols/media-buy/scenarios/geo_region_all_values_support.yaml",
+        "protocols/media-buy/scenarios/geo_region_exclusion_support.yaml",
+        "protocols/media-buy/scenarios/geo_region_targeting.yaml",
+        "protocols/media-buy/scenarios/governance_agent_binding_acceptance.yaml",
         "protocols/media-buy/scenarios/inline_creatives_without_sync.yaml",
-        "protocols/media-buy/scenarios/pending_creatives_to_start.yaml",
-        "protocols/media-buy/scenarios/per_creative_conversion_attribution.yaml",
+        "protocols/media-buy/scenarios/inventory_list_no_match.yaml",
+        "protocols/media-buy/scenarios/inventory_list_targeting.yaml",
+        "protocols/media-buy/scenarios/measurement_terms_accepted.yaml",
+        "protocols/media-buy/scenarios/media_buy_frequency_cap_readback.yaml",
+        "protocols/media-buy/scenarios/media_buy_frequency_cap_updates.yaml",
+        "protocols/media-buy/scenarios/package_automatic_bidding.yaml",
         "protocols/media-buy/scenarios/performance_buy_flow.yaml",
         "protocols/media-buy/scenarios/performance_buy_flow_roas.yaml",
         "protocols/media-buy/scenarios/product_signal_targeting.yaml",
         "protocols/media-buy/scenarios/reach_buy_flow.yaml",
         "protocols/media-buy/scenarios/refine_finalize_exclusivity.yaml",
+        "protocols/media-buy/scenarios/refine_products.yaml",
+        "protocols/media-buy/scenarios/seller_optimized_budget.yaml",
+        "protocols/media-buy/scenarios/typed_proposal_negotiation.yaml",
+        "protocols/media-buy/scenarios/vendor_metric_accountability.yaml",
         "protocols/media-buy/scenarios/vendor_metric_catalog_precondition.yaml",
         "protocols/media-buy/scenarios/vendor_metric_optimization_flow.yaml",
         "protocols/media-buy/state-machine.yaml",
+        "universal/account-identity-reconciliation.yaml",
         "universal/get-products-pagination-integrity.yaml",
+        "universal/oauth-setup.yaml",
+        "universal/trusted-match-publisher-authentication.yaml",
         "universal/wholesale-feed-bulk-webhooks.yaml",
         "universal/wholesale-feed-product-webhooks.yaml",
+        "universal/wholesale-feed-products-scope-isolation.yaml",
         "universal/wholesale-feed-products.yaml",
         "universal/wholesale-feed-signal-webhooks.yaml",
+        "universal/wholesale-feed-signals-scope-isolation.yaml",
         "universal/wholesale-feed-signals.yaml",
     }
 )
@@ -209,7 +248,20 @@ EXPECTED_GATED_STORYBOARDS: frozenset[str] = frozenset(
 #: prevent; it is correct here because the drop was MEASURED and its cause named,
 #: which is the same discipline EXPECTED_GATED_STORYBOARDS above states for a
 #: deliberate reclassification.
-MINIMUM_INDEX_CHECKS = 1303
+#:
+#: 1303 -> 3166 AT THE 3.2.1 PIN, RAISED not lowered. The 3.2.1 compliance tree publishes
+#: far more graded material than 3.1.1 did, and leaving the floor at 1303 would have let a
+#: collapse from 3166 to 1400 pass unnoticed -- the exact failure this floor exists to
+#: catch. Measured from the built index, not estimated.
+#:
+#: EXPECTED_GATED_STORYBOARDS moved with it, and the direction of every change was checked
+#: before re-pinning rather than after: FIVE left the GATED set by being PROMOTED to
+#: ON-PATH (available_actions, dependency_impairment, dependency_impairment_cardinality,
+#: pending_creatives_to_start, per_creative_conversion_attribution -- each now reports
+#: ON-PATH in the built index), which is the deliberate-reclassification case the guard
+#: names and NOT the misroute case, because their checks are still published where the
+#: gate-schema oracle can read them. FORTY-FOUR arrived gated with the pin.
+MINIMUM_INDEX_CHECKS = 3166
 
 
 @requires_pinned_bundle

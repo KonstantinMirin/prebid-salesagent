@@ -241,13 +241,6 @@ storyboards:
     note: See universal/wholesale-feed-products.yaml.
 
   # -------------------------------------------------------- protocols/media-buy
-  protocols/media-buy/scenarios/create_media_buy_async.yaml:
-    issues: [1305, 1531]
-    coverage: partial
-    note: >-
-      #1305 is the spec-conformant async/submitted envelope; #1531 finishes the
-      update write path's async lifecycle. create's own async path is covered
-      by #1305 only at the envelope level.
   protocols/media-buy/scenarios/get_products_async.yaml:
     issues: [1305]
     coverage: partial
@@ -337,9 +330,6 @@ storyboards:
     coverage: none
     note: See provenance_audit_observation.yaml.
 
-  protocols/media-buy/scenarios/refine_products.yaml:
-    coverage: none
-    note: Product refinement round-trip is graded and untracked.
 
   # ------------------------------------------------------------- specialisms
   specialisms/sales-non-guaranteed/index.yaml:
@@ -365,9 +355,6 @@ storyboards:
       T-UC-003-storyboard-media-buy-not-found was wired through AdCPTestClient
       in this PR -- the demonstrator. Its two siblings remain in the binding
       allowlist.
-  protocols/media-buy/scenarios/creative_fate_after_cancellation.yaml:
-    coverage: partial
-    note: Both covering UC-003 scenarios are in the binding allowlist.
   protocols/media-buy/scenarios/creative_reception.yaml:
     coverage: partial
     note: >-
@@ -379,12 +366,6 @@ storyboards:
       Covered by one controller-driven scenario. comply_test_controller is a
       required_tool we will not implement, so the graded injection path is
       permanently unreachable -- see the roadmap's DETERMINISTIC INJECTION rows.
-  protocols/media-buy/scenarios/inventory_list_no_match.yaml:
-    coverage: partial
-    note: Covering scenario is in the binding allowlist.
-  protocols/media-buy/scenarios/inventory_list_targeting.yaml:
-    coverage: partial
-    note: One of two covering scenarios is in the binding allowlist.
   protocols/media-buy/scenarios/measurement_accountability.yaml:
     coverage: partial
     note: Covering scenario is in the binding allowlist.
@@ -397,11 +378,6 @@ storyboards:
       Four UC-006 scenarios, two of them in the binding allowlist. This is the
       storyboard whose standalone reachability is UNRESOLVED in the coverage
       map -- see scripts/audit/storyboard_coverage_map.py's module docstring.
-  protocols/media-buy/scenarios/vendor_metric_accountability.yaml:
-    coverage: partial
-    note: >-
-      Covered by two UC-004 scenarios. The sibling vendor_metric storyboards
-      (catalog_precondition, optimization_flow) have no scenario at all.
 
   # ------------------------------------------ on-path only since the 3.2.1 pin
   #

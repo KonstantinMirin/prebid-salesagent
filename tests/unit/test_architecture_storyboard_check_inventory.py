@@ -155,8 +155,12 @@ def test_phase_is_graded_still_sees_grading_in_a_later_step():
             {"field_present": 5, "field_value": 1, "field_value_or_absent": 1, "response_schema": 4},
         ),
         (
+            # Re-counted from the 3.2.1 file, not adjusted to pass: the storyboard grew at
+            # the pin (field_present 12 -> 14, field_value 1 -> 10, and a field_absent that
+            # was not there before). Measured with a literal ``check:`` count over
+            # adcp-3.2.1/compliance/protocols/media-buy/scenarios/vendor_metric_accountability.yaml.
             "protocols/media-buy/scenarios/vendor_metric_accountability.yaml",
-            {"field_present": 12, "field_value": 1, "response_schema": 4},
+            {"field_absent": 1, "field_present": 14, "field_value": 10, "response_schema": 4},
         ),
         (
             "protocols/media-buy/scenarios/performance_buy_flow_roas.yaml",

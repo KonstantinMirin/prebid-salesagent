@@ -48,14 +48,19 @@ from tests.unit._storyboard_guard_env import (  # noqa: E402
 
 CONTROLLER = "comply_test_controller"
 
-# The four ON-PATH storyboards the dict misses. Named rather than derived: this
-# is the ticket's evidence, and a test that re-derived it would pass no matter
-# what production did.
+# The ON-PATH storyboards the dict misses. Named rather than derived: this is the
+# ticket's evidence, and a test that re-derived it would pass no matter what
+# production did.
+#
+# TWO LEFT THE SET AT THE 3.2.1 PIN, and that is a fact about the pin rather than a
+# regression: ``create_media_buy_async`` and ``vendor_metric_accountability`` no longer
+# list ``comply_test_controller`` in their ``required_tools`` at 3.2.1 (both also went
+# off-path, which is why their issue-map entries went with them). They are removed rather
+# than kept-and-excused, because a hardcoded claim that is false at the pin grades
+# nothing; the set stays hardcoded so the property this note protects is unchanged.
 ON_PATH_UNMARKED = {
-    "create_media_buy_async",
     "delivery_reporting",
     "measurement_accountability",
-    "vendor_metric_accountability",
 }
 
 

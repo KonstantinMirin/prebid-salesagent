@@ -112,15 +112,16 @@ def test_checks_for_phase_does_not_match_prose_ending_in_check_colon():
 
     checks = storyboard_spec.checks_for_phase(text, "update_swap_lists")
 
-    # 6 real checks live in this phase's window (2 steps: 3 validations each).
-    # A regex relaxed to match bare `check:` without validation-item context would
-    # report a 7th, phantom entry sourced from the prose line above.
+    # 5 real checks live in this phase's window at the 3.2.1 pin (it was 6 at 3.1.1 --
+    # one `field_value` left the second step). Re-counted from the pinned file, not
+    # adjusted: the property under test is unchanged, because a regex relaxed to match a
+    # bare `check:` without validation-item context would still report one phantom entry
+    # more than this list, sourced from the prose line asserted above.
     assert checks == [
         "response_schema",
         "field_present",
         "field_contains",
         "response_schema",
-        "field_value",
         "field_value",
     ]
 
