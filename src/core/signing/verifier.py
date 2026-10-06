@@ -495,10 +495,12 @@ def _jwks_is_well_known(resolution: AgentResolution) -> bool:
 
     So nothing here reads ``identity.key_origins``. With one possible location there is
     no origin to pin: the map's whole purpose is to declare where keys live when that can
-    vary. The subset this seller implements -- this narrowing, the enforcement narrowing
-    beside it, and the one that was MEASURED AND NOT TAKEN (``covers_content_digest`` stays
-    ``either``) -- is stated with its measurements in
-    ``docs/design/request-signing-subset.md``.
+    vary. The subset this seller implements -- this narrowing and the enforcement narrowing
+    beside it -- is stated with its measurements in
+    ``docs/design/request-signing-subset.md``. ``covers_content_digest`` used to be listed
+    here as a third narrowing, measured and not taken; it is no longer one of them, because
+    the 3.2 pin leaves a verifier that advertises signing exactly one value and the posture
+    derives it (``src/core/signing/posture.py``).
     """
     origin = origin_of(resolution.agent_url)
     return bool(origin) and resolution.jwks_uri == f"{origin}{WELL_KNOWN_JWKS_PATH}"

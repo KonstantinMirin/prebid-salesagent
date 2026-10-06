@@ -49,14 +49,16 @@ from adcp.types.domains.protocol.get_adcp_capabilities_response import (
 # match THIS module's subclass keeps the guard checking the right pair. Do not
 # "simplify" it back to `LibraryMeasurement`.
 from adcp.types.domains.protocol.get_adcp_capabilities_response import (
-    Measurement as LibraryMeasurementDeclaration,
+    CoversContentDigest,
+    SupportedProtocol,
 )
 from adcp.types.domains.protocol.get_adcp_capabilities_response import (
-    SupportedProtocol,
+    Measurement as LibraryMeasurementDeclaration,
 )
 from adcp.types.domains.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from src.core.enum_helpers import enum_value
 from src.core.errors.details import ConfigurationDetails
 from src.core.signing.posture import (
     IdentityDeclaration,
@@ -602,6 +604,8 @@ class CapabilityDeclarations(BaseModel):
     #   (a) undeclarable fields      -- _reject_undeclarable_posture_fields, on the RAW
     #                                   declaration, before pydantic types anything
     #   (b) required_for  subset of supported_for
+    #   (c) covers_content_digest    -- 'required' is the only 3.2 signing posture, see
+    #                                   _validate_digest_coverage
     #   (d) must_equal_when          -- needs platform state, see
     #                                   validate_signing_platform_backing
     #   (e) required_when            -- identity.brand_json_url obliged
@@ -652,8 +656,53 @@ class CapabilityDeclarations(BaseModel):
         """Rules (b), (c), (e), (f-pattern) and (g) — everything with no DB read."""
         posture = self.request_signing
         if posture is not None:
+            self._validate_digest_coverage(posture)
             self._validate_bucket_monotonicity(posture)
         self._validate_identity_relations(posture)
+
+    def _validate_digest_coverage(self, posture: RequestSigningPosture) -> None:
+        """``required`` is the ONLY ``covers_content_digest`` a 3.2 verifier may advertise.
+
+        ``get-adcp-capabilities-response.json`` carries this as an if/then rather than in the
+        property's own ``enum``: IF ``request_signing.supported === true`` and the document
+        speaks 3.2 or later, THEN ``covers_content_digest`` is required with
+        ``{"const": "required"}``. security.mdx: "AdCP 3.2 verifiers that advertise
+        request-signing support MUST advertise ``covers_content_digest: "required"``", and
+        ``either`` / ``forbidden`` are 3.0/3.1 compatibility values that "MUST NOT be
+        advertised as a 3.2 signing posture". This seller serves 3.2, so the condition fires
+        on every response it emits.
+
+        An ABSENT value never reaches here: ``RequestSigningPosture`` derives ``required``
+        from ``supported``, which is what makes a declaration of the field optional rather
+        than obligatory for the operator. So the only values this rejects are the two the pin
+        names, and the refusal is the one the operator needs -- the alternative is emitting a
+        document the buyer's own schema check refuses, naming nothing.
+
+        Why a refusal rather than a quiet rewrite to ``required``: this posture is also what
+        the verifier enforces. Accepting ``either`` and enforcing ``required`` would tighten
+        what the operator asked for without telling them, which is the advertise/enforce
+        divergence ``posture.py`` exists to remove. A deployment that genuinely cannot
+        require body binding declares ``supported: false`` -- security.mdx's own answer:
+        "Infrastructure that rewrites bodies MUST use a separately configured legacy
+        endpoint/origin or disable request signing under 3.2."
+        """
+        if not posture.supported:
+            return
+        declared = enum_value(posture.covers_content_digest)
+        if declared == CoversContentDigest.required.value:
+            return
+        self._reject(
+            "request_signing.covers_content_digest",
+            "A verifier that advertises request signing under AdCP 3.2 must advertise "
+            "covers_content_digest 'required': every accepted signature on a request with a "
+            "body covers content-digest. 'either' and 'forbidden' are 3.0/3.1 compatibility "
+            "postures that must not be advertised as a 3.2 signing posture; a deployment that "
+            "cannot require body binding declares request_signing.supported false instead "
+            "(get-adcp-capabilities-response.json, the allOf if/then on "
+            "request_signing.supported; security.mdx, Signed Requests (Transport Layer)).",
+            rejected_value=declared,
+            accepted_values=[CoversContentDigest.required.value],
+        )
 
     def _validate_bucket_monotonicity(self, posture: RequestSigningPosture) -> None:
         """``required_for`` may only name what a DECLARED ``supported_for`` does.

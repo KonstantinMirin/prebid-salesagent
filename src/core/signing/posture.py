@@ -2,15 +2,17 @@
 
 #1291 B1, re-homed onto #1721's request boundary.
 
-``request_signing`` is a *behavioral* declaration: ``covers_content_digest`` and the
-operation buckets are tenant-declared but they change what the VERIFIER does. So the
-block the agent advertises on ``get_adcp_capabilities`` and the capability the verifier
-enforces must come from one object; two sources is a correctness bug that advertises a
-posture we do not enforce (or vice versa).
+``request_signing`` is a *behavioral* declaration: the operation buckets are tenant-declared
+and ``covers_content_digest`` is derived from ``supported``, but all of them change what the
+VERIFIER does. So the block the agent advertises on ``get_adcp_capabilities`` and the
+capability the verifier enforces must come from one object; two sources is a correctness bug
+that advertises a posture we do not enforce (or vice versa).
 
 :class:`RequestSigningPosture` is that object. It extends the AdCP library type — no
-re-declaration (CLAUDE.md Pattern #1) — and adds the two derivations the verifier needs:
+re-declaration (CLAUDE.md Pattern #1) — and adds the three derivations the verifier needs:
 
+* :meth:`RequestSigningPosture._digest_coverage_is_required_wherever_we_verify` — the one
+  ``covers_content_digest`` a 3.2 verifier may advertise, from ``supported``;
 * :meth:`RequestSigningPosture.bucket_for` — the schema's ``required_for >
   supported_for`` precedence, over the TWO buckets a tenant can declare
   (``docs/design/request-signing-subset.md``);
@@ -43,8 +45,8 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
 from adcp.signing.webhook_signer import WEBHOOK_TAG
+from adcp.types.domains.protocol.get_adcp_capabilities_response import CoversContentDigest, KeyOrigins
 from adcp.types.domains.protocol.get_adcp_capabilities_response import Identity as LibraryIdentity
-from adcp.types.domains.protocol.get_adcp_capabilities_response import KeyOrigins
 from adcp.types.domains.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
 from adcp.types.domains.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
 from pydantic import AnyUrl, ConfigDict, model_validator
@@ -113,6 +115,44 @@ class RequestSigningPosture(LibraryRequestSigning):
 
     model_config = ConfigDict(frozen=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _digest_coverage_is_required_wherever_we_verify(cls, data: Any) -> Any:
+        """Fill ``covers_content_digest`` with the one value a 3.2 verifier may advertise.
+
+        Under the 3.2 pin this field is not a choice. ``get-adcp-capabilities-response.json``
+        makes it conditionally REQUIRED and fixes its value in one if/then: IF
+        ``request_signing.supported === true`` and the document speaks 3.2 or later, THEN
+        ``request_signing`` requires ``covers_content_digest`` with ``{"const": "required"}``.
+        security.mdx says it in words -- "AdCP 3.2 verifiers that advertise request-signing
+        support MUST advertise ``covers_content_digest: "required"``" -- and the field's own
+        description says what the other two values are now for: ``either`` and ``forbidden``
+        are 3.0/3.1 compatibility postures that "MUST NOT be advertised as a 3.2 signing
+        posture". The top-level ``required`` list still names ``supported`` alone, so the
+        obligation is invisible to anything that reads only the property list.
+
+        So the value is DERIVED from ``supported``, and derived HERE, on the one object both
+        the wire and the verifier read -- ``to_verifier_capability`` then hands the SDK the
+        same ``required`` it advertises, and the two cannot disagree. Done as a validator for
+        the reason :meth:`WebhookSigningPosture._profile_defaults_to_the_emitted_tag` is: the
+        pinned annotation and description stay the field's single definition, where a
+        redeclaration introducing a default would be the drift Pattern #1 exists to prevent
+        (and would owe the schema-inheritance guard a row).
+
+        Only an ABSENT value is filled. A tenant that wrote one of the legacy values has made
+        a configuration error, and ``CapabilityDeclarations._validate_digest_coverage``
+        refuses it by name: normalizing it here would silently STRENGTHEN what the verifier
+        enforces past what the operator asked for, which is the advertise/enforce divergence
+        this module exists to remove, pointed the other way.
+
+        ``supported: false`` fills nothing. The schema's condition does not fire, every
+        operation is in the ``none`` bucket, and there is no signature whose body binding a
+        policy could describe.
+        """
+        if isinstance(data, dict) and data.get("covers_content_digest") is None and data.get("supported"):
+            return {**data, "covers_content_digest": CoversContentDigest.required}
+        return data
+
     def bucket_for(self, operation: str) -> PostureBucket:
         """Which enforcement bucket the AdCP *operation* this request invoked falls in.
 
@@ -132,6 +172,11 @@ class RequestSigningPosture(LibraryRequestSigning):
         Nothing is lost in the projection now: the SDK reads ``required_for`` (for its
         absent-header pre-check), ``supported_for`` and ``covers_content_digest``, and this
         seller declares no bucket the SDK would drop.
+
+        The ``or "either"`` fallback is reachable only for ``supported: false``, where
+        :meth:`_digest_coverage_is_required_wherever_we_verify` fills nothing and the SDK
+        verifies nothing either. Wherever we DO verify, the policy handed to the SDK is the
+        ``required`` the wire advertises -- same object, one value.
         """
         return VerifierCapability(
             supported=self.supported,

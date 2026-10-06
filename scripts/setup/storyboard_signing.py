@@ -114,27 +114,26 @@ COUNTERPARTY_PRINCIPAL_TOKEN = "storyboard-conformance-runner-token-not-presente
 #: promise to buyers that nothing here checks.
 REQUIRED_FOR = ("create_media_buy",)
 
-#: ``covers_content_digest``. The corpus asks for all three values and an agent has ONE:
-#: ``negative/007`` needs ``required`` (a signature omitting content-digest must be
-#: refused), ``negative/018`` needs ``forbidden`` (one covering it must be refused), and
-#: every other vector is written against ``either``.
+#: ``covers_content_digest``. NOT a choice at the 3.2 pin, and not this script's to make:
+#: the response schema requires ``required`` with a ``const`` wherever
+#: ``request_signing.supported`` is true and the document speaks 3.2 or later, so
+#: ``RequestSigningPosture`` derives it and ``CapabilityDeclarations`` refuses the other two.
+#: Declared here anyway, literally, because this is the storyboard's own capability document
+#: and the corpus reads the value off it — ``profile-3.2/negative/007`` carries
+#: ``verifier_capability.covers_content_digest: "required"`` and expects
+#: ``request_signature_components_incomplete``.
 #:
-#: ``either`` is the value that grades the most and mis-grades nothing, and the arithmetic
-#: was re-measured against the runner's own gate (``request-signing/grader.mjs``
-#: ``contentDigestDeclarationMismatch`` + ``contentDigestStructuralMismatch`` at
-#: @adcp/sdk 14.0.0-rc.42) rather than inferred from what each vector declares:
-#:
-#: * under ``either`` the runner skips 007 and 018 (their expected codes are the two
-#:   content-digest POLICY refusals) and grades 010, 023 and ``positive/002``;
-#: * ``required`` would NOT add 007 back — the structural rule skips a vector whose
-#:   Signature-Input omits content-digest, which is 007's whole shape — while removing
-#:   ELEVEN of the twelve positives, every one that signs without a digest;
-#: * ``forbidden`` would drop ``positive/002``, which covers one.
-#:
-#: So ``either`` is not a compromise between the vectors; it is the only value under which
-#: the happy path is graded at all. A property of the corpus, not a gap in this agent —
-#: reported with the fixture PR.
-COVERS_CONTENT_DIGEST = "either"
+#: What this costs TODAY, stated because it is a real loss and not a rounding error: the
+#: root corpus signs 36 of its 40 vectors WITHOUT content-digest, so a ``required`` verifier
+#: cannot grade them — the runner's structural gate skips them (it does not fail them).
+#: ``profile-3.2/`` exists to restore exactly that coverage and all 11 of its positives
+#: cover content-digest, but ``compliance/universal/signed-requests.yaml`` says of itself:
+#: "This storyboard's current black-box runner contract is 3.1-compatible. It does not claim
+#: 3.2 certification ... while runner-side profile selection is added." So until the runner
+#: selects the 3.2 profile, the signed-requests card grades fewer vectors than it did under
+#: the 3.1.1 pin. The measurement that argued for ``either`` is kept in
+#: ``docs/design/request-signing-subset.md`` §3 with what the 3.2 pin does to its premise.
+COVERS_CONTENT_DIGEST = "required"
 
 #: Test-kit ``stateful_vector_contract.revocation.pre_revoked_keyid``.
 REVOKED_KEYID = "test-revoked-2026"

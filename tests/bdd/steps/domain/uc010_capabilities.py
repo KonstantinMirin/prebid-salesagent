@@ -2039,23 +2039,37 @@ def then_brand_field_equals(ctx: dict, field: str, expected: str) -> None:
 
 
 @then(parsers.parse("the seller capabilities builder should treat the configuration as {verdict}"))
-def then_identity_signing_verdict(ctx: dict, verdict: str) -> None:
-    """identity.brand_json_url required_when invariant: a seller declaring a signing
-    posture with an absent/empty identity MUST be rejected (it cannot produce a
-    conformant response), surfaced as a CONFIGURATION_ERROR (seller-side deployment
-    fault, recovery terminal) naming brand_json_url. A no-posture config emits a
-    valid success response (adcp + supported_protocols, no adcp_error).
+def then_signing_declaration_verdict(ctx: dict, verdict: str) -> None:
+    """A declaration this seller cannot emit conformantly MUST be rejected, not emitted.
 
-    "naming brand_json_url" is part of the scenario's own recorded observable, so it is
-    pinned rather than assumed. It is graded on ``errors[0].field`` because CODE_TABLE now
-    owns the sentence: ``_validate_identity_relations`` rejects with
-    ``field="capability_declarations.identity.brand_json_url"``. Once ``identity`` leaves
-    ``_UNBACKED_BLOCKS`` this row's Given declares a block production accepts, so an
-    un-pinned CONFIGURATION_ERROR would also be satisfied by the block-level refusal that
-    used to fire first — the wrong rejection wearing the right code."""
+    Two outlines share this Then, because they grade the same observable over two different
+    rules of the signing family. identity-required-when-signing: a posture declared with an
+    absent or empty ``identity`` cannot produce a conformant response
+    (``brand_json_url``'s ``required_when``). request-signing-legacy-digest: a
+    ``covers_content_digest`` of ``either`` or ``forbidden`` alongside ``supported: true``
+    is a 3.0/3.1 posture the 3.2 ``allOf`` if/then forbids emitting. Either way the refusal
+    is a CONFIGURATION_ERROR (seller-side deployment fault, recovery terminal), and a
+    no-posture config emits a valid success response (adcp + supported_protocols, no
+    adcp_error).
+
+    The FIELD the refusal names is read out of the verdict column rather than hardcoded, so
+    each row pins its own rule's field instead of the step pinning one outline's. It is part
+    of the scenario's recorded observable and graded on ``errors[0].field``, because
+    CODE_TABLE owns the sentence and every CONFIGURATION_ERROR therefore reaches the buyer
+    with the same text, while ``CapabilityDeclarations._reject`` raises
+    ``field="capability_declarations.<the rule's field>"``. Without the pin, an un-pinned
+    CONFIGURATION_ERROR is also satisfied by a refusal that fired for a DIFFERENT reason —
+    the block-level unbacked refusal, or the sibling signing rule — which is the wrong
+    rejection wearing the right code. The dotted shape is required of the column for that
+    reason: a row that named no field would silently grade nothing but the code."""
     verdict = verdict.strip()
     if verdict.startswith("rejected"):
-        _assert_capabilities_config_error(ctx, block="brand_json_url")
+        field = verdict.rsplit(maxsplit=1)[-1]
+        assert "." in field, (
+            f"the verdict column must END with the dotted field the refusal names, so the row "
+            f"pins its own rule rather than any CONFIGURATION_ERROR: {verdict!r}"
+        )
+        _assert_capabilities_config_error(ctx, block=field)
         return
     assert verdict == "a valid capabilities response", f"unrecognized verdict column: {verdict!r}"
     _assert_capabilities_success(ctx)

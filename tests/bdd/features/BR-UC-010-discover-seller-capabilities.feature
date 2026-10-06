@@ -1179,19 +1179,56 @@ Feature: BR-UC-010 Discover Seller Capabilities
     Then the response is compliant with the get_adcp_capabilities spec
     And request_signing.supported should equal <supported>
     And request_signing.covers_content_digest should be <expected_digest>
-    # request_signing.required = [supported]; covers_content_digest enum [required,
-    # forbidden, either], default "either", optional — a supported=false seller typically
-    # omits it (the default is buyer interpretation, not a seller emission obligation), so
-    # the row-4 assert is presence-conditional; rows 1-3 exact-echo the declared value.
+    # request_signing.required = [supported]. covers_content_digest is NOT a free choice
+    # under 3.2: the response schema carries an allOf if/then — if supported === true and
+    # the document speaks 3.2 or later, covers_content_digest is required with
+    # {"const": "required"} — so a supported=true seller has exactly ONE legal value,
+    # whether it declares the field (row 2) or leaves it to be derived (row 1). The
+    # supported=false row keeps a presence-conditional assert: the condition does not fire,
+    # a seller that verifies nothing has no digest policy to state, and the schema default
+    # is buyer interpretation rather than a seller emission obligation. The two legacy
+    # values are graded next door, as the refusal they now are.
     # POST-S23: Buyer knows the request_signing posture
     # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing
+    # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/allOf
 
     Examples:
       | partition_boundary                                                            | posture                                        | supported | expected_digest                                          |
-      | signing_supported_either supported=true covers_content_digest=either          | supported=true covers_content_digest=either    | true      | equal to "either"                                        |
+      | signing_supported_digest_derived supported=true, no digest policy declared    | supported=true                                 | true      | equal to "required"                                      |
       | signing_required_covers_digest supported=true covers_content_digest=required  | supported=true covers_content_digest=required  | true      | equal to "required"                                      |
-      | signing_forbidden_digest supported=true covers_content_digest=forbidden       | supported=true covers_content_digest=forbidden | true      | equal to "forbidden"                                     |
       | signing_unsupported supported=false (no required_for)                         | supported=false                                | false     | absent or one of "required", "forbidden", "either"       |
+
+  @T-UC-010-v31-request-signing-legacy-digest @v31 @invariant @boundary @post-s23
+  Scenario Outline: request-signing-legacy-digest — a 3.0/3.1 digest posture is refused under 3.2
+    Given a tenant is resolvable from the request context
+    And the tenant declares request_signing posture <posture>
+    When the Buyer Agent calls get_adcp_capabilities
+    Then the response is compliant with the get_adcp_capabilities spec
+    And the seller capabilities builder should treat the configuration as <verdict>
+    # The two values moved off the posture outline above, because under 3.2 they are not
+    # emissions this seller may make. covers_content_digest's own description: "'either' and
+    # 'forbidden' are deprecated legacy 3.0/3.1 postures retained only for version
+    # negotiation with pre-3.2 peers; they MUST NOT be advertised as a 3.2 signing posture
+    # and are removed in 4.0", and the allOf if/then pins the emitted value to the const
+    # "required" whenever supported is true. security.mdx says the same in words and gives
+    # the remedy a deployment that cannot bind bodies has: "Infrastructure that rewrites
+    # bodies MUST use a separately configured legacy endpoint/origin or disable request
+    # signing under 3.2" — that is supported=false, not a legacy digest policy.
+    # Observable pinned on the same terms as identity-required-when-signing: "rejected" =
+    # the builder does NOT return a success response — it surfaces CONFIGURATION_ERROR (a
+    # seller-side config fault the buyer cannot fix) with recovery "terminal", naming
+    # request_signing.covers_content_digest. The field name is part of the observable
+    # because an un-pinned CONFIGURATION_ERROR would also be satisfied by a refusal that
+    # fired for a different reason.
+    # POST-S23: Buyer knows the request_signing posture
+    # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/properties/request_signing/properties/covers_content_digest
+    # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/protocol/get-adcp-capabilities-response.json pointer=/allOf
+    # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/enums/error-code.json pointer=/enumMetadata/CONFIGURATION_ERROR
+
+    Examples:
+      | partition_boundary                                                      | posture                                        | verdict                                                 |
+      | signing_either_refused supported=true covers_content_digest=either      | supported=true covers_content_digest=either    | rejected naming request_signing.covers_content_digest   |
+      | signing_forbidden_refused supported=true covers_content_digest=forbidden | supported=true covers_content_digest=forbidden | rejected naming request_signing.covers_content_digest   |
 
   @T-UC-010-v31-request-signing-subset @v31 @invariant @boundary
   Scenario: request-signing-subset — required_for must be a subset of supported_for
