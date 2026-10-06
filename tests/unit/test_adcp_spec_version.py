@@ -70,6 +70,36 @@ def test_the_vendored_schema_tree_matches_the_pin() -> None:
     )
 
 
+def test_the_vendored_vector_readers_resolve_at_the_pin() -> None:
+    """A READER of a vendored tree must resolve, not merely the tree itself.
+
+    The two guards above grade the TREES: the SDK against the pin, and the vendored
+    schema directory against the pin. Both passed through the 3.2.1 re-vendor, because
+    both trees moved correctly. What nothing graded was the other side of the same fact —
+    a module that spells its own version segment while READING one of those trees.
+
+    ``scripts/setup/storyboard_signing.py`` did, and the cost was paid in full: the
+    re-vendor renamed the tree to ``3.2.1`` and left that path on ``3.1.1``, so
+    ``counterparty_jwks()`` raised ``FileNotFoundError`` in setup and every full run died
+    before a single suite reported. A tree-side guard cannot see that, and the failure
+    surfaces as thirteen minutes of a dead run rather than as a red assertion.
+
+    So this grades the readers. Each resolves its version segment from
+    ``EXPECTED_SPEC_VERSION``, which is what makes them correct by construction; this
+    asserts the construction actually lands on a file that is there.
+    """
+    from scripts.setup.storyboard_signing import _KEYS_JSON
+    from tests.helpers.signing_vectors import VECTORS_DIR
+
+    for label, path in (("storyboard_signing._KEYS_JSON", _KEYS_JSON), ("signing_vectors.VECTORS_DIR", VECTORS_DIR)):
+        assert path.exists(), (
+            f"{label} resolves to {path}, which does not exist. The codebase is pinned to "
+            f"{EXPECTED_SPEC_VERSION}; a reader that spells a version of its own breaks the "
+            f"moment the pin moves, and it breaks in SETUP, where no suite report is written "
+            f"to name the cause. Derive the segment from EXPECTED_SPEC_VERSION."
+        )
+
+
 def test_the_published_jwk_model_preserves_members_it_does_not_declare() -> None:
     """``AgentSigningKey`` must round-trip ``key_ops`` and ``adcp_use``.
 

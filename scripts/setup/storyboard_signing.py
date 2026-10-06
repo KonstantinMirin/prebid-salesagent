@@ -68,6 +68,7 @@ from scripts.setup.seed_storyboard_tenant import STORYBOARD_TOKEN  # noqa: E402
 from scripts.setup.seed_storyboard_tenant import (  # noqa: E402
     STORYBOARD_VIRTUAL_HOST as _SEEDED_STORYBOARD_VIRTUAL_HOST,
 )
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION  # noqa: E402
 
 #: The Host the conformance runner dials, and therefore the ``virtual_host`` the storyboard
 #: tenant must answer to. Re-exported from ``seed_storyboard_tenant``, which WRITES it.
@@ -165,8 +166,20 @@ GRADING_REPLAY_TTL_SECONDS = 70
 #: bundle: this module is read by ``scripts/test-stack.sh`` at compose time, before
 #: anything has materialized a bundle, and the vendored tree is committed and sha256-pinned
 #: by ``MANIFEST.json`` — so it is both always present and not a second copy of the keys.
+#:
+#: The version segment is READ FROM THE PIN, never spelled here. ``adcp_pin`` carries that
+#: rule for exactly this reason: a site that spells its own version drifts the moment the
+#: pin moves, and this one did. The 3.2.1 re-vendor renamed the tree and left this path on
+#: ``3.1.1``, so every full run died in setup on a FileNotFoundError before a single suite
+#: reported — the vendored tree is "always present" only at the version the pin names.
 _KEYS_JSON = (
-    _PROJECT_ROOT / "tests" / "fixtures" / "adcp_conformance_vectors" / "3.1.1" / "request-signing" / "keys.json"
+    _PROJECT_ROOT
+    / "tests"
+    / "fixtures"
+    / "adcp_conformance_vectors"
+    / EXPECTED_SPEC_VERSION
+    / "request-signing"
+    / "keys.json"
 )
 
 #: Members of a published JWK that are not part of the public key.
