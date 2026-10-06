@@ -228,7 +228,13 @@ def _action_str(action: Any) -> str:
 
 
 def _brand_id_str(bid: Any) -> str | None:
-    """Extract string value from BrandId (RootModel[str]) or return as-is."""
+    """Extract the string value of a brand id, whatever shape it arrives in.
+
+    ``BrandId`` is a ``ScalarStr`` -- a plain ``str`` subclass -- from adcp 9 on,
+    so the ``isinstance(bid, str)`` branch is what answers today. It was a
+    ``RootModel[str]`` before; the ``.root`` read below stays only for a caller
+    still handing one over, and must not be copied into new code.
+    """
     if bid is None:
         return None
     if isinstance(bid, str):
