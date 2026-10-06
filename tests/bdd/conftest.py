@@ -2929,13 +2929,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # bool and an absent field still parse. The boundary turns that refusal
             # into an INVALID_REQUEST envelope (_boundary.py validated_request ->
             # HTTP 400), so the row grades production, not a reconstruction.
-            # Not vacuous, and that was measured rather than argued. The row's "invalid"
-            # resolves to _assert_wire_rejection (uc004_delivery.py), which accepts ONE
-            # outcome besides a wire envelope: a request that died building in the step.
-            # Poisoning that no-envelope branch with a raise left all three transports'
-            # bodies passing, so none of them takes it; moving the same raise to the top
-            # of the helper reddened all three, so the helper is on their path and the
-            # probe was live. The pass therefore comes from the real captured envelope.
+            # Not vacuous, and that was measured rather than argued — but it took TWO
+            # findings, and the first was not enough:
+            #  1. The row reached a real wire envelope. Its outcome cell was a bare
+            #     `invalid`, which resolves to _assert_wire_rejection (uc004_delivery.py);
+            #     that helper accepts ONE outcome besides an envelope, a request that died
+            #     building in the step. Poisoning the no-envelope branch with a raise left
+            #     all three transports passing, so none takes it; moving the same raise to
+            #     the top of the helper reddened all three, proving the probe live.
+            #  2. But reaching an envelope is not grading the obligation. The bare
+            #     `invalid` branch only asserts the code is NOT one of nine server-fault /
+            #     auth codes and that recovery is correctable|terminal. It never asserts
+            #     WHICH code, so production answering BUDGET_TOO_LOW would have passed.
+            #     The cell is therefore STRENGTHENED to `error "INVALID_REQUEST" with
+            #     suggestion` (BR-UC-004 Examples), which routes to _assert_error_outcome
+            #     -> assert_wire_error(code, require_suggestion=True). Grounded in the pin:
+            #     get-media-buy-delivery-request.json types the field {"type":"boolean"}
+            #     and enums/error-code.json gives INVALID_REQUEST recovery "correctable"
+            #     with a suggestion. Measured after strengthening: the three rows pass, and
+            #     substituting BUDGET_TOO_LOW into the cell reddens all three (the failure
+            #     names the real INVALID_REQUEST) — so the row now grades which code.
             # Per-row evidence for the sibling partition entry below.
             # account: only the omitted/(field absent) rows
             # pass on every transport. The other rows fail transport-asym-

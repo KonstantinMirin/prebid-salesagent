@@ -43,6 +43,14 @@
 # (owner-mismatch principal, out-of-enum sampling, string "true" daily-breakdown,
 # geo metro without system).
 # Production does not validate them — a real spec-production gap, tracked for src/ fix.
+# STALE RISK on the daily-breakdown line: its in-process siblings GRADUATED at the
+# adcp 9.0.0 pin (the SDK types include_package_daily_breakdown strict bool, so the
+# boundary refuses "true" with INVALID_REQUEST on a2a/mcp/rest). The live server runs
+# the same request model, so this line is probably stale too — but no in-network run
+# was made to show it, so it stays. Ledger entries are non-strict, so a stale line
+# cannot green over a failure. The nodeid was re-pointed when the outcome cell was
+# strengthened from a bare `invalid` to the named code; without that it would silently
+# stop collecting.
 # (campaign-unit interval!=1 GRADUATED at the main merge: upstream regenerated the
 # scenario's expected cell `invalid` -> `error "VALIDATION_ERROR" with suggestion`,
 # the old `-invalid]` nodeid no longer collects, and the renamed scenario passes
@@ -53,7 +61,7 @@
 # partition twins (start_after_end / start_equals_end) on origin/pr-1417 itself
 # (d4af23095, strict-xfail XPASS in-network) — that is the positive evidence the
 # twins were waiting for, so all four date-range rows are off the ledger.
-tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-invalid]
+tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-"true"-error "INVALID_REQUEST" with suggestion]
 tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]
 
 # --- uc004 delivery account valid rows — GRADUATED (#1417 merge) ---

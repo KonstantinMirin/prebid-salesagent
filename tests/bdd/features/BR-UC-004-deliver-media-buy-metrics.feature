@@ -944,7 +944,7 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
       | omitted (absent from request) | (field absent) | valid |
       | false (explicit) | false | valid |
       | true (explicit) | true | valid |
-      | string 'true' (non-boolean type) | "true" | invalid |
+      | string 'true' (non-boolean type) | "true" | error "INVALID_REQUEST" with suggestion |
 
   @T-UC-004-partition-account @partition @delivery_account
   Scenario Outline: Delivery account partition - <partition>
