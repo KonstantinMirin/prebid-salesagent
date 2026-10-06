@@ -2456,8 +2456,15 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
         # Branch 0 -- "Explicit packages with fixed allocation".
         # packages; no proposal_id; every package carries budget and NOT min_spend_target;
         # budget_allocation, if sent, is mode=fixed.
-        packages_ok = bool(self.packages) and all(
-            "budget" in pkg.model_fields_set and "min_spend_target" not in pkg.model_fields_set for pkg in self.packages
+        #
+        # ``or []`` rather than narrowing ``self.packages``: the field is optional, and a
+        # ``bool(...) and all(... for pkg in self.packages)`` does not carry the narrowing
+        # into the generator's own scope, so mypy reads the iteration as possibly-None
+        # under --check-untyped-defs. An empty list is false for packages_ok exactly as
+        # None is, so the branch condition is unchanged.
+        packages = self.packages or []
+        packages_ok = bool(packages) and all(
+            "budget" in pkg.model_fields_set and "min_spend_target" not in pkg.model_fields_set for pkg in packages
         )
         if "packages" in sent and "proposal_id" not in sent and packages_ok and allocation_mode in (None, "fixed"):
             return self
