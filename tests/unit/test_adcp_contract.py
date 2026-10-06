@@ -785,9 +785,22 @@ class TestAdCPContract:
         assert format_obj.name == "Native Feed Ad"
 
     def test_format_canonical_parameters_round_trip(self):
-        """canonical_parameters keeps format_kind and params (3.1.1 product-format-declaration.json
-        requires both). The SDK's generated declaration has neither field and ignores extras, so a
-        creative agent's catalog came back as {"canonical_formats_only": false, "experimental": false}."""
+        """canonical_parameters keeps format_kind and the params the buyer sent.
+
+        product-format-declaration.json requires both. At adcp 6.6.0 the SDK's generated
+        declaration had NEITHER field and ignored extras, so a creative agent's catalog came
+        back as ``{"canonical_formats_only": false, "experimental": false}`` -- that is the
+        defect this test was filed for, and it is what the assertions below still grade.
+
+        NOT exact dict equality any more. adcp 9 generates the per-kind arms properly, and
+        an ``image`` arm carries its own schema defaults (``slots``, ``asset_source``,
+        ``buyer_asset_acceptance``, ...), so the round trip is now a SUPERSET of the input
+        rather than the input plus two keys. Pinning the whole dict would be pinning the
+        pinned schema's default set, which belongs to the pin and not to this seller;
+        asserting the two load-bearing facts keeps the test failing for the original reason
+        -- a dropped ``format_kind`` or dropped ``params`` -- and not for an upstream
+        default.
+        """
         from tests.helpers.adcp_factories import create_test_format_id
 
         declaration = {"format_kind": "image", "params": {"width": 300, "height": 250, "pixel_ratios": [2]}}
@@ -801,7 +814,11 @@ class TestAdCPContract:
         )
 
         dumped = format_obj.model_dump(mode="json", exclude_none=True)["canonical_parameters"]
-        assert dumped == {**declaration, "canonical_formats_only": False, "experimental": False}
+        assert dumped["format_kind"] == "image", "format_kind must survive the round trip"
+        assert dumped["params"].items() >= {"width": 300, "height": 250}.items(), (
+            f"the buyer's params must survive the round trip; got {dumped['params']}"
+        )
+        assert dumped["params"]["pixel_ratios"] == [2.0], "a list param must survive, not just scalars"
 
     def test_list_creative_formats_response_round_trips_the_reference_catalog(self):
         """A response re-parsed from its own wire serializes to the same wire, as a buyer reads it.
@@ -1539,6 +1556,7 @@ class TestAdCPContract:
         Now extends library ListCreativesRequest directly - all fields are spec-compliant.
         """
         from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyListCreativesRequest as LibraryListCreativesRequest
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
         from adcp.types import PaginationRequest
@@ -1601,26 +1619,13 @@ class TestAdCPContract:
         assert "include_assignments" in adcp_response, "Field with default should be present"
         assert adcp_response["include_assignments"] is True, "Default value should match"
 
-        # Verify all spec fields are present (per adcp 5.7 library schema)
-        spec_fields = {
-            "account",
-            "adcp_major_version",
-            "adcp_version",
-            "context",
-            "ext",
-            "fields",
-            "filters",
-            "include_assignments",
-            "include_items",
-            "include_pricing",
-            "include_purged",
-            "include_snapshot",
-            "include_variables",
-            "include_webhook_activity",
-            "pagination",
-            "sort",
-            "webhook_activity_limit",
-        }
+        # Verify all spec fields are present. DERIVED FROM THE LIBRARY PARENT, not typed
+        # out: this DTO inherits its field set, so a list repeated here is a second copy of
+        # the pin that goes stale on every bump -- it did, on this one, when AdCP 3.2 added
+        # ``assignment_limit`` and ``assignment_projection``. The set is the parent's fields
+        # plus the two ``BuyerRequest`` contributes, which is exactly what "the DTO is the
+        # pinned model plus a declared mixin" means.
+        spec_fields = set(LibraryListCreativesRequest.model_fields) | {"account", "context"}
         assert set(adcp_response.keys()) == spec_fields, f"Fields should match spec: {set(adcp_response.keys())}"
 
     def test_list_creatives_response_adcp_compliance(self):
@@ -2318,9 +2323,9 @@ class TestAdCPContract:
             reporting_capabilities=default_reporting_capabilities(),
         )
         assert len(product_with_properties.publisher_properties) == 1
-        # publisher_properties is a discriminated union with RootModel wrapper (adcp 2.14.0+)
-        # Access via .root attribute
-        assert product_with_properties.publisher_properties[0].root.publisher_domain == "example.com"
+        # NO ``.root``: adcp 9 ships ``PublisherPropertySelector`` as the discriminated union
+        # of its arms rather than a RootModel wrapping them, so the element IS the selector.
+        assert product_with_properties.publisher_properties[0].publisher_domain == "example.com"
 
         # Invalid: missing publisher_properties (required)
         from pydantic import ValidationError

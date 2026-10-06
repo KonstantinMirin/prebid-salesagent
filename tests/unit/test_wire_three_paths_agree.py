@@ -114,7 +114,10 @@ def test_pricing_option_paths_agree_and_the_nested_wire_carries_no_null() -> Non
     assert "min_spend_per_package" not in dumped_json
 
     # The path the buyer sees: nested in a Product, inside the get_products envelope.
-    response = GetProductsResponse(products=[_product(pricing_options=[option])])
+    # ``option.root``, not the wrapper: ``Product.pricing_options`` holds the typed MEMBERS
+    # from adcp 9 on (the SDK deleted the RootModel wrapper), and the wrapper is still what
+    # the three-path check above grades on its own.
+    response = GetProductsResponse(products=[_product(pricing_options=[option.root])])
     wire = _assert_three_paths_agree(response)
     (product,) = wire["products"]
     (nested,) = product["pricing_options"]

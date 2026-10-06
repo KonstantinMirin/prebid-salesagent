@@ -161,10 +161,20 @@ class TestProductIntegration:
             is_custom=False,
         )
 
-    def test_product_wraps_options_in_local_wrapper(self):
+    def test_product_holds_the_local_members_not_a_wrapper(self):
+        """``Product.pricing_options`` validates into the LOCAL member class.
+
+        It used to validate into the local ``PricingOption`` RootModel wrapper, because
+        the SDK's own field held that wrapper and the local one subclassed it. adcp 9
+        deletes the wrapper (the fix for adcp-client-python#1077) and types the field as
+        the arms, so holding a wrapper here would RESHAPE the parent instead of narrowing
+        it. What still matters, and is what this asserts, is that the element is the LOCAL
+        subclass -- that is what carries this seller's extra policy and the derived
+        ``is_fixed``, which an SDK member would not.
+        """
         product = self._product([_cpm_kwargs()])
-        assert type(product.pricing_options[0]) is PricingOption
-        assert type(product.pricing_options[0].root) is CpmPricingOption
+        assert type(product.pricing_options[0]) is CpmPricingOption
+        assert product.pricing_options[0].is_fixed is True
 
     def test_product_wire_pricing_options_exact_shape(self):
         """A nested option reaches the wire as exactly the pinned dict, no local extras.
