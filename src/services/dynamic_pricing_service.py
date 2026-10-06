@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from src.core.database.models import FormatPerformanceMetrics
 from src.core.schemas import CpmPricingOption, PriceGuidance, Product
-from src.core.schemas.pricing import PricingOption
 
 logger = logging.getLogger(__name__)
 
@@ -232,7 +231,8 @@ class DynamicPricingService:
         # so the writes below are plain declared-field assignments.
         cpm_option: CpmPricingOption | None = None
         for option in product.pricing_options:
-            inner = option.root
+            # The element IS the member (Product.pricing_options holds the arms).
+            inner = option
             if isinstance(inner, CpmPricingOption):
                 cpm_option = inner
                 break
@@ -278,7 +278,8 @@ class DynamicPricingService:
                 price_guidance=price_guidance_obj,
                 min_spend_per_package=None,
             )
-            # Wrap in the local RootModel so the list stays homogeneous — every
-            # element supports .root exactly like options built at conversion time.
-            product.pricing_options.append(PricingOption(new_option))
+            # The MEMBER, unwrapped: Product.pricing_options holds the arms from adcp 9 on
+            # (the SDK deleted the RootModel wrapper), so appending one keeps the list
+            # homogeneous with what conversion builds.
+            product.pricing_options.append(new_option)
             logger.debug(f"Created new CPM pricing option for {product.product_id}")

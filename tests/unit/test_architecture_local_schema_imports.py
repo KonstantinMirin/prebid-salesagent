@@ -88,12 +88,14 @@ ALLOWLIST: set[tuple[str, str]] = {
     # check (_shadows_local_schema) proved neither is a real Pattern #1 violation:
     # both are SDK flat-namespace name collisions with an UNRELATED local schema
     # class of the same bare name, not the actual SDK parent the local class extends.
-    # FIXME(#1388): admin blueprints import SDK types directly
-    ("src/admin/blueprints/operations.py", "Package"),
+    # Three rows removed at the adcp 9 bump, violation FIXED rather than re-allowlisted:
+    # operations.py's ``Package``, schema_helpers.py's ``GetProductsResponse`` and
+    # ``Product``. AdCP 3.2 repointed those unprefixed ``adcp.types`` names at the 3.2
+    # canonical models, so each import had to name ``Legacy*`` explicitly -- and the
+    # subclass-identity check reads the explicit name as no longer shadowing the local
+    # schema class. The allowlist shrinks; it is never grown.
     # FIXME(#1388): core modules import SDK types directly
     ("src/core/creative_agent_registry.py", "ListCreativeFormatsRequest"),
-    ("src/core/schema_helpers.py", "GetProductsResponse"),
-    ("src/core/schema_helpers.py", "Product"),
     # FIXME(#1388): tools import SDK types directly
     ("src/core/tools/products.py", "FormatId"),
     # FIXME(#1388): services import SDK types directly

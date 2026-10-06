@@ -4,7 +4,7 @@ Extracted from src/core/schemas/__init__.py to reduce file size.
 All classes are re-exported from src.core.schemas for backward compatibility.
 """
 
-from typing import Any, ClassVar
+from typing import Annotated, Any, ClassVar
 
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
@@ -28,7 +28,7 @@ from src.core.schemas._base import (
 # Private alias: product.py is star-imported by the package __init__, and a bare
 # `PricingOption` import here would re-export the pricing wrapper over the legacy
 # flat PricingOption that src.core.schemas still exposes (see pricing.py's naming note).
-from src.core.schemas.pricing import PricingOption as _PricingOption
+from src.core.schemas.pricing import AdCPPricingOption as _AdCPPricingOption
 
 
 class ProductCard(LibraryProductCard):
@@ -90,11 +90,23 @@ class Product(LibraryProduct):
     # default_reporting_capabilities), for the rows that still store NULL; the NOT NULL
     # migration that retires it is salesagent-3cs7o.21.
 
-    # Narrowed to the local pricing wrapper (src.core.schemas.pricing) so every
-    # member carries our extra policy and the derived is_fixed property. Same
-    # wire shape and constraints as the SDK field it overrides; the [assignment]
-    # ignore is the expected cost of narrowing a list element type (invariance).
-    pricing_options: list[_PricingOption] = Field(  # type: ignore[assignment]
+    # Narrowed to the local pricing MEMBERS so every one carries our extra policy and the
+    # derived is_fixed property. Same wire shape, same discriminator and same constraints
+    # as the SDK field it overrides.
+    #
+    # The ELEMENTS, not the ``PricingOption`` RootModel wrapper this used to hold. At adcp
+    # 6.6.0 the SDK's own field held that wrapper and the local one subclassed it; adcp 9
+    # deletes the wrapper (the fix for adcp-client-python#1077) and types the field as the
+    # arms, so holding a wrapper here would be a RESHAPE of the parent rather than a
+    # narrowing of it -- the thing the schema-inheritance guard exists to catch. The
+    # wrapper still exists for callers that want ``.root``; it is simply not what a
+    # Product's field is.
+    # The ``[assignment]`` ignore is invariance, not suppression: every local member
+    # subclasses its SDK counterpart so every ELEMENT is assignable, but ``list`` is
+    # invariant so the list types are not -- the same cost delivery.py's six breakdown
+    # narrowings pay and for the same reason. The local union is also a strict narrowing
+    # in ARMS: nine of the parent's ten, without RevenueSharePricingOption.
+    pricing_options: list[Annotated[_AdCPPricingOption, Field(discriminator="pricing_model")]] = Field(  # type: ignore[assignment]
         description="Available pricing models for this product",
         min_length=1,
     )

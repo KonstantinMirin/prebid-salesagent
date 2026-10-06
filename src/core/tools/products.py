@@ -50,7 +50,9 @@ def get_recommended_cpm(product: Product) -> float | None:
         Recommended CPM value (p75) from price_guidance, or None if not available
     """
     for option in product.pricing_options:
-        inner = option.root
+        # The element IS the member: Product.pricing_options holds the arms, not the
+        # RootModel wrapper adcp 9 deleted.
+        inner = option
         price_guidance = getattr(inner, "price_guidance", None)
         if inner.pricing_model.upper() == "CPM" and price_guidance:
             p75 = price_guidance.p75
@@ -520,11 +522,11 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 # to access inner variant fields (fixed_price lives on the variant)
                 if req.filters.is_fixed_price:
                     has_matching_pricing = any(
-                        getattr(po.root, "fixed_price", None) is not None for po in product.pricing_options
+                        getattr(po, "fixed_price", None) is not None for po in product.pricing_options
                     )
                 else:
                     has_matching_pricing = any(
-                        getattr(po.root, "fixed_price", None) is None for po in product.pricing_options
+                        getattr(po, "fixed_price", None) is None for po in product.pricing_options
                     )
                 if not has_matching_pricing:
                     continue

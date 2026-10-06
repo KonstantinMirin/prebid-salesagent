@@ -328,10 +328,15 @@ class TestGetTaskSpecFlags:
 
         result = await self._call(mock_uow, self._identity(), task_id="step_done", include_result=True)
 
-        # Validated into the pinned async-result union, so the concrete member carries its own
-        # envelope defaults; what this asserts is that the STORED payload survived into it.
-        assert result.result.root.media_buy_id == "mb_1"
-        assert result.result.root.packages == []
+        # VALIDATED against the pinned async-result union and then SHIPPED AS THE DOCUMENT.
+        # ``get-task-status-response.json`` types ``result`` as ``dict[str, Any]``, and adcp
+        # 9 ships ``AdcpAsyncResponseData`` as an ``Annotated[Union[...]]`` alias rather than
+        # a RootModel -- so there is no ``.root`` and nothing to unwrap. The validation still
+        # happens (a payload that is none of the union's members raises); it runs for its
+        # REFUSAL, and what reaches the wire is the stored document, which is what these two
+        # assertions read.
+        assert result.result["media_buy_id"] == "mb_1"
+        assert result.result["packages"] == []
 
     async def test_result_withheld_while_not_completed(self, mock_uow, mock_workflow_repo, completed_step):
         """Asking for the result of an unfinished task returns none — "when status is completed".

@@ -453,11 +453,13 @@ class TestSchemaInheritance:
             # CreativeAsset bound to the FIRST BRANCH, where format_id is required.
             #
             # This subclasses that branch and relaxes format_id to optional, stating the oneOf
-            # as what it is (an XOR validator) on one flat model. Keeping the parent's
-            # requiredness announces half the schema, because the format_kind branch becomes
-            # unsendable on all three transports at once. Rowed rather than admitted, because
-            # a weakening a derived rule lets through is invisible and permanent.
-            ("CreativeAssetRequest", "format_id"),
+            # as what it is (an XOR validator) on one flat model.
+            #
+            # ROW REMOVED at the adcp 9 bump: AdCP 3.2 makes ``format_id`` OPTIONAL on
+            # core/creative-asset.json itself (identity moved to format_kind /
+            # format_option_ref), so the local declaration no longer relaxes anything --
+            # it matches the parent. The XOR validator still runs; what is gone is the
+            # weakening this row recorded.
             ("GetSignalsResponse", "signals"),
             # RESHAPED AXIS: item type, and the reshape is the LIBRARY's, not ours.
             # get-media-buy-delivery-response.json renders daily_breakdown[] twice under
@@ -495,11 +497,13 @@ class TestSchemaInheritance:
             # NOT a weakening: this row previously covered ``list[Creative]``, the
             # list_creatives RESPONSE model, which typed ``assets`` as an untyped dict and so
             # admitted package creatives the pin refuses (salesagent-b341x.17).
-            ("PackageRequest", "creatives"),
-            # Mirror of PackageRequest.targeting_overlay for the update path —
-            # makes collection_list typed at the request boundary instead of
-            # leaking through library extra="allow" as a raw dict.
-            ("Signal", "deployments"),
+            #
+            # ROW REMOVED at the adcp 9 bump: the numeric arm name is gone, the branch IS
+            # ``CreativeAsset``, and the local item statically extends the parent's declared
+            # element type -- so the redeclaration is neither reshaped nor weakened.
+            # ROW REMOVED at the adcp 9 bump: ``Signal.deployments`` now matches its
+            # parent's declared element type, so the local list is a plain narrowing the
+            # admission rule accepts without a row.
             # WEAKENED AXIS: nullability. The parent types confirmed_at as a non-null
             # datetime; this redeclares it ``AwareDatetime | None``. Rowed rather than
             # admitted, because a widening a derived rule lets through is invisible and
@@ -517,7 +521,9 @@ class TestSchemaInheritance:
             # that buy is a HOLD with no seller commitment to report. While the status sat
             # in _SELLER_COMMITTED_STATUSES it was stamped and the non-null type held --
             # but the stamp was the defect.
-            ("CreateMediaBuySuccess", "confirmed_at"),
+            #
+            # ROW REMOVED at the adcp 9 bump: the parent now types ``confirmed_at`` nullable
+            # itself, so the local declaration adds no nullability and needs no row.
             # QuerySummary.filters_applied keeps the parent's SHAPE and requiredness and
             # differs only in the DEFAULT — the axis a shape-and-requiredness rule cannot
             # see, since is_required() is already False on both sides. Rowed rather than
@@ -557,6 +563,23 @@ class TestSchemaInheritance:
             # with three precedents, not an allowlistable exception.
             # Pattern #4: ListAccountsResponse.accounts uses local Account subclass
             ("ListAccountsResponse", "accounts"),
+            # Pattern #4, and NEW AT adcp 9: AdCP 3.2 splits the targeting overlay into
+            # core/targeting.json (readback) and core/targeting_input.json (request), and
+            # the two are different models -- nine of the thirty-seven fields differ in
+            # ELEMENT type, each schema generating its own GeoCountry / GeoRegion /
+            # KeywordTarget / StoreCatchment, and the exclusion lists are Sequence on one
+            # side and list on the other.
+            #
+            # The AXIS: the parent's annotation is the union
+            # ``TargetingOverlayInput | Annotated[TargetingOverlay, SkipJsonSchema] | None``
+            # and these declare ``TargetingInput | None`` -- a NARROWING to one arm's local
+            # subclass, not a weakening: nullability is unchanged and no constraint is
+            # dropped. Rowed because narrowing a UNION-typed parent field to one arm is a
+            # reshape of the annotation even when every value it admits is admitted by the
+            # parent, and a derived rule that let that through would also let through a
+            # narrowing to the WRONG arm.
+            ("PackageRequest", "targeting_overlay"),
+            ("AdCPPackageUpdate", "targeting_overlay"),
             # Pattern #4: the get_media_buys item chain. ALL THREE narrowings below are
             # load-bearing, and for three different reasons — the comment used to say
             # "both" while listing three, which leaves a reader to guess which one was

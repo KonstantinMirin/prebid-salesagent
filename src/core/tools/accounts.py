@@ -470,6 +470,20 @@ _APPLIED = _Disposition("applied")
 
 #: Why ``preferred_reporting_protocol`` is a DECLARED no-op rather than a
 #: rejection. Named because both modes cite it identically.
+_ADCP_32_UNIMPLEMENTED_CITATION = (
+    "AdCP 3.2 sync-accounts-request.json#/properties/accounts/items — seven settable fields "
+    "arrived with the 3.2.1 pin (currency, timezone, operator_unit, operator_identity, "
+    "destination_billing_entity, reporting_delivery_configs, revision) and this seller "
+    "implements NONE of them: measured, the Account table carries no column for any of the "
+    "seven and accounts.py reads none of them. Ignored rather than rejected, for the reason "
+    "preferred_reporting_protocol gives: refusing a spec-legal field would fail a conformant "
+    "request over a setting this seller simply does not keep, and non-support stays "
+    "discoverable through get_adcp_capabilities. FIXME(#1729): triage each field as the "
+    "columns land — `revision` in particular is an optimistic-concurrency token, so ignoring "
+    "it means a buyer's conflict guard does not apply and that is a semantic gap, not just an "
+    "unstored setting."
+)
+
 _PREFERRED_PROTOCOL_CITATION = (
     "v3.1.1 sync-accounts-request.json"
     "#/properties/accounts/items/properties/preferred_reporting_protocol/description — hint language "
@@ -575,6 +589,35 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
     "preferred_reporting_protocol": _FieldPolicy(
         provisioning=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
         settings_update=_Disposition("ignored_by_design", _PREFERRED_PROTOCOL_CITATION),
+    ),
+    # The seven AdCP 3.2 additions, each a declared no-op. See the citation.
+    "currency": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "timezone": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "operator_unit": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "operator_identity": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "destination_billing_entity": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "reporting_delivery_configs": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+    ),
+    "revision": _FieldPolicy(
+        provisioning=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
+        settings_update=_Disposition("ignored_by_design", _ADCP_32_UNIMPLEMENTED_CITATION),
     ),
 }
 

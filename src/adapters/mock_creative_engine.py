@@ -50,13 +50,11 @@ class MockCreativeEngine(CreativeEngineAdapter):
             if format_id_str and "video" in format_id_str.lower():
                 # Suggest vertical version for horizontal videos
                 if "16x9" in format_id_str or "horizontal" in format_id_str:
-                    from pydantic import AnyUrl
-
                     suggested_adaptations.append(
                         CreativeAdaptation(
                             adaptation_id=f"adapt_{creative.creative_id}_vertical",
                             format_id=FormatId(
-                                agent_url=AnyUrl("https://creative.adcontextprotocol.org"),
+                                agent_url="https://creative.adcontextprotocol.org",
                                 id="video_vertical_9x16",
                             ),
                             name="Mobile Vertical Version",
@@ -80,13 +78,11 @@ class MockCreativeEngine(CreativeEngineAdapter):
                         break
 
                 if duration_ms / 1000.0 > 15:
-                    from pydantic import AnyUrl
-
                     suggested_adaptations.append(
                         CreativeAdaptation(
                             adaptation_id=f"adapt_{creative.creative_id}_6s",
                             format_id=FormatId(
-                                agent_url=AnyUrl("https://creative.adcontextprotocol.org"),
+                                agent_url="https://creative.adcontextprotocol.org",
                                 id="video_6s_bumper",
                             ),
                             name="6-Second Bumper Version",

@@ -99,12 +99,18 @@ class TestRegistryConnectionRouting:
         # agent rejects a bare string, which the live public host tolerated
         # (the mismatch the in-network pinning unmasked). The identity keeps the
         # CANONICAL agent_url and is the FormatId serialization
-        # (model_dump(mode="json")): Pydantic AnyUrl yields the trailing-slash
-        # form for the path-less public URL — verified tolerated by the pinned
-        # reference agent (probe 2026-07-13).
+        # (model_dump(mode="json")).
+        #
+        # VERBATIM, no trailing slash. It used to be ``+ "/"`` because Pydantic's
+        # ``AnyUrl`` appended one to a path-less origin; adcp 9 (upstream #1396, "keep the
+        # format-reference agent_url as the wire string") types the field ``str``, so the
+        # serialization now carries exactly the URL that went in. The slash-suffixed form
+        # was recorded as "verified tolerated by the pinned reference agent (probe
+        # 2026-07-13)" — tolerated, never required — so emitting the canonical bytes is
+        # strictly closer to what ``core/format-id.json`` asks for.
         payload = cmc.call_args.kwargs["arguments"]
         assert payload["format_id"] == {
-            "agent_url": PUBLIC_DEFAULT_AGENT_URL + "/",
+            "agent_url": PUBLIC_DEFAULT_AGENT_URL,
             "id": "display_300x250",
         }
 

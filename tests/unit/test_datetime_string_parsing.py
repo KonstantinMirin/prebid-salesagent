@@ -207,7 +207,9 @@ class TestDateTimeParsingEdgeCases:
         assert req.start_time is not None
         assert req.end_time is not None
         # start_time is the library StartTiming RootModel wrapping the datetime
-        assert req.start_time.root.tzinfo is not None
+        # No ``.root``: ``start_time`` is the plain ``datetime | Literal["asap"]`` the DTO
+        # declares, and adcp 9 ships no ``StartTiming`` RootModel to unwrap.
+        assert req.start_time.tzinfo is not None
         assert req.end_time.tzinfo is not None
 
 
