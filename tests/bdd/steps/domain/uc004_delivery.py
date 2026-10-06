@@ -31,6 +31,7 @@ from tests.bdd.steps._outcome_helpers import (
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic.then_error import _get_error_message
 from tests.bdd.steps.generic.then_payload import register_boundary_handler
+from tests.factories.request import CreateMediaBuyRequestFactory
 from tests.factories.webhook import ReportingWebhookRequestFactory
 from tests.harness._mixins import LocalOriginMixin
 from tests.helpers import locate_envelope_error
@@ -4138,11 +4139,7 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
     all transports" — they do, but only because this constructor check is
     transport-independent. That is the gap #2109 names, not evidence of coverage.
     """
-    from datetime import UTC, datetime
-
     from pydantic import ValidationError
-
-    from src.core.schemas import CreateMediaBuyRequest
 
     reporting_webhook = ReportingWebhookRequestFactory.payload(
         url="https://buyer.example.com/reporting",
@@ -4154,15 +4151,18 @@ def _validate_reporting_webhook_credentials(ctx: dict, auth_scheme: str, credent
         # NOT ctx["response"]: this is the constructed REQUEST, not a response.
         # It shared the key with dispatch responses, so a Then could read a
         # request believing it had a response — the ambiguity lane gra7.5 removes.
-        ctx["constructed_request"] = CreateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            brand={"domain": "buyer.example.com"},
-            start_time=datetime(2025, 1, 1, tzinfo=UTC),
-            end_time=datetime(2025, 2, 1, tzinfo=UTC),
+        #
+        # The base comes from CreateMediaBuyRequestFactory rather than a field list
+        # written out here. A hand-listed base was what broke at the AdCP 3.2.1 pin:
+        # create-media-buy-request.json has no `anyOf` at 3.1 and gains a three-branch
+        # one at 3.2 — `packages` (each item requiring budget, and no proposal_id) /
+        # `packages`+`total_budget`+`budget_allocation` / `proposal_id`+`total_budget` —
+        # and a base carrying none of the three is refused before the webhook under test
+        # is ever looked at. The factory is DERIVED from the DTO and already carries a
+        # branch-0 `packages` item, so it tracks the pin; one more copy of the field list
+        # would just be the next thing to go stale.
+        ctx["constructed_request"] = CreateMediaBuyRequestFactory.build(
             reporting_webhook=reporting_webhook,
-            # Required field — a valid key keeps this step's ValidationError
-            # assertions scoped to the webhook credentials under test.
-            idempotency_key="bdd-webhook-cred-key-0001",
         )
     except ValidationError as exc:
         offending = {".".join(str(p) for p in err["loc"]) for err in exc.errors()}
