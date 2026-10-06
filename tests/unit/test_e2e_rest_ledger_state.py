@@ -84,7 +84,7 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # (d4af23095, strict-xfail XPASS in-network).
         # Account valid rows graduated at the #1417 merge (jr5b seeded-account
         # Given; XPASS in-network innet_140726_1516) — see ledger note.
-        "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string 'true' (non-boolean type)-\"true\"-invalid]",
+        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string \'true\' (non-boolean type)-"true"-error "INVALID_REQUEST" with suggestion]',
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
