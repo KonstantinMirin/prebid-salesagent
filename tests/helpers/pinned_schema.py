@@ -161,6 +161,42 @@ _VERSION_PREFIX = re.compile(r"^(\d+\.\d+\.\d+)/(.+)$")
 # (``/schemas/3.1.1/core/agent-signing-key.json``).
 _SITE_ROOT_PREFIX = "/schemas/"
 
+#: The origin upstream stamps into ``$id`` and ``$ref`` from AdCP 3.2 on. Before 3.2 it
+#: wrote the bare site-rooted path; from 3.2 it writes the same path behind this origin,
+#: which is why both spellings have to resolve to the same vendored file.
+_SITE_ORIGIN = "https://adcontextprotocol.org"
+
+
+def _site_rooted_path(uri: str) -> str | None:
+    """*uri*'s site-rooted ``/schemas/…`` path, or ``None`` if it has none.
+
+    THE ROUTING DECISION, in one place, made on the PARSED PATH rather than on the raw
+    string. AdCP 3.2 writes ``$id`` and ``$ref`` as absolute URLs where 3.1.1 wrote the
+    bare path, so ``uri.startswith("/schemas/")`` -- what both call sites used to ask --
+    is False for every 3.2 ref. Those refs then fell through to the SDK branch, where
+    ``Path(url2pathname(urlparse(uri).path))`` is the ABSOLUTE ``/schemas/3.2.1/...`` and
+    :meth:`_PinnedSource.contained` correctly refused it as outside the SDK tree. The
+    guard was right; the routing that reached it was not.
+
+    THE ORIGIN IS CHECKED, not ignored. Routing on the path alone would make
+    ``https://evil.example/schemas/3.2.1/core/error.json`` resolve into the vendored tree
+    -- a foreign document naming our pinned namespace and being served our bytes. Only
+    upstream's own origin, or no origin at all, is site-rooted here; anything else keeps
+    falling through to the SDK branch and is refused there as it always was.
+
+    Not fixed by normalizing at vendor time instead: that would edit upstream's own bytes,
+    which is exactly what the SHA-256 pin guard on ``enums/error-code.json`` exists to
+    detect, and the vendoring is deliberately byte-faithful.
+    """
+    if uri.startswith(_SITE_ROOT_PREFIX):
+        return uri
+    parsed = urlparse(uri)
+    if not parsed.scheme and not parsed.netloc:
+        return None
+    if f"{parsed.scheme}://{parsed.netloc}" != _SITE_ORIGIN:
+        return None
+    return parsed.path if parsed.path.startswith(_SITE_ROOT_PREFIX) else None
+
 
 class _PinnedSource(NamedTuple):
     """One pinned schema tree, and everything that differs between the two.
@@ -373,8 +409,9 @@ def _ref_target(target_part: str, *, file_dir: Path, source: _PinnedSource, what
     path relative to the referring file's own directory (the SDK plain tree's
     form) and stays inside *source*.
     """
-    if target_part.startswith(_SITE_ROOT_PREFIX):
-        return _site_rooted_target(target_part, what=what)
+    site_rooted = _site_rooted_path(target_part)
+    if site_rooted is not None:
+        return _site_rooted_target(site_rooted, what=what)
     return source, source.contained(file_dir / target_part, what=what)
 
 
@@ -446,10 +483,14 @@ def _retrieve(uri: str) -> referencing.Resource:
     filesystem path. Vendored tree: upstream's own site-rooted
     ``/schemas/<version>/…`` refs, which ARE the registry keys verbatim (that
     is why the vendored documents keep their own ``$id`` — see
-    ``_PinnedSource.uri_prefix``).
+    ``_PinnedSource.uri_prefix``) — in either the bare-path spelling 3.1.1 used
+    or the absolute one AdCP 3.2 adopted. :func:`_site_rooted_path` decides
+    which convention a URI is in; see its docstring for why the raw-string test
+    this used to make sent every 3.2 ref to the SDK branch.
     """
-    if uri.startswith(_SITE_ROOT_PREFIX):
-        source, path = _site_rooted_target(uri, what=f"Schema URI {uri!r}")
+    site_rooted = _site_rooted_path(uri)
+    if site_rooted is not None:
+        source, path = _site_rooted_target(site_rooted, what=f"Schema URI {uri!r}")
     else:
         source = _sdk_source()
         path = source.contained(Path(url2pathname(urlparse(uri).path)), what=f"Schema URI {uri!r}")
