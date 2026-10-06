@@ -37,7 +37,12 @@ from src.core.errors.details import (
     ValidationDetails,
     VersionUnsupportedDetails,
 )
-from src.core.errors.issues import ErrorIssue, issues_from_validation_error, pointer_to_field
+from src.core.errors.issues import (
+    ErrorIssue,
+    issues_from_validation_error,
+    pointer_for_pydantic_error,
+    pointer_to_field,
+)
 from src.core.errors.signature_codes import SignatureErrorCode
 
 if TYPE_CHECKING:
@@ -1678,7 +1683,7 @@ class AdcpFailure(Exception):
 # INVALID_REQUEST's text.
 
 
-def first_validation_error_field(validation_error: ValidationError) -> str | None:
+def first_validation_error_field(validation_error: ValidationError, *, document: Any = None) -> str | None:
     """Return the bracket-notation path of the first Pydantic error, or ``None``.
 
     Lets a transport boundary attach a structured ``field`` to the
@@ -1686,22 +1691,20 @@ def first_validation_error_field(validation_error: ValidationError) -> str | Non
     field path instead of only the rendered message. List indices render as
     ``[i]`` so boundary-derived paths such as ``packages[0].budget`` align with
     the ``packages[].budget`` field strings raised by the implementation layer.
+
+    ``JsonPointer`` renders it, rather than a second loop over ``loc`` here: ``field``
+    and ``issues[].pointer`` are two spellings of ONE path that the pin MUST-requires
+    agree, so they are one computation. *document* is the buyer's payload, which is
+    what tells pydantic's synthesized union segments apart from real members; a call
+    site holding none passes none and gets the raw loc, as this function always did.
     """
     errors = validation_error.errors()
     if not errors:
         return None
-    parts: list[str] = []
-    for loc in errors[0]["loc"]:
-        if isinstance(loc, int):
-            parts.append(f"[{loc}]")
-        elif parts:
-            parts.append(f".{loc}")
-        else:
-            parts.append(str(loc))
-    return "".join(parts)
+    return pointer_for_pydantic_error(errors[0], document).field
 
 
-def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentError:
+def adcp_error_for(exc: Exception, field: str | None = None, *, document: Any = None) -> AdCPSalesAgentError:
     """Normalize untyped exceptions to typed AdCPSalesAgentError subclasses.
 
     Single source of truth for the wrapping applied at all three transport
@@ -1748,9 +1751,18 @@ def adcp_error_for(exc: Exception, field: str | None = None) -> AdCPSalesAgentEr
         # ValidationError IS a ValueError subclass, so the order decides whether a
         # buyer gets the field and issues or a bare VALIDATION_ERROR.
         errors = exc.errors()
+        issues = issues_from_validation_error(errors, document)
+        # ``field`` is NOT computed here when issues[] came out non-empty. core/error.json
+        # makes it a FUNCTION of issues[0].pointer ("sellers MUST set this to
+        # issues[0].pointer translated from RFC 6901 to JSONPath-lite"), and
+        # ``AdCPSalesAgentError.__init__`` derives exactly that from the issues it is
+        # handed. Deriving it a second time from errors[0] -- which the dropped-issue rule
+        # can make a DIFFERENT error -- is how the two channels came to disagree. The
+        # fallback stands only for a ValidationError whose every entry was unattributable,
+        # where there is no issues[0] to be a function of.
         return AdCPInvalidRequestError(
-            field=field if field is not None else first_validation_error_field(exc),
-            issues=issues_from_validation_error(errors),
+            field=field if field is not None or issues else first_validation_error_field(exc, document=document),
+            issues=issues,
         )
     if isinstance(exc, ValueError):
         return AdCPValidationError()

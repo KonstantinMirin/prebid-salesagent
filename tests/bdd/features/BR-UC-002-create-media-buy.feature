@@ -324,14 +324,21 @@ Feature: BR-UC-002 Create Media Buy
     When the Buyer Agent sends the create_media_buy request
     Then the response is compliant with the create_media_buy error spec
     And the response contains error code INVALID_REQUEST
-    And the response error field is packages[0].creatives[0].assets.primary.AssetVariant.image.url
+    And the response error field is packages[0].creatives[0].assets.primary.url
     # The two Thens that stood here — "the operation should fail" and "the error should
     # include \"suggestion\" field" — were satisfied by ANY error, so this scenario
     # reported green while saying nothing about which refusal arrived. It stayed green
     # through a repair that changed the refusal from union_tag_not_found to url_parsing.
     # Code AND field now, so a request that dies for an unrelated reason fails here.
-    # The pointer carries pydantic's union-branch name (AssetVariant.image) rather than a
-    # pointer into the buyer's own request; that leak is real and separately filed.
+    # THE EXPECTED PATH IS THE PIN'S, not pydantic's. core/error.json @ 3.2 makes `field`
+    # "the field path associated with the error in JSONPath-lite format", MUST-set to
+    # issues[0].pointer translated — a path over the BUYER'S OWN DOCUMENT. This line read
+    # `...assets.primary.AssetVariant.image.url` and both extra segments were pydantic's:
+    # `AssetVariant` (adcp 9 spells it `tagged-union[ImageAsset,...21 more...]`) is a union
+    # ARM NAME and `image` is the discriminator TAG VALUE. image-asset.json declares `url`
+    # directly and no `image` member, so what the buyer sent at `assets.primary` is
+    # `{asset_type, url, width, height}` and the only conformant path to the blank URL is
+    # the one above (salesagent-lkgmg).
     # POST-F1: System state is unchanged on failure
     # POST-F2: Buyer knows what failed
     # POST-F3: Buyer knows how to fix the issue

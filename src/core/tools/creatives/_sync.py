@@ -219,7 +219,7 @@ def sync_creatives(
                     # from the pydantic error. The raw text rides internal_detail (server
                     # log only) instead of details, so no arbitrary exception text reaches
                     # the buyer.
-                    typed = adcp_error_for(validation_error)
+                    typed = adcp_error_for(validation_error, document=raw_creative)
                     typed.internal_detail = validation_error
                     # A DECLARED field, not a dict poked onto a built error. The
                     # subject is what `creative_id` names, and ValidationDetails
@@ -391,7 +391,7 @@ def sync_creatives(
                 # ValidationError becomes VALIDATION_ERROR with its field and details,
                 # anything else becomes INTERNAL_ERROR. Synthesizing a bare INTERNAL_ERROR
                 # here instead threw away the field the buyer needs.
-                typed = adcp_error_for(e)
+                typed = adcp_error_for(e, document=raw_creative)
                 typed.internal_detail = e
                 typed.details = _with_creative(typed.details, creative_id)
                 results.append(_failed_sync_result(creative_id, typed))

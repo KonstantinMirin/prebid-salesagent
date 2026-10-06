@@ -30,6 +30,7 @@ Two properties this module keeps, both of which the hand-rolled version lost:
 from __future__ import annotations
 
 import typing
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar, Literal
 
 import pydantic_core
@@ -44,6 +45,7 @@ __all__ = [
     "JsonSchemaKeyword",
     "issue_from_pydantic_error",
     "issues_from_validation_error",
+    "pointer_for_pydantic_error",
     "pointer_to_field",
 ]
 
@@ -75,6 +77,25 @@ substantiate is worse than none. See ``_KEYWORD_SENTENCES`` for the pairing.
 """
 
 
+_ABSENT = object()
+"""Sentinel for "this segment addresses nothing here", distinct from a member whose
+value IS ``None`` -- a buyer who sent ``{"url": null}`` has a ``url`` member."""
+
+
+def _member(node: Any, segment: str | int) -> Any:
+    """The value *segment* addresses inside *node*, or ``_ABSENT``.
+
+    Objects are addressed by key and arrays by integer index, which is the whole of
+    what RFC 6901 can express -- so a string where an array is, or a key the object
+    does not carry, is not a path into the buyer's document.
+    """
+    if isinstance(node, Mapping):
+        return node[segment] if segment in node else _ABSENT
+    if isinstance(node, Sequence) and not isinstance(node, str | bytes):
+        return node[segment] if isinstance(segment, int) and -len(node) <= segment < len(node) else _ABSENT
+    return _ABSENT
+
+
 class JsonPointer:
     """A path into the request payload, renderable in both formats the pin uses.
 
@@ -99,13 +120,59 @@ class JsonPointer:
         return cls(segments)
 
     @classmethod
-    def from_pydantic_loc(cls, loc: typing.Sequence[str | int]) -> JsonPointer:
-        """Build from a pydantic ``ValidationError.errors()[i]["loc"]`` tuple.
+    def from_pydantic_loc(
+        cls,
+        loc: typing.Sequence[str | int],
+        document: Any,
+        *,
+        names_absent_member: bool = False,
+    ) -> JsonPointer:
+        """Build from a pydantic ``ValidationError.errors()[i]["loc"]``, resolved against
+        the document the buyer actually sent.
 
-        ``loc`` is already the pointer this channel needs; the hand-rolled
-        predecessor emitted it verbatim as ``details.validation_errors[].loc``.
+        ``loc`` IS NOT A POINTER. pydantic synthesizes segments of its own for the
+        validators it was running, and the hand-rolled predecessor emitted them verbatim
+        as ``details.validation_errors[].loc``. Measured on this repo's models at the 3.2
+        pin, pydantic inserts them from two places:
+
+        * a SMART UNION pushes the failing arm's pydantic-core validator name --
+          ``tagged-union[ImageAsset,VideoAsset,...]``, ``Assets``, ``list[Inner]``,
+          ``constrained-int``, ``int``, ``function-after[_m(), Zoo]``;
+        * a TAGGED UNION pushes the resolved discriminator TAG VALUE -- ``image``.
+
+        Neither set can be recognized by spelling. Arm names include model class names,
+        which are unbounded and can collide with a real field name; tag values are strings
+        the BUYER chose. So a ``startswith("tagged-union[")`` test, or any list of
+        spellings, fixes the one payload it was written for and leaves every sibling live.
+
+        What settles it instead is the pin's own definition of the thing being built.
+        ``core/error.json`` specifies ``field`` as "Field path associated with the error
+        in JSONPath-lite format (e.g. ``packages[0].targeting``)" and MUST-requires it be
+        ``issues[0].pointer`` translated -- a path over THE BUYER'S DOCUMENT. So membership
+        in that document is the test: a segment survives iff it addresses something there.
+
+        ``names_absent_member`` is the one error for which it cannot be: a ``missing``
+        rejection's last segment names the member that is ABSENT, which is exactly why it
+        does not resolve. Interior segments never get this treatment -- pydantic puts the
+        missing key last.
+
+        A ``document`` that is not a container at all (``None`` from a call site holding no
+        buyer payload, or a body that never parsed) leaves every segment unjudgeable, and
+        the loc passes through. Dropping on no evidence would erase real paths.
         """
-        return cls(tuple(loc))
+        if not isinstance(document, Mapping | Sequence) or isinstance(document, str | bytes):
+            return cls(tuple(loc))
+        segments = tuple(loc)
+        kept: list[str | int] = []
+        node: Any = document
+        for position, segment in enumerate(segments):
+            child = _member(node, segment)
+            if child is not _ABSENT:
+                kept.append(segment)
+                node = child
+            elif names_absent_member and position == len(segments) - 1:
+                kept.append(segment)
+        return cls(tuple(kept))
 
     @staticmethod
     def _escape(token: str) -> str:
@@ -385,8 +452,12 @@ class ErrorIssue(LibraryIssue):
         return self.model_dump(mode="json", exclude_none=True)
 
 
-def issues_from_validation_error(errors: typing.Sequence[typing.Mapping[str, Any]]) -> list[ErrorIssue]:
+def issues_from_validation_error(errors: typing.Sequence[typing.Mapping[str, Any]], document: Any) -> list[ErrorIssue]:
     """Convert a whole ``ValidationError.errors()`` list, dropping the unattributable.
+
+    *document* is the payload the buyer sent, which every pointer is resolved against --
+    see ``JsonPointer.from_pydantic_loc``. It is positional and has no default so a call
+    site states what it validated rather than silently emitting pydantic's raw loc.
 
     This replaces ``build_validation_error_details``, which projected the same
     pydantic errors into ``details.validation_errors[]`` as ``loc``/``msg``/
@@ -394,7 +465,7 @@ def issues_from_validation_error(errors: typing.Sequence[typing.Mapping[str, Any
     sentence, and a pydantic token where the pin asks for a JSON Schema keyword.
     Same input, same information, the channel and vocabulary the pin defines.
     """
-    return [issue for e in errors if (issue := issue_from_pydantic_error(e)) is not None]
+    return [issue for e in errors if (issue := issue_from_pydantic_error(e, document)) is not None]
 
 
 _KEYWORD_CTX_KEY: dict[JsonSchemaKeyword, str] = {
@@ -441,7 +512,7 @@ name one this table does not carry.
 """
 
 
-def issue_from_pydantic_error(error: typing.Mapping[str, Any]) -> ErrorIssue | None:
+def issue_from_pydantic_error(error: typing.Mapping[str, Any], document: Any) -> ErrorIssue | None:
     """Convert one ``ValidationError.errors()`` entry, or None if unattributable.
 
     Returns None when the pydantic type maps to no JSON Schema keyword. Omitting
@@ -456,9 +527,25 @@ def issue_from_pydantic_error(error: typing.Mapping[str, Any]) -> ErrorIssue | N
     ctx_key = _KEYWORD_CTX_KEY.get(keyword)
     raw = ctx.get(ctx_key) if ctx_key else None
     return ErrorIssue.of(
-        pointer=JsonPointer.from_pydantic_loc(error.get("loc", ())).pointer,
+        pointer=pointer_for_pydantic_error(error, document).pointer,
         keyword=keyword,
         keyword_value=None if raw is None else str(raw),
+    )
+
+
+def pointer_for_pydantic_error(error: typing.Mapping[str, Any], document: Any) -> JsonPointer:
+    """The pointer one ``ValidationError.errors()`` entry names in the buyer's document.
+
+    The ``required`` keyword is what tells ``from_pydantic_loc`` that this error's last
+    segment names an ABSENT member, so it must survive not resolving. Derived from the
+    keyword map rather than from a second list of pydantic types: the four ``missing*``
+    types are precisely the ones that map to ``required``, and a map read cannot drift
+    from the map.
+    """
+    return JsonPointer.from_pydantic_loc(
+        error.get("loc", ()),
+        document,
+        names_absent_member=PYDANTIC_KEYWORD_MAP.get(str(error.get("type"))) == "required",
     )
 
 

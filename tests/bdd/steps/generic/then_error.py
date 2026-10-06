@@ -414,9 +414,15 @@ def then_response_error_issue(ctx: dict, keyword: str, field: str) -> None:
      ``ValidationError`` -- including one synthesised in the test process --
      satisfied an isinstance check.
 
-     *field* is matched against the issue POINTER by trailing segment, so
-     ``billing`` matches ``/accounts/0/Accounts/billing`` without the scenario
-     having to spell out pydantic's union-branch naming.
+     *field* is matched against the issue POINTER by trailing segment, so a scenario
+     naming ``billing`` is satisfied by ``/accounts/0/billing`` without having to
+     restate the whole request-rooted path it already established in its Given.
+
+     It used to read "so ``billing`` matches ``/accounts/0/Accounts/billing`` without
+     the scenario having to spell out pydantic's union-branch naming" -- the tolerance
+     was for a pointer segment that was a UNION ARM NAME, not a member of the buyer's
+     document at all. The pointer no longer carries one (salesagent-lkgmg), so the
+     suffix match is back to being what it says it is: a scenario naming the leaf.
     """
     from tests.helpers.envelope_assertions import locate_envelope_error
 

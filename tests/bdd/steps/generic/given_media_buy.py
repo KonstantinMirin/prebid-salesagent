@@ -2296,11 +2296,11 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
 
     WHAT THIS ACTUALLY REACHES, measured rather than intended. The empty URL is
     refused at the REQUEST BOUNDARY, not by production's reference-creative
-    validation: ``CreativeAssetRequest`` rejects ``url: ""`` with
-    ``assets.primary.AssetVariant.image.url Input should be a valid URL, input is
-    empty [type=url_parsing]``. So T-UC-002-ext-g grades an INVALID_REQUEST from
-    the boundary and never gets as far as the reference-creative URL check its
-    sentence names.
+    validation: ``CreativeAssetRequest`` rejects ``url: ""`` as ``url_parsing``
+    ("Input should be a valid URL, input is empty"), which the buyer receives at
+    ``packages[0].creatives[0].assets.primary.url``. So T-UC-002-ext-g grades an
+    INVALID_REQUEST from the boundary and never gets as far as the
+    reference-creative URL check its sentence names.
 
     That is a real obligation and the scenario now asserts it BY CODE AND FIELD
     (salesagent-b9hi1.2). It used to pass on any error whatsoever, because its two
@@ -2331,8 +2331,8 @@ def given_inline_creative_missing_url(ctx: dict) -> None:
                 "empty_string",
                 "url='' on the primary asset is the scenario's whole subject: a URL the buyer "
                 "supplied and left blank, not one they omitted. CreativeAssetRequest refuses the "
-                "bytes themselves — assets.primary.AssetVariant.image.url 'Input should be a valid "
-                "URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
+                "bytes themselves — packages[0].creatives[0].assets.primary.url 'Input should be a "
+                "valid URL, input is empty' [type=url_parsing] — so the obligation is INVALID_REQUEST "
                 "from the request boundary, not VALIDATION_ERROR from a seller rule.",
                 creative,
                 obligation=ErrorCode.INVALID_REQUEST,

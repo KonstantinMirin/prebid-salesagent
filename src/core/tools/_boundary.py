@@ -169,6 +169,7 @@ def failure_response(
     *,
     echo: ContextObject | None = None,
     identity: PublicIdentity | None = None,
+    document: Any = None,
 ) -> AdcpErrorResponse:
     """Record one failure and build the response that answers it. THE one failure builder.
 
@@ -195,9 +196,15 @@ def failure_response(
     ``DetailsT`` to ``Any``; it is parameterized now. Catching here instead would answer
     INTERNAL_ERROR while the record said BUDGET_EXCEEDED -- making the log-versus-wire
     disagreement that was the damage into permanent behavior.
+
+    ``document`` is the RAW payload, passed only by the one caller that holds one -- the
+    parse step. A pydantic ``loc`` is not a pointer into it (pydantic synthesizes segments
+    for the unions it was resolving), so the buyer's own payload is what resolves the
+    difference; see ``JsonPointer.from_pydantic_loc``. A failure raised after the parse has
+    no payload to blame and passes none.
     """
     record_boundary_error(protocol, operation, exc, identity=identity)
-    return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc)))
+    return _served(echo, AdcpErrorResponse.of(adcp_error_for(exc, document=document)))
 
 
 def _failed(
@@ -206,9 +213,12 @@ def _failed(
     exc: Exception,
     echo: ContextObject | None,
     identity: PublicIdentity | None = None,
+    document: Any = None,
 ) -> NoReturn:
     """Leave the boundary with the failure response for ``exc``, scoped to the caller once resolved."""
-    raise AdcpFailure(failure_response(protocol, tool_name, exc, echo=echo, identity=identity)) from exc
+    raise AdcpFailure(
+        failure_response(protocol, tool_name, exc, echo=echo, identity=identity, document=document)
+    ) from exc
 
 
 def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> BuyerRequest:
@@ -233,7 +243,7 @@ def validated_request(tool_name: str, raw: Any, protocol: TransportProtocol) -> 
             echo = ContextObject.model_validate(raw["context"])
         except (TypeError, KeyError, IndexError, ValidationError):
             echo = None
-        _failed(protocol, tool_name, exc, echo)
+        _failed(protocol, tool_name, exc, echo, document=raw)
 
 
 async def serve(
