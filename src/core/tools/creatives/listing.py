@@ -502,11 +502,11 @@ def _list_creatives_impl(
                 )
 
             # Build Creative directly with explicit types to satisfy mypy
-            from src.core.schemas import FormatId, url
+            from src.core.schemas import FormatId
 
             # Build FormatId with optional parameters (AdCP 2.5 format templates)
             format_kwargs: dict[str, Any] = {
-                "agent_url": url(db_creative.agent_url),
+                "agent_url": db_creative.agent_url,
                 "id": db_creative.format or "",
             }
             # Add format parameters if present

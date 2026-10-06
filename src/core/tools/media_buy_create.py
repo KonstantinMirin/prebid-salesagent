@@ -111,9 +111,6 @@ from src.core.schemas import (
     Targeting,
     canonical_agent_url,
 )
-from src.core.schemas import (
-    url as make_url,
-)
 from src.core.security.outbound_http import CounterpartyUrl, UrlProvenance
 from src.core.tools._media_buy_transitions import resolve_flight_window_status
 from src.core.tools.financial_validation import (
@@ -3287,7 +3284,7 @@ async def _create_media_buy_impl(
                     for fmt_item in pkg_product.format_ids:
                         if isinstance(fmt_item, str):
                             # Convert legacy string format to FormatId object
-                            format_ids_to_use.append(FormatId(agent_url=make_url(default_agent_url), id=fmt_item))
+                            format_ids_to_use.append(FormatId(agent_url=default_agent_url, id=fmt_item))
                         elif isinstance(fmt_item, dict):
                             # Convert dict to FormatId object (preserves width/height/duration_ms)
                             # Ensure agent_url is set

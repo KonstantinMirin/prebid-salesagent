@@ -186,7 +186,6 @@ from adcp.types.domains.core.collection_list_ref import (
 )
 from annotated_types import MaxLen, MinLen
 from pydantic import (
-    AnyUrl,
     AwareDatetime,
     BaseModel,
     ConfigDict,
@@ -203,9 +202,6 @@ from pydantic_core import ValidationError as PydanticCoreValidationError
 # The pricing option types (nine local member subclasses, the AdCPPricingOption
 # union, and the PricingOption wrapper) live in src.core.schemas.pricing; the
 # package __init__ star-exports the members and the union from there.
-
-
-# Helper function for creating AnyUrl instances (eliminates mypy warnings)
 
 
 class Error(_LibraryError):
@@ -355,24 +351,6 @@ class Error(_LibraryError):
     def model_construct(cls, _fields_set: set[str] | None = None, **values: Any) -> "Error":  # type: ignore[override]
         """Validation-skipping construction is not available for a graded model."""
         return cls.model_validate(values)
-
-
-def url(value: str) -> AnyUrl:
-    """Convert string to AnyUrl for type-safe URL construction.
-
-    This helper eliminates mypy warnings when passing strings to AnyUrl fields.
-    Pydantic's AnyUrl accepts strings at runtime and validates/converts them automatically.
-
-    Usage:
-        FormatId(agent_url=url("https://example.com"), id="test")
-
-    Args:
-        value: URL string to convert
-
-    Returns:
-        AnyUrl instance (auto-validated by Pydantic)
-    """
-    return AnyUrl(value)  # Pydantic handles string -> AnyUrl conversion
 
 
 def canonical_agent_url(agent_url: object) -> str:
@@ -2118,9 +2096,12 @@ class ProductPerformance(SalesAgentBaseModel):
 class FormatId(LibraryFormatId):
     """AdCP format identifier - extends library FormatId with convenience methods.
 
-    Note: The inherited agent_url field has type AnyUrl, but Pydantic accepts strings
-    at runtime and automatically validates/converts them. This causes mypy warnings
-    (str vs AnyUrl) which are safe to ignore - the code works correctly at runtime.
+    Note: the inherited ``agent_url`` is the WIRE STRING. adcp 9 (#1396, "keep the
+    format-reference agent_url as the wire string") types it ``StrictStr`` behind an
+    absolute-URL validator, so an ``AnyUrl`` is REFUSED rather than coerced, and the
+    normalisation ``AnyUrl`` used to apply (a trailing slash on a bare origin) is no
+    longer applied on this field. Pass the string through; comparing two references
+    still goes through :func:`canonical_agent_url`, which the spec makes a MUST.
 
     AdCP 2.5+ supports parameterized format IDs with width/height/duration_ms fields.
     """
