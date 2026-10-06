@@ -58,8 +58,9 @@ _T = TypeVar("_T")
 # jsonschema's own _WrappedReferencingError, which subclasses it), but
 # Unretrievable and NoSuchResource subclass KeyError instead. Unretrievable is
 # the one this repo actually produces at runtime — referencing wraps any
-# exception out of a registry retrieve callable, and pinned_schema._retrieve
-# raises PinnedSchemaError for a schema outside the pinned tree.
+# exception out of a registry retrieve callable, and the callback
+# pinned_schema._retrieve_in binds to a source raises PinnedSchemaError for a
+# schema outside that source's pinned tree, or missing from it.
 _INSTRUMENT_FAILURES = (
     jsonschema.exceptions.SchemaError,
     referencing.exceptions.Unresolvable,
