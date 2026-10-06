@@ -1353,6 +1353,26 @@ def request_headers(token: str | None, extra: dict[str, str] | None = None) -> d
     return headers
 
 
+def buyer_signing_profile_version() -> str:
+    """The signing profile version every test-side signer sends.
+
+    DERIVED from the pin, never declared — the same rule production follows in
+    ``src.core.signing.request_signer``. adcp 9 made ``signing_profile_version`` a
+    required keyword of ``sign_request``, and the SDK helper's own docstring says a
+    caller "must derive this from trusted endpoint configuration, never an unbound
+    request-body field". ``get_adcp_spec_version()`` is the installed wheel reporting
+    the version it implements, so it moves on its own at the next pin bump; a literal
+    here would quietly sign under a stale profile instead.
+
+    One function rather than the expression at each call site: the buyer signer in
+    this module and the replay-store integration test both need it, and a second
+    copy is a second thing to forget at the next bump.
+    """
+    from adcp.signing import signing_profile_for_adcp_version
+
+    return signing_profile_for_adcp_version(get_adcp_spec_version())
+
+
 def sign_wire_request(
     private_key: Any,
     *,
@@ -1374,6 +1394,7 @@ def sign_wire_request(
         key_id=key_id,
         alg="ed25519",
         cover_content_digest=True,
+        signing_profile_version=buyer_signing_profile_version(),
     )
     return signed.as_dict()
 
