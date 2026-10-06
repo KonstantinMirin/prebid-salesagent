@@ -53,6 +53,7 @@ from src.core.signing.algorithms import (
     signing_alg_check_clause,
     signing_purpose_check_clause,
 )
+from src.core.signing.onboarding import RequestSigningRecord
 
 logger = logging.getLogger(__name__)
 
@@ -791,6 +792,13 @@ class Principal(Base, JSONValidatorMixin):
     # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
     # would make that second lookup ambiguous, which is a silent authentication defect.
     agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # The counterparty's request-signing keys, pinned at onboarding (src/core/signing/onboarding.py).
+    # A signed request with no bearer resolves its keyid against these records in the tenant it
+    # addressed. A record requires an ``agent_url``, because that URL is the ``agents[]`` entry
+    # the keyid resolves to (security.mdx @ v3.1.1 :1094, :1210-1216).
+    request_signing: Mapped[RequestSigningRecord | None] = mapped_column(
+        JSONType(model=RequestSigningRecord), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
@@ -814,6 +822,9 @@ class Principal(Base, JSONValidatorMixin):
         Index("idx_principals_tenant", "tenant_id"),
         Index("idx_principals_token_hash", "token_hash"),
         UniqueConstraint("tenant_id", "agent_url", name="uq_principals_tenant_agent_url"),
+        CheckConstraint(
+            "request_signing IS NULL OR agent_url IS NOT NULL", name="ck_principals_request_signing_agent_url"
+        ),
     )
 
     @classmethod

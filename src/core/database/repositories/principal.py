@@ -64,6 +64,22 @@ class PrincipalRepository:
             select(Principal).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
         ).first()
 
+    def find_by_signing_keyid(self, keyid: str) -> Principal | None:
+        """The principal of this tenant whose onboarding record pins ``keyid``, or ``None``.
+
+        How a signed request that presents no bearer finds its signer: the keyid is its only
+        handle, and onboarding is where its key comes from (security.mdx @ v3.1.1 :1090).
+
+        ``None`` as well when more than one principal pins it. A verifier "MUST NOT accept
+        signatures from a ``keyid`` they cannot resolve to a specific ``agents[]`` entry"
+        (:1094), and two entries are not a specific one.
+        """
+        pins_keyid = Principal.request_signing["jwks"]["keys"].contains([{"kid": keyid}])
+        rows = self._session.scalars(
+            select(Principal).filter_by(tenant_id=self._tenant_id).where(pins_keyid).limit(2)
+        ).all()
+        return rows[0] if len(rows) == 1 else None
+
     def list_all(self) -> list[Principal]:
         """Every principal in this tenant, ordered by display name."""
         return list(

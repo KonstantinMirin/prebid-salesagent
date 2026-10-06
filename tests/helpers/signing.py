@@ -40,13 +40,16 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from unittest.mock import patch
 
 from adcp import get_adcp_spec_version
 
 from tests.helpers.credentials import credential_headers
 from tests.helpers.webhook_wire import CapturedWebhook
+
+if TYPE_CHECKING:
+    from src.core.signing.onboarding import RequestSigningRecord
 
 # An RFC 9421 signature base: the canonicalized component list joined by LF with
 # ``"@signature-params"`` last. A SigningProvider signs this as a RAW MESSAGE —
@@ -80,12 +83,11 @@ COUNTERPARTY_AGENT_URL = "https://buyer.example.com/a2a"
 #: The ``keyid`` the counterparty signs under.
 COUNTERPARTY_KID = "buyer-request-signing-1"
 
-#: The counterparty as a REGISTERED entry of
-#: :attr:`~src.core.config.SigningSettings.counterparty_registry` carries it (#1291 B4).
-#: Deliberately different from :data:`COUNTERPARTY_AGENT_URL` and its origin: the two
-#: resolution paths must be distinguishable at the assertion, so a test can say WHICH
+#: The counterparty as a principal's onboarding record (``principals.request_signing``)
+#: names it. Deliberately different from :data:`COUNTERPARTY_AGENT_URL` and its origin: the
+#: two resolution paths must be distinguishable at the assertion, so a test can say WHICH
 #: one supplied the key rather than only that some key was found.
-REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
+PINNED_AGENT_URL = "https://test-kit.example.com/a2a"
 
 #: An ``agent_url`` whose brand.json walk FAILS, deterministically and with no network.
 #:
@@ -129,6 +131,9 @@ def wire_origin(url: str) -> str:
 #: suite that wants these ids constructs its env with them.
 SIGNING_TENANT_ID = "sig_tenant"
 SIGNING_PRINCIPAL_ID = "sig_principal"
+#: The counterparty in the same tenant whose onboarding record pins its keys
+#: (:func:`seed_principal`'s ``pinned_keys``).
+PINNED_PRINCIPAL_ID = "sig_pinned_principal"
 
 #: The seller's own host, DOTTED so ``canonical_agent_url`` derives ``https://`` for it.
 #:
@@ -739,14 +744,14 @@ def counterparty_key(
     run the REAL verifier against real keys without a live counterparty — nothing
     about the outcome is faked.
 
-    Built via ``build_registry_resolution`` (#1291 B4) — the SAME production
-    constructor the configured counterparty registry uses — rather than a
-    second inline ``AgentResolution(...)`` here, so this fixture and the
-    registry fallback can never drift into two different resolution shapes.
+    Built via ``build_pinned_resolution`` — the SAME production constructor a
+    principal's onboarding record resolves through — rather than a second inline
+    ``AgentResolution(...)`` here, so this fixture and the pinned-record path can
+    never drift into two different resolution shapes.
 
     A resolution seeded here lands in the SAME ``AGENT_RESOLUTION_CACHE`` a real
-    brand.json walk populates, so ``_resolution_for`` tags it ``source="walk"``
-    and the verifier runs against it exactly as it would in production.
+    brand.json walk populates, so ``_resolution_for`` serves it as the walk's and
+    the verifier runs against it exactly as it would in production.
 
     NO TIER-3 RESOLVER IS SEEDED. This used to also populate a
     ``_BRAND_AUTHZ_RESOLVER_CACHE`` so that brand-authorization (#1291 hksr) ran over
@@ -757,27 +762,11 @@ def counterparty_key(
     resolution refuses to do — a helper that pokes a cache nothing reads makes every
     caller LOOK like it configured Tier 3 while configuring nothing.
     """
-    from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_registry_resolution
+    from src.core.signing.verifier import AGENT_RESOLUTION_CACHE, build_pinned_resolution
 
-    resolution = build_registry_resolution({"agent_url": agent_url, "jwks": jwks})
+    resolution = build_pinned_resolution(agent_url, jwks)
     with seeded_cache_entry(AGENT_RESOLUTION_CACHE, agent_url, resolution):
         yield
-
-
-def registry_entry(
-    jwks: dict[str, Any],
-    *,
-    agent_url: str = REGISTRY_AGENT_URL,
-) -> dict[str, Any]:
-    """One entry of the configured counterparty registry (#1291 B4).
-
-    The same two values :func:`counterparty_key` seeds into the cache, because the
-    registry's whole job is to produce the SAME ``AgentResolution`` shape from config
-    instead of from the brand.json walk. Keeping one vocabulary for both is what lets
-    a test swap the resolution SOURCE while changing nothing else — and what makes it
-    visible if the two shapes ever drift apart.
-    """
-    return {"agent_url": agent_url, "jwks": jwks}
 
 
 @contextmanager
@@ -1209,13 +1198,21 @@ def keypair_for(kid: str) -> tuple[Any, dict[str, Any]]:
     return load_private_key_pem(pem), {"keys": [public_jwk]}
 
 
-def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) -> str:
+def seed_principal(
+    env: Any,
+    *,
+    agent_url: str | None = COUNTERPARTY_AGENT_URL,
+    pinned_keys: RequestSigningRecord | None = None,
+) -> str:
     """Create the shared tenant + a Principal carrying *agent_url*; return its token.
 
     ``Principal.agent_url`` (nullable ``String(500)``) is the onboarding record,
     and the only legitimate source for the counterparty's agent URL. Pass
     ``agent_url=None`` to grade what the verifier does when onboarding never
     recorded one.
+
+    *pinned_keys* adds a SECOND principal to the same tenant, onboarded at :data:`PINNED_AGENT_URL` with that
+    record: the counterparty a bearer-less signed request's keyid resolves to.
 
     *env* is the live :class:`~tests.harness._base.BareIntegrationEnv`: it is not
     read here, but the factories below write through the session that entering the
@@ -1238,6 +1235,13 @@ def seed_principal(env: Any, *, agent_url: str | None = COUNTERPARTY_AGENT_URL) 
         principal_id=SIGNING_PRINCIPAL_ID,
         agent_url=agent_url,
     )
+    if pinned_keys is not None:
+        PrincipalFactory(
+            tenant=tenant,
+            principal_id=PINNED_PRINCIPAL_ID,
+            agent_url=PINNED_AGENT_URL,
+            request_signing=pinned_keys,
+        )
     # The PLAINTEXT token, from the one producer that mints it. #1721 replaced the
     # ``access_token`` column with ``token_hash``, so the row no longer carries a readable
     # credential to hand back -- ``PrincipalFactory`` hashes exactly this value, which is
@@ -1430,7 +1434,7 @@ def signed_headers(
 
 def signed_probe(
     private_key: Any,
-    token: str,
+    token: str | None,
     *,
     key_id: str = COUNTERPARTY_KID,
     request_id: str = "registry-probe",

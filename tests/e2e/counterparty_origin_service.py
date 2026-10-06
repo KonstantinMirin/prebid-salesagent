@@ -31,7 +31,7 @@ document points at:
 
 That pair is what makes "resolvable via the PUBLISHED TRUST ROOT" a wire fact
 rather than an inference: without the unlisted sibling, a regression that skipped
-Tier 3 or routed to the config registry would produce a byte-identical 2xx AND an
+Tier 3 or routed to a pinned onboarding record would produce a byte-identical 2xx AND an
 identical metric increment. ``AGENT_RESOLUTION_CACHE`` is keyed on agent_url, so
 the two cannot collide in the server's cache.
 

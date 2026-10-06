@@ -8,20 +8,18 @@
 #   scripts/test-stack.sh cmd_up       (host stack)
 #   run_all_tests.sh                   (in-network stack)
 #
-# It must run at BRING-UP, not with the other storyboard seeding in tox: these are
-# settings the server process reads from its own environment at boot
+# It must run at BRING-UP, not with the other storyboard seeding in tox: this is a
+# setting the server process reads from its own environment at boot
 # (src/core/config.py SigningSettings), so a value produced after the container
-# started reaches nothing. The tenant half of the same contract IS seeded later, from
+# started reaches nothing. The tenant half of the same contract -- the counterparty's
+# onboarding record that pins the runner's keys -- IS seeded later, from
 # [testenv:storyboard], because the database can be written at any time.
 #
-# Values are DERIVED by scripts/setup/storyboard_signing.py from the vendored
-# conformance keys and the test-kit's own thresholds — see that module for what each
-# one satisfies.
+# The value is produced by scripts/setup/storyboard_signing.py; see that module for
+# what it satisfies.
 #
-# A failure here is FATAL rather than silent. Without these the storyboard agent
-# trusts no counterparty, and every signed vector is refused at checklist step 7 with
-# request_signature_key_unknown — 20+ graded checks failing for a reason that looks
-# like a verifier bug and is actually a missing export.
+# A failure here is FATAL rather than silent. Without it the pre-revoked keyid is
+# not revoked, and negative/017 is accepted instead of refused.
 
 _sb_root="$( cd "$( dirname "${BASH_SOURCE[0]}" )/../.." && pwd )"
 

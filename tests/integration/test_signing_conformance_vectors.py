@@ -149,6 +149,7 @@ import pytest
 from adcp.signing.canonical import build_signature_base, parse_signature_input_header
 from adcp.signing.digest import compute_content_digest_sha256, content_digest_matches
 
+from src.core.signing.onboarding import RequestSigningRecord
 from tests.factories import PrincipalFactory, TenantFactory
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
@@ -203,8 +204,8 @@ _PRINCIPAL_ID = "b3_conformance_principal"
 #: both be accepted because the first entry expired between them.
 _REPLAY_TTL_SECONDS = 70.0
 
-#: ``negative/020``'s cap, scoped through the PRODUCTION config knob so it is
-#: process-local and cannot reach another xdist worker.
+#: ``negative/020``'s cap, set on the counterparty's onboarding record in this module's
+#: own tenant, so it cannot reach another xdist worker.
 _RATE_ABUSE_CAP = 3
 
 _ED25519_KEYID = "test-ed25519-2026"
@@ -431,8 +432,12 @@ def _seed_tenant() -> Any:
     return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
 
 
-def _seed_principal(tenant: Any) -> str:
+def _seed_principal(tenant: Any, request_signing: RequestSigningRecord | None = None) -> str:
     """The counterparty's Principal, carrying the ``agent_url`` key resolution reads.
+
+    *request_signing* is its onboarding record, for a case whose request presents no
+    bearer (:attr:`Credential.ONBOARDED_KEYS`): the keyid then resolves to this
+    principal through the record rather than through the walk.
 
     ``_resolve_identity`` resolves this row from the Bearer value and hands
     :func:`~src.core.signing.verifier.verify_inbound_signature` the ``Principal``;
@@ -445,7 +450,12 @@ def _seed_principal(tenant: Any) -> str:
     compute — the same derivation ``tests/utils/database_helpers.py`` and the harness
     use, never a second one written here.
     """
-    PrincipalFactory(tenant=tenant, principal_id=_PRINCIPAL_ID, agent_url=COUNTERPARTY_AGENT_URL)
+    PrincipalFactory(
+        tenant=tenant,
+        principal_id=_PRINCIPAL_ID,
+        agent_url=COUNTERPARTY_AGENT_URL,
+        request_signing=request_signing,
+    )
     return plaintext_token_for(_PRINCIPAL_ID)
 
 
@@ -538,10 +548,10 @@ def _frozen_verifier_clock(reference_now: float) -> Iterator[None]:
 def _config_for(plan: VectorPlan) -> Iterator[None]:
     """Establish the case's pre-state through PRODUCTION config seams only.
 
-    ``017``'s revocation and ``020``'s cap are CONFIG on this deployment, not
-    white-box injection: ``SigningSettings.revoked_keyids``'s own docstring says "Set to
-    ``test-revoked-2026`` on the conformance-grading deployment", and
-    ``per_keyid_cap_overrides`` says "test-kit counterparties -> 100".
+    ``017``'s revocation is CONFIG on this deployment, not white-box injection:
+    ``SigningSettings.revoked_keyids`` is how the conformance-grading deployment
+    pre-revokes ``test-revoked-2026``. (``020``'s cap is not config: it is the
+    counterparty's onboarding record, seeded by :func:`_vector_case`.)
 
     Through :func:`tests.helpers.signing.signing_config`, which substitutes the whole
     ``SigningSettings`` the verifier reads per request off ``get_settings().signing``
@@ -551,12 +561,23 @@ def _config_for(plan: VectorPlan) -> Iterator[None]:
     """
     with signing_config(
         revoked_keyids="test-revoked-2026" if plan.harness_state is HarnessState.REVOKED_KID else "",
-        per_keyid_cap_overrides=(
-            {_ED25519_KEYID: _RATE_ABUSE_CAP} if plan.harness_state is HarnessState.CAP_OVERRIDE else {}
-        ),
-        replay_ttl_overrides={_ED25519_KEYID: _REPLAY_TTL_SECONDS},
     ):
         yield
+
+
+def _onboarding_record(plan: VectorPlan, vector: dict[str, Any]) -> RequestSigningRecord | None:
+    """The counterparty's onboarding record for a case that presents no bearer, else None.
+
+    Pins the vector's JWKS, with the replay tuning the conformance deployment's record
+    carries: ``020``'s cap, and the TTL clamp on every case.
+    """
+    if plan.credential is not Credential.ONBOARDED_KEYS:
+        return None
+    return RequestSigningRecord(
+        jwks=_jwks_for(vector),
+        replay_cap=_RATE_ABUSE_CAP if plan.harness_state is HarnessState.CAP_OVERRIDE else None,
+        replay_ttl_seconds=_REPLAY_TTL_SECONDS,
+    )
 
 
 @contextmanager
@@ -567,18 +588,21 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
     pairs = _replay_pairs(vector)
 
     if plan.harness_state is HarnessState.CAP_OVERRIDE:
-        # ``negative/020``: fill the per-keyid replay cache TO the (overridden) cap with
+        # ``negative/020``: fill the per-keyid replay cache TO the record's lowered cap with
         # CASE-UNIQUE nonces, which the vector explicitly blesses ("populating the cache
         # with N placeholder entries"). The keyid stays ``test-ed25519-2026`` — renaming
         # it would mutate a graded ``Signature-Input`` byte and need the JWKS reseeded
         # under a new kid. These pairs are deleted by exact match afterwards, and the
-        # cap itself is a process-local config override, so neither can leak to a
-        # sibling module on another worker.
+        # cap itself lives on this module's own tenant's principal, so neither can leak
+        # to a sibling module on another worker.
         pairs = pairs + [(_ED25519_KEYID, f"b3-cap-{index:02d}") for index in range(_RATE_ABUSE_CAP)]
 
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
         tenant = _seed_tenant()
-        token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        token = None
+        if plan.credential is not Credential.NONE:
+            principal_token = _seed_principal(tenant, request_signing=_onboarding_record(plan, vector))
+            token = principal_token if plan.credential is Credential.PRINCIPAL_TOKEN else None
         _forget(env, pairs)
         if plan.harness_state is HarnessState.CAP_OVERRIDE:
             _claim(env, pairs[-_RATE_ABUSE_CAP:])

@@ -28,6 +28,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import pytest
+from adcp.signing.verifier import VerifiedSigner
 
 from src.core.exceptions import AdCPRequestSignatureError
 from src.core.schemas import Principal
@@ -80,10 +81,17 @@ def _unsigned(operation: str = A_PROTECTED_OPERATION, *, registers_credentials: 
     return SignatureSubject(operation=operation, registers_credentials=registers_credentials, exchange=None)
 
 
+def _verify(subject: SignatureSubject, *, tenant: TenantContext, principal: Principal | None) -> VerifiedSigner | None:
+    """The verifier entry over an unsigned request, which never asks for an onboarded signer."""
+    return verify_inbound_signature(
+        subject, headers={}, tenant=tenant, principal=principal, onboarded_signer=lambda keyid: None
+    )
+
+
 def test_an_unauthenticated_unsigned_request_to_a_required_operation_is_refused() -> None:
     """The control for everything below, and the rule's first bullet verbatim."""
     with _tenant_requiring_signatures() as tenant, pytest.raises(AdCPRequestSignatureError) as refusal:
-        verify_inbound_signature(_unsigned(), headers={}, tenant=tenant, principal=None)
+        _verify(_unsigned(), tenant=tenant, principal=None)
     assert str(refusal.value.error_code) == "request_signature_required"
 
 
@@ -94,13 +102,13 @@ def test_an_authenticated_unsigned_request_to_a_required_operation_is_served() -
     configuration: the bearer is what this seller advertised as sufficient for this caller.
     """
     with _tenant_requiring_signatures() as tenant:
-        assert verify_inbound_signature(_unsigned(), headers={}, tenant=tenant, principal=_a_caller()) is None
+        assert _verify(_unsigned(), tenant=tenant, principal=_a_caller()) is None
 
 
 def test_an_operation_outside_the_buckets_is_served_unsigned_and_unauthenticated() -> None:
     """The refusal is scoped to the declared membership, not to signing being enabled."""
     with _tenant_requiring_signatures() as tenant:
-        assert verify_inbound_signature(_unsigned("get_products"), headers={}, tenant=tenant, principal=None) is None
+        assert _verify(_unsigned("get_products"), tenant=tenant, principal=None) is None
 
 
 def test_registering_webhook_credentials_is_refused_even_for_an_authenticated_caller() -> None:
@@ -115,12 +123,7 @@ def test_registering_webhook_credentials_is_refused_even_for_an_authenticated_ca
     caller is normally bearer-authed — that is the threat model, not an edge case.
     """
     with _tenant_requiring_signatures() as tenant, pytest.raises(AdCPRequestSignatureError) as refusal:
-        verify_inbound_signature(
-            _unsigned("get_products", registers_credentials=True),
-            headers={},
-            tenant=tenant,
-            principal=_a_caller(),
-        )
+        _verify(_unsigned("get_products", registers_credentials=True), tenant=tenant, principal=_a_caller())
     assert str(refusal.value.error_code) == "request_signature_required", (
         "the escalation fires on an operation in NO bucket and for an authenticated caller — "
         "both of the exemptions the composition rule would otherwise grant"
@@ -139,12 +142,7 @@ def test_a_seller_that_does_not_verify_refuses_nothing() -> None:
         virtual_host=AN_AGENT_HOST,
         capability_declarations={"request_signing": {"supported": False}},
     )
-    assert (
-        verify_inbound_signature(
-            _unsigned("get_products", registers_credentials=True), headers={}, tenant=tenant, principal=None
-        )
-        is None
-    )
+    assert _verify(_unsigned("get_products", registers_credentials=True), tenant=tenant, principal=None) is None
 
 
 def test_the_kill_switch_reads_no_posture_at_all() -> None:
@@ -152,4 +150,4 @@ def test_the_kill_switch_reads_no_posture_at_all() -> None:
     from tests.helpers.signing import verifier_disabled
 
     with _tenant_requiring_signatures() as tenant, verifier_disabled():
-        assert verify_inbound_signature(_unsigned(), headers={}, tenant=tenant, principal=None) is None
+        assert _verify(_unsigned(), tenant=tenant, principal=None) is None

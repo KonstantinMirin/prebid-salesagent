@@ -70,7 +70,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, resolve_agent
 from adcp.signing.canonical import split_structured_field
@@ -98,7 +98,7 @@ from adcp.signing.verifier import (
     verify_request_signature,
 )
 
-from src.core.config import CounterpartyRegistryEntry, SigningSettings, get_settings
+from src.core.config import SigningSettings, get_settings
 from src.core.database.database_session import get_db_session
 from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 from src.core.exceptions import adcp_error_for
@@ -107,6 +107,7 @@ from src.core.schemas import Principal
 from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
 from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
+from src.core.signing.onboarding import RequestSigningRecord
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
 from src.core.signing.replay_store import PostgresReplayStore
 from src.core.signing.revocation import checker_for
@@ -143,10 +144,14 @@ _RESOLUTION_FAILURES: dict[str, _ResolutionFailure] = {}
 
 @dataclass(frozen=True)
 class _CounterpartyResolution:
-    """A resolved (or unresolved) counterparty, tagged with WHERE it came from."""
+    """A resolved (or unresolved) counterparty, and the onboarding record it came from.
+
+    *record* is set only when the keys came from a pinned onboarding record rather than the
+    brand.json walk; its replay tuning then applies to this request.
+    """
 
     resolution: AgentResolution | None
-    source: Literal["walk", "registry"]
+    record: RequestSigningRecord | None = None
 
 
 class _FailedDiscoveryJwksResolver:
@@ -177,6 +182,7 @@ def verify_inbound_signature(
     headers: Mapping[str, str],
     tenant: TenantContext | None,
     principal: Principal | None,
+    onboarded_signer: Callable[[str], Principal | None],
 ) -> VerifiedSigner | None:
     """Read the signature credential this request presents, if any. THE verifier entry.
 
@@ -198,6 +204,11 @@ def verify_inbound_signature(
     taking the signer's agent URL from a header or a body field, because that would let the
     signer choose which brand.json (and therefore which key set) it is verified against, so
     the only legitimate source is what onboarding recorded.
+
+    *onboarded_signer* maps a keyid to the principal of the ADDRESSED tenant whose onboarding
+    record pins it. The resolver binds it to that tenant and hands it over, because it is
+    the one place principal rows are loaded. It is consulted only when there is no
+    ``agent_url`` to walk from (:func:`_resolution_for`).
     """
     config = get_settings().signing
     if not config.verifier_enabled:
@@ -227,7 +238,14 @@ def verify_inbound_signature(
         )
 
     return _verify_signed(
-        posture, subject, exchange, bucket=bucket, headers=headers, agent_url=agent_url, config=config
+        posture,
+        subject,
+        exchange,
+        bucket=bucket,
+        headers=headers,
+        agent_url=agent_url,
+        onboarded_signer=onboarded_signer,
+        config=config,
     )
 
 
@@ -291,6 +309,7 @@ def _verify_signed(
     bucket: PostureBucket,
     headers: Mapping[str, str],
     agent_url: str | None,
+    onboarded_signer: Callable[[str], Principal | None],
     config: SigningSettings,
 ) -> VerifiedSigner | None:
     """At least one signature header present: run the pre-check, then the checklist."""
@@ -333,7 +352,7 @@ def _verify_signed(
         # counterparty a three-hop outbound walk on a request that cannot be accepted.
         _strict_header_precheck(exchange.raw_headers)
         if precheck_only:
-            counterparty = _CounterpartyResolution(None, source="registry")
+            counterparty = _CounterpartyResolution(None)
         else:
             # The layer's target-URI gate, in FRONT of the SDK verifier: the pinned 6.6.0
             # verifier canonicalizes internally without the fixes the vendored copy carries,
@@ -346,14 +365,16 @@ def _verify_signed(
             # target-URI malformation, so hoisting it would make ``none`` refuse beyond the
             # requirement.
             reject_malformed_target(exchange.url)
-            counterparty = _resolution_for(agent_url, config, keyid=_parse_keyid(headers))
+            counterparty = _resolution_for(
+                agent_url, config, keyid=_parse_keyid(headers), onboarded_signer=onboarded_signer
+            )
         signer = _run_verifier(
             exchange=exchange,
             headers=headers,
             capability=posture.to_verifier_capability(),
             operation=operation,
             bucket=bucket,
-            resolution=counterparty.resolution,
+            counterparty=counterparty,
             agent_url=agent_url,
             config=config,
             precheck_only=precheck_only,
@@ -439,19 +460,17 @@ def _refuse(exc: SignatureVerificationError, operation: str, *, recorded: bool =
 WELL_KNOWN_JWKS_PATH = "/.well-known/jwks.json"
 
 
-def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResolution:
-    """The :class:`AgentResolution` a configured counterparty registry entry projects to.
+def build_pinned_resolution(agent_url: str, jwks: dict[str, Any]) -> AgentResolution:
+    """The :class:`AgentResolution` for a counterparty whose JWKS is already in hand.
 
-    The two subscripts cannot raise ``KeyError``:
-    :class:`~src.core.config.CounterpartyRegistryEntry` is the setting's type, so an entry
-    missing one is refused at config load, where an operator sees it.
+    Built from a principal's onboarding record (``principals.request_signing``): its
+    ``agent_url`` and the JWKS it pinned.
 
     Both document locations are DERIVED from the agent URL rather than declared beside it.
-    That is what makes this path answer the same question as the walk: a registry entry
+    That is what makes this path answer the same question as the walk: a pinned record
     cannot name a JWKS location :func:`_jwks_is_well_known` would refuse, because it names
     no location at all.
     """
-    agent_url = entry["agent_url"]
     origin = origin_of(agent_url)
     jwks_uri = f"{origin}{WELL_KNOWN_JWKS_PATH}"
     return AgentResolution(
@@ -459,7 +478,7 @@ def build_registry_resolution(entry: CounterpartyRegistryEntry) -> AgentResoluti
         brand_json_url=f"{origin}/.well-known/brand.json",
         agent_entry={"type": "sales", "url": agent_url, "jwks_uri": jwks_uri},
         jwks_uri=jwks_uri,
-        jwks=entry["jwks"],
+        jwks=jwks,
         fetched_at=time.time(),
     )
 
@@ -507,7 +526,7 @@ def _jwks_is_well_known(resolution: AgentResolution) -> bool:
 def _parse_keyid(headers: Mapping[str, str]) -> str | None:
     """The keyid named in the (unverified) ``Signature-Input`` header, or None.
 
-    Used ONLY to look up the counterparty registry fallback below — the signature must still
+    Used ONLY to look up the onboarding record that pins it, below — the signature must still
     cryptographically verify against whatever key this resolves to, so reading an unverified
     header here is not a bypass; it is exactly as safe as any other keyid-based key lookup
     (the SDK's own checklist resolves a JWKS entry off the same unverified field).
@@ -527,9 +546,13 @@ def _parse_keyid(headers: Mapping[str, str]) -> str | None:
 
 
 def _resolution_for(
-    agent_url: str | None, config: SigningSettings, *, keyid: str | None = None
+    agent_url: str | None,
+    config: SigningSettings,
+    *,
+    keyid: str | None,
+    onboarded_signer: Callable[[str], Principal | None],
 ) -> _CounterpartyResolution:
-    """The counterparty's cached resolution, resolving on a cold entry, tagged by source.
+    """The counterparty's cached resolution, resolving on a cold entry.
 
     ``agent_url -> capabilities -> identity.brand_json_url -> brand.json agents[] -> jwks_uri
     -> JWKS`` is a three-hop outbound walk, so it is done once per counterparty per TTL and
@@ -545,29 +568,31 @@ def _resolution_for(
     The SSRF pin stays at the SDK default: the walk follows a URL that ultimately came from a
     counterparty document, and ``allow_private_destinations`` is a test argument.
 
-    The registry fallback: when *agent_url* is falsy (no bearer resolved a principal, or an
-    onboarded principal recorded none — exactly what a bearer-less conformance runner
-    produces), *keyid* is looked up in ``config.counterparty_registry``. This branch is the
-    ONLY place the registry is consulted. A principal that DOES carry an ``agent_url`` never
-    reaches it, even when that walk fails below and returns ``cached`` (possibly ``None``) —
-    the registry is a fallback for a walk with no INPUT, never an override for a walk that
+    The pinned-record branch: when *agent_url* is falsy (no bearer resolved a principal, or
+    an onboarded principal recorded none — exactly what a bearer-less conformance runner
+    produces), *keyid* is resolved against the addressed tenant's onboarding records
+    (*onboarded_signer*, security.mdx @ v3.1.1 :1090 "prior onboarding"). The resolution is
+    named by that principal's ``agent_url`` and carries the JWKS it pinned, and the record's
+    replay tuning travels with it. A principal that DOES carry an ``agent_url`` never reaches
+    this branch, even when that walk fails below and returns ``cached`` (possibly ``None``) —
+    a pinned record is a source for a walk with no INPUT, never an override for a walk that
     FAILED, or a counterparty with a briefly unreachable brand.json would be silently
-    re-identified from config.
+    re-identified as whoever pinned its keyid.
     """
     if not agent_url:
-        if keyid is not None:
-            entry = config.counterparty_registry.get(keyid)
-            if entry is not None:
-                return _CounterpartyResolution(build_registry_resolution(entry), source="registry")
-        return _CounterpartyResolution(None, source="registry")
+        onboarded = onboarded_signer(keyid) if keyid is not None else None
+        if onboarded is None or onboarded.agent_url is None or onboarded.request_signing is None:
+            return _CounterpartyResolution(None)
+        record = onboarded.request_signing
+        return _CounterpartyResolution(build_pinned_resolution(onboarded.agent_url, record.jwks), record=record)
 
     now = time.time()
     cached = AGENT_RESOLUTION_CACHE.get(agent_url)
     if cached is not None and now - cached.fetched_at <= config.agent_resolution_ttl_seconds:
-        return _CounterpartyResolution(cached, source="walk")
+        return _CounterpartyResolution(cached)
     failure = _RESOLUTION_FAILURES.get(agent_url)
     if failure is not None and now - failure.at < config.agent_resolution_refetch_cooldown_seconds:
-        return _CounterpartyResolution(cached, source="walk")
+        return _CounterpartyResolution(cached)
 
     try:
         resolution = resolve_agent(
@@ -580,7 +605,7 @@ def _resolution_for(
         mapped = _map_agent_resolver_error(exc)
         _RESOLUTION_FAILURES[agent_url] = _ResolutionFailure(at=now, code=mapped)
         logger.warning("Could not resolve signing keys for counterparty %r (%s): %s", agent_url, exc.code, exc)
-        return _CounterpartyResolution(cached, source="walk")
+        return _CounterpartyResolution(cached)
 
     if not _jwks_is_well_known(resolution):
         # The counterparty's brand.json pointed its keys somewhere other than the one
@@ -593,11 +618,11 @@ def _resolution_for(
             resolution.jwks_uri,
             WELL_KNOWN_JWKS_PATH,
         )
-        return _CounterpartyResolution(cached, source="walk")
+        return _CounterpartyResolution(cached)
 
     AGENT_RESOLUTION_CACHE[agent_url] = resolution
     _RESOLUTION_FAILURES.pop(agent_url, None)
-    return _CounterpartyResolution(resolution, source="walk")
+    return _CounterpartyResolution(resolution)
 
 
 def _map_agent_resolver_error(exc: AgentResolverError) -> str:
@@ -680,7 +705,7 @@ def _run_verifier(
     capability: VerifierCapability,
     operation: str,
     bucket: PostureBucket,
-    resolution: AgentResolution | None,
+    counterparty: _CounterpartyResolution,
     agent_url: str | None,
     config: SigningSettings,
     precheck_only: bool,
@@ -705,7 +730,8 @@ def _run_verifier(
     one decision. Step 9 runs before crypto verify because the SDK calls it that way; nothing
     here may reorder it.
     """
-    with _verifier_dependencies(resolution, agent_url=agent_url, config=config, precheck_only=precheck_only) as deps:
+    resolution = counterparty.resolution
+    with _verifier_dependencies(counterparty, agent_url=agent_url, config=config, precheck_only=precheck_only) as deps:
         jwks_resolver, replay_store, revocation_checker = deps
         options = VerifyOptions(
             now=time.time(),
@@ -727,7 +753,7 @@ def _run_verifier(
 
 @contextmanager
 def _verifier_dependencies(
-    resolution: AgentResolution | None,
+    counterparty: _CounterpartyResolution,
     *,
     agent_url: str | None,
     config: SigningSettings,
@@ -748,15 +774,19 @@ def _verifier_dependencies(
     WRAPS the verify call rather than merely preceding it: the replay store's three methods
     are synchronous and the verifier calls them inline, so the session has to outlive the
     construction.
+
+    The replay store takes the counterparty's onboarding record, when the keys came from
+    one, so its cap and TTL apply to this request (test kit L113-149: "for the test-kit
+    counterparty only").
     """
     if precheck_only:
         yield StaticJwksResolver({}), None, None
         return
     with get_db_session() as session:
         yield (
-            _jwks_resolver(resolution, agent_url=agent_url),
-            PostgresReplayStore(ReplayNonceRepository(session), config),
-            checker_for(resolution, config),
+            _jwks_resolver(counterparty.resolution, agent_url=agent_url),
+            PostgresReplayStore(ReplayNonceRepository(session), config, counterparty.record),
+            checker_for(counterparty.resolution, config),
         )
 
 

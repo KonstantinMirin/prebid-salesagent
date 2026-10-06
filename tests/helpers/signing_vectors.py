@@ -325,6 +325,11 @@ class Credential(Enum):
 
     #: A provisioned Principal whose ``agent_url`` is the seeded counterparty.
     PRINCIPAL_TOKEN = "principal_token"
+    #: The vector's own headers and NO bearer; the counterparty Principal carries an
+    #: onboarding record (``principals.request_signing``) pinning the vector's JWKS, so
+    #: the keyid alone resolves it — the shape the conformance runner meets on the
+    #: storyboard deployment. Needed where the graded state is a property of that record.
+    ONBOARDED_KEYS = "onboarded_keys"
     #: The vector's own headers verbatim, and NO principal provisioned for them.
     #: security.mdx §"Composition with fallback authenticators": "an unrecognized
     #: bearer token or API key (one the verifier does not accept) is not a valid
@@ -340,7 +345,7 @@ class HarnessState(Enum):
     REPLAY_PAIR = "replay_pair"
     #: 017: ``SigningSettings.revoked_keyids`` -> ``CounterpartyRevocationChecker``.
     REVOKED_KID = "revoked_kid"
-    #: 020: ``SigningSettings.per_keyid_cap_overrides`` + case-unique claimed nonces.
+    #: 020: the onboarding record's ``replay_cap`` + case-unique claimed nonces.
     CAP_OVERRIDE = "cap_override"
 
 
@@ -611,9 +616,10 @@ TRANSPLANT: dict[str, VectorPlan] = {
     "negative/020-rate-abuse": _rejects(
         "negative/020-rate-abuse",
         "request_signature_rate_abuse",
+        credential=Credential.ONBOARDED_KEYS,
         harness_state=HarnessState.CAP_OVERRIDE,
-        notes="NEVER re-signed (same canary as 017). Cap set via per_keyid_cap_overrides, which is "
-        "process-local and cannot reach another xdist worker.",
+        notes="NEVER re-signed (same canary as 017). Cap set on the counterparty's onboarding record "
+        "(replay_cap), which lives in this module's own tenant and cannot reach another xdist worker.",
     ),
     "negative/021-duplicate-signature-input-label": _rejects(
         "negative/021-duplicate-signature-input-label",
