@@ -22,8 +22,8 @@ from typing import TYPE_CHECKING, Literal, NamedTuple, TypedDict, cast
 
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import PaginationRequest, PaginationResponse
-from adcp.types.generated_poc.core.account_ref import AccountReference1, AccountReference2
-from adcp.types.generated_poc.core.business_entity import BusinessEntity
+from adcp.types.domains.core.account_ref import AccountReference1, AccountReference2
+from adcp.types.domains.core.business_entity import BusinessEntity
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
@@ -308,7 +308,7 @@ def _resolve_billing_entity(entry: SyncEntry, existing: DBAccount | None) -> tup
     #/properties/accounts/items/properties/billing_entity/description), and the
     response item echoes it back with bank details stripped (write-only).
     """
-    from adcp.types.generated_poc.core.business_entity import BusinessEntity
+    from adcp.types.domains.core.business_entity import BusinessEntity
 
     submitted = getattr(entry, "billing_entity", None)
     if submitted is None:

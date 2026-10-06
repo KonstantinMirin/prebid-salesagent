@@ -67,7 +67,7 @@ _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 
 def _creative_for_registered_format(creative_id: str):
     """A creative naming the registered format — the buyer only chooses WHICH format."""
-    from adcp.types import FormatId
+    from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
     return CreativeAssetFactory(
         creative_id=creative_id,
@@ -162,7 +162,7 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
             env.set_run_async_result([_registered_format()])
             registry.preview_creative = AsyncMock(side_effect=OutboundRequestBlocked())
 
-            from adcp.types import FormatId
+            from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
             update_creative = CreativeAssetFactory(
                 creative_id=creative_id,

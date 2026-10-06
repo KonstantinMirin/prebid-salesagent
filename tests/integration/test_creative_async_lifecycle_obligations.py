@@ -18,14 +18,14 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
-from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
     Reason,
     SyncCreativesInputRequired,
 )
-from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
     SyncCreativesSubmitted,
 )
-from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
     SyncCreativesWorking,
 )
 from sqlalchemy import select

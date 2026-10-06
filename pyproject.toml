@@ -7,9 +7,9 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp==6.6.0",  # exact pin — 6.6.0 (latest stable); bump WIP, see docs/adcp-spec-version.md
-    "fastmcp>=3.2.0,<3.3.0", # 3.3.0 split fastmcp-slim[server] from the monolith (breaking Context/Middleware imports); stay on 3.2.x
-    "mcp>=1.28.1", # fixes CVE-2026-59950 / GHSA-vj7q-gjh5-988w
+    "adcp==9.0.0",  # exact pin — see [tool.uv.sources]; bump WIP, see docs/adcp-spec-version.md
+    "fastmcp>=4.0.0,<5.0.0", # 4.0.0 is the first fastmcp whose mcp floor allows mcp 2.x, which adcp 9 requires; fastmcp.tools.tool moved to fastmcp.tools.base
+    "mcp>=2.0.0", # adcp 9 requires mcp>=2.0,<3.0 (mcp.server.fastmcp was renamed mcp.server.mcpserver); supersedes the 1.28.1 floor for CVE-2026-59950 / GHSA-vj7q-gjh5-988w
     "google-cloud-iam>=2.19.1",
     "rich>=13.7.1",
     "google-ads>=24.1.0",
@@ -52,7 +52,7 @@ dependencies = [
     "logfire>=4.16.0",
     "pydantic-ai-slim[google,openai,anthropic,cohere,mistral,groq]>=1.99.0",  # 1.99.0 fixes CVE-2026-46678 / GHSA-cqp8-fcvh-x7r3; use slim to avoid pydantic-ai meta-package pulling fastmcp>=3.3.0
     # Security patches for transitive dependencies
-    "mcp>=1.28.1",  # CVE-2026-59950 / GHSA-vj7q-gjh5-988w (via fastmcp)
+    "mcp>=2.0.0",  # CVE-2026-59950 / GHSA-vj7q-gjh5-988w (via fastmcp); 2.0 floor required by adcp 9
     "pyjwt>=2.15.0",  # GHSA-42vr-xj54-vc7v (fixed in 2.15.0) + 11 more fixed in 2.14.0, GHSA-w6j9-cwv2-h6wq et al.; earlier GHSA-752w-5fwx-jx9f
     "filelock>=3.20.3",  # GHSA-qmgc-5h2g-mvrw
     "urllib3>=2.8.0",  # GHSA-8988-9cw3-xx77 + GHSA-gh4c-6fx4-qh6g + GHSA-vxq7-64xx-v4gw; earlier GHSA-38jv-5279-wg99 + GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j
@@ -142,6 +142,21 @@ dev = [
     # but audited, because `uv export` includes the dev group.
     "virtualenv>=21.7.13",
 ]
+
+[tool.uv.sources]
+# adcp 9.0.0 is not on PyPI: it is the local integration build of upstream main
+# plus adcontextprotocol/adcp-client-python#1392 (the domain-tree inversion and
+# the open ``format_kind``). It is consumed from the public fork by revision, so
+# `uv sync --frozen` inside the Dockerfile — which runs with only pyproject.toml
+# and uv.lock in the build context, long before `COPY . .` — can fetch it over
+# the network. A path dependency cannot work there (the directory is outside the
+# build context) and a committed wheel is forbidden (salesagent-cnb23: a 41.7 MB
+# binary in git history).
+#
+# Local iteration against an SDK worktree checked out beside this one:
+#     uv pip install --no-deps -e ../acp-v9
+# which overlays the editable install on top of the synced revision.
+adcp = { git = "https://github.com/KonstantinMirin/adcp-client-python", rev = "3ee02a042c189747c6cf99f04f5f25445f850a95" }
 
 [tool.ruff]
 line-length = 120

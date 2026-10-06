@@ -44,7 +44,7 @@ from src.core.webhooks.registration import accept_push_notification_config
 
 logger = logging.getLogger(__name__)
 
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from adcp.types.domains.creative.sync_creatives_request import Assignment
 
 from src.core.audit_logger import get_audit_logger
 from src.core.context_manager import get_context_manager

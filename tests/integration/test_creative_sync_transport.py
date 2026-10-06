@@ -1145,7 +1145,7 @@ class TestStaticPreviewFailed:
     @pytest.mark.parametrize("transport", ALL_TRANSPORTS, ids=lambda t: t.value)
     def test_no_preview_no_url_fails(self, integration_db, transport):
         """Static format with empty preview_creative result and no url → failed."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         with CreativeSyncEnv() as env:
             env.setup_default_data()
@@ -1411,7 +1411,7 @@ class TestAsyncLifecycleSubmitted:
     )
     def test_queued_sync_returns_submitted(self, integration_db):
         """Queued sync operation returns SyncCreativesSubmitted with context."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.sync_creatives_async_response_submitted import (  # TODO: no stable alias in adcp.types
             SyncCreativesSubmitted,
         )
 
@@ -1447,7 +1447,7 @@ class TestAsyncLifecycleWorking:
     )
     def test_in_progress_returns_working_with_progress(self, integration_db):
         """Status check on in-progress async op returns SyncCreativesWorking."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.sync_creatives_async_response_working import (  # TODO: no stable alias in adcp.types
             SyncCreativesWorking,
         )
 
@@ -1495,7 +1495,7 @@ class TestAsyncLifecycleInputRequired:
     )
     def test_approval_needed_returns_input_required(self, integration_db):
         """Async op needing approval returns SyncCreativesInputRequired."""
-        from adcp.types.generated_poc.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.sync_creatives_async_response_input_required import (  # TODO: no stable alias in adcp.types
             Reason,
             SyncCreativesInputRequired,
         )

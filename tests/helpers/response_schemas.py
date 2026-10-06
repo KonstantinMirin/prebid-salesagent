@@ -27,7 +27,7 @@ def _camel(tool: str) -> str:
 def _category(tool: str) -> str | None:
     """The schema's directory, read off the SDK response type's module path.
 
-    ``GetProductsResponse`` lives in ``adcp.types.generated_poc.media_buy.…``,
+    ``GetProductsResponse`` lives in ``adcp.types.domains.media_buy.…``,
     and its schema in ``media-buy/``. This is not decoration: two DIFFERENT
     schemas share the basename ``list-creative-formats-response.json`` (one
     under ``creative/``, one under ``media-buy/``), so a bare filename is
@@ -47,7 +47,7 @@ def _category(tool: str) -> str | None:
         branches = [arg for arg in typing.get_args(model) if isinstance(arg, type)]
         model = branches[0] if branches else None
     module = getattr(model, "__module__", "") or ""
-    if ".generated_poc." not in module:
+    if ".domains." not in module:
         return None
     return module.split(".")[-2].replace("_", "-")
 

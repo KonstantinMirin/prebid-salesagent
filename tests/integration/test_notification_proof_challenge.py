@@ -66,7 +66,7 @@ from typing import Any
 
 import pytest
 from adcp.signing.webhook_signer import WEBHOOK_TAG
-from adcp.types.generated_poc.core.webhook_challenge import WebhookChallenge
+from adcp.types.domains.core.webhook_challenge import WebhookChallenge
 
 from src.core.schemas.account import SyncAccountsRequest
 from tests.factories.request import fresh_idempotency_key

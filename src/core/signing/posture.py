@@ -43,10 +43,10 @@ from typing import TYPE_CHECKING, Any, Literal, NamedTuple, cast
 
 from adcp.signing.verifier import CoversDigestPolicy, VerifierCapability
 from adcp.signing.webhook_signer import WEBHOOK_TAG
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Identity as LibraryIdentity
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import KeyOrigins
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
+from adcp.types.domains.protocol.get_adcp_capabilities_response import Identity as LibraryIdentity
+from adcp.types.domains.protocol.get_adcp_capabilities_response import KeyOrigins
+from adcp.types.domains.protocol.get_adcp_capabilities_response import RequestSigning as LibraryRequestSigning
+from adcp.types.domains.protocol.get_adcp_capabilities_response import WebhookSigning as LibraryWebhookSigning
 from pydantic import AnyUrl, ConfigDict, model_validator
 
 from src.core.config import get_settings

@@ -52,8 +52,8 @@ from adcp import get_adcp_spec_version
 # unless the new variant is a superset of our keys, so the binding itself is pinned by
 # ``test_the_brand_agent_variant_is_still_the_one_we_bind`` in
 # tests/unit/test_adcp_spec_version.py.
-from adcp.types.generated_poc.brand import BrandDiscovery3 as LibraryBrandAgentDocument
-from adcp.types.generated_poc.core.agent_signing_key import AgentSigningKey as LibraryAgentSigningKey
+from adcp.types.domains.brand_discovery import BrandDiscovery3 as LibraryBrandAgentDocument
+from adcp.types.domains.core.agent_signing_key import AgentSigningKey as LibraryAgentSigningKey
 from pydantic import BaseModel, field_serializer
 
 from src.core.agent_identity import agent_endpoint_urls, agent_entry_id, canonical_agent_url, jwks_uri

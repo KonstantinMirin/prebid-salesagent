@@ -88,7 +88,7 @@ def test_the_published_jwk_model_preserves_members_it_does_not_declare() -> None
     it is the same kind of claim: something about the pinned SDK that our code depends on
     and that a bump could move.
     """
-    from adcp.types.generated_poc.core.agent_signing_key import AgentSigningKey
+    from adcp.types.domains.core.agent_signing_key import AgentSigningKey
 
     declared = set(AgentSigningKey.model_fields)
     assert {"key_ops", "adcp_use"}.isdisjoint(declared), (

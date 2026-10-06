@@ -37,8 +37,8 @@ required.
 
 from adcp.types import NotificationConfig as LibraryNotificationConfig
 from adcp.types import PushNotificationConfig as LibraryPushNotificationConfig
-from adcp.types.generated_poc.core.notification_config import Authentication as LibraryNotificationAuthentication
-from adcp.types.generated_poc.core.push_notification_config import Authentication as LibraryPushAuthentication
+from adcp.types.domains.core.notification_config import Authentication as LibraryNotificationAuthentication
+from adcp.types.domains.core.push_notification_config import Authentication as LibraryPushAuthentication
 from pydantic import ConfigDict, Field
 
 __all__ = ["Authentication", "NotificationConfig", "PushAuthentication", "PushNotificationConfig"]

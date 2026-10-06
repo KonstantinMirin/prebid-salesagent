@@ -64,7 +64,7 @@ from src.core.security.egress.policy import OutboundRequestBlocked, is_reserved_
 from src.core.security.outbound_http import CounterpartyUrl, validate_url
 
 if TYPE_CHECKING:
-    from adcp.types.generated_poc.core.webhook_challenge import WebhookChallenge
+    from adcp.types.domains.core.webhook_challenge import WebhookChallenge
     from adcp.webhook_auth import JwkSignerStrategy
 
     from src.core.signing.outbound import ChallengeAnswer
@@ -294,7 +294,7 @@ def _build_challenge(
     """
     import json
 
-    from adcp.types.generated_poc.core.webhook_challenge import DeliveryAuth, WebhookChallenge
+    from adcp.types.domains.core.webhook_challenge import DeliveryAuth, WebhookChallenge
     from adcp.webhooks import generate_webhook_challenge_value
 
     from src.core.signing.outbound import credential_fingerprint, declared_auth, delivery_auth_mode

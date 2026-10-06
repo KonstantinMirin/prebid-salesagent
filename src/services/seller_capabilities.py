@@ -21,14 +21,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, NamedTuple
 
-from adcp.types.generated_poc.core.media_buy_features import MediaBuyFeatures
-from adcp.types.generated_poc.core.postal_area_support import (
+from adcp.types.domains.core.media_buy_features import MediaBuyFeatures
+from adcp.types.domains.core.postal_area_support import (
     PostalAreaSupport,  # adcp 6.6: standalone GeoPostalAreas removed; capabilities use PostalAreaSupport
 )
-from adcp.types.generated_poc.enums.channels import MediaChannel
-from adcp.types.generated_poc.enums.pricing_model import PricingModel
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.enums.channels import MediaChannel
+from adcp.types.domains.enums.pricing_model import PricingModel
+from adcp.types.domains.protocol.get_adcp_capabilities_request import Protocol as RequestProtocol
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     # Aliased: three distinct types in src/ are named Account -- the ORM row
     # (imported as DBAccount in accounts.py), the domain schema
     # (src/core/schemas/account.py, imported BARE by accounts.py), and this
@@ -39,7 +39,7 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
     # this tools-module alias does not carry.
     Account as AccountCapabilities,
 )
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     Adcp,
     CreativeApprovalMode,
     Execution,

@@ -72,27 +72,27 @@ class TestSchemaMatchesLibrary:
         Non-spec fields should be explicitly documented and eventually removed.
         """
         from adcp import (
-            CreateMediaBuyRequest as LibCreateMediaBuyRequest,
-        )
-        from adcp import (
             GetMediaBuyDeliveryRequest as LibGetMediaBuyDeliveryRequest,
         )
         from adcp import (
             GetSignalsRequest as LibGetSignalsRequest,
         )
+        from adcp import (
+            LegacyCreateMediaBuyRequest as LibCreateMediaBuyRequest,
+        )
 
         # We define it locally in src/core/schemas.py
         from adcp import (
-            ListCreativeFormatsRequest as LibListCreativeFormatsRequest,
+            LegacyListCreativeFormatsRequest as LibListCreativeFormatsRequest,
         )
         from adcp import (
-            ListCreativesRequest as LibListCreativesRequest,
+            LegacyListCreativesRequest as LibListCreativesRequest,
         )
         from adcp import (
-            SyncCreativesRequest as LibSyncCreativesRequest,
+            LegacySyncCreativesRequest as LibSyncCreativesRequest,
         )
         from adcp.types import (
-            GetProductsWholesaleRequest as LibGetProductsRequest,
+            LegacyGetProductsRequest as LibGetProductsRequest,
         )
 
         from src.core.schemas import (
@@ -170,7 +170,7 @@ class TestSchemaMatchesLibrary:
         This test catches accidental regressions where we make fields required.
         In adcp 3.6.0, brand_manifest is replaced by brand (BrandReference with domain).
         """
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
 
         # Verify library allows empty request (buying_mode is required for wholesale variant)
         lib_req = LibraryGetProductsRequest(buying_mode="wholesale")
@@ -186,7 +186,7 @@ class TestSchemaMatchesLibrary:
 
     def test_get_products_request_brand_accepts_domain(self):
         """Verify brand (BrandReference) accepts domain field per adcp 3.6.0."""
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
 
         # Library accepts brand with domain (buying_mode required for wholesale variant)
         lib_req = LibraryGetProductsRequest(brand={"domain": "acme.com"}, buying_mode="wholesale")
@@ -202,7 +202,7 @@ class TestSchemaMatchesLibrary:
 
         In adcp 3.6.0, brand (BrandReference) is required for CreateMediaBuyRequest.
         """
-        from adcp import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+        from adcp.types import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
         from pydantic import ValidationError
 
         # Library should require brand for CreateMediaBuyRequest
@@ -211,7 +211,7 @@ class TestSchemaMatchesLibrary:
 
     def test_schema_validation_matches_library(self):
         """Compare our schema validation against library for common cases."""
-        from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
+        from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
 
         # Test cases that should work in both (adcp 3.6.0: brand replaces brand_manifest)
         # buying_mode is required for the wholesale variant in adcp 3.9
@@ -248,8 +248,8 @@ class TestSchemaMatchesLibrary:
         the parent's annotation — the library parent is the source of truth,
         which also catches any future drift on an SDK bump.
         """
-        from adcp.types.aliases import (
-            CreateMediaBuySuccessResponse as LibraryCreateMediaBuySuccess,
+        from adcp.types.domains.media_buy.create_media_buy_response import (
+            CreateMediaBuyResponse1 as LibraryCreateMediaBuySuccess,
         )
 
         from src.core.schemas import CreateMediaBuySuccess as LocalCreateMediaBuySuccess
@@ -1538,11 +1538,11 @@ class TestAdCPContract:
 
         Now extends library ListCreativesRequest directly - all fields are spec-compliant.
         """
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
 
         # adcp 3.6.0: Request pagination uses PaginationRequest (cursor + max_results)
         from adcp.types import PaginationRequest
-        from adcp.types.generated_poc.creative.list_creatives_request import (
+        from adcp.types.domains.creative.list_creatives_request import (
             Sort as LibrarySort,
         )  # TODO: different Sort from adcp.types.Sort
 
@@ -2047,7 +2047,7 @@ class TestAdCPContract:
         # adcp 3.9: GetSignalsRequest is a regular model (not RootModel).
         # deliver_to replaced with top-level destinations + countries fields.
 
-        from adcp.types.generated_poc.core.destination import Destination1  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.core.destination import Destination1  # TODO: no stable alias in adcp.types
 
         from src.core.schemas import GetSignalsRequest, SignalFilters
 

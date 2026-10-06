@@ -7,21 +7,21 @@ All classes are re-exported from src.core.schemas for backward compatibility.
 from typing import Any, ClassVar
 
 from adcp.types import BrandReference as LibraryBrandReference
-from adcp.types import GetProductsResponse as LibraryGetProductsResponse
-from adcp.types import GetProductsWholesaleRequest as LibraryGetProductsRequest
-from adcp.types import Placement as LibraryPlacement
-from adcp.types import Product as LibraryProduct
+from adcp.types import LegacyGetProductsRequest as LibraryGetProductsRequest
+from adcp.types import LegacyGetProductsResponse as LibraryGetProductsResponse
+from adcp.types import LegacyPlacement as LibraryPlacement
+from adcp.types import LegacyProduct as LibraryProduct
+from adcp.types import LegacyProductFilters as LibraryFilters
 from adcp.types import ProductCard as LibraryProductCard
 from adcp.types import ProductCardDetailed as LibraryProductCardDetailed
-from adcp.types import ProductFilters as LibraryFilters
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
-    AdcpResponse,
     BuyerRequest,
     FormatId,
     NestedModelSerializerMixin,
+    SalesAgentAdcpResponse,
     SalesAgentBaseModel,
 )
 
@@ -229,7 +229,7 @@ class GetProductsRequest(BuyerRequest, LibraryGetProductsRequest):
     )
 
 
-class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, AdcpResponse):
+class GetProductsResponse(NestedModelSerializerMixin, LibraryGetProductsResponse, SalesAgentAdcpResponse):
     """Extends library GetProductsResponse - all fields inherited from AdCP spec.
 
     Per AdCP PR #113, this response contains ONLY domain data.

@@ -1,13 +1,20 @@
 # AdCP Spec Version
 
-Prebid Sales Agent targets **AdCP spec version 3.1.1** via the `adcp==6.6.0`
-Python SDK (pinned exactly in `pyproject.toml`).
+Prebid Sales Agent targets **AdCP spec version 3.2.1** via the `adcp==9.0.0`
+Python SDK (pinned exactly in `pyproject.toml`; 9.0.0 is a local integration
+build consumed by revision — see `[tool.uv.sources]`).
+
+> **The rest of this document still describes the 3.1.1 target.** The SDK bump
+> moved the pin; re-vendoring the pinned schema tree and the trust-root fixtures
+> at `v3.2.1`, and repointing the compliance-tree citations below, is the
+> remaining half of the bump and is not done. Treat every `3.1.1` path below as
+> naming what is currently vendored, not what the pin targets.
 
 ## Verifying the current target
 
 ```bash
 uv run python -c "import adcp; print(adcp.get_adcp_spec_version(), adcp.get_adcp_sdk_version())"
-# 3.1.1 6.6.0
+# 3.2.1 9.0.0
 ```
 
 The same command tells you what spec version any other SDK release targets —

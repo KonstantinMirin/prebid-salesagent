@@ -64,7 +64,7 @@ from src.core.exceptions import AdcpFailure, adcp_error_for
 from src.core.idempotency_canonical import canonical_request_hash
 from src.core.idempotency_replay import cache_success, lookup_cached_replay, maybe_evict_expired
 from src.core.resolved_identity import PublicIdentity, TransportProtocol
-from src.core.schemas._base import AdcpErrorResponse, AdcpResponse, BuyerRequest
+from src.core.schemas._base import AdcpErrorResponse, BuyerRequest, SalesAgentAdcpResponse
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.webhook_credentials import log_arriving_webhook_credentials, registers_webhook_credentials
 from src.core.tool_error_logging import record_boundary_error
@@ -73,14 +73,14 @@ from src.core.version_negotiation import SERVED_ADCP_VERSION, negotiate_adcp_ver
 logger = logging.getLogger(__name__)
 
 
-def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
+def _response_model_for(impl: Callable[..., Any]) -> type[SalesAgentAdcpResponse] | None:
     """The model an implementation returns, read off its annotation.
 
     Derived rather than declared: a registry row says which DTO a tool ACCEPTS, and the
     implementation's own signature already says what it returns. Storing the response type
     a second time would be a second declaration that can disagree with the function.
 
-    Narrowed to ``AdcpResponse``, which is what an AdCP response IS -- every pinned response
+    Narrowed to ``SalesAgentAdcpResponse``, which is what an AdCP response IS -- every pinned response
     schema composes the version and protocol envelopes at its root, and that base carries both.
     The narrowing is what lets this module ASSIGN ``adcp_version`` and ``replayed`` and CALL
     ``revive`` without probing for them; ``_register_tool`` refuses at import any tool whose
@@ -96,7 +96,7 @@ def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
     except Exception:
         return None
     annotation = hints.get("return")
-    if isinstance(annotation, type) and issubclass(annotation, AdcpResponse):
+    if isinstance(annotation, type) and issubclass(annotation, SalesAgentAdcpResponse):
         return annotation
     return None
 
@@ -104,7 +104,7 @@ def _response_model_for(impl: Callable[..., Any]) -> type[AdcpResponse] | None:
 def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], Any | None]:
     """Turn a stored envelope back into a typed response, or None if it no longer validates.
 
-    ``AdcpResponse.revive`` resolves the stored body to its type -- for a tool whose schema is
+    ``SalesAgentAdcpResponse.revive`` resolves the stored body to its type -- for a tool whose schema is
     a ``oneOf``, to the BRANCH the buyer originally received.
 
     None means "treat as a miss": a stored envelope that stopped validating -- because the
@@ -117,7 +117,7 @@ def _deserializer_for(impl: Callable[..., Any]) -> Callable[[dict[str, Any]], An
     reason, and the cached body stays clean so repeated replays of one key each carry it once.
 
     A plain assignment, with no check that the field exists: every response model inherits
-    ``AdcpResponse``, which ``_register_tool`` refuses to register a tool without.
+    ``SalesAgentAdcpResponse``, which ``_register_tool`` refuses to register a tool without.
     """
     model = _response_model_for(impl)
 
@@ -242,7 +242,7 @@ async def serve(
     headers: Mapping[str, str],
     protocol: TransportProtocol,
     exchange: HttpExchange | None = None,
-) -> AdcpResponse:
+) -> SalesAgentAdcpResponse:
     """Answer one buyer payload. THE transport entry.
 
     Parses the payload and runs the tool. Either step can fail, and both failures leave the
@@ -264,7 +264,7 @@ async def invoke_tool(
     headers: Mapping[str, str],
     protocol: TransportProtocol,
     exchange: HttpExchange | None = None,
-) -> AdcpResponse:
+) -> SalesAgentAdcpResponse:
     """Run the registry's tool named ``tool_name``, for the caller the request *headers* present.
 
     The form every transport calls. A transport names the TOOL and hands over the request it
@@ -370,7 +370,7 @@ async def invoke_tool(
         _failed(protocol, tool_name, exc, echo, identity)
 
 
-def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) -> Served:
+def _served[Served: SalesAgentAdcpResponse](echo: ContextObject | None, response: Served) -> Served:
     """Stamp what the BOUNDARY owns onto one response envelope: the release, and the echo.
 
     THE one assignment for both, on every outcome: a fresh run, a replayed one and a failure
@@ -387,7 +387,7 @@ def _served[Served: AdcpResponse](echo: ContextObject | None, response: Served) 
     rather than an envelope field, and runs at the top of ``invoke_tool``.
     """
     response.adcp_version = SERVED_ADCP_VERSION
-    # ``object.__setattr__``, not assignment: ``AdcpResponse.__setattr__`` refuses ``context``
+    # ``object.__setattr__``, not assignment: ``SalesAgentAdcpResponse.__setattr__`` refuses ``context``
     # so that no code outside this function can write it. This is the one bypass, and it is
     # the reason the refusal can be unconditional everywhere else.
     object.__setattr__(response, "context", echo)
@@ -399,7 +399,7 @@ async def _invoke(
     impl: Callable[..., Any],
     req: BuyerRequest,
     identity: PublicIdentity,
-) -> AdcpResponse:
+) -> SalesAgentAdcpResponse:
     """``invoke`` without the envelope stamp: honour the key, run it.
 
     The account the request named is already ON the identity: the resolver built it with

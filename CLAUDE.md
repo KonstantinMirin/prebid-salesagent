@@ -94,7 +94,8 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP spec version
 
-This project targets AdCP spec **3.1.1** via the `adcp==6.6.0` Python SDK. See
+This project targets AdCP spec **3.2.1** via the `adcp==9.0.0` Python SDK (a local
+integration build consumed by revision — see `[tool.uv.sources]` in `pyproject.toml`). See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
 and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
 fails on pin drift.

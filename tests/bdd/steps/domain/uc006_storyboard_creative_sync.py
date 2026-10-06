@@ -94,7 +94,7 @@ def given_creative_provenance_omits_digital_source_type(ctx: dict) -> None:
     """Provenance dict present but missing digital_source_type.
 
     ``digital_source_type`` is optional on the wire-level Provenance model
-    (``adcp.types.generated_poc.core.provenance.Provenance`` — the type
+    (``adcp.types.domains.core.provenance.Provenance`` — the type
     actually bound to ``CreativeAsset.provenance``), so this dict is
     otherwise fully valid: sent as a raw dict rather than a constructed
     ``Provenance`` model so the wire payload genuinely represents "the buyer
@@ -137,7 +137,7 @@ def given_creative_submission_previously_failed(ctx: dict) -> None:
 def given_creative_resubmits_corrected(ctx: dict) -> None:
     """Build a creative payload with a complete, valid provenance object.
 
-    Shape matches ``adcp.types.generated_poc.core.provenance.Provenance``
+    Shape matches ``adcp.types.domains.core.provenance.Provenance``
     (the type bound to ``CreativeAsset.provenance``): ``disclosure`` is a
     ``Disclosure`` object (``{"required": bool}``), ``human_oversight`` is
     one of the ``HumanOversight`` enum values, and ``verification`` is a
@@ -525,7 +525,7 @@ def then_every_status_in_creative_status_enum(ctx: dict) -> None:
     sync-creatives-response.json: "Values come from CreativeStatus only (processing,
     pending_review, approved, suspended, rejected, archived) -- never from CreativeAction."
     """
-    from adcp.types.generated_poc.enums.creative_status import CreativeStatus
+    from adcp.types.domains.enums.creative_status import CreativeStatus
 
     resp = _require_response(ctx, "every status drawn from the creative-status enum")
     statuses = [result.status for result in resp.creatives]

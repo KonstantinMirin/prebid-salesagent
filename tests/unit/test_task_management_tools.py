@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from unittest.mock import ANY, MagicMock, Mock, patch
 
 import pytest
-from adcp.types.generated_poc.protocol.list_tasks_request import Filters as ListTasksFilters
+from adcp.types.domains.protocol.list_tasks_request import Filters as ListTasksFilters
 
 from src.core.database.models import WorkflowStep
 from src.core.exceptions import AdCPTaskNotFoundError

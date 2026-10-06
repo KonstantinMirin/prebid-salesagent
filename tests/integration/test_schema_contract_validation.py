@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 # The LOCAL subclass, not ``adcp.CpmPricingOption``: ``Product.pricing_options`` is the
 # local ``PricingOption`` RootModel, whose union members are the local subclasses and which
 # refuses an SDK instance by design (tests/unit/test_pricing_option_schemas.py).
-from adcp.types.generated_poc.core.vendor_pricing_option import (
+from adcp.types.domains.core.vendor_pricing_option import (
     VendorPricingOption,
 )  # TODO: no stable alias in adcp.types
 

@@ -7,7 +7,7 @@ from typing import Any
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
 
 # FIXME(#1388): Package has a local subclass; import from src.core.schemas (Pattern #7/#4).
-from adcp.types import Package
+from adcp.types import LegacyPackage as Package
 from flask import Blueprint, request
 from sqlalchemy import select
 

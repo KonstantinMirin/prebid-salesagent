@@ -20,7 +20,7 @@ from itertools import repeat
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from adcp.types.domains.creative.sync_creatives_request import Assignment
 from pydantic import ValidationError
 
 from src.adapters.base import AdapterUpdateResult
@@ -1222,7 +1222,7 @@ class TestUC003UpdateCreativeIds:
 
         Covers: UC-003-ALT-UPDATE-CREATIVE-IDS-09
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as LibraryCreative,
         )
 

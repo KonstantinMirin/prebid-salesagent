@@ -16,7 +16,7 @@ import logging
 from adcp import EventType, TimeUnit
 from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from adcp.types._generated import MediaChannel
-from adcp.types.generated_poc.pricing_options.time_option import Parameters as TimeParameters
+from adcp.types.domains.pricing_options.time_option import Parameters as TimeParameters
 
 # Import our extended Product (includes implementation_config) and the local
 # pricing member subclasses (our extra policy + internal adapter annotations)

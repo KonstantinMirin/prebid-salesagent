@@ -1500,7 +1500,7 @@ class TestCrossCuttingObligations:
         Note: This tests the format validation helper directly.
         """
         # Build mocks
-        from adcp.types import FormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
         from src.core.helpers import validate_creative_format_against_product
 

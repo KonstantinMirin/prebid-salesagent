@@ -216,7 +216,7 @@ class TestAdditionalDateTimeValidation:
 
     def test_list_creatives_with_timezone_aware_filters(self):
         """Test ListCreativesRequest with timezone-aware datetime filters."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
 
         from src.core.schemas import ListCreativesRequest
 
@@ -235,7 +235,7 @@ class TestAdditionalDateTimeValidation:
 
     def test_list_creatives_rejects_naive_created_after(self):
         """Test CreativeFilters rejects naive datetime for created_after."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
         from pydantic import ValidationError
 
         # The library's CreativeFilters enforces AwareDatetime
@@ -247,7 +247,7 @@ class TestAdditionalDateTimeValidation:
 
     def test_list_creatives_rejects_naive_created_before(self):
         """Test CreativeFilters rejects naive datetime for created_before."""
-        from adcp.types import CreativeFilters as LibraryCreativeFilters
+        from adcp.types import LegacyCreativeFilters as LibraryCreativeFilters
         from pydantic import ValidationError
 
         # The library's CreativeFilters enforces AwareDatetime

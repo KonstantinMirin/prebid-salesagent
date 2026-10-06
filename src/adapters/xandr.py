@@ -23,7 +23,6 @@ from src.core.schemas import (
     Product,
     ReportingPeriod,
     Targeting,
-    url,
 )
 from src.core.security.outbound_http import OutboundError
 
@@ -356,7 +355,7 @@ class XandrAdapter(AdServerAdapter):
             # FIXME(#1388): DeliveryMeasurement has a local subclass; import from src.core.schemas (Pattern #7/#4).
             from adcp.types import DeliveryMeasurement, DeliveryType
             from adcp.types import PriceGuidance as AdCPPriceGuidance
-            from adcp.types.generated_poc.core.publisher_property_selector import (
+            from adcp.types.domains.core.publisher_property_selector import (
                 PublisherPropertySelector1,
             )  # TODO: no stable alias in adcp.types
 
@@ -371,9 +370,9 @@ class XandrAdapter(AdServerAdapter):
                     name="Display - Standard Banners",
                     description="Standard display banner placements (supports geo, device, os, browser targeting)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_728x90"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_300x250"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_320x50"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_320x50"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -401,8 +400,8 @@ class XandrAdapter(AdServerAdapter):
                     name="Video - In-Stream",
                     description="Pre-roll, mid-roll, and post-roll video (supports geo, device, content targeting)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="video_16x9"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="video_9x16"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_16x9"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_9x16"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -430,8 +429,8 @@ class XandrAdapter(AdServerAdapter):
                     name="Native Advertising",
                     description="Native ad placements (supports geo, device, context targeting)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="native_1x1"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="native_1.2x1"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="native_1x1"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="native_1.2x1"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[
@@ -459,9 +458,9 @@ class XandrAdapter(AdServerAdapter):
                     name="Private Marketplace Deals",
                     description="Access to premium inventory through deals (pricing varies by deal)",
                     format_ids=[
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_300x250"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="display_728x90"),
-                        FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id="video_16x9"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_300x250"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="display_728x90"),
+                        FormatId(agent_url="https://creative.adcontextprotocol.org", id="video_16x9"),
                     ],
                     delivery_type=DeliveryType.non_guaranteed,
                     pricing_options=[

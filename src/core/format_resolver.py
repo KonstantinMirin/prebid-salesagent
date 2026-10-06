@@ -14,7 +14,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
-from adcp.types import FormatId as LibraryFormatId
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from pydantic import ValidationError
 
 from src.core.database.database_session import get_db_session

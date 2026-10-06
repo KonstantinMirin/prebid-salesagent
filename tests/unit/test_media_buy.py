@@ -225,7 +225,7 @@ class TestCreateMediaBuySchemaCompliance:
 
         Spec: CONFIRMED -- create-media-buy-request.json requires brand_manifest (mapped to brand in library)
         https://github.com/adcontextprotocol/adcp/blob/8f26baf3549c00d2638341fed1d80abacb5d894a/schemas/media-buy/create-media-buy-request.json
-        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/create_media_buy_request.py
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/domains/media_buy/create_media_buy_request.py
         Covers: UC-002-MAIN-02
         """
         with pytest.raises(ValidationError):
@@ -3061,7 +3061,7 @@ class TestDeliveryImplSingleBuy:
         """UC-004-D03: aggregated_totals sums across multiple buys.
 
         Spec: CONFIRMED -- get-media-buy-delivery-response.json has aggregated_totals property
-        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/generated_poc/media_buy/get_media_buy_delivery_response.py
+        https://github.com/adcontextprotocol/adcp-client-python/blob/a08805d6345c96d43ba9369bb0afe0597182871f/src/adcp/types/domains/media_buy/get_media_buy_delivery_response.py
         Priority: P1
         Type: unit
         Source: UC-004 main flow
@@ -3906,7 +3906,7 @@ class TestBRRule043ContextEcho:
     expecting an ``_impl`` to copy the request's context onto what it returned.
 
     Neither is possible now, by design. ``context`` is written by the boundary ALONE
-    (``src/core/tools/_boundary._served``, through ``object.__setattr__``): ``AdcpResponse``
+    (``src/core/tools/_boundary._served``, through ``object.__setattr__``): ``SalesAgentAdcpResponse``
     refuses the field on construction AND on assignment, ``ruff-boundary.toml`` bans the
     ``context=`` keyword outside the boundary and the schemas, and a tool therefore has no
     echo to perform -- the boundary stamps the buyer's context onto every response, once,

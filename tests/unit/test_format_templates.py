@@ -4,8 +4,8 @@ Issue #782: Support creative format templates with dynamic width/height/duration
 """
 
 import pytest
-from adcp.types import FormatId
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
 
 from src.core.helpers import _extract_format_info, _extract_format_namespace
 from src.core.schemas import Format

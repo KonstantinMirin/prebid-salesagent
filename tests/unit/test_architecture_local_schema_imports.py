@@ -12,12 +12,12 @@ Legitimate exceptions:
   - Explicit allowlist entries for code that intentionally needs the raw SDK type
 
 Scanning approach: AST parse all .py files in src/ (excluding src/core/schemas/).
-For each ``from adcp.types import X`` or ``from adcp.types.generated_poc... import X``,
+For each ``from adcp.types import X`` or ``from adcp.types.domains... import X``,
 check if X matches a locally-exported schema name AND the imported SDK class is
 actually an ancestor of that local schema class -- the SDK's flat namespace has
 name collisions (e.g. two distinct ``Account`` types: the sync_accounts domain
 entity at ``adcp.types.Account`` and the capabilities response's embedded
-account-block at ``adcp.types.generated_poc.protocol.get_adcp_capabilities_response.Account``)
+account-block at ``adcp.types.domains.protocol.get_adcp_capabilities_response.Account``)
 so bare-name matching alone produces false positives. If so, flag it.
 """
 

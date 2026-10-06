@@ -329,7 +329,7 @@ class TestBuildGeoBreakdownTupleReturn:
 
 class TestDeviceTypeBreakdownSchema:
     def test_inherits_from_library_by_device_type_item(self):
-        from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+        from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
             ByDeviceTypeItem as LibraryByDeviceTypeItem,
         )
 

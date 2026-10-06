@@ -6,10 +6,10 @@ from datetime import UTC, datetime
 from typing import Any, cast, get_args
 
 from adcp.types import AssignedPackage, Assignments, SnapshotUnavailableReason
-from adcp.types.generated_poc.core.creative_item import CreativeItem
-from adcp.types.generated_poc.core.creative_item import CreativeItem1 as MediaItem
-from adcp.types.generated_poc.core.creative_item import CreativeItem2 as TextItem
-from adcp.types.generated_poc.core.creative_variable import CreativeVariable
+from adcp.types.domains.core.creative_item import CreativeItem
+from adcp.types.domains.core.creative_item import CreativeItem1 as MediaItem
+from adcp.types.domains.core.creative_item import CreativeItem2 as TextItem
+from adcp.types.domains.core.creative_variable import CreativeVariable
 from pydantic import TypeAdapter, ValidationError
 
 from src.core.audit_logger import get_audit_logger

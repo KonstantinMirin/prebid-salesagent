@@ -8,12 +8,12 @@ from typing import Any
 from uuid import uuid4
 
 from adcp.types import BrandReference
-from adcp.types.generated_poc.core.account import (
+from adcp.types.domains.core.account import (
     CreditLimit,
     GovernanceAgent,
     Setup,
 )  # TODO: no stable alias in adcp.types
-from adcp.types.generated_poc.core.business_entity import (
+from adcp.types.domains.core.business_entity import (
     BusinessEntity,
 )  # TODO: no stable alias in adcp.types
 from sqlalchemy import (

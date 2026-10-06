@@ -3447,7 +3447,7 @@ def then_attribution_has_model(ctx: dict) -> None:
     BR-RULE-092 invariant: every delivery response must echo the applied
     attribution window with a non-null model from the spec-allowed values.
     """
-    from adcp.types.generated_poc.enums.attribution_model import AttributionModel
+    from adcp.types.domains.enums.attribution_model import AttributionModel
 
     assert "error" not in ctx, f"Expected valid response but got error: {ctx.get('error')}"
     resp = require_payload(ctx)

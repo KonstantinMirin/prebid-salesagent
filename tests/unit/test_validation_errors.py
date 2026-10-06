@@ -63,7 +63,7 @@ def test_create_media_buy_boundary_validation_names_the_offending_field():
 
 def test_brand_target_audience_must_be_string():
     """Test Brand target_audience field accepts strings (adcp 3.12: Brand replaced BrandManifest)."""
-    from adcp.types.generated_poc.brand import Brand, LocalizedName  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.brand_discovery import Brand, LocalizedName  # TODO: no stable alias in adcp.types
 
     brand = Brand(
         id="test_brand",
@@ -75,7 +75,7 @@ def test_brand_target_audience_must_be_string():
 
 def test_brand_accepts_extra_fields():
     """Test that Brand accepts arbitrary extra fields (extra=allow)."""
-    from adcp.types.generated_poc.brand import Brand, LocalizedName  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.brand_discovery import Brand, LocalizedName  # TODO: no stable alias in adcp.types
 
     brand = Brand(
         id="test_brand",

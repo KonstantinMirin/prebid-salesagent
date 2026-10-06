@@ -11,8 +11,8 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, Any, TypedDict
 
-from adcp import FormatId as LibraryFormatId
 from adcp.types import ValidationMode
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 from pydantic import BaseModel, ValidationError
 
 from src.core.tenant_context import TenantContext

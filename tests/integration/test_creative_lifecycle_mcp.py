@@ -16,8 +16,9 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from adcp.types import AccountReference, CreativeFilters
-from adcp.types.generated_poc.creative.sync_creatives_request import Assignment
+from adcp.types import AccountReference
+from adcp.types import LegacyCreativeFilters as CreativeFilters
+from adcp.types.domains.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session

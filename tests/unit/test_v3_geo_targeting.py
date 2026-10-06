@@ -162,7 +162,7 @@ class TestTargetingModelDumpSerialization:
 
     def test_model_dump_mode_override(self):
         """Explicit mode='python' still works when caller needs it."""
-        from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
+        from adcp.types.domains.enums.metro_system import MetroAreaSystem
 
         t = Targeting(geo_metros=[{"system": "nielsen_dma", "values": ["501"]}])
         d = t.model_dump(exclude_none=True, mode="python")

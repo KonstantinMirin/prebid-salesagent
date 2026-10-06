@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from adcp.types import GeneratedTaskStatus as AdcpTaskStatus
-from adcp.types.generated_poc.media_buy.get_media_buy_delivery_response import (
+from adcp.types.domains.media_buy.get_media_buy_delivery_response import (
     NotificationType,
 )  # TODO: no stable alias — response-level NotificationType differs from top-level
 from sqlalchemy import func, select

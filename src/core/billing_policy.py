@@ -10,7 +10,7 @@ copy of the value-set may appear anywhere else (#1521, #1592).
 
 from typing import TYPE_CHECKING
 
-from adcp.types.generated_poc.enums.billing_party import (
+from adcp.types.domains.enums.billing_party import (
     BillingParty,
 )  # TODO: no stable alias in adcp.types
 

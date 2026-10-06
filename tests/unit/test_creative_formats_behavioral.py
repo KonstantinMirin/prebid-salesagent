@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from adcp.types import ImageFormatAsset, VideoFormatAsset
-from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
 # adcp SDK: Assets classes are type-discriminated by asset_type + item_type.
 # ImageFormatAsset = individual image, VideoFormatAsset = individual video

@@ -12,7 +12,7 @@ Part of the #1391 SDK 5.7 creative-asset-shape migration.
 """
 
 import pytest
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 
 from src.core.tools.creatives._assets import _extract_message_from_assets
 from tests.bdd.steps.domain.uc006_sync_creatives import given_message_asset_with_prompt

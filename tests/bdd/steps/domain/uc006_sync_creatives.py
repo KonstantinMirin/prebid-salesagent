@@ -841,7 +841,7 @@ def _creative_status_values() -> frozenset[str]:
     (processing, pending_review, approved, suspended, rejected, archived) — never
     from CreativeAction."
     """
-    from adcp.types.generated_poc.enums.creative_status import CreativeStatus
+    from adcp.types.domains.enums.creative_status import CreativeStatus
 
     return frozenset(member.value for member in CreativeStatus)
 

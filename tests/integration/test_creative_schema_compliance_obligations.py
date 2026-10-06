@@ -229,7 +229,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.list_creatives_response import (  # TODO: no stable alias in adcp.types
             Creative as ListingCreative,
         )
 
@@ -254,7 +254,7 @@ class TestCreativeExtendsListingBase:
 
         Covers: UC-006-CREATIVE-SCHEMA-COMPLIANCE-01
         """
-        from adcp.types.generated_poc.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
+        from adcp.types.domains.creative.get_creative_delivery_response import (  # TODO: no stable alias in adcp.types
             Creative as DeliveryCreative,
         )
 

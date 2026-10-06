@@ -11,10 +11,10 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
-from adcp.types.generated_poc.core.async_response_data import AdcpAsyncResponseData
-from adcp.types.generated_poc.core.pagination_response import PaginationResponse
-from adcp.types.generated_poc.protocol.get_task_status_response import HistoryItem
-from adcp.types.generated_poc.protocol.list_tasks_response import QuerySummary
+from adcp.types.domains.core.async_response_data import AdcpAsyncResponseData
+from adcp.types.domains.core.pagination_response import PaginationResponse
+from adcp.types.domains.protocol.get_task_status_response import HistoryItem
+from adcp.types.domains.protocol.list_tasks_response import QuerySummary
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW

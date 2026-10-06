@@ -11,7 +11,7 @@ Part of #1391 SDK 5.7 creative-asset-shape migration.
 """
 
 import pytest
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 from pydantic import ValidationError
 
 from src.core.schemas.creative import CreativeAssetRequest

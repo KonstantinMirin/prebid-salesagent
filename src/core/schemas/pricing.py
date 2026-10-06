@@ -1,13 +1,17 @@
 """Pricing option schemas extending the adcp library's discriminated union.
 
-The SDK's ``PricingOption`` RootModel wraps a nine-member discriminated union
-(discriminator ``pricing_model``). Its members carry ``extra="allow"``, which
-this seller must not expose: unknown inbound fields would be silently echoed
-back onto the wire, and pre-V3 keywords such as ``rate=`` would be accepted
-instead of rejected. The RootModel wrapper itself cannot carry an ``extra``
-policy (pydantic forbids ``extra`` on RootModel — see
-adcontextprotocol/adcp-client-python#1077), but the members can: each one is a
-plain BaseModel and subclasses cleanly.
+The SDK's ``PricingOption`` is a nine-member discriminated union (discriminator
+``pricing_model``). Its members carry ``extra="allow"``, which this seller must
+not expose: unknown inbound fields would be silently echoed back onto the wire,
+and pre-V3 keywords such as ``rate=`` would be accepted instead of rejected.
+The members can carry an ``extra`` policy: each one is a plain BaseModel and
+subclasses cleanly.
+
+At adcp 6.6.0 the union also had a ``RootModel`` WRAPPER class, which this
+module's ``PricingOption`` subclassed. adcp 9 deletes that wrapper and ships
+only the union — the fix for adcontextprotocol/adcp-client-python#1077 — so
+there is nothing left to subclass and the local wrapper is a plain
+``RootModel`` over the local union.
 
 This module therefore defines:
 
@@ -15,9 +19,8 @@ This module therefore defines:
   set from the library type (Pattern #1 — never copy fields) and mixes in a
   derived ``is_fixed`` property. The mixin also applies this project's ``extra``
   policy (``forbid`` outside production), replacing the SDK's ``allow``.
-- A ``PricingOption`` wrapper subclassing the SDK's RootModel with its root
-  narrowed to OUR union, so ``option.root`` and proxied attribute access keep
-  working at call sites.
+- A ``PricingOption`` RootModel over OUR union, so ``option.root`` and proxied
+  attribute access keep working at call sites.
 
 Naming note: this wrapper is intentionally NOT star-exported from
 ``src.core.schemas`` — the package-level ``PricingOption`` name still refers to
@@ -29,7 +32,7 @@ SDK names at package level, so ``from src.core.schemas import
 CpmPricingOption`` resolves to the local subclass (Pattern #7 applies).
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from adcp.types import CpaPricingOption as LibraryCpaPricingOption
 from adcp.types import CpcPricingOption as LibraryCpcPricingOption
@@ -40,17 +43,7 @@ from adcp.types import CpvPricingOption as LibraryCpvPricingOption
 from adcp.types import FlatRatePricingOption as LibraryFlatRatePricingOption
 from adcp.types import TimeBasedPricingOption as LibraryTimeBasedPricingOption
 from adcp.types import VcpmPricingOption as LibraryVcpmPricingOption
-
-# The SDK's RootModel wrapper. NOT importable as adcp.types.PricingOption —
-# that public name is a plain Union alias over the members, not the wrapper.
-# Underscore-prefixed (not the usual Library* alias) on purpose: the
-# schema-inheritance guard maps every Library* alias against the PACKAGE-level
-# class of the same bare name, and src.core.schemas.PricingOption is still the
-# legacy flat model (see the naming note above), not this wrapper's subclass.
-from adcp.types.generated_poc.core.pricing_option import (
-    PricingOption as _LibraryPricingOption,
-)
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -156,16 +149,34 @@ AdCPPricingOption = (
 )
 
 
-class PricingOption(_LibraryPricingOption):
-    """The SDK's RootModel wrapper, narrowed to OUR union members.
+class PricingOption(RootModel[AdCPPricingOption]):
+    """A RootModel over OUR union members, with the SDK wrapper's call contract.
 
     ``Product.pricing_options`` is typed with this wrapper so every element
     carries the local members' extra policy and internal annotations while the
-    call-site contract (``option.root``, proxied attribute access via the
-    inherited ``__getattr__``) stays identical to the SDK wrapper it replaces.
-    Every local member subclasses its SDK counterpart, so this root type is a
-    strict narrowing of the parent's.
+    call-site contract (``option.root``, proxied attribute access) stays what it
+    has always been.
+
+    IT NO LONGER INHERITS AN SDK WRAPPER, because adcp 9 has none to inherit.
+    At 6.6.0 ``adcp.types.domains.core.pricing_option.PricingOption`` was a
+    ``RootModel`` subclass that added exactly two things -- a ``root`` annotation
+    over the nine arms and an ``__getattr__`` proxy -- and the public
+    ``adcp.types.PricingOption`` name was a plain union alias. adcp 9 deletes the
+    wrapper and keeps only the union (the fix for
+    adcp-client-python#1077, which is why the RootModel-cannot-be-subclassed note
+    elsewhere in this file is obsolete), so there is no class left to extend: the
+    inheritance that matters moved down to the MEMBERS, each of which still
+    subclasses its SDK counterpart, which is what makes this root type a strict
+    narrowing. ``__getattr__`` is restated below because it came from the wrapper.
     """
+
+    # A RootModel has no named fields, so there is no ``extra`` policy to set -- pydantic
+    # forbids ``extra`` on RootModel outright (adcontextprotocol/adcp-client-python#1077).
+    # The policy that matters lives on the nine MEMBERS, via _AdapterSupportAnnotations.
+    # Declared empty rather than omitted because the no-bare-BaseModel guard reads the
+    # presence of ``model_config`` as the signal that the extra policy was CONSIDERED, and
+    # the adcp 6.6.0 wrapper this class used to inherit carried exactly this: ``{}``.
+    model_config = ConfigDict()
 
     root: Annotated[
         AdCPPricingOption,
@@ -177,6 +188,18 @@ class PricingOption(_LibraryPricingOption):
             title="Pricing Option",
         ),
     ]
+
+    def __getattr__(self, name: str) -> Any:
+        """Proxy attribute access to the wrapped member.
+
+        Verbatim from the adcp 6.6.0 wrapper this class used to inherit. Call sites
+        read ``option.pricing_model`` / ``option.fixed_price`` directly, so deleting
+        the wrapper upstream would have silently turned every one of those into an
+        AttributeError.
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        return getattr(self.root, name)
 
     # NO SDK-COERCING VALIDATOR. A ``mode="before"`` validator used to accept an SDK-typed
     # member (or the SDK's own wrapper) by serializing it to a plain dict and revalidating

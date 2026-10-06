@@ -10,18 +10,20 @@ from enum import Enum
 from typing import Any, ClassVar, Literal
 
 from adcp.types import CreativeStatus
-from adcp.types import FormatId as LibraryFormatId
 from adcp.types import (
-    ListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
+    LegacyListCreativeFormatsRequest as LibraryListCreativeFormatsRequest,
 )
 from adcp.types import (
-    ListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
+    LegacyListCreativeFormatsResponse as LibraryListCreativeFormatsResponse,
 )
 from adcp.types import (
-    ListCreativesRequest as LibraryListCreativesRequest,
+    LegacyListCreativesRequest as LibraryListCreativesRequest,
 )
 from adcp.types import (
-    ListCreativesResponse as LibraryListCreativesResponse,
+    LegacyListCreativesResponse as LibraryListCreativesResponse,
+)
+from adcp.types import (
+    LegacySyncCreativesRequest as LibrarySyncCreativesRequest,
 )
 from adcp.types import PaginationResponse as LibraryResponsePagination
 from adcp.types import (
@@ -30,24 +32,25 @@ from adcp.types import (
 from adcp.types import (
     SyncCreativeResult as LibrarySyncCreativeResult,
 )
-from adcp.types import (
-    SyncCreativesRequest as LibrarySyncCreativesRequest,
-)
 
-# The BRANCH, named at its generated path. ``adcp.types.CreativeAsset`` binds to this same
-# class at RUNTIME, but mypy resolves the public alias to the RootModel UNION, so static and
-# runtime disagreed about what this model extends. Same adcp codegen defect as the pointer
-# problem documented on Creative below; unreported upstream.
-from adcp.types.generated_poc.core.creative_asset import CreativeAsset1 as LibraryCreativeAsset
-from adcp.types.generated_poc.core.provenance import Provenance as LibraryProvenance
-from adcp.types.generated_poc.creative.list_creatives_response import (
+# The BRANCH, named at its generated path. adcp 9 retired the numeric arm name: the branch
+# IS ``CreativeAsset`` in the generated module now, and neither it nor the public
+# ``adcp.types.CreativeAsset`` is a RootModel, so the static/runtime disagreement this
+# import was written around is gone. The import stays on the GENERATED path for one
+# reason: the public name binds to ``adcp.types.canonical_creative.CreativeAsset``, which
+# STRIPS ``format_id``. Repointing it is part of the creative migration (salesagent-3xcdk),
+# not of the SDK bump.
+from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.provenance import Provenance as LibraryProvenance
+from adcp.types.domains.creative.list_creatives_response import (
     Creative as LibraryCreative,
 )
-from adcp.types.generated_poc.creative.sync_creatives_response import (
+from adcp.types.domains.creative.sync_creatives_response import (
     SyncCreativesResponse1 as LibrarySyncCreativesSuccess,
 )
-from adcp.types.generated_poc.enums.digital_source_type import DigitalSourceType as LibraryDigitalSourceType
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.enums.digital_source_type import DigitalSourceType as LibraryDigitalSourceType
+from adcp.types.domains.media_buy.get_media_buys_response import (
     CreativeApproval as LibraryGetMediaBuysCreativeApproval,
 )
 from pydantic import (
@@ -62,11 +65,11 @@ from pydantic_core import PydanticCustomError
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
-    AdcpResponse,
     BuyerRequest,
     Format,
     FormatId,
     NestedModelSerializerMixin,
+    SalesAgentAdcpResponse,
     SalesAgentBaseModel,
     Targeting,
 )
@@ -184,7 +187,9 @@ class CreativeAssetRequest(LibraryCreativeAsset):
     # LibraryFormatId, not the local FormatId subclass: the ONLY axis this redeclaration
     # changes is nullability. Narrowing to the subclass would repeat the defect above one
     # level down -- the SDK's own FormatId would stop validating into its own field.
-    format_id: LibraryFormatId | None = None  # type: ignore[assignment]
+    # No suppression: on adcp 9 the parent declares this field with the same class, so
+    # adding nullability is a change mypy accepts outright.
+    format_id: LibraryFormatId | None = None
 
     @model_validator(mode="after")
     def _exactly_one_format_identifier(self) -> "CreativeAssetRequest":
@@ -592,7 +597,7 @@ class AssignmentResult(SalesAgentBaseModel):
     )
 
 
-class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, AdcpResponse):
+class SyncCreativesResponse(NestedModelSerializerMixin, LibrarySyncCreativesSuccess, SalesAgentAdcpResponse):
     """Extends library SyncCreativesResponse success variant.
 
     adcp 3.9: SyncCreativesResponse is now a union TypeAlias (not RootModel).
@@ -657,7 +662,9 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class ListCreativeFormatsResponse(NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, AdcpResponse):
+class ListCreativeFormatsResponse(
+    NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, SalesAgentAdcpResponse
+):
     """Extends library ListCreativeFormatsResponse from AdCP spec.
 
     Inherits all AdCP-compliant fields from adcp library,
@@ -752,7 +759,7 @@ class Pagination(LibraryResponsePagination):
     pass  # Inherits all fields from library: cursor, has_more, total_count
 
 
-class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse, AdcpResponse):
+class ListCreativesResponse(NestedModelSerializerMixin, LibraryListCreativesResponse, SalesAgentAdcpResponse):
     """Extends library ListCreativesResponse with local subtypes.
 
     Library provides: context, creatives, ext, format_summary, pagination,

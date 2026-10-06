@@ -13,14 +13,16 @@ Philosophy:
 import logging
 from typing import Any
 
-# FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
-from adcp import CreativeFilters, GetProductsResponse, Product
-
 # FIXME(#1388): ProductFilters has a local subclass; import from src.core.schemas.
 from adcp.types import (
     BrandReference,
     ReportingWebhook,
 )
+
+# FIXME(#1388): GetProductsResponse, Product have local subclasses; import from src.core.schemas.
+from adcp.types import LegacyCreativeFilters as CreativeFilters
+from adcp.types import LegacyGetProductsResponse as GetProductsResponse
+from adcp.types import LegacyProduct as Product
 from pydantic import BaseModel
 
 from src.core.schemas.notification import PushNotificationConfig

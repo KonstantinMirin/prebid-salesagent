@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 import factory
-from adcp.types.generated_poc.core.business_entity import (  # TODO: no stable alias in adcp.types
+from adcp.types.domains.core.business_entity import (  # TODO: no stable alias in adcp.types
     Address,
     Bank,
     BusinessEntity,

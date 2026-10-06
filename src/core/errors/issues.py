@@ -33,7 +33,7 @@ import typing
 from typing import Any, ClassVar, Literal
 
 import pydantic_core
-from adcp.types.generated_poc.core.error import Issue as LibraryIssue
+from adcp.types.domains.core.error import Issue as LibraryIssue
 from pydantic import ConfigDict, model_validator
 
 from src.core.config import get_pydantic_extra_mode
@@ -192,6 +192,15 @@ PYDANTIC_KEYWORD_MAP: dict[str, JsonSchemaKeyword | None] = {
     "uuid_version": "format",
     "json_invalid": "format",
     "string_unicode": "format",
+    # New in the pydantic-core the adcp 9 pin resolves (2.46.5, via pydantic 2.13.5):
+    # pydantic's ``StringConstraints(ascii_only=True)``, message "String should contain
+    # only ASCII characters". Same family as ``string_unicode`` -- the string's character
+    # repertoire is wrong, not its length or its regex -- and JSON Schema has no ``ascii``
+    # keyword, so ``format`` is the honest naming: "not in the required format", with no
+    # constraint value to quote (``format`` is absent from ``_KEYWORD_CTX_KEY`` for that
+    # reason). Nothing in the pinned SDK tree or this repo sets ``ascii_only`` today, so
+    # the row is unreachable; the map is TOTAL over ``ErrorType``, which is why it is here.
+    "string_not_ascii": "format",
     "bytes_invalid_encoding": "format",
     "complex_str_parsing": "format",
     "datetime_object_invalid": "format",

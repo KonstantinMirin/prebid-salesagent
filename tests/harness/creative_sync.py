@@ -729,7 +729,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
         if generative:
             return self.setup_generative_build(format_id=format_id)
 
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         mock_format = MagicMock()
         mock_format.format_id = LibraryFormatId(agent_url=self.DEFAULT_AGENT_URL, id=format_id)
@@ -780,7 +780,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             fmt = env.setup_generative_build(format_id="gen_banner")
             creative = {"creative_id": "c1", "name": "Test", "format_id": fmt, ...}
         """
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         agent = agent_url or self.DEFAULT_AGENT_URL
 

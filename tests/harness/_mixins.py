@@ -2026,7 +2026,7 @@ class AccountListDispatchMixin:
 
     def _parse_list_rest_response(self, data: dict[str, Any]) -> Any:
         # revive, not the constructor: a served document carries the context the boundary
-        # stamped and AdcpResponse refuses that field on construction.
+        # stamped and SalesAgentAdcpResponse refuses that field on construction.
         from src.core.schemas.account import ListAccountsResponse
 
         return ListAccountsResponse.revive(data)

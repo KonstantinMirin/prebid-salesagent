@@ -532,7 +532,7 @@ class TestFindFormat:
 
     def test_matches_across_the_two_format_id_classes(self):
         """The subclass and the library type name the same format, so they match."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
         from src.core.schemas import FormatId as OurFormatId
@@ -549,7 +549,7 @@ class TestFindFormat:
 
     def test_trailing_slash_on_agent_url_does_not_split_identity(self):
         """A reference built from a str and one built from AnyUrl name one format."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -558,7 +558,7 @@ class TestFindFormat:
         assert find_format([fmt], LibraryFormatId(agent_url=bare, id=fmt.format_id.id)) is fmt
 
     def test_a_different_id_does_not_match(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -567,7 +567,7 @@ class TestFindFormat:
         assert find_format([fmt], other) is None
 
     def test_a_different_agent_url_does_not_match(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -587,7 +587,7 @@ class TestFindFormat:
         and the creative is silently written as a static asset. Exactly the failure
         this whole helper exists to prevent.
         """
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -598,14 +598,14 @@ class TestFindFormat:
         assert find_format([fmt], parameterized) is fmt
 
     def test_returns_none_for_an_empty_listing(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
         assert find_format([], LibraryFormatId(agent_url="https://a.example.com", id="display")) is None
 
     def test_returns_the_first_match_in_listing_order(self):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -637,7 +637,7 @@ class TestFormatIdentityCanonicalization:
         ],
     )
     def test_a_reference_matches_despite(self, reference_url, what_the_trim_kept):
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 
@@ -650,7 +650,7 @@ class TestFormatIdentityCanonicalization:
 
     def test_a_genuinely_different_host_still_does_not_match(self):
         """Canonicalizing must not blur two agents together."""
-        from adcp.types import FormatId as LibraryFormatId
+        from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
 
         from src.core.format_resolver import find_format
 

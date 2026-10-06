@@ -20,22 +20,22 @@ from adcp.types import ListAccountsRequest as LibraryListAccountsRequest
 from adcp.types import ListAccountsResponse as LibraryListAccountsResponse
 from adcp.types import SyncAccountsRequest as LibrarySyncAccountsRequest
 from adcp.types.aliases import SyncAccountsSuccessResponse as LibrarySyncAccountsSuccess
-from adcp.types.generated_poc.account.sync_accounts_request import (
+from adcp.types.domains.account.sync_accounts_request import (
     Accounts as LibrarySyncAccountInput,
 )
-from adcp.types.generated_poc.account.sync_accounts_request import (
+from adcp.types.domains.account.sync_accounts_request import (
     Accounts1 as LibrarySettingsUpdateAccountInput,
 )
-from adcp.types.generated_poc.account.sync_accounts_response import (
+from adcp.types.domains.account.sync_accounts_response import (
     Account as LibraryAccount,
 )  # TODO: no stable alias in adcp.types
 from pydantic import ConfigDict, Field, model_validator
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.schemas._base import (
-    AdcpResponse,
     BuyerRequest,
     NestedModelSerializerMixin,
+    SalesAgentAdcpResponse,
     validate_idempotency_key_shape,
 )
 from src.core.schemas.notification import NotificationConfig, PushNotificationConfig
@@ -193,7 +193,7 @@ class SyncAccountsRequest(BuyerRequest, LibrarySyncAccountsRequest):
 # ---------------------------------------------------------------------------
 
 
-class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse, AdcpResponse):
+class ListAccountsResponse(NestedModelSerializerMixin, LibraryListAccountsResponse, SalesAgentAdcpResponse):
     """Extends library ListAccountsResponse.
 
     Library provides: accounts, errors, pagination, context, ext.
@@ -230,7 +230,7 @@ class SyncResponseAccount(LibraryAccount):
 class SyncAccountsResponse(
     NestedModelSerializerMixin,
     LibrarySyncAccountsSuccess,  # type: ignore[misc]
-    AdcpResponse,
+    SalesAgentAdcpResponse,
 ):
     """Extends library SyncAccountsResponse success variant.
 

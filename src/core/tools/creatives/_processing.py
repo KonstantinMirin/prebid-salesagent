@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-from adcp.types import CreativeAsset
+from adcp.types import LegacyCreativeAsset as CreativeAsset
 
 from src.core.errors.details import AdapterFailureDetails, ConfigurationDetails, CreativeRejectionDetails
 from src.core.exceptions import (
@@ -1026,10 +1026,12 @@ def _create_new_creative(
         data=data,
     )
 
-    # Update creative_id if it was generated (i6k: model attribute assignment)
-    # SDK 5.7: CreativeAsset is now a RootModel; __getattr__ proxies to .root
+    # Update creative_id if it was generated (i6k: model attribute assignment).
+    # The attr-defined ignore is GONE: adcp 5.7 made CreativeAsset a RootModel whose
+    # __getattr__ proxied to .root, which is what hid the attribute from mypy. adcp 9's
+    # CreativeAsset is a plain model again and declares creative_id itself.
     if not creative.creative_id:
-        creative.creative_id = db_creative.creative_id  # type: ignore[attr-defined]
+        creative.creative_id = db_creative.creative_id
 
     # Now apply approval mode logic
     if approval_mode == "auto-approve":

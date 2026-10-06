@@ -48,7 +48,15 @@ from a2a.types import (
 )
 from a2a.utils.errors import A2AError
 from adcp.server.mcp_tools import ADCP_TOOL_DEFINITIONS
-from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
+
+# The spec's nine-value task status, off the PUBLIC surface. Until adcp 9,
+# ``adcp.types.TaskStatus`` resolved to a hand-written five-value enum and the real one was
+# reachable only through the private generated tree, which is why this import used to go
+# there. adcp 9 deletes the hand-written enum outright and ``GeneratedTaskStatus`` is the
+# public name for the generated one (identity-checked: it IS
+# ``adcp.types.domains.enums.task_status.TaskStatus``). The local ALIAS stays, because
+# ``TaskStatus`` above is a2a's protobuf message of the same name.
+from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from google.protobuf import json_format, struct_pb2
 
 from src.a2a_server.context_builder import EXCHANGE_STATE_KEY

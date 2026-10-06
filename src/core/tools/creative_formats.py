@@ -25,7 +25,7 @@ from adcp.types import (
     UrlFormatAsset,
     VideoFormatAsset,
 )
-from adcp.types import Format as AdcpFormat
+from adcp.types import LegacyFormat as AdcpFormat
 from adcp.utils.format_assets import get_format_assets
 
 # Format subclass preserved through backward-compatibility helper (PEP 695 type param below).
@@ -197,7 +197,7 @@ def _list_creative_formats_impl(
             if adapter_type == "broadstreet":
                 # Import Broadstreet templates and convert to formats
                 from src.adapters.broadstreet.config_schema import BROADSTREET_TEMPLATES
-                from src.core.schemas import Format, FormatId, url
+                from src.core.schemas import Format, FormatId
 
                 agent_url = f"broadstreet://{tenant.tenant_id}"
 
@@ -205,7 +205,12 @@ def _list_creative_formats_impl(
                     try:
                         format_id = FormatId(
                             id=f"broadstreet_{template_id}",
-                            agent_url=url(agent_url),
+                            # The WIRE STRING, not an AnyUrl: adcp 9 (#1396, "keep the
+                            # format-reference agent_url as the wire string") types
+                            # FormatReferenceStructuredObject.agent_url as ``str``, so an
+                            # AnyUrl is refused and its normalisation (a trailing slash on a
+                            # bare origin) is no longer applied on this field.
+                            agent_url=agent_url,
                         )
 
                         # Build assets list using the correct Assets variant per type
@@ -464,7 +469,7 @@ def _list_creative_formats_impl(
     )
 
     # Build creative_agents referrals from registry (POST-S4)
-    from adcp.types.generated_poc.media_buy.list_creative_formats_response import (
+    from adcp.types.domains.media_buy.list_creative_formats_response import (
         CreativeAgent as AdcpCreativeAgent,
     )
 

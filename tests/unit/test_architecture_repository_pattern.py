@@ -1295,20 +1295,20 @@ class TestIntegrationTestsNoGetDbSession:
 # ---------------------------------------------------------------------------
 
 # The generated-response-shape family: types describing a WIRE response, not a
-# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency3
+# DB row. IdempotencyPosture/to_sdk_union() imported Idempotency/Idempotency1
 # from here while living in repositories/idempotency_attempt.py (D2, salesagent-
 # c0ia.11 M2) -- business/wire-shaping logic belongs above the repository,
 # never inside it. Scoped to this specific submodule (not bare `adcp.types`,
 # whose top-level re-exports like ContextObject/Error are generic shared types
 # used legitimately in a handful of repository method signatures today) so the
 # check is crisp with zero false positives.
-_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.generated_poc.protocol"
+_FORBIDDEN_REPOSITORY_IMPORT_PREFIX = "adcp.types.domains.protocol"
 
 REPOSITORIES_DIR = "src/core/database/repositories"
 
 
 def _scan_for_protocol_imports(tree: ast.Module) -> list[tuple[str, int]]:
-    """(imported_module, line) for every ``from adcp.types.generated_poc.protocol...
+    """(imported_module, line) for every ``from adcp.types.domains.protocol...
     import ...`` in ``tree``."""
     return [
         (node.module, node.lineno)
@@ -1344,7 +1344,7 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
     def test_no_repository_imports_adcp_protocol_response_types(self):
         violations = _find_repository_protocol_imports()
         assert not violations, (
-            "repositories/*.py importing adcp.types.generated_poc.protocol.* "
+            "repositories/*.py importing adcp.types.domains.protocol.* "
             "(a response-shaped SDK type) -- move the business/wire-shaping logic "
             "that needs this type OUT of the repository layer (see "
             "src/core/idempotency_policy.py for the pattern):\n"
@@ -1354,9 +1354,7 @@ class TestRepositoriesDoNotImportProtocolResponseTypes:
     @pytest.mark.arch_guard
     def test_guard_catches_a_reintroduced_protocol_import(self):
         """Positive meta-test: reproduces the exact pre-M2 idempotency_attempt.py shape."""
-        drifted = ast.parse(
-            "from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import Idempotency\n"
-        )
+        drifted = ast.parse("from adcp.types.domains.protocol.get_adcp_capabilities_response import Idempotency\n")
         assert _scan_for_protocol_imports(drifted), "a reintroduced protocol-response import must be flagged"
 
     @pytest.mark.arch_guard

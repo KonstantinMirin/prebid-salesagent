@@ -1762,7 +1762,7 @@ class BaseTestEnv:
         #
         # Through ``revive`` when the parser is a response model, because a SERVED document
         # carries the context the boundary stamped and the constructor refuses that field --
-        # ``AdcpResponse`` makes ``_boundary._served`` the only thing that can put one on a
+        # ``SalesAgentAdcpResponse`` makes ``_boundary._served`` the only thing that can put one on a
         # response, so ``parser(**wire)`` raised a ValidationError in the TEST process and the
         # scenario reported "no response arrived" for a request the seller answered fine.
         # ``revive`` is the reader-side door: it takes the field off the document, validates
@@ -2679,7 +2679,7 @@ class BaseTestEnv:
         NotImplementedError, and nine envs answered it with one line of their own --
         ``SomeResponse(**data)`` -- which is the substituted-variable duplication the DRY
         rule forbids, and which every one of them got WRONG in the same way: a served
-        document carries the ``context`` the boundary stamped, ``AdcpResponse`` refuses
+        document carries the ``context`` the boundary stamped, ``SalesAgentAdcpResponse`` refuses
         that field on construction so the boundary is the only thing that can put one
         there, and so every REST dispatch of a context-carrying request raised in the TEST
         process. The scenario then reported "no response arrived" for a request the seller
@@ -2691,7 +2691,7 @@ class BaseTestEnv:
         ``RESPONSE_MODEL`` and overrides this; the refusal below is what it used to be.
 
         ``revive`` only when the model HAS one. Some envs name the LIBRARY response type
-        rather than a local subclass of ``AdcpResponse`` — ``CapabilitiesEnv`` does — and a
+        rather than a local subclass of ``SalesAgentAdcpResponse`` — ``CapabilitiesEnv`` does — and a
         library model carries no context refusal to work around, so plain construction is
         correct for it. Refusing instead cost 97 UC-010 failures in one run: measured as
         NEW between two remote runs, every one of them this frame raising

@@ -372,7 +372,7 @@ def when_list_creatives_concept_ids(ctx: dict, concept_list: str) -> None:
     """
     import re
 
-    from adcp import CreativeFilters
+    from adcp.types import LegacyCreativeFilters as CreativeFilters
 
     from tests.bdd.steps.generic.when_request import _call_via
 

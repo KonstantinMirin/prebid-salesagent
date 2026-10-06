@@ -43,7 +43,7 @@ from src.core.schemas import (
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
 )
-from src.core.schemas._base import AdcpResponse, BuyerRequest
+from src.core.schemas._base import BuyerRequest, SalesAgentAdcpResponse
 from src.core.tools.accounts import _list_accounts_impl, _sync_accounts_impl
 from src.core.tools.capabilities import _get_adcp_capabilities_impl
 from src.core.tools.creative_formats import _list_creative_formats_impl
@@ -102,7 +102,7 @@ class ToolImpl[Req: BuyerRequest, Id: PublicIdentity](Protocol):
     ``identity`` declared Optional or defaulted, and an extra defaulted parameter.
     """
 
-    def __call__(self, *, req: Req, identity: Id) -> AdcpResponse | Awaitable[AdcpResponse]: ...
+    def __call__(self, *, req: Req, identity: Id) -> SalesAgentAdcpResponse | Awaitable[SalesAgentAdcpResponse]: ...
 
 
 _IDENTITY_TYPES: tuple[type[PublicIdentity], ...] = (PublicIdentity, ResolvedIdentity, AccountIdentity)

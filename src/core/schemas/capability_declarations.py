@@ -25,11 +25,18 @@ from collections.abc import Collection, Iterable
 from enum import Enum
 from typing import Any, NamedTuple
 
-from adcp.types.generated_poc.enums.specialism import AdcpSpecialism
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
-    ExperimentalFeature,
-    ReportingDeliveryMethod,
-    SupportedProtocol,
+# adcp 9 renamed two of these. ``ExperimentalFeature`` became the named $ref type
+# ``ExperimentalFeatureId`` and moved to ``domains.core``; the capabilities response's
+# two-value ``ReportingDeliveryMethod`` enum (``webhook`` / ``offline``) became
+# ``CapabilityReportingDeliveryMethod``, because the public ``adcp.types`` name now belongs
+# to a DIFFERENT type — the union of durable reporting-delivery objects. Aliasing both back
+# to the names this module uses, so the rename stays at the import.
+from adcp.types.domains.core.experimental_feature_id import (
+    ExperimentalFeatureId as ExperimentalFeature,
+)
+from adcp.types.domains.enums.specialism import AdcpSpecialism
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
+    CapabilityReportingDeliveryMethod as ReportingDeliveryMethod,
 )
 
 # `Measurement` is aliased `LibraryMeasurementDeclaration`, NOT the conventional
@@ -41,10 +48,13 @@ from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
 # the product-level `Measurement` inherit the capabilities-response type. Aliasing to
 # match THIS module's subclass keeps the guard checking the right pair. Do not
 # "simplify" it back to `LibraryMeasurement`.
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import (
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
     Measurement as LibraryMeasurementDeclaration,
 )
-from adcp.types.generated_poc.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
+from adcp.types.domains.protocol.get_adcp_capabilities_response import (
+    SupportedProtocol,
+)
+from adcp.types.domains.protocol.get_adcp_capabilities_response import TrustedMatch as LibraryTrustedMatch
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.core.errors.details import ConfigurationDetails

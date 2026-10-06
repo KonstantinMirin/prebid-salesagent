@@ -29,7 +29,8 @@ from adcp import Error as _LibraryError
 from adcp.types import AccountReference as LibraryAccountReference
 from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import (
-    CanonicalFormatKind,
+    # ``CanonicalFormatKind`` was imported here for the deleted ProductFormatDeclaration
+    # subclass (see the note where that class used to be) and has no reader left.
     ContextObject,
     # DeliveryStatus / MediaBuyStatus are no longer referenced by a declaration in
     # this module — Snapshot and GetMediaBuysMediaBuy inherit them from their library
@@ -43,51 +44,64 @@ from adcp.types import (
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
     ProtocolEnvelope,
 )
-from adcp.types import CreateMediaBuyRequest as LibraryCreateMediaBuyRequest
-
-# Import main request/response types from stable API
-from adcp.types import Format as LibraryFormat
-
-# Import types from stable API (per adcp 2.7.0+)
-from adcp.types import FormatId as LibraryFormatId
+from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
 from adcp.types import GetAdcpCapabilitiesResponse as LibraryGetAdcpCapabilitiesResponse
 from adcp.types import GetMediaBuysRequest as LibraryGetMediaBuysRequest
-from adcp.types import GetMediaBuysResponse as LibraryGetMediaBuysResponse
 from adcp.types import GetTaskStatusResponse as LibraryGetTaskStatusResponse
-from adcp.types import ListTasksRequest as LibraryListTasksRequest
-from adcp.types import ListTasksResponse as LibraryListTasksResponse
-from adcp.types import PackageRequest as LibraryPackageRequest
+from adcp.types import LegacyCreateMediaBuyRequest as LibraryCreateMediaBuyRequest
+
+# Import main request/response types from stable API.
+#
+# ``LegacyFormat``, not ``Format``: adcp 9 (AdCP 3.2) repoints the public name ``Format``
+# at the canonical format DECLARATION (``adcp.types.canonical_creative.Format`` — eleven
+# fields: format_kind, params, format_option_id, …), and the 3.1.1 named-format model this
+# seller extends — format_id, assets, renders, canonical_parameters, twenty fields — is
+# exported as ``LegacyFormat``. The two are different models with one name between them,
+# so an unprefixed import silently rebinds the base. Moving onto the canonical model is
+# the creative migration (salesagent-3xcdk), not the bump.
+from adcp.types import LegacyFormat as LibraryFormat
+from adcp.types import LegacyGetMediaBuysResponse as LibraryGetMediaBuysResponse
+from adcp.types import LegacyPackageRequest as LibraryPackageRequest
 
 # Import types from stable API (per adcp 2.9.0+ - all types now in stable)
 # Note: AffectedPackage was removed in 2.9.0, use Package instead
-from adcp.types import PackageUpdate as LibraryPackageUpdate
-from adcp.types import UpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
+from adcp.types import LegacyPackageUpdate as LibraryPackageUpdate
+from adcp.types import LegacyUpdateMediaBuyRequest as LibraryUpdateMediaBuyRequest
+from adcp.types import ListTasksRequest as LibraryListTasksRequest
+from adcp.types import ListTasksResponse as LibraryListTasksResponse
+
+# The six media-buy response ARMS, and why three of them are reached at a generated path
+# while two are reached by a public Legacy* name.
+#
+# adcp 9 repoints the unprefixed ``adcp.types.aliases`` names at the 3.2 canonical response
+# models (``adcp.types.canonical_creative.*``) and publishes ``Legacy*`` names for the 3.1.1
+# generated arms. That set is INCOMPLETE: it carries LegacyUpdateMediaBuyErrorResponse and
+# LegacyUpdateMediaBuySuccessResponse, and NO LegacyCreateMediaBuy*Response and no
+# LegacyUpdateMediaBuySubmittedResponse. For the four arms with no legacy name the generated
+# module is the only way to name the class 6.6.0 gave, so that is what these import.
 from adcp.types.aliases import (
-    CreateMediaBuyErrorResponse as AdCPCreateMediaBuyError,
+    LegacyUpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
 )
 from adcp.types.aliases import (
-    CreateMediaBuySubmittedResponse as AdCPCreateMediaBuySubmitted,
-)
-from adcp.types.aliases import (
-    CreateMediaBuySuccessResponse as AdCPCreateMediaBuySuccess,
+    LegacyUpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.aliases import Package as AdCPPackage
-from adcp.types.aliases import (
-    UpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
-)
-from adcp.types.aliases import (
-    UpdateMediaBuySubmittedResponse as AdCPUpdateMediaBuySubmitted,
-)
-from adcp.types.aliases import (
-    UpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
-)
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
-from adcp.types.generated_poc.core.product_format_declaration import (
-    ProductFormatDeclaration as LibraryProductFormatDeclaration,
-)
-from adcp.types.generated_poc.core.version_envelope import AdcpVersionEnvelope
-from adcp.types.generated_poc.enums.creative_approval_status import (
+from adcp.types.base import AdcpRequest as LibraryAdcpRequest
+
+# The GENERATED format reference, reached at its generated path because adcp 9 gives it no
+# public name. ``adcp.types.FormatId`` is gone and both candidate public names --
+# ``LegacyFormatId`` and ``LegacyFormatReferenceStructuredObject`` -- resolve to
+# ``adcp.types.legacy.LegacyFormatId``, a SUBCLASS that narrows ``duration_ms`` from float
+# to int. Binding to that subclass is not equivalent: every SDK model field is annotated
+# with the generated class, so the narrowed type is not what the models produce, and this
+# repo's own helpers would demand it. This import is the 6.6.0 class exactly
+# (``adcp.types.generated_poc.core.format_id.FormatReferenceStructuredObject``, same
+# qualname, now under ``domains``) plus the ``pixel_ratio`` the spec added.
+from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.version_envelope import AdcpVersionEnvelope
+from adcp.types.domains.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
     # load-bearing: src.core.schemas already exports an unrelated
     # ``CreativeApprovalStatus`` (creative.py:252, a per-creative result model), so an
@@ -98,26 +112,37 @@ from adcp.types.generated_poc.enums.creative_approval_status import (
     # the library type behind our ``ApprovalStatus``.
     CreativeApprovalStatus as LibraryApprovalStatus,
 )
-from adcp.types.generated_poc.enums.media_buy_valid_action import (
+from adcp.types.domains.enums.media_buy_valid_action import (
     MediaBuyValidAction,  # noqa: F401 — re-exported via src.core.schemas
 )
-from adcp.types.generated_poc.enums.snapshot_unavailable_reason import (
+from adcp.types.domains.enums.snapshot_unavailable_reason import (
     SnapshotUnavailableReason as LibrarySnapshotUnavailableReason,
 )
-from adcp.types.generated_poc.enums.task_status import TaskStatus as LibraryTaskStatus
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse1 as AdCPCreateMediaBuySuccess,
+)
+from adcp.types.domains.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse2 as AdCPCreateMediaBuyError,
+)
+from adcp.types.domains.media_buy.create_media_buy_response import (
+    CreateMediaBuyResponse3 as AdCPCreateMediaBuySubmitted,
+)
+from adcp.types.domains.media_buy.get_media_buys_response import (
     MediaBuy as LibraryGetMediaBuysMediaBuy,
 )
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.media_buy.get_media_buys_response import (
     Package as LibraryGetMediaBuysPackage,
 )
-from adcp.types.generated_poc.media_buy.get_media_buys_response import (
+from adcp.types.domains.media_buy.get_media_buys_response import (
     Snapshot as LibraryGetMediaBuysSnapshot,
 )
-from adcp.types.generated_poc.protocol.get_task_status_request import (
+from adcp.types.domains.media_buy.update_media_buy_response import (
+    UpdateMediaBuyResponse3 as AdCPUpdateMediaBuySubmitted,
+)
+from adcp.types.domains.protocol.get_task_status_request import (
     GetTaskStatusRequest as LibraryGetTaskStatusRequest,
 )
-from adcp.types.generated_poc.protocol.list_tasks_response import Task as LibraryTaskSummary
+from adcp.types.domains.protocol.list_tasks_response import Task as LibraryTaskSummary
 
 from src.core.config import get_pydantic_extra_mode
 from src.core.errors.codes import CODE_TABLE, ErrorCodeT
@@ -155,7 +180,7 @@ from adcp.types import TargetingOverlay
 # the library's TargetingOverlay field types exactly. Track upstream:
 # https://github.com/adcontextprotocol/adcp-client-python — when CollectionListReference is added
 # to adcp.types, switch this import to the public path.
-from adcp.types.generated_poc.core.collection_list_ref import (
+from adcp.types.domains.core.collection_list_ref import (
     CollectionListReference,  # noqa: F401 — re-exported via src.core.schemas; used by callers and TargetingOverlay.collection_list type
 )
 from annotated_types import MaxLen, MinLen
@@ -803,12 +828,12 @@ def _mirror_media_buy_status(model: Any) -> Any:
 
 
 #: ``union root -> TypeAdapter`` for the tools whose response schema is a ``oneOf``. Populated
-#: beside the branches, which is the only place that knows them; :meth:`AdcpResponse.revive`
+#: beside the branches, which is the only place that knows them; :meth:`SalesAgentAdcpResponse.revive`
 #: is the only reader. A root absent from here has a single shape and validates as itself.
 _BRANCH_ADAPTERS: dict[type, TypeAdapter] = {}
 
 
-class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
+class SalesAgentAdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     """What every AdCP response IS: the two envelopes its schema composes at the root.
 
     Declares NO fields of its own. It exists to name a TYPE, and a field added here would put
@@ -837,7 +862,7 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
     """
 
     @model_validator(mode="after")
-    def _context_is_the_boundarys(self) -> "AdcpResponse":
+    def _context_is_the_boundarys(self) -> "SalesAgentAdcpResponse":
         if self.__dict__.get("context") is not None:
             raise ValueError(
                 "context is stamped by the boundary (src/core/tools/_boundary._served); a response is constructed without one"
@@ -852,7 +877,7 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
         super().__setattr__(name, value)
 
     @classmethod
-    def revive(cls, data: dict[str, Any]) -> "AdcpResponse":
+    def revive(cls, data: dict[str, Any]) -> "SalesAgentAdcpResponse":
         """Rebuild a response of this type from a document, resolving a ``oneOf`` to its branch.
 
         A response whose schema is a single shape validates as itself. A union root resolves
@@ -885,7 +910,7 @@ class AdcpResponse(AdcpVersionEnvelope, ProtocolEnvelope):
         return revived
 
 
-class AdcpErrorResponse(AdcpResponse):
+class AdcpErrorResponse(SalesAgentAdcpResponse):
     """What a FAILED tool call is: the response envelope, carrying the error.
 
     AdCP models a failure as a response, not as a separate document.
@@ -893,7 +918,7 @@ class AdcpErrorResponse(AdcpResponse):
     every response envelope and lists ``status`` as required, so an error body is a response
     body with the error fields filled in. This class is that body, declared once.
 
-    ``errors`` is declared HERE rather than on ``AdcpResponse`` because the pin puts it on
+    ``errors`` is declared HERE rather than on ``SalesAgentAdcpResponse`` because the pin puts it on
     each tool's own schema (``media-buy/*-response.json``) and not on the envelope. One
     subclass is the only place it can live without a per-tool copy, and a failure has no tool
     payload to carry besides the error.
@@ -965,7 +990,7 @@ class AdcpErrorResponse(AdcpResponse):
         return cls(status=LibraryTaskStatus.failed, adcp_error=error, errors=[error])
 
 
-class CreateMediaBuyResult(AdcpResponse):
+class CreateMediaBuyResult(SalesAgentAdcpResponse):
     """The three shapes a create_media_buy response can take, as one nameable type.
 
     ``media-buy/create-media-buy-response.json`` is a root ``oneOf`` over Success, Error and
@@ -980,7 +1005,7 @@ class CreateMediaBuyResult(AdcpResponse):
     """
 
 
-class UpdateMediaBuyResult(AdcpResponse):
+class UpdateMediaBuyResult(SalesAgentAdcpResponse):
     """The three shapes an update_media_buy response can take. See ``CreateMediaBuyResult``."""
 
 
@@ -1063,11 +1088,10 @@ class CreateMediaBuySuccess(AlwaysIncludeFieldsMixin, AdCPCreateMediaBuySuccess,
     #
     # The suppression records an SDK/SPEC DIVERGENCE, not our convenience: we extend the
     # SDK's class, and that class does not account for the null case its own pinned
-    # schema permits. Suppressing here is how we keep inheriting the SDK type while
-    # honouring the contract it under-specifies. Cost stated rather than buried -- the
-    # type-ignore ratchet moves 56 -> 57, and the ratchet is shrink-only by default, so
-    # this is an approved exception rather than a silent increase.
-    confirmed_at: AwareDatetime | None  # type: ignore[assignment]
+    # schema permits. The suppression this carried is GONE: adcp 9 types the parent field
+    # so the redeclaration is a plain narrowing mypy accepts, and the type-ignore ratchet
+    # shrinks by one rather than carrying an approved exception.
+    confirmed_at: AwareDatetime | None
 
     # Names the branch this model IS, so the retained-field set is DERIVED from the pin
     # rather than listed here. branch0 is CreateMediaBuySuccess; the bare ref is
@@ -1217,7 +1241,7 @@ class AffectedPackage(LibraryPackage):
     )
 
 
-class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):  # type: ignore[misc]
+class UpdateMediaBuySuccess(NestedModelSerializerMixin, AdCPUpdateMediaBuySuccess, UpdateMediaBuyResult):
     """Successful update_media_buy response, extending the SDK success branch.
 
     Extends the official adcp UpdateMediaBuySuccess type.
@@ -1327,7 +1351,7 @@ class UpdateMediaBuyError(AdCPUpdateMediaBuyError, UpdateMediaBuyResult):  # typ
     """
 
 
-class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted, UpdateMediaBuyResult):  # type: ignore[misc]
+class UpdateMediaBuySubmitted(AdCPUpdateMediaBuySubmitted, UpdateMediaBuyResult):
     """Async/pending update_media_buy response, extending the SDK submitted branch.
 
     Spec 3.1.1 ``update-media-buy-response.json`` models a not-yet-applied update
@@ -1572,21 +1596,16 @@ class FormatReference(SalesAgentBaseModel):
     format_id: str = Field(..., serialization_alias="id", description="Format ID within that agent's format catalog")
 
 
-class ProductFormatDeclaration(LibraryProductFormatDeclaration):
-    """Format.canonical_parameters, with the two fields the generated class lacks.
-
-    3.1.1 core/product-format-declaration.json is a oneOf over format kinds, and every
-    branch requires ``format_kind`` and ``params``. adcp 6.6.0 generated only the shared
-    base properties and ignores extras, so parsing a creative agent's catalog dropped
-    both and served ``{"canonical_formats_only": false, "experimental": false}``, which
-    the pinned schema rejects. ``params`` is per-kind in the schema; it is carried as a
-    dict, as the SDK's own hand-written declaration (adcp.types.canonical_decl) does.
-    7.0.3 has the same gap; 8.0 (AdCP 3.2) generates the union. Delete this class when
-    the SDK pin carries the fix (adcontextprotocol/adcp-client-python#1275).
-    """
-
-    format_kind: CanonicalFormatKind
-    params: dict[str, Any]
+# ``ProductFormatDeclaration`` was declared here: a narrowing subclass that added
+# ``format_kind`` and ``params``, because adcp 6.6.0 generated only the shared base
+# properties of the ``oneOf`` and dropped both when parsing a creative agent's catalog.
+# Its docstring named its own deletion condition -- "8.0 (AdCP 3.2) generates the union.
+# Delete this class when the SDK pin carries the fix
+# (adcontextprotocol/adcp-client-python#1275)". adcp 9 carries it:
+# ``LegacyFormat.canonical_parameters`` is a ``CanonicalParameters`` RootModel over the
+# generated per-kind arms, each with its own required ``format_kind`` and typed ``params``,
+# which is strictly more than the two hand-added fields expressed. So the class is gone and
+# ``Format`` inherits the field rather than redeclaring it.
 
 
 class Format(LibraryFormat):
@@ -1600,10 +1619,10 @@ class Format(LibraryFormat):
     We only add internal fields here marked with exclude=True.
     """
 
-    # Narrowed to the local subclass above: the library type loses format_kind and params.
-    canonical_parameters: ProductFormatDeclaration | None = Field(
-        default=None, deprecated=True, description=LibraryFormat.model_fields["canonical_parameters"].description
-    )
+    # ``canonical_parameters`` is INHERITED. It was redeclared here only to narrow it to
+    # the local ProductFormatDeclaration subclass, which existed only because adcp 6.6.0's
+    # generated type lost format_kind and params. adcp 9 generates the per-kind union, so
+    # the narrowing has nothing left to narrow and the redeclaration is the parent's.
 
     # Internal fields for backward compatibility and convenience
     # These are NOT part of the AdCP spec and are excluded from serialization
@@ -1750,7 +1769,7 @@ def convert_format_ids_to_formats(format_ids: list[str], tenant_id: str | None =
             # For unknown format IDs, create a minimal Format object with FormatId
             formats.append(
                 Format(
-                    format_id=FormatId(agent_url=url("https://creative.adcontextprotocol.org"), id=format_id),
+                    format_id=FormatId(agent_url="https://creative.adcontextprotocol.org", id=format_id),
                     name=format_id.replace("_", " ").title(),
                 )
             )
@@ -2189,12 +2208,11 @@ class PackageRequest(LibraryPackageRequest):
     #
     # ``type: ignore[assignment]`` survives the correction and is not the same silence it was.
     # ``adcp.types.CreativeAsset`` is a RootModel UNION over the two codegen branches of a
-    # oneOf; ``CreativeAssetRequest`` extends one branch (see its docstring for why the union
-    # cannot be extended: a failing branch puts ``CreativeAsset1`` -- a name absent from AdCP --
-    # into the buyer's error pointer). A branch subclass is not a static subtype of the union,
-    # so mypy reports the mismatch for any correct spelling of this field. Same ignore, same
-    # reason, on SyncCreativesRequest.creatives.
-    creatives: list["CreativeAssetRequest"] | None = Field(  # type: ignore[assignment]
+    # oneOf; ``CreativeAssetRequest`` extends one branch. The ignore this carried is GONE:
+    # adcp 9 retired the numeric arm name and the branch IS ``CreativeAsset``, so the field's
+    # declared element type is a class the local subclass statically extends and mypy no
+    # longer reports a mismatch. Same removal on SyncCreativesRequest.creatives.
+    creatives: list["CreativeAssetRequest"] | None = Field(
         None,
         min_length=1,
         max_length=100,
@@ -2693,8 +2711,9 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
     # provide -- a retried update executes twice. Our job on a required field is compliance,
     # not judgement, so the overrides are gone.
 
-    # Override datetime fields to accept raw strings (A2A path sends ISO strings)
-    start_time: datetime | Literal["asap"] | None = None  # type: ignore[assignment]
+    # Override datetime fields to accept raw strings (A2A path sends ISO strings).
+    # No suppression: adcp 9's parent field accepts the same union, so this is a narrowing.
+    start_time: datetime | Literal["asap"] | None = None
     end_time: datetime | None = None
     # Override packages to use our extended type with creative_ids
     # RE-STATED, same reason as the create side: the local element type is
@@ -2975,10 +2994,9 @@ class Signal(LibrarySignal):
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # Override types that differ from library
-    deployments: list[SignalDeployment] = Field(  # type: ignore[assignment]
-        ..., min_length=1, description="Array of platform deployments"
-    )
+    # Override types that differ from library. No suppression: adcp 9 types the parent
+    # field so the local element subclass is a static subtype.
+    deployments: list[SignalDeployment] = Field(..., min_length=1, description="Array of platform deployments")
 
     # Internal fields (not in AdCP spec, excluded from serialization)
     tenant_id: str | None = Field(None, description="Internal: Tenant ID for multi-tenancy", exclude=True)
@@ -3172,7 +3190,7 @@ PROPERTY_ERROR_MESSAGES = {
 # --- Authorized Properties (AdCP Spec) ---
 # Use library types directly - all fields inherited from AdCP spec
 # V3: Property uses property-specific Identifier, not generic Identifier
-from adcp.types.generated_poc.core.property import (
+from adcp.types.domains.core.property import (
     Identifier as PropertySpecificIdentifier,
 )  # TODO: no stable alias in adcp.types (different from adcp.types.Identifier)
 
@@ -3283,7 +3301,7 @@ class GetMediaBuysMediaBuy(AlwaysIncludeFieldsMixin, LibraryGetMediaBuysMediaBuy
     _SERIALIZE_NESTED_MODELS: ClassVar[bool] = True
 
 
-class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
+class CompleteTaskRequest(BuyerRequest, LibraryAdcpRequest, AdcpVersionEnvelope):
     """Request to complete a task.
 
     There used to be TWO models for this one tool: this one, and a legacy
@@ -3300,6 +3318,16 @@ class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
     under it this request could not carry a protocol version at all. Every other request DTO
     reaches the same envelope through its pinned generated type. Not exported from
     ``adcp.types``; import the full generated path.
+
+    ``AdcpRequest`` is the SECOND base, and it is what makes this DTO registrable.
+    ``src/core/main.py``'s refusal is the CONJUNCTION of ``issubclass(dto, AdcpRequest)``
+    and ``issubclass(dto, AdcpVersionEnvelope)`` -- the two predicates refuse disjoint
+    forgeries, so neither alone is the check. ``AdcpRequest`` is a field-less, non-pydantic
+    marker (``adcp.types.base``) carrying six accessors that answer from the instance dict
+    and return ``None`` for a field the tool does not declare, so naming it adds nothing to
+    the wire and nothing to the field set; it is the request POSITION stated by type.
+    Every SDK-generated request model has both bases, and this is the one DTO the SDK
+    ships no type for, so it names them itself.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
@@ -3315,7 +3343,7 @@ class CompleteTaskRequest(BuyerRequest, AdcpVersionEnvelope):
     context: ContextObject | None = Field(default=None, description="Application-level context")
 
 
-class CompleteTaskResponse(AdcpResponse):
+class CompleteTaskResponse(SalesAgentAdcpResponse):
     """Response from completing a task.
 
     On the SDK's base envelopes for the same reason the request is: the pin defines no
@@ -3350,7 +3378,7 @@ class GetTaskStatusRequest(BuyerRequest, LibraryGetTaskStatusRequest):
     now, and when the SDK ships one, make it the BASE CLASS rather than maintaining a
     parallel definition". That instruction was already satisfiable when it was written: the
     SDK ships the type under a DIFFERENT NAME, ``GetTaskStatusRequest`` in
-    ``generated_poc.protocol``, because the spec calls the operation ``get-task-status-status``
+    ``domains.protocol``, because the spec calls the operation ``get-task-status-status``
     while the tool is ``get_task_status``. A search for the type by the TOOL's name found nothing
     and a hand-written parallel was declared instead.
 
@@ -3410,7 +3438,7 @@ class GetAdcpCapabilitiesRequest(BuyerRequest, LibraryGetAdcpCapabilitiesRequest
     )
 
 
-class GetAdcpCapabilitiesResponse(LibraryGetAdcpCapabilitiesResponse, AdcpResponse):
+class GetAdcpCapabilitiesResponse(LibraryGetAdcpCapabilitiesResponse, SalesAgentAdcpResponse):
     """The get_adcp_capabilities response."""
 
 
@@ -3421,7 +3449,7 @@ class ListTasksRequest(BuyerRequest, LibraryListTasksRequest):
     """
 
 
-class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, AdcpResponse):
+class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, SalesAgentAdcpResponse):
     """Extends the pinned ListTasksResponse.
 
     Was a raw dict ``{tasks, total, offset, limit, has_more}`` -- six violations of
@@ -3443,7 +3471,7 @@ class ListTasksResponse(NestedModelSerializerMixin, LibraryListTasksResponse, Ad
     #: declare, and serializing by the DECLARED type would drop them silently.
 
 
-class GetTaskStatusResponse(LibraryGetTaskStatusResponse, AdcpResponse):
+class GetTaskStatusResponse(LibraryGetTaskStatusResponse, SalesAgentAdcpResponse):
     """Extends the pinned GetTaskStatusResponse (the spec names the task ``get-task-status-status``).
 
     Was a raw dict (GH #2202): ``protocol`` and ``task_type`` absent, and ``type`` emitted in
@@ -3497,7 +3525,7 @@ class GetMediaBuysRequest(BuyerRequest, LibraryGetMediaBuysRequest):
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
 
-class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse, AdcpResponse):
+class GetMediaBuysResponse(NestedModelSerializerMixin, LibraryGetMediaBuysResponse, SalesAgentAdcpResponse):
     """Extends library GetMediaBuysResponse.
 
     Library provides: media_buys, errors, context, pagination, sandbox, ext, and the

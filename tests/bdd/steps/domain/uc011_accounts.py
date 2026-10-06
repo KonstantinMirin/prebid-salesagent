@@ -266,7 +266,7 @@ def _make_governance_agent(url: str = "https://compliance.example.com/check") ->
     omission-preserves scenario (salesagent-gcze) is the first, and it must
     fail on the governance wipe, not on the fixture.
     """
-    from adcp.types.generated_poc.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
+    from adcp.types.domains.core.account import GovernanceAgent  # TODO: no stable alias in adcp.types
 
     return GovernanceAgent(url=url).model_dump(mode="json")
 

@@ -41,7 +41,7 @@ precondition these scenarios have to satisfy -- see ``_tenant_with_a_portfolio``
 from __future__ import annotations
 
 import pytest
-from adcp.types.generated_poc.enums.channels import MediaChannel
+from adcp.types.domains.enums.channels import MediaChannel
 
 from src.adapters.mock_ad_server import MockAdServer
 from tests.factories import ProductFactory

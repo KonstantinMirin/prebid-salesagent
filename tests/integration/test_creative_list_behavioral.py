@@ -17,8 +17,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from adcp.types import CreativeFilters, PaginationRequest
-from adcp.types.generated_poc.creative.list_creatives_request import Sort
+from adcp.types import LegacyCreativeFilters as CreativeFilters
+from adcp.types import PaginationRequest
+from adcp.types.domains.creative.list_creatives_request import Sort
 
 from tests.factories import (
     CreativeAssignmentFactory,
@@ -431,7 +432,7 @@ class TestListStructuredFilters:
 
     def test_structured_filters_merge_with_flat(self, integration_db):
         """Spec: list_creatives structured filters merge with flat params in request."""
-        from adcp import CreativeFilters
+        from adcp.types import LegacyCreativeFilters as CreativeFilters
 
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
