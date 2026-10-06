@@ -2411,6 +2411,80 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
         return self
 
     @model_validator(mode="after")
+    def _check_anyof_branch_conditions(self):
+        """Enforce the 3.2 ``anyOf`` branch conditions the generated validator drops.
+
+        ``media-buy/create-media-buy-request.json`` @ 3.2.1 carries a three-branch
+        ``anyOf``. The pinned SDK's generated ``_require_schema_required_group`` tests
+        only the branches' TOP-LEVEL field presence::
+
+            for group in (('packages',), ('packages','total_budget','budget_allocation'),
+                          ('proposal_id','total_budget')):
+                if all(name in self.model_fields_set for name in group):
+                    return self
+
+        Every nested condition is discarded by the generator, so a request carrying
+        ``packages`` matched group one and was ACCEPTED however malformed. Measured: a
+        package with no ``budget``, no ``total_budget`` and no ``budget_allocation``
+        satisfies no branch of the schema and was waved through, after which
+        ``get_total_budget()`` summed ``None`` to 0 and the budget FLOOR answered
+        ``BUDGET_TOO_LOW`` -- a business code for a schema violation. The floor check is
+        correct; it was answering a question it should never have been asked.
+
+        This re-states the three branches in full. ``model_fields_set`` is the
+        requiredness test, matching the generated validator's convention: a supplied
+        field counts even when explicitly null, and a default the caller never sent does
+        not (``PackageRequest.budget`` defaults to ``None`` and stays out of the set).
+
+        Omission of ``budget_allocation`` means fixed allocation, per the field's own
+        description, which is why branch 0 constrains it only when present -- JSON Schema
+        ``properties`` does not imply presence, and reading it as a requirement would
+        refuse the legacy-compatible shape the spec preserves.
+
+        The refusal is a ``ValueError``, which the boundary translates to
+        ``INVALID_REQUEST`` -- the code whose published condition is "Request is
+        malformed, missing required fields, or violates schema constraints"
+        (``enums/error-code.json``).
+
+        See also ``L.1`` in the triage: the generator flattens EVERY ``anyOf`` this way
+        and emits ``_require_schema_required_group`` for 45 models in this pin, so this
+        is one instance of an upstream codegen defect, not a quirk of create_media_buy.
+        """
+        sent = self.model_fields_set
+        allocation_mode = getattr(self.budget_allocation, "mode", None) if "budget_allocation" in sent else None
+
+        # Branch 0 -- "Explicit packages with fixed allocation".
+        # packages; no proposal_id; every package carries budget and NOT min_spend_target;
+        # budget_allocation, if sent, is mode=fixed.
+        packages_ok = bool(self.packages) and all(
+            "budget" in pkg.model_fields_set and "min_spend_target" not in pkg.model_fields_set for pkg in self.packages
+        )
+        if "packages" in sent and "proposal_id" not in sent and packages_ok and allocation_mode in (None, "fixed"):
+            return self
+
+        # Branch 1 -- "Explicit packages with seller-optimized allocation".
+        # packages + total_budget + budget_allocation(mode=seller_optimized); no proposal_id.
+        # No per-package budget requirement: the seller allocates across the total.
+        if (
+            {"packages", "total_budget", "budget_allocation"} <= sent
+            and "proposal_id" not in sent
+            and allocation_mode == "seller_optimized"
+        ):
+            return self
+
+        # Branch 2 -- "Committed proposal execution".
+        # proposal_id + total_budget; none of packages / budget_allocation / frequency_cap.
+        if {"proposal_id", "total_budget"} <= sent and not ({"packages", "budget_allocation", "frequency_cap"} & sent):
+            return self
+
+        raise ValueError(
+            "CreateMediaBuyRequest matches no accepted shape. One of: "
+            "packages, each with budget and without min_spend_target (fixed allocation); "
+            "packages + total_budget + budget_allocation.mode='seller_optimized'; "
+            "proposal_id + total_budget with no packages, budget_allocation or frequency_cap"
+        )
+
+    @model_validator(mode="after")
     def validate_timezone_aware(self):
         """Validate that datetime fields are timezone-aware.
 
