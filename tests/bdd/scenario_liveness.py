@@ -459,6 +459,39 @@ def pytest_testnodedown(node: Any, error: Any) -> None:
         _merge_shard(workeroutput[_WORKEROUTPUT_KEY])
 
 
+def _repo_relative(path: Path, root: Path) -> str:
+    """*path* as a repo-relative posix string, or its absolute form if it is outside.
+
+    ``"."`` for the repo root itself, so an arg naming the whole tree is spellable.
+    """
+    try:
+        relative = path.resolve().relative_to(root.resolve()).as_posix()
+    except ValueError:
+        return path.resolve().as_posix()
+    return relative or "."
+
+
+def _scope_paths(config: pytest.Config) -> list[str]:
+    """The paths this session was asked to collect, repo-relative.
+
+    ``config.args`` is what pytest was given positionally -- ``['tests/bdd']`` for a
+    whole-suite run, ``['tests']`` when the bare command falls back to ``testpaths``,
+    and the file or node id when a run was narrowed by path. Measured rather than
+    assumed: ``-k`` leaves ``args`` at the directory, which is why the two fields
+    answer different questions and the reader needs both.
+
+    A node id's ``::`` suffix is dropped. Narrowing to one test inside a file is
+    already narrower than the suite by the file alone, so the suffix adds nothing to
+    the judgement and would only make the recorded path unresolvable.
+    """
+    base = config.invocation_params.dir
+    paths = []
+    for arg in config.args:
+        target = Path(str(arg).split("::", 1)[0])
+        paths.append(_repo_relative(target if target.is_absolute() else base / target, config.rootpath))
+    return paths
+
+
 def _run_scope(session: pytest.Session) -> dict[str, Any]:
     """What this session actually covered, recorded beside what it observed.
 
@@ -475,10 +508,21 @@ def _run_scope(session: pytest.Session) -> dict[str, Any]:
     true for zero and false for partial. This block makes it true for both:
     ``load_artifact`` refuses an artifact whose own scope says it is not a
     measurement of the suite.
+
+    ``selection`` and ``markers`` were, for a while, the only narrowing recorded —
+    and they are the narrowing nobody here uses. ``pytest
+    tests/bdd/test_uc010_discover_seller_capabilities.py`` passes no ``-k`` and no
+    ``-m``, so a 24-record artifact over this suite read as a full measurement and
+    every scenario it did not name read as dormant. ``args`` is the narrowing pytest
+    records for that form; see :func:`_scope_paths`. ``suite`` is recorded beside it
+    so the reader needs no ``"tests/bdd"`` literal to judge against -- it is derived
+    from where this plugin actually lives, and so cannot drift from it.
     """
     config = session.config
     return {
         "collected": session.testscollected,
+        "args": _scope_paths(config),
+        "suite": _repo_relative(Path(__file__).parent, config.rootpath),
         "selection": getattr(config.option, "keyword", "") or "",
         "markers": getattr(config.option, "markexpr", "") or "",
         "deselected": len(getattr(session, "deselected", ()) or ()),

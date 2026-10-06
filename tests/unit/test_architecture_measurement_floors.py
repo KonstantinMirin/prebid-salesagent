@@ -359,15 +359,26 @@ def test_a_narrowed_run_is_rejected_rather_than_read_as_dormancy(tmp_path) -> No
     assert "storyboard and recancel" in str(excinfo.value)
 
 
-def test_a_full_run_is_still_read_normally(tmp_path) -> None:
-    """The floor must not reject the artifact it exists to protect."""
+@pytest.mark.parametrize("args", [["tests/bdd"], ["tests"], ["."], ["tests/bdd", "tests/bdd"]])
+def test_a_full_run_is_still_read_normally(tmp_path, args) -> None:
+    """The floor must not reject the artifact it exists to protect.
+
+    The suite root and every ancestor of it collect the whole suite on the way
+    past, so all of these asked the whole question.
+    """
     from scripts.audit import scenario_liveness_join
 
     artifact = tmp_path / "liveness.json"
     artifact.write_text(
         json.dumps(
             {
-                "run": {"collected": 900, "selection": "", "markers": ""},
+                "run": {
+                    "collected": 900,
+                    "args": args,
+                    "suite": "tests/bdd",
+                    "selection": "",
+                    "markers": "",
+                },
                 "scenarios": [{"scenario_id": "T-UC-003-x", "steps_bound": True, "ledgered": False}],
             }
         ),
@@ -375,3 +386,103 @@ def test_a_full_run_is_still_read_normally(tmp_path) -> None:
     )
 
     assert set(scenario_liveness_join.load_artifact(artifact)) == {"T-UC-003-x"}
+
+
+# ── Floor 4: narrowing by PATH sets no -k and no -m ─────────────────────────
+#
+# Floor 3 watched `-k`/`-m` and nothing else, which is the narrowing nobody
+# here uses. `pytest tests/bdd/test_uc010_discover_seller_capabilities.py`
+# records neither expression, so a 24-record artifact over a suite of some
+# eight thousand parametrized scenarios was accepted as a full measurement and
+# every scenario it did not name read as dormant — the exact
+# claim-about-production Floor 3 exists to refuse, through the door it did not
+# watch (salesagent-peq79).
+#
+# MEASURED, three artifacts inside half an hour in one shared worktree:
+#   07:27  selection='daily_breakdown'               30 collected -> refused
+#   07:41  selection='', one module by path          24 collected -> ACCEPTED
+#   07:50  selection='creative_missing_required_url'  3 collected -> refused
+# A full tests/unit run spanning 07:42-07:53 read the 07:41 file and PASSED
+# test_the_published_check_index_does_not_silently_shrink; two minutes later it
+# reads the 07:50 one and fails. The guard's own verdict was a coin flip on
+# which narrowed run wrote last.
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["tests/bdd/test_uc010_discover_seller_capabilities.py"],
+        ["tests/bdd/test_uc010_discover_seller_capabilities.py", "tests/bdd/test_uc010_declaration_backing.py"],
+        ["tests/bdd"],  # one whole-suite arg does not license the narrow one beside it
+        ["tests/bdd-extra"],  # a sibling whose name merely starts with the suite's
+    ],
+)
+def test_a_path_narrowed_run_is_rejected_though_it_records_no_k_or_m(tmp_path, args) -> None:
+    """A run narrowed by path must be refused on its own recorded scope."""
+    from scripts.audit import scenario_liveness_join, storyboard_spec
+
+    narrow = "tests/bdd/test_uc010_discover_seller_capabilities.py"
+    if narrow not in args:
+        args = [*args, narrow]
+
+    artifact = tmp_path / "liveness.json"
+    artifact.write_text(
+        json.dumps(
+            {
+                # The 07:41 artifact's own numbers: no -k, no -m, 24 records.
+                "run": {
+                    "collected": 24,
+                    "args": args,
+                    "suite": "tests/bdd",
+                    "selection": "",
+                    "markers": "",
+                },
+                "scenarios": [{"scenario_id": "T-UC-010-x", "steps_bound": True, "ledgered": False}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(storyboard_spec.StoryboardAuditError) as excinfo:
+        scenario_liveness_join.load_artifact(artifact)
+    assert narrow in str(excinfo.value), (
+        "the refusal must NAME the path that narrowed the run, or the next reader cannot "
+        f"tell which question was actually asked: {excinfo.value}"
+    )
+
+
+def test_the_writer_records_the_paths_the_reader_judges(tmp_path) -> None:
+    """The two halves must agree on the field names, or the floor is unreachable.
+
+    ``_run_scope`` and ``_reject_narrowed_run`` live in different trees
+    (``tests/bdd`` and ``scripts/audit``), so nothing but this test fails when one
+    renames a key. Without it the guard degrades silently to the legacy
+    allow-through path, which is indistinguishable from passing.
+    """
+    from scripts.audit import scenario_liveness_join, storyboard_spec
+    from tests.bdd import scenario_liveness
+
+    repo_root = Path(__file__).resolve().parents[2]
+    session = SimpleNamespace(
+        testscollected=24,
+        exitstatus=0,
+        testsfailed=0,
+        deselected=(),
+        config=SimpleNamespace(
+            option=SimpleNamespace(keyword="", markexpr=""),
+            rootpath=repo_root,
+            args=["tests/bdd/test_uc010_discover_seller_capabilities.py"],
+            invocation_params=SimpleNamespace(dir=repo_root),
+        ),
+    )
+    scope = scenario_liveness._run_scope(session)
+
+    assert scope["suite"] == "tests/bdd", f"the writer no longer locates its own suite: {scope}"
+    assert scope["args"] == ["tests/bdd/test_uc010_discover_seller_capabilities.py"], (
+        f"the writer no longer records the paths it was asked to collect: {scope}"
+    )
+
+    artifact = tmp_path / "liveness.json"
+    artifact.write_text(json.dumps({"run": scope, "scenarios": []}), encoding="utf-8")
+    with pytest.raises(storyboard_spec.StoryboardAuditError):
+        scenario_liveness_join.load_artifact(artifact)
