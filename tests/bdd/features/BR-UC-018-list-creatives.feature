@@ -367,7 +367,7 @@ Feature: BR-UC-018 List Creatives
       | omitted                      | no fields parameter                                                                                 | all fields included in each creative object                     |
       | single_field                 | fields ["creative_id"]                                                                              | only the selected and required fields in each creative object   |
       | minimal_set                  | fields ["creative_id", "name", "status"]                                                            | only the selected and required fields in each creative object   |
-      | all_fields                   | fields with all 13 enum values                                                                      | all fields included in each creative object                     |
+      | all_fields                   | fields with all 20 enum values                                                                      | all fields included in each creative object                     |
       | enrichment_fields            | fields ["creative_id", "assignments", "snapshot"] and include_snapshot true                         | only the selected and required fields in each creative object   |
       | assignments_disabled         | include_assignments false                                                                           | assignment data excluded from creatives                          |
 
@@ -391,7 +391,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                            | request_params                                  | outcome                                                  |
       | ['creative_id'] (single field, minItems boundary)         | fields ["creative_id"]                          | only the selected and required fields in response         |
-      | All 13 enum values (max enum coverage)                    | fields with all 13 enum values                  | all fields included in response                           |
+      | All 20 enum values (max enum coverage)                    | fields with all 20 enum values                  | all fields included in response                           |
       | [] (empty array, violates minItems: 1)                    | fields as empty array                           | error "INVALID_REQUEST" with suggestion                  |
       | ['creative_id', 'thumbnail'] (unknown enum value)         | fields ["creative_id", "thumbnail"]             | error "INVALID_REQUEST" with suggestion                  |
       | fields omitted entirely (all fields returned)             | no fields parameter                             | all fields included in response                            |
@@ -700,7 +700,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Valid partitions
       | partition          | request_params                                         | outcome                                         |
       | minimal_fields     | fields ["creative_id", "name", "status"]               | only the selected and required fields in response |
-      | all_enum_values    | fields with all 13 enum values                         | all fields included in response                  |
+      | all_enum_values    | fields with all 20 enum values                         | all fields included in response                  |
 
   @T-UC-018-partition-sort-field @partition @creative-sort-field
   # sort is an OBJECT of field + direction (list-creatives-request.json); the flat sort_by
@@ -732,7 +732,7 @@ Feature: BR-UC-018 List Creatives
     Examples: Boundary values
       | boundary_point                                                                                                                          | request_params                                | outcome                                   |
       | ["creative_id"] (single field, minimum valid)                                                                                           | fields ["creative_id"]                        | only the selected and required fields in response |
-      | ["creative_id", "name", "format_id", "status", "created_date", "updated_date", "tags", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 13 fields) | fields with all 13 enum values                | all fields included in response           |
+      | ["creative_id", "name", "format_id", "format_kind", "format_option_ref", "assets", "status", "created_date", "updated_date", "tags", "rights", "rights_attestation_evaluations", "localization", "localization_unavailable", "assignments", "snapshot", "items", "variables", "concept", "pricing_options"] (all 20 fields) | fields with all 20 enum values                | all fields included in response           |
       | Not provided (all fields returned)                                                                                                      | no fields parameter                           | all fields returned                        |
       | ["creative_id", "thumbnail"] (unknown field in array)                                                                                   | fields ["creative_id", "thumbnail"]           | error "INVALID_REQUEST" with suggestion   |
       | [] (empty array, violates minItems)                                                                                                     | fields as empty array                         | error "INVALID_REQUEST" with suggestion   |

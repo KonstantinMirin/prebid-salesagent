@@ -702,12 +702,21 @@ def _max_results(raw: str) -> object:
 def _every_selectable_field(expected_count: int) -> list[str]:
     """The whole ``fields`` enum, READ OFF the pinned request schema.
 
-    A row that says "all 13 enum values" is asking for every member there is, so the list
+    A row that says "all 20 enum values" is asking for every member there is, so the list
     comes from list-creatives-request.json rather than being copied into the feature file
     or into this module — two places that would then have to be updated when the enum
     grows, and would silently under-select until someone did. The count the row states is
     asserted against the enum's real size, so a spec bump reddens the row instead of
     quietly changing what it means.
+
+    That tripwire has now fired once, as designed: ``creative/list-creatives-request.json``
+    went 13 members at 3.1 to 20 at the 3.2.1 pin (nothing removed; added ``format_kind``,
+    ``format_option_ref``, ``assets``, ``rights``, ``rights_attestation_evaluations``,
+    ``localization``, ``localization_unavailable``), and the rows said 13. The COUNT stays
+    the assertion rather than becoming a membership check: the member list is derived from
+    the pin, so asserting membership here would compare the pin with itself and could not
+    falsify anything. The count is the only independently-authored number in the row, which
+    is exactly why it caught the bump.
     """
     members = validator_for("creative/list-creatives-request.json").schema["properties"]["fields"]["items"]["enum"]
     assert len(members) == expected_count, (
@@ -803,7 +812,8 @@ _REQUEST_PHRASES: tuple[tuple[str, Callable[[re.Match[str], dict], dict[str, Any
         lambda match, ctx: {f"include_{match.group(1)}": match.group(2) == "true"},
     ),
     (r"include_pricing true and no account(?: reference)?", lambda match, ctx: {"include_pricing": True}),
-    # fields — the array itself is pin-declared (minItems 1, closed enum of 13 values).
+    # fields — the array itself is pin-declared (minItems 1, closed enum of 20 values at
+    # AdCP 3.2.1; 13 at 3.1).
     (r"fields as empty array", lambda match, ctx: {"fields": []}),
     (
         r"fields with all (\d+) enum values",
