@@ -149,7 +149,7 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     account's flag, not this one's. Tools whose When sends no account still reach it
     through the principal's access grant.
     """
-    from adcp.types import AccountReference, AccountReferenceById
+    from adcp.types import AccountReferenceById
 
     from tests.factories.account import AccountFactory, AgentAccountAccessFactory
 
@@ -162,7 +162,7 @@ def _seed_account_for_principal(ctx: dict, *, sandbox: bool) -> None:
     account = AccountFactory(tenant=ctx["tenant"], sandbox=sandbox)
     AgentAccountAccessFactory(tenant=ctx["tenant"], principal=ctx["principal"], account=account)
     env._commit_factory_data()
-    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account.account_id))
+    ctx["account_ref"] = AccountReferenceById(account_id=account.account_id)
     ctx.setdefault("tenant_id", "sandbox_tenant" if sandbox else "prod_tenant")
 
 

@@ -77,9 +77,9 @@ def _attach_raw_account_shape(ctx: dict, account_value: Any | None) -> None:
 @given(parsers.parse('a valid create_media_buy request with account_id "{account_id}"'))
 def given_request_with_account_id(ctx: dict, account_id: str) -> None:
     """Set up a create_media_buy request referencing an explicit account_id."""
-    from adcp.types import AccountReference, AccountReferenceById
+    from adcp.types import AccountReferenceById
 
-    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+    ctx["account_ref"] = AccountReferenceById(account_id=account_id)
     ctx["request_account_id"] = account_id
     _attach_account_to_full_request(ctx)
 
@@ -87,11 +87,9 @@ def given_request_with_account_id(ctx: dict, account_id: str) -> None:
 @given(parsers.parse('a valid create_media_buy request with account natural key brand "{brand}" operator "{operator}"'))
 def given_request_with_natural_key(ctx: dict, brand: str, operator: str) -> None:
     """Set up a create_media_buy request referencing a natural key (brand + operator)."""
-    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceByNaturalKey, BrandReference
 
-    ctx["account_ref"] = AccountReference(
-        root=AccountReferenceByNaturalKey(brand=BrandReference(domain=brand), operator=operator),
-    )
+    ctx["account_ref"] = AccountReferenceByNaturalKey(brand=BrandReference(domain=brand), operator=operator)
     ctx["request_brand"] = brand
     ctx["request_operator"] = operator
     _attach_account_to_full_request(ctx)
@@ -127,9 +125,9 @@ def given_valid_request(ctx: dict) -> None:
 @given(parsers.parse('a valid create_media_buy request with account "{account_id}"'))
 def given_request_with_account(ctx: dict, account_id: str) -> None:
     """Set up a create_media_buy request with account (short form)."""
-    from adcp.types import AccountReference, AccountReferenceById
+    from adcp.types import AccountReferenceById
 
-    ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+    ctx["account_ref"] = AccountReferenceById(account_id=account_id)
     ctx["request_account_id"] = account_id
 
 
@@ -283,7 +281,7 @@ def given_account_active(ctx: dict) -> None:
 @given(parsers.parse("a create_media_buy request with account configuration {partition}"))
 def given_request_with_partition(ctx: dict, partition: str) -> None:
     """Set up request based on partition name (for Scenario Outline tables)."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -299,7 +297,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="explicit.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-explicit"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-explicit")
 
     elif partition == "natural_key_unambiguous":
         account = AccountFactory(
@@ -310,8 +308,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="natkey.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="natkey.com"), operator="natkey.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="natkey.com"), operator="natkey.com"
         )
 
     elif partition == "missing_account":
@@ -332,11 +330,11 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
         return
 
     elif partition == "explicit_not_found":
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-not-found"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-not-found")
 
     elif partition == "natural_key_not_found":
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="unknown.com"), operator="unknown.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="unknown.com"), operator="unknown.com"
         )
 
     elif partition == "natural_key_ambiguous":
@@ -350,8 +348,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             owner_for_index=lambda _i: principal,
             account_id_prefix="acc-amb",
         )
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="ambiguous.com"), operator="ambiguous.com"
         )
 
     elif partition == "account_setup_required":
@@ -363,7 +361,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="setup.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-setup"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-setup")
 
     elif partition == "account_payment_required":
         account = AccountFactory(
@@ -374,7 +372,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="payment.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-payment"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-payment")
 
     elif partition == "account_suspended":
         account = AccountFactory(
@@ -385,7 +383,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             operator="suspended.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-suspended")
 
     elif partition == "natural_key_sandbox":
         # v3.1: sandbox natural-key resolution — an active sandbox account is
@@ -400,10 +398,8 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
             sandbox=True,
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(
-                brand=BrandReference(domain="sandbox.com"), operator="sandbox.com", sandbox=True
-            ),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="sandbox.com"), operator="sandbox.com", sandbox=True
         )
 
     else:
@@ -419,7 +415,7 @@ def given_request_with_partition(ctx: dict, partition: str) -> None:
 @given(parsers.parse("a create_media_buy request with account: {config}"))
 def given_request_with_boundary_config(ctx: dict, config: str) -> None:
     """Set up request based on boundary config string."""
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -436,11 +432,11 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator=f"{account_id}.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+        ctx["account_ref"] = AccountReferenceById(account_id=account_id)
 
     elif config.startswith("acc-") and "not-found" in config:
         account_id = config.split()[0]
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+        ctx["account_ref"] = AccountReferenceById(account_id=account_id)
 
     elif config.startswith("brand+op") and "single match" in config:
         account = AccountFactory(
@@ -451,13 +447,13 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="single.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="single.com"), operator="single.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="single.com"), operator="single.com"
         )
 
     elif config.startswith("brand+op") and "no match" in config:
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="nomatch.com"), operator="nomatch.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="nomatch.com"), operator="nomatch.com"
         )
 
     elif config.startswith("brand+op") and "multi match" in config:
@@ -471,8 +467,8 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             owner_for_index=lambda _i: principal,
             account_id_prefix="acc-multi",
         )
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain="multi.com"), operator="multi.com"),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="multi.com"), operator="multi.com"
         )
 
     elif "setup-needed" in config:
@@ -484,7 +480,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="setup.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-setup"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-setup")
 
     elif "payment-due" in config:
         account = AccountFactory(
@@ -495,7 +491,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="payment.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-payment"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-payment")
 
     elif "suspended" in config:
         account = AccountFactory(
@@ -506,7 +502,7 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             operator="suspended.com",
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id="acc-suspended"))
+        ctx["account_ref"] = AccountReferenceById(account_id="acc-suspended")
 
     elif "no account" in config:
         # Schema-shape case: account field omitted entirely. account is REQUIRED on
@@ -533,10 +529,8 @@ def given_request_with_boundary_config(ctx: dict, config: str) -> None:
             sandbox=True,
         )
         AgentAccountAccessFactory(tenant_id=tenant.tenant_id, principal=principal, account=account)
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(
-                brand=BrandReference(domain="sandboxbo.com"), operator="sandboxbo.com", sandbox=True
-            ),
+        ctx["account_ref"] = AccountReferenceByNaturalKey(
+            brand=BrandReference(domain="sandboxbo.com"), operator="sandboxbo.com", sandbox=True
         )
 
     else:
@@ -659,14 +653,12 @@ def given_request_natural_key_sandbox(ctx: dict) -> None:
     the sandbox echo cannot be asserted. Wire-ready: dispatch a full create
     carrying the natural-key reference so production resolves it at the boundary.
     """
-    from adcp.types import AccountReference, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceByNaturalKey, BrandReference
 
-    ctx["account_ref"] = AccountReference(
-        root=AccountReferenceByNaturalKey(
-            brand=BrandReference(domain="sandbox-brand.com"),
-            operator="sandbox-brand.com",
-            sandbox=True,
-        )
+    ctx["account_ref"] = AccountReferenceByNaturalKey(
+        brand=BrandReference(domain="sandbox-brand.com"),
+        operator="sandbox-brand.com",
+        sandbox=True,
     )
     _attach_account_to_full_request(ctx)
 
@@ -981,11 +973,11 @@ def _assert_validation_pass(ctx: dict, outcome: str) -> None:
         # Verify the resolved account_id matches the Given step's account_ref
         account_ref = ctx.get("account_ref")
         if account_ref is not None:
-            root = account_ref.root
-            if hasattr(root, "account_id"):
-                assert resp == root.account_id, (
+            # adcp 9: AccountReference IS the two-arm union, so the ref is the variant.
+            if hasattr(account_ref, "account_id"):
+                assert resp == account_ref.account_id, (
                     f"Resolved account_id '{resp}' does not match requested "
-                    f"account_id '{root.account_id}' for '{domain}' validation"
+                    f"account_id '{account_ref.account_id}' for '{domain}' validation"
                 )
     else:
         from tests.bdd.steps._outcome_helpers import _get_response_field

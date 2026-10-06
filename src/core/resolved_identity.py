@@ -592,7 +592,8 @@ def identity_of(tenant_id: str, principal_id: str, account_id: str | None = None
         raise AdCPConfigurationError()
     if account_id is None:
         return ResolvedIdentity(principal=principal, tenant=tenant)
-    account_ref = AccountReference(root=AccountReferenceById(account_id=account_id))
+    # The ARM, not a wrapper: adcp 9's AccountReference IS the two-arm union.
+    account_ref = AccountReferenceById(account_id=account_id)
     return AccountIdentity(principal=principal, tenant=tenant, account=_load_account(account_ref, tenant_id, principal))
 
 

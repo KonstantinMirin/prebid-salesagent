@@ -15,6 +15,7 @@ from adcp.types.domains.core.async_response_data import AdcpAsyncResponseData
 from adcp.types.domains.core.pagination_response import PaginationResponse
 from adcp.types.domains.protocol.get_task_status_response import HistoryItem
 from adcp.types.domains.protocol.list_tasks_response import QuerySummary
+from pydantic import TypeAdapter
 
 from src.core.audit_logger import get_audit_logger
 from src.core.database.repositories.uow import WorkflowUoW
@@ -36,6 +37,17 @@ from src.core.schemas import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Validator for ``core/async-response-data.json``, built ONCE.
+#:
+#: A ``TypeAdapter`` rather than ``AdcpAsyncResponseData.model_validate``: adcp 9 ships
+#: that name as an ``Annotated[Union[...]]`` ALIAS over the concrete task results rather
+#: than as a RootModel wrapping them, so there is no class to call a classmethod on.
+#: ``TypeAdapter`` is pydantic's own way to validate against a non-model annotation, and
+#: it keeps the refusal identical -- a payload that is none of the arms raises, which is
+#: the fail-loudly posture the call site below depends on. Module level because building
+#: an adapter compiles a validator; doing it per request would pay that on every read.
+_ASYNC_RESPONSE_DATA: TypeAdapter[AdcpAsyncResponseData] = TypeAdapter(AdcpAsyncResponseData)
 
 
 #: Spec TaskStatus -> the workflow-step status this repo actually stores.
@@ -378,12 +390,20 @@ async def _get_task_status_impl(
         # failed task's detail rides error_message, per "For failed tasks, read the existing
         # error field instead" (task-lifecycle.mdx).
         if req.include_result and task.status == "completed":
-            # VALIDATED, not cast. The pin types ``result`` as core/async-response-data.json --
-            # a union of the concrete AdCP task results -- while ``response_data`` is whatever
-            # this seller stored. model_validate raises on a payload that is not one of them
-            # rather than shipping an arbitrary dict under a spec field name, which is the same
+            # VALIDATED, not cast. ``core/async-response-data.json`` is the union of the
+            # concrete AdCP task results, while ``response_data`` is whatever this seller
+            # stored, so the validation raises on a payload that is not one of them rather
+            # than shipping an arbitrary dict under a spec field name -- the same
             # fail-loudly posture _spec_task_type takes.
-            task_detail.result = AdcpAsyncResponseData.model_validate(task.response_data)
+            #
+            # The validated OBJECT is deliberately discarded: ``result`` is
+            # ``dict[str, Any] | None`` on the pinned response, so the document itself is
+            # what goes on the wire and the call above exists for its REFUSAL. Assigning
+            # the validated model instead would put a pydantic object in a dict-typed
+            # field, and turning it back into a dict here would be a serialization
+            # outside the named edges (CLAUDE.md pattern #4).
+            _ASYNC_RESPONSE_DATA.validate_python(task.response_data)
+            task_detail.result = task.response_data
 
         # UNGRADED by any storyboard in the 3.1.1 tree, so this is the response schema's
         # item shape and nothing invented on top of it: {timestamp, type, data}, all three

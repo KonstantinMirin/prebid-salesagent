@@ -736,7 +736,11 @@ def _update_media_buy_impl(
                     },
                 )
                 ctx_manager.audit_workflow_step_result(step.step_id, success_response)
-                success_response.status = AdcpTaskStatus.completed
+                # No status assignment: UpdateMediaBuySuccess IS the completed branch of
+                # update-media-buy-response.json's oneOf, so its ``status`` is the const
+                # ``Literal["completed"]`` with that default. The line here set it to the
+                # same value through the TaskStatus enum, which adcp 9 types as the enum
+                # member rather than the bare string -- a no-op that did not type-check.
                 return success_response
 
             # Handle package-level updates
@@ -1303,7 +1307,7 @@ def _update_media_buy_impl(
             # Use mode="json" to ensure enums are serialized as strings for JSONB storage
             ctx_manager.audit_workflow_step_result(step.step_id, final_response)
 
-        final_response.status = AdcpTaskStatus.completed
+        # No status assignment, for the reason the pause/resume branch above states.
         return final_response
 
 

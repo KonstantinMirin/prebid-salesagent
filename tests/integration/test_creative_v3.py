@@ -20,7 +20,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 from adcp.types.domains.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
 
@@ -223,7 +223,7 @@ class TestCrossPrincipalIsolation:
             # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
             # that sync_creatives honours the key.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=_headers(self.TENANT_ID, principal_id),
         )
 
@@ -333,7 +333,7 @@ class TestApprovalWorkflow:
             # SyncCreativesRequest now, so omitting either is a rejected request rather than
             # a call that reaches the impl.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=_headers(tenant_id, principal_id),
         )
 
@@ -452,7 +452,7 @@ class TestBatchSync:
             creatives=creatives,
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=self._creds(),
         )
 
@@ -481,7 +481,7 @@ class TestBatchSync:
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Original Name")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
         action1 = result1.creatives[0].action
@@ -494,7 +494,7 @@ class TestBatchSync:
             creatives=[_make_creative_dict(creative_id="c_upsert", name="Updated Name")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
         action2 = result2.creatives[0].action
@@ -616,7 +616,7 @@ class TestFormatCompatibility:
             creatives=[_make_creative_dict(creative_id="c_display")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -642,7 +642,7 @@ class TestFormatCompatibility:
                 validation_mode="strict",
                 # Both are in sync-creatives-request.json /required.
                 idempotency_key=f"sync-{uuid4().hex}",
-                account=AccountReference(root={"account_id": ACCOUNT_ID}),
+                account=AccountReferenceById(account_id=ACCOUNT_ID),
                 headers=headers,
             )
 
@@ -751,7 +751,7 @@ class TestMediaBuyStatusTransition:
             assignments=[Assignment(creative_id="c_transition", package_id="pkg_draft")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=_headers(self.TENANT_ID, self.PRINCIPAL_ID),
         )
 

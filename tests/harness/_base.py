@@ -3281,9 +3281,9 @@ class IntegrationEnv(BaseTestEnv):
         The account_id form is the one a seeded row can satisfy exactly, so steps get
         that rather than reconstructing a brand/operator pair the DB may not agree with.
         """
-        from adcp.types import AccountReference
+        from adcp.types import AccountReferenceById
 
-        return AccountReference(root={"account_id": self.setup_default_account().account_id})
+        return AccountReferenceById(account_id=self.setup_default_account().account_id)
 
     # Seeding a NAMED account reference lives here rather than on one env: any env whose
     # tool carries an ``account`` needs it, and update_media_buy needed it the moment the

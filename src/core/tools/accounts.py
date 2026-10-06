@@ -154,8 +154,9 @@ def _apply_list_account_filters(db_accounts: list[DBAccount], req: ListAccountsR
 
     account_filter = req.account
     if account_filter is not None:
-        # account_filter is always AccountReference (a RootModel) when present.
-        db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter.root)]
+        # account_filter IS the variant when present -- adcp 9's AccountReference is the
+        # two-arm union itself, so there is no ``.root`` to unwrap.
+        db_accounts = [a for a in db_accounts if _matches_account_ref(a, account_filter)]
 
     return db_accounts
 
@@ -1062,7 +1063,7 @@ def _process_settings_update_entry(
     """
     if entry.account is None:
         raise AdCPConfigurationError()
-    ref = entry.account.root
+    ref = entry.account  # adcp 9: the union itself, no RootModel wrapper to unwrap
     existing = _resolve_settings_update_target(ref, repo)
 
     if existing is None:
@@ -1429,7 +1430,7 @@ def _lookup_existing_for_entry(entry: SyncEntry, repo: AccountRepository) -> DBA
     """
     ref = getattr(entry, "account", None)
     if ref is not None:
-        return _resolve_settings_update_target(ref.root, repo)
+        return _resolve_settings_update_target(ref, repo)
     brand = getattr(entry, "brand", None)
     operator = getattr(entry, "operator", None)
     if brand is None or operator is None:

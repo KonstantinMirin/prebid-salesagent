@@ -59,7 +59,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from adcp.signing import SigningConfig, sign_request
+from adcp import get_adcp_spec_version
+from adcp.signing import SigningConfig, sign_request, signing_profile_for_adcp_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,4 +106,12 @@ class RequestSignerStrategy:
             alg=self.signing.alg,
             cover_content_digest=True,
             tag=self.signing.tag,
+            # DERIVED from the pin, never declared. adcp 9 made
+            # ``signing_profile_version`` a required keyword, and its own helper's
+            # docstring says callers "must derive this from trusted endpoint
+            # configuration, never an unbound request-body field" --
+            # ``get_adcp_spec_version()`` is the installed wheel reporting the version it
+            # implements, which is the most trusted source this process has and the one
+            # that moves by itself at the next pin bump.
+            signing_profile_version=signing_profile_for_adcp_version(get_adcp_spec_version()),
         ).as_dict()

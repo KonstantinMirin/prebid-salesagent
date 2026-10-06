@@ -16,7 +16,7 @@ from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 from adcp.types import LegacyCreativeFilters as CreativeFilters
 from adcp.types.domains.creative.sync_creatives_request import Assignment
 from sqlalchemy import select
@@ -331,7 +331,7 @@ class TestCreativeLifecycleMCP:
             # reused one key across two payloads -- correctly an IDEMPOTENCY_CONFLICT now
             # that sync_creatives honours the key.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -402,7 +402,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=updated_creative_data,
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -443,7 +443,7 @@ class TestCreativeLifecycleMCP:
             ],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -478,7 +478,7 @@ class TestCreativeLifecycleMCP:
             assignments=[Assignment(creative_id=creative_id, package_id="package_buyer_ref")],
             # Both are in sync-creatives-request.json /required.
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -522,7 +522,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=invalid_creatives,
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
 
@@ -824,7 +824,7 @@ class TestCreativeLifecycleMCP:
             core_sync_creatives_tool(
                 creatives=sample_creatives,
                 idempotency_key=f"sync-{uuid4().hex}",
-                account=AccountReference(root={"account_id": ACCOUNT_ID}),
+                account=AccountReferenceById(account_id=ACCOUNT_ID),
                 headers=credential_headers(token="invalid-token", tenant=self.test_tenant_id),
             )
 
@@ -856,7 +856,7 @@ class TestCreativeLifecycleMCP:
         response = core_sync_creatives_tool(
             creatives=sample_creatives,
             idempotency_key=f"sync-{uuid4().hex}",
-            account=AccountReference(root={"account_id": ACCOUNT_ID}),
+            account=AccountReferenceById(account_id=ACCOUNT_ID),
             headers=headers,
         )
         assert isinstance(response, SyncCreativesResponse)
@@ -897,7 +897,7 @@ class TestCreativeLifecycleMCP:
             SyncCreativesRequest(
                 creatives=sample_creatives,
                 idempotency_key=f"sync-{uuid4().hex}",
-                account=AccountReference(root={"account_id": ACCOUNT_ID}),
+                account=AccountReferenceById(account_id=ACCOUNT_ID),
             ),
             headers,
             TransportProtocol.MCP,

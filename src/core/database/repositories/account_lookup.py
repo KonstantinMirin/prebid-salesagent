@@ -47,15 +47,18 @@ def find_account(repo: AccountRepository, account_ref: AccountReference, princip
         AdCPAccountSetupRequiredError, AdCPAccountSuspendedError,
         AdCPAccountPaymentRequiredError: the account's status blocks operations.
     """
-    inner = account_ref.root
-    if isinstance(inner, AccountReferenceById):
-        return _by_id(repo, inner.account_id, principal.principal_id)
-    if isinstance(inner, AccountReferenceByNaturalKey):
-        return _by_natural_key(repo, inner, principal.principal_id)
+    # No ``.root``: adcp 9 ships ``AccountReference`` as the two-arm union itself, not as a
+    # RootModel wrapping it, so the value IS the variant. ``core/account-ref.json`` is a
+    # oneOf over objects, which is what a RootModel wrapper around an object union was
+    # always misrepresenting (adcp-client-python#1077).
+    if isinstance(account_ref, AccountReferenceById):
+        return _by_id(repo, account_ref.account_id, principal.principal_id)
+    if isinstance(account_ref, AccountReferenceByNaturalKey):
+        return _by_natural_key(repo, account_ref, principal.principal_id)
     # Unreachable: AccountReference is a closed two-variant union validated by Pydantic
     # upstream. A fresh variant reaching here is an internal contract violation, not a
     # buyer-facing not-found -- raise ValueError, not AdCPSalesAgentError.
-    raise ValueError(f"Unsupported AccountReference variant: {type(inner)}")
+    raise ValueError(f"Unsupported AccountReference variant: {type(account_ref)}")
 
 
 def _by_id(repo: AccountRepository, account_id: str, principal_id: str) -> Account:

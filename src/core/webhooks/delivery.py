@@ -205,6 +205,21 @@ def build_webhook_envelope(
 
     from src.core.webhook_validator import validate_webhook_task_type
 
+    if operation_id is None:
+        # Refused HERE, where the one envelope shape is decided, rather than passed on as
+        # ``None``. core/push-notification-config.json leaves ``operation_id`` optional on
+        # the REGISTRATION while core/mcp-webhook-payload.json makes it required on the
+        # ENVELOPE, and the spec forbids recovering it by parsing the receiver URL -- so a
+        # registration without one names no deliverable webhook. adcp 6.6.0 typed the
+        # parameter ``str | None`` and built a schema-invalid body; adcp 9 types it ``str``
+        # and refuses. This is the same refusal, raised by the seller with the reason.
+        raise ValueError(
+            "push_notification_config carries no operation_id, so this delivery has "
+            "nothing to echo: operation_id is REQUIRED on core/mcp-webhook-payload.json "
+            "and compliance/universal/webhook-emission.yaml req. 1 forbids recovering it "
+            "from the receiver URL."
+        )
+
     return create_mcp_webhook_payload(
         task_id=task.task_id,
         status=status,

@@ -1005,7 +1005,6 @@ class TestSyncAccountsBrandIdRoundTrip:
     @pytest.mark.asyncio
     async def test_brand_id_persists_unmangled_and_resolves(self, integration_db):
         from adcp.types import (
-            AccountReference,
             AccountReferenceByNaturalKey,
         )
 
@@ -1044,11 +1043,9 @@ class TestSyncAccountsBrandIdRoundTrip:
                 assert rows[0].brand.brand_id.root == "brand_one"
 
             # ...and the resolver (which reads .root) must find that same row.
-            ref = AccountReference(
-                AccountReferenceByNaturalKey(
-                    brand={"domain": "acme.com", "brand_id": "brand_one"},
-                    operator="example.com",
-                )
+            ref = AccountReferenceByNaturalKey(
+                brand={"domain": "acme.com", "brand_id": "brand_one"},
+                operator="example.com",
             )
             with AccountUoW("sync_bid1") as uow:
                 assert uow.accounts is not None

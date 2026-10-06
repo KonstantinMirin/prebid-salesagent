@@ -225,25 +225,23 @@ def _items_from_assets(assets: Any) -> list[CreativeItem] | None:
             url_value = getattr(candidate, "url", None)
             content = getattr(candidate, "content", None)
             if url_value is not None:
+                # The ARM, not a wrapper: adcp 9 ships ``CreativeItem`` as the union of
+                # its two arms rather than a RootModel over them.
                 items.append(
-                    CreativeItem(
-                        root=MediaItem(
-                            asset_kind="media",
-                            asset_type=asset_type,
-                            asset_id=asset_id,
-                            content_uri=str(url_value),
-                        )
+                    MediaItem(
+                        asset_kind="media",
+                        asset_type=asset_type,
+                        asset_id=asset_id,
+                        content_uri=str(url_value),
                     )
                 )
             elif content is not None:
                 items.append(
-                    CreativeItem(
-                        root=TextItem(
-                            asset_kind="text",
-                            asset_type=asset_type,
-                            asset_id=asset_id,
-                            content=content,
-                        )
+                    TextItem(
+                        asset_kind="text",
+                        asset_type=asset_type,
+                        asset_id=asset_id,
+                        content=content,
                     )
                 )
     return items or None

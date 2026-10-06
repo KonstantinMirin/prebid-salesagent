@@ -63,7 +63,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 
 from src.core.schemas import SyncCreativesRequest, SyncCreativesResponse
 from tests.factories.mint import mint
@@ -934,7 +934,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             # account_lookup.find_account, which reads AccountReference.root. A dict gets
             # as far as "'dict' object has no attribute 'root'". build_rest_body serialises
             # it for the wire itself.
-            kwargs["account"] = AccountReference(root={"account_id": account_id})
+            kwargs["account"] = AccountReferenceById(account_id=account_id)
         return kwargs
 
     def call_impl(self, **kwargs: Any) -> SyncCreativesResponse:
@@ -982,7 +982,7 @@ class CreativeSyncEnv(EgressHatchMixin, IntegrationEnv):
             # (see the docstring), so an unstated account gets a syntactically valid
             # reference that no lookup will ever consult. _sync_creatives_impl reads
             # identity, never req.account.
-            account=account if account is not None else AccountReference(root={"account_id": "acct_unresolved"}),
+            account=account if account is not None else AccountReferenceById(account_id="acct_unresolved"),
             **kwargs,
         )
         return _sync_creatives_impl(req=req, identity=identity)

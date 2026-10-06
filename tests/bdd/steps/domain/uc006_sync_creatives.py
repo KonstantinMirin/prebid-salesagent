@@ -272,7 +272,7 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     Parses account_setup as JSON to build an AccountReference, or handles
     sentinel values like "not provided".
     """
-    from adcp.types import AccountReference, AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
+    from adcp.types import AccountReferenceById, AccountReferenceByNaturalKey, BrandReference
 
     env = ctx["env"]
     ensure_tenant_principal(ctx, env)
@@ -296,7 +296,7 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
 
     if "account_id" in config:
         account_id = config["account_id"]
-        ctx["account_ref"] = AccountReference(root=AccountReferenceById(account_id=account_id))
+        ctx["account_ref"] = AccountReferenceById(account_id=account_id)
         ctx["request_account_id"] = account_id
 
         # Create DB state based on known account IDs from the spec
@@ -305,9 +305,7 @@ def given_account_is(ctx: dict, account_setup: str) -> None:
     elif "brand" in config:
         brand_domain = config["brand"]["domain"]
         operator = config["operator"]
-        ctx["account_ref"] = AccountReference(
-            root=AccountReferenceByNaturalKey(brand=BrandReference(domain=brand_domain), operator=operator),
-        )
+        ctx["account_ref"] = AccountReferenceByNaturalKey(brand=BrandReference(domain=brand_domain), operator=operator)
         ctx["request_brand"] = brand_domain
         ctx["request_operator"] = operator
 

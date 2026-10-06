@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, TypeA
 from src.core.enum_helpers import enum_value
 
 if TYPE_CHECKING:
+    from adcp.types import DevicePlatform
     from pydantic.fields import FieldInfo
 
     from src.core.schemas.creative import CreativeAssetRequest
@@ -171,7 +172,7 @@ from adcp.types import PlatformDeployment as LibraryPlatformDeployment
 from adcp.types import Property as LibraryProperty
 from adcp.types import Signal as LibrarySignal
 from adcp.types import SignalFilters as LibrarySignalFilters
-from adcp.types import TargetingOverlay
+from adcp.types import TargetingOverlay, TargetingOverlayInput
 
 # The adcp SDK generates CollectionListReference and uses it on TargetingOverlay.collection_list /
 # collection_list_exclude, but does not re-export the type from the public adcp.types namespace
@@ -1817,37 +1818,27 @@ _PLATFORM_TO_FORM_FACTORS: dict[str, list[str]] = {
 }
 
 
-class Targeting(TargetingOverlay):
-    """Targeting extending AdCP TargetingOverlay with internal dimensions.
+class _InternalTargetingDimensions(SalesAgentBaseModel):
+    """The dimensions this seller adds to the pin's targeting overlay, declared ONCE.
 
-    Inherits v3 structured geo fields from library:
-    - geo_countries, geo_regions, geo_metros, geo_postal_areas
-    - frequency_cap, axe_include_segment, axe_exclude_segment
+    A mixin rather than a base, because AdCP 3.2 splits the overlay into TWO pinned
+    schemas and this seller needs a local subclass of each: ``core/targeting.json``
+    (``TargetingOverlay``, what a package READBACK carries) and
+    ``core/targeting_input.json`` (``TargetingOverlayInput``, what a request sends).
+    They are not the same model -- nine of the thirty-seven fields differ in element
+    type, each schema generating its own ``GeoCountry`` / ``GeoRegion`` /
+    ``KeywordTarget`` / ``StoreCatchment``, and the exclusion lists are ``Sequence``
+    on one side and ``list`` on the other -- so neither can stand in for the other.
 
-    Adds exclusion extensions and internal dimensions. It reshapes nothing on the way in:
-    the accepted shape is what the fields declare, and a stored document that does not fit
-    is a repository or migration problem, not a validator's.
+    Restating these twenty-odd fields on both subclasses is the duplication
+    ``check_code_duplication`` exists to refuse, so they live here and both inherit.
     """
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
-    # --- Inherited from TargetingOverlay (7 fields): ---
-    # geo_countries: list[GeoCountry] | None
-    # geo_regions: list[GeoRegion] | None
-    # geo_metros: list[GeoMetro] | None
-    # geo_postal_areas: list[GeoPostalArea] | None
-    # frequency_cap: FrequencyCap | None  (overridden below)
-    # axe_include_segment: str | None
-    # axe_exclude_segment: str | None
-
-    # Override frequency_cap to use our extended FrequencyCap with scope
-    frequency_cap: FrequencyCap | None = None
-
-    # NOTE: property_list, collection_list, and collection_list_exclude are inherited from
-    # TargetingOverlay (native in the adcp SDK). CollectionListReference is re-exported
-    # from src.core.schemas (see import above) so callers can use a single import path.
-
-    # --- Internal dimensions (unchanged) ---
+    # Nothing from the pinned overlay is restated here -- the two subclasses below inherit
+    # it, each from its own schema's generated type. CollectionListReference is re-exported
+    # from src.core.schemas (see import above) so callers use a single import path.
 
     # Device and platform targeting
     device_type_any_of: list[str] | None = None  # ["mobile", "desktop", "tablet", "ctv", "audio", "dooh"]
@@ -1891,6 +1882,15 @@ class Targeting(TargetingOverlay):
     # persist belongs on a repository-owned carrier, not on a wire model (CLAUDE.md pattern
     # 4; salesagent-3cs7o.22).
 
+    if TYPE_CHECKING:  # pragma: no cover - typing only
+        # DECLARED, not inherited: ``device_platform`` is the PINNED overlay's field, and
+        # both subclasses get it from their own schema's generated type (identically --
+        # ``list[DevicePlatform] | None`` on both, checked). The mixin reads it in
+        # ``device_form_factors`` below, so it names the dependency here rather than
+        # having the property restated on each subclass, which is the duplication the
+        # mixin exists to remove.
+        device_platform: list[DevicePlatform] | None
+
     @property
     def device_form_factors(self) -> list[str] | None:
         """The form factors adapters target, DERIVED on read.
@@ -1908,6 +1908,48 @@ class Targeting(TargetingOverlay):
         for platform in self.device_platform:
             form_factors.update(_PLATFORM_TO_FORM_FACTORS.get(enum_value(platform), []))
         return sorted(form_factors) or None
+
+
+class Targeting(TargetingOverlay, _InternalTargetingDimensions):
+    """``core/targeting.json`` plus this seller's internal dimensions.
+
+    The READBACK side. Inherits the pinned overlay's v3 structured geo fields
+    (geo_countries, geo_regions, geo_metros, geo_postal_areas, frequency_cap,
+    axe_include_segment, axe_exclude_segment, property_list, collection_list,
+    collection_list_exclude) and the internal dimensions from the mixin. It reshapes
+    nothing on the way in: the accepted shape is what the fields declare, and a stored
+    document that does not fit is a repository or migration problem, not a validator's.
+
+    Base order puts the library type FIRST so its field definitions win, and the mixin
+    LAST so its ``extra`` policy does (pydantic merges base configs in ``__bases__``
+    order, last one wins) -- the same ordering rule the pricing members follow.
+    """
+
+    # Override frequency_cap to use our extended FrequencyCap with scope
+    frequency_cap: FrequencyCap | None = None
+
+
+class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
+    """``core/targeting_input.json`` plus this seller's internal dimensions.
+
+    The REQUEST side. ``PackageRequest.targeting_overlay`` and
+    ``PackageUpdate.targeting_overlay`` are typed with the INPUT schema from AdCP 3.2 on,
+    and its nested element types are its own, so :class:`Targeting` is not a substitute
+    even though the runtime union still accepts one through a ``SkipJsonSchema`` arm.
+    Declaring both is what keeps the request DTOs statically honest about what they take.
+    """
+
+    # Override frequency_cap to use our extended FrequencyCap with scope
+    frequency_cap: FrequencyCap | None = None
+
+
+#: Either local targeting overlay, for the business rules that read the PINNED dimensions.
+#:
+#: AdCP 3.2 splits the overlay into a readback schema and an input schema, so this seller
+#: has two local subclasses (above). A rule that only reads fields both declare --
+#: ``property_list``, the geo include/exclude pairs -- takes either, and saying so is what
+#: keeps one implementation of the rule instead of one per side.
+AnyTargeting = Targeting | TargetingInput
 
 
 class Budget(SalesAgentBaseModel):
@@ -2232,8 +2274,10 @@ class PackageRequest(LibraryPackageRequest):
         description="Internal: List of creative IDs to assign (alternative to full creatives objects)",
         exclude=True,
     )
-    # Override library TargetingOverlay -> our Targeting with internal fields
-    targeting_overlay: Targeting | None = None
+    # Override library TargetingOverlayInput -> our TargetingInput with internal fields.
+    # The INPUT twin: from AdCP 3.2 on, the request schema $refs core/targeting_input.json
+    # and the readback core/targeting.json, and their nested element types are distinct.
+    targeting_overlay: TargetingInput | None = None
 
 
 class Package(LibraryPackage):
@@ -2404,10 +2448,12 @@ class CreateMediaBuyRequest(BuyerRequest, LibraryCreateMediaBuyRequest):
     @property
     def flight_start_date(self) -> date | None:
         """Extract date from start_time for display purposes."""
-        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
-        inner = self.start_time.root if self.start_time else None
-        if isinstance(inner, datetime):
-            return inner.date()
+        # ``start_time`` is declared on this model as ``datetime | Literal["asap"] | None``,
+        # so the value IS the union member. This read used to go through ``.root``, which
+        # was the shape of the SDK's ``StartTiming`` RootModel wrapper; adcp 9 has no such
+        # wrapper (and no ``StartTiming`` name at all), so the unwrap is gone.
+        if isinstance(self.start_time, datetime):
+            return self.start_time.date()
         return None
 
     @property
@@ -2546,7 +2592,8 @@ class AdCPPackageUpdate(LibraryPackageUpdate):
     creative_ids: list[str] | None = None
     # Override library targeting_overlay so local extensions (collection_list)
     # are coerced to typed CollectionListReference at the boundary, not dicts.
-    targeting_overlay: Targeting | None = None
+    # The INPUT twin, for the reason PackageRequest.targeting_overlay gives.
+    targeting_overlay: TargetingInput | None = None
 
     # Fields that are immutable once a package is created (BR-RULE-198). They are
     # not valid update fields, so the AdCP package-update schema rejects them via a
@@ -3014,11 +3061,15 @@ class Signal(LibrarySignal):
         """Backward compat: return the inner model of the first pricing option.
 
         DEPRECATED: Use pricing_options instead.
-        Provides .cpm, .currency etc. from the first pricing option's root model.
+        Provides .cpm, .currency etc. from the first pricing option.
         Returns None if pricing_options is empty.
+
+        No ``.root``: adcp 9 types ``Signal.pricing_options`` as a list of the
+        ``VendorPricingOption`` ARMS rather than of a RootModel wrapping them, so the
+        element already IS the inner model this property promises.
         """
         if self.pricing_options:
-            return self.pricing_options[0].root
+            return self.pricing_options[0]
         return None
 
     @property

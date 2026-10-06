@@ -2186,9 +2186,10 @@ async def _create_media_buy_impl(
         if req.start_time is None:
             raise AdCPValidationError(field="start_time")
 
-        # Handle 'asap' start_time (AdCP v1.7.0)
-        # start_time is StartTiming (RootModel[datetime | 'asap']); unwrap via .root
-        raw_start_time = req.start_time.root
+        # Handle 'asap' start_time (AdCP v1.7.0).
+        # No ``.root``: the DTO declares ``start_time`` as the plain union, and adcp 9 ships
+        # no ``StartTiming`` RootModel to unwrap.
+        raw_start_time = req.start_time
         if raw_start_time == "asap":
             computed_start_time: datetime = now
         else:

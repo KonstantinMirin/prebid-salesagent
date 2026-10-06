@@ -18,7 +18,7 @@ from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
 from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
 from src.core.exceptions import AdCPValidationError
-from src.core.schemas import Error, Targeting, TargetingCapability
+from src.core.schemas import AnyTargeting, Error, TargetingCapability
 from src.core.validation_helpers import PACKAGES_FIELD
 
 if TYPE_CHECKING:
@@ -227,7 +227,9 @@ def property_list_unsupported_advisories(
     return advisories or None
 
 
-def validate_property_targeting_allowed(product: "Product | None", targeting_overlay: Targeting | None) -> str | None:
+def validate_property_targeting_allowed(
+    product: "Product | None", targeting_overlay: AnyTargeting | None
+) -> str | None:
     """Reject property_list targeting against products that disallow it.
 
     AdCP 3.0.0 (core/product.json ``property_targeting_allowed``): "Sellers
@@ -332,7 +334,7 @@ def _extract_system_values(items: list) -> dict[str, set[str]]:
     return by_system
 
 
-def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
+def collect_targeting_violations(targeting: AnyTargeting) -> dict[str, object]:
     """Assemble every targeting-overlay violation into buyer-facing ``details``.
 
     THE one place the per-dimension validators are composed. Both tools that validate an
@@ -371,7 +373,7 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     return {key: value for key, value in candidates.items() if value}
 
 
-def geo_overlap_conflicts(targeting: Targeting) -> list[dict[str, object]]:
+def geo_overlap_conflicts(targeting: AnyTargeting) -> list[dict[str, object]]:
     """Reject same-value overlap between geo inclusion and exclusion fields.
 
     Per AdCP spec (adcp PR #1010): sellers SHOULD reject requests where the

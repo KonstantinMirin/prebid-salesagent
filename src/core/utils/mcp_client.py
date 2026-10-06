@@ -76,7 +76,14 @@ from typing import Any, NoReturn, Protocol
 # them from here resolves to the real symbol past the gate (GH #1802). The
 # underscore makes that an ImportError, so the seam cannot re-export what it was
 # sanctioned to import.
-import httpx as _httpx
+# The httpx2 generation, for the reason the paragraph above gives and one more: mcp 2.x
+# wrote its whole streamable-HTTP client against ``httpx2`` -- a separate distribution,
+# not a version of ``httpx`` -- so the client this module hands that transport, and the
+# request-event hook it installs on it, are httpx2 objects. Annotating them ``httpx``
+# would be wrong in the way that matters: ``except _httpx.RequestNotRead`` cannot catch
+# an ``httpx2.RequestNotRead``, so the explicit "refuse rather than sign the wrong bytes"
+# branch would never run.
+import httpx2 as _httpx2
 from fastmcp.client import (
     Client as _Client,
 )
@@ -148,7 +155,7 @@ class MCPSigningError(AdCPConfigurationError):
 def _refuse_unsignable(
     diagnostic: str,
     *,
-    request: _httpx.Request,
+    request: _httpx2.Request,
     cause: BaseException | None = None,
 ) -> NoReturn:
     """Log the operator-facing diagnostic, then raise the wire-safe typed refusal.
@@ -204,7 +211,7 @@ class SignMcpAttempt(Protocol):
     def __call__(self, *, method: str, url: str, headers: Mapping[str, str], body: bytes) -> Mapping[str, str]: ...
 
 
-def _install_signing_hook(client: _httpx.AsyncClient, sign: SignMcpAttempt) -> None:
+def _install_signing_hook(client: _httpx2.AsyncClient, sign: SignMcpAttempt) -> None:
     """Make *client* sign every request it is about to send, per request.
 
     An httpx request event hook is the injection point because it is the LAST place
@@ -226,10 +233,10 @@ def _install_signing_hook(client: _httpx.AsyncClient, sign: SignMcpAttempt) -> N
     request would leave unsigned.
     """
 
-    async def _sign_hook(request: _httpx.Request) -> None:
+    async def _sign_hook(request: _httpx2.Request) -> None:
         try:
             body = request.content
-        except _httpx.RequestNotRead as exc:
+        except _httpx2.RequestNotRead as exc:
             # A streaming request body cannot be signed without buffering it, and
             # buffering it here would re-frame a request the transport already
             # framed. Refuse instead: today's MCP transport always sends a
@@ -302,11 +309,11 @@ def _mcp_client_factory(url: str, sign: SignMcpAttempt | None) -> McpClientFacto
         return guarded
 
     def factory(
-        headers: Mapping[str, str] | None = None,
-        timeout: _httpx.Timeout | float | None = None,
-        auth: _httpx.Auth | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: _httpx2.Timeout | None = None,
+        auth: _httpx2.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> _httpx.AsyncClient:
+    ) -> _httpx2.AsyncClient:
         client = guarded(headers, timeout, auth, follow_redirects)
         _install_signing_hook(client, sign)
         return client

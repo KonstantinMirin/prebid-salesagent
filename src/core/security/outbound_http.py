@@ -160,7 +160,20 @@ from typing import Any, Protocol
 # underscore makes that re-export an ImportError instead of something a ban
 # list has to keep enumerating.
 import httpx as _httpx
-from adcp.signing import AsyncIpPinnedTransport, IpPinnedTransport
+
+# The SECOND httpx generation, bound privately for the identical reason. ``httpx2`` is a
+# separate distribution, not a version of ``httpx``: mcp 2.x's streamable-HTTP client is
+# written entirely against it (``httpx2.AsyncClient``, ``httpx2.SSEError``,
+# ``httpx2.StreamError``, ``EventSource``), so the ONE seam that hands a long-lived client
+# to that transport has to build an httpx2 client. Every install already carries both,
+# because ``adcp`` depends on both (its pyproject says so) and ships IP-pinned transports
+# for each.
+import httpx2 as _httpx2
+from adcp.signing import (
+    AsyncIpPinnedTransport,
+    AsyncIpPinnedTransport2,
+    IpPinnedTransport,
+)
 from pydantic import JsonValue
 from typing_extensions import TypeIs
 
@@ -223,15 +236,25 @@ class McpClientFactory(Protocol):
     Protocol and the annotation on :func:`guarded_client_factory` would not
     check. ``follow_redirects`` is the fourth because fastmcp passes it
     unconditionally; it is accepted and discarded, never honoured.
+
+    **It is the httpx2 generation from mcp 2.x on.** The restatement used to name
+    ``httpx`` types, and mcp 2.x moved its whole streamable-HTTP client to ``httpx2`` --
+    a different distribution with different classes, down to the exceptions its retry
+    paths catch (``httpx2.SSEError``, ``httpx2.StreamError``). Handing that transport an
+    ``httpx.AsyncClient`` is not a typing mismatch to suppress: its error handling would
+    never match, and ``EventSource`` would be given a foreign response. mcp 2.x also
+    narrowed ``headers`` to ``dict`` and dropped ``follow_redirects`` from its own
+    Protocol, though fastmcp 4 still passes it (with a ``type: ignore[call-arg]`` of its
+    own, fastmcp/client/transports/http.py), which is why it stays declared here.
     """
 
     def __call__(
         self,
-        headers: Mapping[str, str] | None = None,
-        timeout: _httpx.Timeout | float | None = None,
-        auth: _httpx.Auth | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: _httpx2.Timeout | None = None,
+        auth: _httpx2.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> _httpx.AsyncClient: ...
+    ) -> _httpx2.AsyncClient: ...
 
 
 #: Headers a signer may not set, because they describe the FRAMING of the body
@@ -505,6 +528,18 @@ def _async_transport(url: str, *, field: str | None, allow_private: bool) -> Asy
     return AsyncIpPinnedTransport(hostname=pinned.hostname, resolved_ip=pinned.resolved_ip, verify=True)
 
 
+def _async_transport2(url: str, *, field: str | None, allow_private: bool) -> AsyncIpPinnedTransport2:
+    """The httpx2 twin of :func:`_async_transport` — same decision, other generation.
+
+    One extra function rather than one parameterised one: the only thing that differs is
+    the transport CLASS, and both resolve through the same
+    :meth:`EgressPolicy.resolve_for_dial`, so there is still exactly one place the
+    pre-connection verdict is reached.
+    """
+    pinned = EgressPolicy.resolve_for_dial(url, field=field, allow_private=allow_private)
+    return AsyncIpPinnedTransport2(hostname=pinned.hostname, resolved_ip=pinned.resolved_ip, verify=True)
+
+
 async def sleep_backoff(attempts: Attempts) -> None:
     """Await the wait BR-RULE-029 owes before *attempts*' next attempt.
 
@@ -729,12 +764,19 @@ def validate_url(url: str, *, provenance: UrlProvenance | None = None) -> None:
 def guarded_async_client(
     url: str,
     *,
-    headers: Mapping[str, str] | None = None,
-    timeout: _httpx.Timeout | float | None = None,
-    auth: _httpx.Auth | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: _httpx2.Timeout | None = None,
+    auth: _httpx2.Auth | None = None,
     follow_redirects: bool | None = None,
-) -> _httpx.AsyncClient:
-    """An ``_httpx.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
+) -> _httpx2.AsyncClient:
+    """An ``_httpx2.AsyncClient`` pinned to ``url``'s validated IP, redirects refused.
+
+    **httpx2, not httpx**, and it is the only builder in this module that is: this client
+    exists for mcp 2.x's streamable-HTTP transport, which is written against httpx2 end to
+    end. :func:`asend` and :func:`send` keep the httpx generation, because they own their
+    own request/response lifecycle and nothing hands their client to another library. See
+    :class:`McpClientFactory` for why handing the wrong generation across is a behaviour
+    bug rather than a typing one.
 
     For the one library seam whose stateful client this module's one-shot
     :func:`asend` cannot carry — fastmcp's ``StreamableHttpTransport``, which
@@ -753,7 +795,7 @@ def guarded_async_client(
     verdict :func:`validate_url` and :func:`asend` reach, because all three go
     through the same policy method.
     """
-    transport = _async_transport(url, field=None, allow_private=_allow_private())
+    transport = _async_transport2(url, field=None, allow_private=_allow_private())
     kwargs: dict[str, Any] = {}
     if headers is not None:
         kwargs["headers"] = headers
@@ -771,7 +813,7 @@ def guarded_async_client(
     # not passable at all.
     del follow_redirects
     kwargs.update(transport=transport, follow_redirects=False, trust_env=False)
-    return _httpx.AsyncClient(**kwargs)
+    return _httpx2.AsyncClient(**kwargs)
 
 
 def guarded_client_factory(url: str) -> McpClientFactory:
@@ -786,11 +828,11 @@ def guarded_client_factory(url: str) -> McpClientFactory:
     """
 
     def factory(
-        headers: Mapping[str, str] | None = None,
-        timeout: _httpx.Timeout | float | None = None,
-        auth: _httpx.Auth | None = None,
+        headers: dict[str, str] | None = None,
+        timeout: _httpx2.Timeout | None = None,
+        auth: _httpx2.Auth | None = None,
         follow_redirects: bool | None = None,
-    ) -> _httpx.AsyncClient:
+    ) -> _httpx2.AsyncClient:
         return guarded_async_client(url, headers=headers, timeout=timeout, auth=auth, follow_redirects=follow_redirects)
 
     return factory

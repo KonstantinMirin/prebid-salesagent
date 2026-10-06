@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 from uuid import uuid4
 
-from adcp.types import AccountReference
+from adcp.types import AccountReferenceById
 
 from src.core.schemas import SyncCreativesRequest
 from tests.factories.creative_asset import AssetSpec, assert_assets, build_assets, image_spec
@@ -69,7 +69,7 @@ def sync_creatives_request(**fields: Any) -> SyncCreativesRequest:
     fields.setdefault("creatives", [creative_payload()])
     fields.setdefault("idempotency_key", f"test-sync-idem-{uuid4().hex}")
     if fields.get("account") is None:
-        fields["account"] = AccountReference(root={"account_id": _PLACEHOLDER_ACCOUNT_ID})
+        fields["account"] = AccountReferenceById(account_id=_PLACEHOLDER_ACCOUNT_ID)
 
     # Imported at call time: this module is imported by tests that patch objects inside the
     # creatives package, and a module-level import would bind before their patches.
