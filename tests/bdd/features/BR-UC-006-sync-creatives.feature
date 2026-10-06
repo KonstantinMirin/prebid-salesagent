@@ -1624,7 +1624,15 @@ Feature: BR-UC-006 Sync Creative Assets
     # provenance_truth_of_claim: verifier contradicts buyer claim; details bounded to audit-safe allowlist
     # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
-  @T-UC-006-storyboard-multi-format-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-006-storyboard-multi-format-sync @uc006-storyboard-routing @v3-1 @bulk-sync @multi-format
   Scenario: Bulk sync of three creatives in three different formats returns per-creative action
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
@@ -1641,7 +1649,15 @@ Feature: BR-UC-006 Sync Creative Assets
     # sync_multiple: bulk multi-format validation returns per-creative action+status
     # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
 
-  @T-UC-006-storyboard-multi-format-sync-status @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @bulk-sync @multi-format
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-006-storyboard-multi-format-sync-status @uc006-storyboard-routing @v3-1 @bulk-sync @multi-format
   Scenario: Bulk sync of three creatives in three different formats returns per-creative status
     Given the Buyer Agent submits three creatives in three different formats in a single sync_creatives call
     When the Buyer Agent sends sync_creatives
@@ -1653,7 +1669,15 @@ Feature: BR-UC-006 Sync Creative Assets
     # sync_multiple: bulk multi-format validation returns per-creative action+status
     # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/creative/index.yaml phase=sync_multiple step=sync_creatives
 
-  @T-UC-006-storyboard-format-id-roundtrip-on-sync @uc006-storyboard-routing @storyboard-v3.1 @v3-1 @format-id-roundtrip
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by the `creative` PROTOCOL, which AdCP 3.2 split creatives into and which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-006-storyboard-format-id-roundtrip-on-sync @uc006-storyboard-routing @v3-1 @format-id-roundtrip
   Scenario: Sync creative with the same format_id object returned by get_products -- seller MUST accept its own format_id
     Given the Buyer Agent captured a format_id {agent_url, id} from a prior get_products response
     When the Buyer Agent sends sync_creatives carrying a creative whose format_id matches the captured object

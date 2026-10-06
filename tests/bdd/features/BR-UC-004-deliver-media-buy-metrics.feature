@@ -1587,7 +1587,15 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
     # measurement_accountability: required_metrics at discovery -> missing_metrics in delivery
     # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/media-buy/scenarios/measurement_accountability.yaml phase=simulate_and_validate_accountability step=get_delivery_clean
 
-  @T-UC-004-storyboard-vendor-metric-end-to-end @storyboard-v3.1 @v3-1 @vendor-metric @accountability
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by `requires_capability media_buy.features.committed_metrics_supported`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-004-storyboard-vendor-metric-end-to-end @v3-1 @vendor-metric @accountability
   Scenario: Vendor metric accountability -- declaration on product, filter at discovery, emission in delivery
     Given the seller's product declared reporting_capabilities.vendor_metrics for vendor "attentionvendor.example" and metric_id "attention_units"
     And the buyer declared filters.required_vendor_metrics matching that pointer at get_products time

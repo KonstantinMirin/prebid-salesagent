@@ -2304,7 +2304,15 @@ Feature: BR-UC-003 Update Media Buy
     # invalid_transitions: re-cancel of terminal canceled buy is NOT_CANCELLABLE, not silent success
     # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/media-buy/scenarios/invalid_transitions.yaml phase=double_cancel step=second_cancel
 
-  @T-UC-003-storyboard-creative-fate-after-cancellation @storyboard-v3.1 @v3-1 @cancellation @creative-library @lifecycle-decoupling
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by `requires_capability creative.has_creative_library`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-003-storyboard-creative-fate-after-cancellation @v3-1 @cancellation @creative-library @lifecycle-decoupling
   Scenario: Canceling a media buy releases package-creative assignments but leaves creatives in the library with review state intact
     Given a media buy has been canceled
     And the canceled buy had a package with creative assignments

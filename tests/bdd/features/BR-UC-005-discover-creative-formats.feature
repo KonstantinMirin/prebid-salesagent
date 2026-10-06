@@ -1225,7 +1225,16 @@ Feature: BR-UC-005 Discover Creative Formats
     And the asset_type payload shape should NOT carry "max_file_size" or "required"
     # v3.1: registry mandates payload-vs-requirements separation
 
-  @T-UC-005-storyboard-format-id-roundtrip-from-products @storyboard-v3.1 @v3-1 @format-id-roundtrip
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — PERMANENT.
+    # The cited step 'list_formats_integrity' does not exist at 3.2.1: zero occurrences across all 214
+    # storyboards in tests/fixtures/adcp_storyboards_pinned/index.json. It was REMOVED
+    # upstream, not relocated the way `sync_creatives` was (that one moved to
+    # protocols/creative/index.yaml and its citations were re-pointed), so no capability
+    # or protocol declaration could resurrect it. From here on this scenario is graded by
+    # OUR BDD and by nothing upstream — ungraded upstream, which is the honest label.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-005-storyboard-format-id-roundtrip-from-products @v3-1 @format-id-roundtrip
   Scenario: Format ID roundtrip -- list_creative_formats returns the same format object that get_products advertised
     Given the Buyer Agent captured a format_id object {agent_url, id} from a prior get_products response
     When the Buyer Agent sends list_creative_formats with format_ids [{captured agent_url, captured id}]
@@ -1243,7 +1252,16 @@ Feature: BR-UC-005 Discover Creative Formats
     # list_formats_integrity: format_ids advertised on products MUST resolve through list_creative_formats
     # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=product_discovery step=list_formats_integrity
 
-  @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @storyboard-v3.1 @v3-1 @format-id-roundtrip @third-party-agent
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — PERMANENT.
+    # The cited step 'list_formats' does not exist at 3.2.1: zero occurrences across all 214
+    # storyboards in tests/fixtures/adcp_storyboards_pinned/index.json. It was REMOVED
+    # upstream, not relocated the way `sync_creatives` was (that one moved to
+    # protocols/creative/index.yaml and its citations were re-pointed), so no capability
+    # or protocol declaration could resurrect it. From here on this scenario is graded by
+    # OUR BDD and by nothing upstream — ungraded upstream, which is the honest label.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-005-storyboard-format-id-third-party-agent-out-of-scope @v3-1 @format-id-roundtrip @third-party-agent
   Scenario: Format ID with agent_url pointing at a third-party creative agent is reported as observation, not failure
     Given a product advertises a format_id whose agent_url points at a third-party creative agent
     And the seller has no local copy of that format in its own catalog

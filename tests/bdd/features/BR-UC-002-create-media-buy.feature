@@ -2968,7 +2968,15 @@ Feature: BR-UC-002 Create Media Buy
     # governance_denied_recovery: corrected buy with new APPROVED decision succeeds
     # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_no_match.yaml
 
-  @T-UC-002-storyboard-inventory-list-no-match @storyboard-v3.1 @v3-1 @inventory-list @no-match
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by `requires_capability media_buy.execution.targeting.property_list`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-002-storyboard-inventory-list-no-match @v3-1 @inventory-list @no-match
   Scenario: Inventory list references that resolve to zero inventory -- zero-forecast or informative error, never silent success
     Given the buyer references a property_list whose entries do not match any seller inventory
     And the buyer references a collection_list whose entries do not match any seller inventory
@@ -2988,7 +2996,15 @@ Feature: BR-UC-002 Create Media Buy
     # inventory_list_no_match: empty intersection MUST be surfaced truthfully
     # @source repo=adcp ref=v3.2.1 path=static/compliance/source/protocols/media-buy/scenarios/inventory_list_no_match.yaml phase=no_match_attempt step=create_buy_no_match
 
-  @T-UC-002-storyboard-inventory-list-targeting-parity @storyboard-v3.1 @v3-1 @inventory-list @property-list @collection-list
+  # STORYBOARD CLAIM WITHDRAWN at the AdCP 3.2.1 pin — RESTORABLE BY DECLARING.
+    # Gated upstream by `requires_capability media_buy.execution.targeting.property_list`, which this seller does not declare, so the claim that an AdCP storyboard grades this scenario is FALSE at 3.2.1
+    # and feeding a guard a false claim is the guard grading a fiction. Declaring it
+    # restores the claim and the coverage with it; that decision is salesagent-o1wxm,
+    # because declaring a capability is a get_adcp_capabilities behaviour change and this
+    # repo declares a posture only where the implementation backs it.
+    # The `@storyboard-v3.1` TAG is gone and nothing else is: every Given, When and Then
+    # below still runs on every transport.
+  @T-UC-002-storyboard-inventory-list-targeting-parity @v3-1 @inventory-list @property-list @collection-list
   Scenario: PropertyListReference and CollectionListReference honored in package targeting on create_media_buy
     Given the buyer holds a property_list (agent_url, list_id) that matches seller inventory
     And the buyer holds a collection_list (agent_url, list_id) that matches seller inventory

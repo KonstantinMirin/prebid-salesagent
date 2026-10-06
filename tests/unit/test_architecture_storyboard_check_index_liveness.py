@@ -109,11 +109,36 @@ def test_registry_wired_scenario_grades_its_claimed_checks(monkeypatch, tmp_path
     assert result["totals"]["with_live_scenario"] >= len(claiming)
 
 
+def _a_claiming_scenario_outside(excluded_uc: str) -> str:
+    """One scenario id that claims an on-path check and is NOT in *excluded_uc*'s bucket.
+
+    Derived from the built index so the fixture cannot go stale against a claim it does
+    not own. Sorted, so the choice is deterministic across runs.
+    """
+    result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
+    candidates = sorted({s for record in result["records"] for s in record["scenarios"] if excluded_uc not in s})
+    assert candidates, (
+        f"fixture broken: no on-path check is claimed by any scenario outside {excluded_uc}. "
+        "Either every claim was withdrawn or the index stopped publishing scenario claims."
+    )
+    return candidates[0]
+
+
 @requires_pinned_bundle
 def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: Path) -> None:
     """steps_bound alone (the old 4-of-21 hand measurement) is not enough -- a UC
-    bucket absent from ENV_ROUTES must stay ungraded even when its steps run for real."""
-    scenario_id = "T-UC-006-storyboard-multi-format-sync"
+    bucket absent from ENV_ROUTES must stay ungraded even when its steps run for real.
+
+    The scenario is DERIVED, not named. It used to hardcode
+    ``T-UC-006-storyboard-multi-format-sync``, and that id stopped claiming any on-path
+    check the moment its ``@storyboard-v3.1`` tag was withdrawn at the 3.2.1 pin -- the
+    guard then failed on its own fixture precondition rather than on the behaviour, which
+    is a fixture coupled to a claim it does not own. What the test actually needs is ANY
+    scenario claiming an on-path check whose UC bucket is not the one ``load_env_routes``
+    is patched to return, so it asks the index for one. The sibling test above keeps its
+    hardcoded UC-019 id legitimately: UC-019 is the bucket it patches IN.
+    """
+    scenario_id = _a_claiming_scenario_outside("UC-019")
     artifact = tmp_path / "liveness.json"
     artifact.write_text(
         json.dumps(
@@ -139,7 +164,7 @@ def test_steps_bound_without_registry_row_does_not_grade(monkeypatch, tmp_path: 
 
     result = storyboard_check_index.build(REPO_ROOT, ADCP_HOME)
     claiming = [r for r in result["records"] if scenario_id in r["scenarios"]]
-    assert claiming, "fixture broken: no on-path check is claimed by T-UC-006-storyboard-multi-format-sync"
+    assert claiming, f"fixture broken: no on-path check is claimed by {scenario_id}"
     assert all(not r["graded_by_live_scenario"] for r in claiming)
     assert all(r["scenario_liveness"][scenario_id]["registry_wired"] is False for r in claiming)
 
