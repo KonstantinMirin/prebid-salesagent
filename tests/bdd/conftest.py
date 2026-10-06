@@ -2130,26 +2130,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                         strict=True,
                     )
                 )
-            elif '"7"' in item.nodeid:
-                # The wrong_type row only. The blanket entry below had been MASKING this,
-                # and it is a different defect: not a harness limitation, a production gap.
-                item.add_marker(
-                    pytest.mark.xfail(
-                        reason=(
-                            "cause=production-gap scope=transport-independent ref=#1721 — pydantic "
-                            'runs in lax mode, so the string "7" is coerced to 7 and a revision '
-                            "whose JSON type is wrong is ACCEPTED on a2a, mcp and rest alike. "
-                            "update-media-buy-request.json declares revision as an integer, so a "
-                            "type violation is INVALID_REQUEST; the scenario says why it matters -- "
-                            '7 and "7" must not behave alike. REMEDY: strict typing on the field. '
-                            "Not done inline because revision is INHERITED from the SDK model, so "
-                            "enforcing it means redeclaring the field (or making the whole request "
-                            "strict), which is a cross-cutting decision about every numeric field "
-                            "rather than a property of this row."
-                        ),
-                        strict=True,
-                    )
-                )
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin: the wrong_type row ('"7"').
+            # Its reason was "pydantic runs in lax mode, so the string "7" is coerced to
+            # 7 and a revision whose JSON type is wrong is ACCEPTED", and its named REMEDY
+            # was strict typing on the field — deferred because `revision` is INHERITED
+            # from the SDK model, so the decision was cross-cutting. The SDK made that
+            # decision: at v9 the inherited field is
+            #   Optional[Annotated[int, Strict(strict=True),
+            #                      BeforeValidator(as_json_schema_integer)]]   (+ Ge(1))
+            # and the measured behaviour now separates the two values the scenario says
+            # must not behave alike — model_validate(revision="7") REFUSES with
+            # [type=int_type] while revision=7 parses. The obligation itself did not move:
+            # media-buy/update-media-buy-request.json declares revision
+            # {"type": "integer", "minimum": 1} at the 3.2 pin, as it did at 3.1.
+            # Not vacuous: the row's Then is `error "INVALID_REQUEST" with suggestion`,
+            # which routes to TransportResult.assert_wire_error and raises outright when
+            # no wire envelope was captured — a request that died building in the step
+            # cannot pass it. The Given passes the string through UNCONVERTED into the
+            # shared harness env's dispatch kwargs, so all three transports send the same
+            # wrong-typed document. No second routing carries this tag: the only other
+            # mention of T-UC-003-partition-revision is the uc003-manual-approval EnvRoute
+            # (setup, not an exemption).
             # GRADUATED (the remaining INVALID_REQUEST rows). The entry described a harness
             # limitation -- "revision 0 is rejected by UpdateMediaBuyRequest's ge=1 during
             # request construction in the step, so the request never reaches the seller" --
@@ -2868,12 +2869,21 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # daily-breakdown: include_package_daily_breakdown
             # is a real bool field; production lax-coerces non-boolean strings
             # ("yes"/"true" → True) instead of raising INVALID_REQUEST.
-            (
-                "T-UC-004-partition-daily-breakdown",
-                {"non_boolean"},
-                "production lax-coerces non-boolean strings to bool (no strict-bool "
-                "validation, no AdCPSalesAgentError(INVALID_REQUEST)). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            #
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin (whole entry removed, not
+            # emptied). The lax coercion the reason names is gone: the SDK now types
+            # the field Optional[Annotated[bool, Strict(strict=True)]], so
+            # GetMediaBuyDeliveryRequest.model_validate(
+            #     {"include_package_daily_breakdown": "yes"})
+            # REFUSES with [type=bool_type], and the boundary frames that refusal as
+            # the INVALID_REQUEST-with-suggestion envelope the row asserts.
+            # Not vacuous: this row's Then resolves to error "INVALID_REQUEST" with
+            # suggestion, which goes through TransportResult.assert_wire_error — the
+            # sanctioned wire assertion, which refuses a missing envelope outright and
+            # checks code, pin-sourced recovery and the suggestion in BOTH mirrored
+            # layers. There is no reconstructed-exception path for it to pass on.
+            # The strict=False twin in _UC004_PARTITION_SELECTIVE is deleted in the
+            # same change; left alone it would turn this graduation into a silent XPASS.
             # VERIFIED 2026-08-24 (xpass-graduation walk of e2e_rest ledger line
             # :55). This entry is CORRECT and stays. Three independent checks:
             #  1. The mechanism in the reason above is real, not inferred. Direct
@@ -2906,12 +2916,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # ValidationError — would not move these rows. C4's "one change clears
             # ~32 rows" estimate over-counts by however many of them are coercion,
             # not translation. Fixing this needs strict-bool validation, not C4.
-            (
-                "T-UC-004-boundary-daily-breakdown",
-                {"string 'true' (non-boolean type)"},
-                "production lax-coerces non-boolean strings to bool (no strict-bool "
-                "validation). See docs/test-debt-bdd-strict-markers.md item C4.",
-            ),
+            #
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin (whole entry removed, not
+            # emptied — an empty substring set xfails EVERY row carrying the tag).
+            # The strict-bool validation the reason said production lacks is now what
+            # the SDK ships, so the remedy the CAVEAT above names is in place:
+            #   GetMediaBuyDeliveryRequest.model_fields[
+            #       "include_package_daily_breakdown"].annotation
+            #   -> Optional[Annotated[bool, Strict(strict=True)]]
+            # and model_validate({"include_package_daily_breakdown": "true"}) now
+            # REFUSES with [type=bool_type] (same for "TRUE"/"yes"/"1"), while a real
+            # bool and an absent field still parse. The boundary turns that refusal
+            # into an INVALID_REQUEST envelope (_boundary.py validated_request ->
+            # HTTP 400), so the row grades production, not a reconstruction.
+            # Not vacuous: measured by poisoning _assert_wire_rejection's
+            # no-envelope branch (uc004_delivery.py) with a raise and re-running the
+            # slice — a2a/mcp/rest still PASS, so all three read the real captured
+            # wire envelope. Per-row evidence for the sibling partition entry below.
             # account: only the omitted/(field absent) rows
             # pass on every transport. The other rows fail transport-asym-
             # metrically — a2a/mcp/rest never parse/resolve AccountReference
@@ -3231,13 +3252,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # hatches.py) cannot catch it: it records conditions only, never `strict`,
             # so a strict=False shadow behind a strict=True route is invisible to it.
             # 62 tags in this file are routed more than once; only this one has been
-            # checked. Deliberately NOT deleted here — it is behaviour-neutral today
-            # and removing a pinned route is its own change, not part of walking :55.
-            (
-                "T-UC-004-boundary-daily-breakdown",
-                {"non-boolean", "non_boolean", "string 'true'"},
-                "include_package_daily_breakdown boundary: non-boolean validation not implemented",
-            ),
+            # checked.
+            #
+            # GRADUATED at the adcp 9.0.0 / AdCP 3.2.1 pin, together with the
+            # strict=True entry whose removal this comment made a precondition. The
+            # predicted sequence is exactly what happened: the SDK grew strict-bool
+            # validation, the strict=True entry fired as an XPASS failure, and
+            # removing it alone handed the row to this shadow, which reported a
+            # silent XPASS (measured: 3 failed -> 3 xpassed on a2a/mcp/rest). Both
+            # entries are therefore deleted in one change, and the row now grades
+            # live. Evidence for the behaviour is on the strict=True entry above.
             # Graduated: "buyer_refs only" and "zero resolution" (all 4 transports pass)
             # Graduated: "empty array" passes on impl/mcp/rest (only a2a fails)
             # Graduated: "partial resolution" -- the transport-agnostic _impl
@@ -3395,12 +3419,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # a real-wire-asserted field (_WIRE_ASSERTED_FIELDS), and all 4 rows
             # pass with the correct VALIDATION_ERROR+suggestion on all 3
             # transports.
-            # daily breakdown: production doesn't validate non-boolean values
-            (
-                "T-UC-004-partition-daily-breakdown",
-                {"non_boolean"},
-                "include_package_daily_breakdown validation not implemented — production accepts non-boolean",
-            ),
+            # daily breakdown: GRADUATED with its strict=True twin in
+            # _UC004_GENUINE_XFAIL_ROWS (see the evidence there). The reason —
+            # "production accepts non-boolean" — is disproved by the pinned SDK's
+            # strict-bool field; leaving this entry would have absorbed the
+            # graduation as a silent XPASS, exactly as the boundary twin's SHADOW
+            # note predicted. Entry deleted, not emptied.
             # Graduated: T-UC-004-partition-account. ENTRY DELETED, not thinned — its set
             # named invalid_oneOf_both and empty_object, and with impl sunsetted (#1417)
             # a2a/mcp/rest are the only in-process transports, so all SIX matching rows
@@ -4807,6 +4831,13 @@ def _uc010_wired_tags() -> frozenset[str]:
             # They are correspondingly absent from _UC010_DORMANT_TRACKING, which is
             # where they used to be cited.
             "T-UC-010-v31-request-signing-posture",
+            # Split out of T-UC-010-v31-request-signing-posture: under 3.2 a
+            # covers_content_digest of `either` or `forbidden` is not an emission this
+            # seller may make, so the two rows that used to assert it moved to a scenario
+            # that grades the refusal. Wired by the SAME steps as the posture outline it
+            # left, so it must join this set or it would xfail as "not yet wired" rather
+            # than run.
+            "T-UC-010-v31-request-signing-legacy-digest",
             "T-UC-010-v31-request-signing-subset",
             "T-UC-010-v31-webhook-signing",
         }

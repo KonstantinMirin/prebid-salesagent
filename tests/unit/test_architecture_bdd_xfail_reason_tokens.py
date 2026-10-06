@@ -254,9 +254,15 @@ class TestEveryTypedReasonInTheTreeParses:
                     rel = path.relative_to(_BDD_DIR.parents[1])
                     violations.append(f"{rel}:{lineno}: {exc}")
 
-        assert typed_seen >= 3, (
-            f"only {typed_seen} typed xfail reasons found under tests/bdd/; the tree had 3 when this "
-            f"guard was written, so the scan is no longer finding them and passes vacuously"
+        # Floor was 3 when the guard was written. It is 2 because the third typed
+        # reason GRADUATED at the adcp 9.0.0 pin: the ref=#1721 marker on the
+        # @T-UC-003-partition-revision wrong_type row ('"7"' coerced to 7) was
+        # removed once the SDK typed `revision` strict, so the row grades live.
+        # Lower this only alongside such a removal — never to make a broken scan
+        # pass, which is the one thing the floor exists to catch.
+        assert typed_seen >= 2, (
+            f"only {typed_seen} typed xfail reasons found under tests/bdd/; the tree had 2 when this "
+            f"floor was last set, so the scan is no longer finding them and passes vacuously"
         )
         assert not violations, "typed xfail reasons that do not parse:\n" + "\n".join(violations)
 

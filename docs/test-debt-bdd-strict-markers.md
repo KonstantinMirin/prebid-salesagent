@@ -179,9 +179,12 @@ file's to edit:
 - The `T-UC-004-boundary-account` row and the `T-UC-004-boundary-status-filter`
   row both key on `impl-` / `pending_activation` substrings that no nodeid can
   match (`tests/bdd/conftest.py:2485-2503`, `:2613-2628`).
-- Three reasons still cite C4 as the cause (`:2368`, `:2461`, `:2467`) although
-  the translation landed; the rows that remain stayed for a different, unnamed
-  reason.
+- One reason still cites C4 as the cause (the `T-UC-004-partition-reporting-dims`
+  `geo_metro_missing_system` row) although the translation landed; that row stays
+  for a different, unnamed reason. It was three until the adcp 9.0.0 pin: the two
+  `include_package_daily_breakdown` rows citing C4 were never translation cases —
+  they were lax **coercion** of a non-boolean string, and they graduated when the
+  SDK typed the field strict, so their entries are gone from `tests/bdd/conftest.py`.
 - `is_impl` (`:1452`) and the `impl-` ledger substrings are dead with the
   transport.
 
