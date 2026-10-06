@@ -267,6 +267,21 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # never reaches the success schema. But any uc005 scenario that graduates onto a success path
 # over e2e_rest lands on this defect immediately. Expect that rather than reading it as a
 # regression.
+#
+# CONDITION NOW MET, ROW DELIBERATELY KEPT (2026-10-06, lane/bdd-category @ 549c3bc5d).
+# This block graduates "when the SPEC pin moves to v3.1.22 or later". It has: at the 3.2
+# pin core/format.json admits pixel_tracker, vast_tracker, daast_tracker, card and
+# published_post -- the five adcp#7421 added. The six in-process #7338 entries
+# (two tags in _XFAIL_TAGS, four row-level in _SELECTIVE_XFAIL, 69 nodes) were graduated
+# in that change on an in-process run.
+#
+# THIS ROW IS NOT GRADUATED, because nothing here measured e2e_rest. Only a bdd-in-network
+# run grades this ledger, and none was run. Graduating on the in-process result would be
+# citing the wrong measurement -- exactly what the UC-005 baseline-format-id row above
+# refuses for its own repaired assertion. The paragraph beginning "SCOPE OF THE GAP" is now
+# stale in one respect: the compliance Then it describes should pass over e2e_rest once the
+# pin is read there too, so expect this row to XPASS on the next in-network run and
+# graduate it then, on that run.
 tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
 
 # --- UC-010 targeting granularity has no per-tenant surface (3) ---

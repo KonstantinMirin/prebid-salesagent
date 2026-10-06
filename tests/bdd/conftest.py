@@ -908,12 +908,36 @@ _XFAIL_TAGS: dict[str, str] = {
     # media-buy-delivery-webhook-result.json declares, rather than from the top level where
     # several of them had been looking and finding nothing.
     #
-    # adcp#7338, whole-scenario form. These three are plain Scenarios, not Outlines: every
-    # transport builds a success response and validates assets, so there is no passing row
-    # to protect and the tag is the right granularity. The four Scenario OUTLINES affected
-    # by the same bug are row-level in _SELECTIVE_XFAIL, which carries the evidence.
-    "T-UC-005-storyboard-baseline-format-id-object-shape": "upstream adcp#7338: the response asset oneOf omits pixel_tracker, which the reference formats declare -- see the _SELECTIVE_XFAIL block for the full evidence",
-    "T-UC-005-sandbox-production": "upstream adcp#7338: the response asset oneOf omits pixel_tracker, which the reference formats declare -- see the _SELECTIVE_XFAIL block for the full evidence",
+    # Graduated: the two adcp#7338 whole-scenario tags
+    # (@T-UC-005-storyboard-baseline-format-id-object-shape, @T-UC-005-sandbox-production),
+    # 6 nodes. THE BLOCK STATED ITS OWN CONDITION -- "graduates when the SPEC pin moves to
+    # v3.1.22 or later" -- and the pin is now 3.2: core/format.json admits pixel_tracker,
+    # vast_tracker, daast_tracker, card and published_post, the five adcp#7421 added. The
+    # condition was met by the SDK bump; what made it visible was the schema-category fix,
+    # because until then these scenarios failed on a PinnedSchemaError
+    # ('list-creative-formats-response.json' is ambiguous) rather than on the asset union
+    # they are ledgered for -- an xfail satisfied by the wrong defect.
+    #
+    # NOT A VACUOUS XPASS, which is the other thing an xpass can mean and the only reason
+    # to refuse graduation. Three measurements:
+    #   - the obligation is real: 45 of the 71 formats in
+    #     tests/fixtures/creative_formats/reference_formats.json declare a pixel_tracker
+    #     asset, so the compliance Then validates documents that genuinely carry one;
+    #   - the check DISCRIMINATES: a served pixel_tracker format validates against
+    #     core/format.json, and the same format with its asset_type changed to a bogus
+    #     value is rejected. It is grading asset types, not accepting anything;
+    #   - each scenario carries a specific assertion beyond the compliance line --
+    #     "should not include a sandbox field" (BR-RULE-209 INV-5) and "every entry's
+    #     format_id should be an object carrying both agent_url and id / no entry's
+    #     format_id should be a bare string" (core/format-id.json required [agent_url, id]).
+    #     Neither is a presence check.
+    #
+    # Verified on lane/bdd-category at 549c3bc5d, own agent-db, artifacts redirected:
+    # 69 XPASS(strict) over uc005, every one citing adcp#7338 and nothing else, grouping
+    # exactly onto these two tags (3 + 3) and the four outlines below (24/18/12/9).
+    #
+    # tests/bdd/e2e_rest_known_failures.txt keeps its one #7338 row: that ledger names the
+    # same spec-pin condition, but only a bdd-in-network run grades it and none was run here.
 }
 
 # Selective xfail for parametrized scenarios where only
@@ -948,86 +972,49 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # "partial" row names the code; main-lenient-warnings built its two valid packages
     # from one factory-default id, so they collapsed into one assignment; and the
     # assignment-weight / provenance rows are described where the Given changed.
-    # ── UPSTREAM SPEC BUG: adcontextprotocol/adcp#7338 ──
-    # Row-level, not tag-level, and that distinction was MEASURED. Only the "-valid" rows
-    # build a success response and therefore validate assets against the pinned schema; the
-    # "-INVALID_REQUEST" rows are rejected before any response is serialized. Ledgering the
-    # whole tag turned all 16 error rows into XPASS(strict) failures -- an xfail that hides
-    # working behavior is worse than the bug it parks. Split measured from run
-    # innet_070926_0757: 68 failing rows, every one ending "-valid"; 16 others, every one
-    # ending "-INVALID_REQUEST".
+    # ── GRADUATED: adcontextprotocol/adcp#7338 ──
+    # The four UC-005 Scenario Outlines parked row-level here
+    # (@T-UC-005-partition-agent-type, -partition-agent-asset, -boundary-agent-type,
+    # -boundary-agent-asset, "-valid" rows only) are graduated: 63 nodes, plus the 6 from
+    # the two whole-scenario tags in _XFAIL_TAGS, which is the 69 that were XPASS(strict).
     #
-    # NOT our formats. tests/fixtures/creative_formats/reference_formats.json is captured
-    # from the REFERENCE creative agent (provenance pin 76b031a85eb8, the v3.1.25 tag; it was
-    # 467fd93d7711, v3.1.1, when this was ledgered, with the same 45 pixel_tracker formats),
-    # and 4 of the 16 files under the spec's own formats/canonical/ declare pixel_tracker
-    # assets. At v3.1.1 the spec's reference catalogue emits what the spec's response schema
-    # rejects.
+    # THE CONDITION THIS BLOCK NAMED IS MET. It said "graduates when the SPEC pin moves to
+    # v3.1.22 or later, not when the agent pin moves". adcp#7421 (merged 2026-09-11, first
+    # released v3.1.22) added the five missing branches, and at the 3.2 pin core/format.json
+    # admits pixel_tracker, vast_tracker, daast_tracker, card and published_post. The SDK
+    # bump earned this; the schema-category fix only made it visible, because until then
+    # these rows failed on a PinnedSchemaError ('list-creative-formats-response.json' is
+    # ambiguous across creative/ and media-buy/) rather than on the asset union they were
+    # parked for. An xfail was being satisfied by a different defect than the one it cited.
     #
-    # Checked against the newest upstream before ledgering, not assumed: v3.1.20 (latest
-    # stable then) still admitted the same 15. adcp#7338 was then fixed by adcp PR #7421
-    # (merged 2026-09-11, first released in v3.1.22): core/format.json, which
-    # list-creative-formats-response.json $refs, now admits pixel_tracker, vast_tracker,
-    # daast_tracker, card and published_post. Bumping the AGENT pin does not fix it here.
+    # INSPECTED FOR VACUITY BEFORE REMOVAL, because the other thing an xpass can mean is a
+    # scenario too weak to fail. Everything below is measured on lane/bdd-category at
+    # 549c3bc5d, own agent-db, artifacts redirected:
+    #   - the obligation is real: 45 of the 71 formats in reference_formats.json declare a
+    #     pixel_tracker asset, so the compliance Then grades documents that carry one;
+    #   - the compliance check DISCRIMINATES: a served pixel_tracker format validates
+    #     against core/format.json, and the same format with asset_type set to a bogus
+    #     value is REJECTED;
+    #   - the asset outlines' second Then is live, not skipped. _assert_filter_content
+    #     guards its asset_types content check with `if was_narrowed`, so it would pass on
+    #     nothing if production ignored the filter. It does not: measured over the
+    #     reference catalog, asset_types=[image] keeps 34/71, [video] 13, [audio] 3,
+    #     [text] 19, [html] 7, [javascript] 1, [url] 35 -- every filtered row narrows, so
+    #     the branch fires. The `not_provided` rows are correctly exempt.
+    #   - the type outlines' second Then asserts the result EQUALS the full registry (the
+    #     post-3.12 obligation: ListCreativeFormatsRequest has no `type` field, so every
+    #     value dispatches unfiltered) and that every format carries a type attribute.
+    #     Falsifiable: a production path that narrowed would fail it.
     #
-    # Graduates when the SPEC pin (tests/fixtures/adcp_schemas_pinned, v3.1.1) moves to
-    # v3.1.22 or later. A local schema overlay was considered and rejected:
-    # tests/helpers/adcp_pinned_schema.py deliberately RAISES on a name present in both the
-    # pinned tree and schemas/, because two live definitions of one contract is the exact
-    # condition that tree exists to avoid, and a copied format.json would freeze the whole
-    # file behind the pin the way the old vendored fixture tree already did once.
+    # The row-level granularity this block argued for was kept to the end and is why the
+    # 16 "-INVALID_REQUEST" rows never needed graduating -- they were never parked.
     #
-    # The fix shape is measured, so whoever picks this up upstream need not re-derive it:
-    #   - the reference asset matches 0 of the 16 existing oneOf branches, so adding one
-    #     introduces no ambiguity;
-    #   - a branch of allOf[baseIndividualAsset] + item_type/asset_type consts and NO
-    #     requirements $ref already validates it, because baseIndividualAsset does not set
-    #     additionalProperties:false, so event/method/requirements pass through
-    #     (IndividualZipAsset and IndividualBriefAsset are the existing ref-less precedent);
-    #   - five types need branches: pixel_tracker, vast_tracker, daast_tracker, card,
-    #     published_post.
-    # The underlying defect is that core/format.json HAND-COPIES the asset union instead of
-    # deriving from core/assets/asset-union.json. Five branches fix this instance; deriving
-    # is what stops the next drift.
-    #
-    # The storyboard does NOT provide a second opinion here. compliance/universal/
-    # schema-validation.yaml step list_formats_match carries `check: response_schema` against
-    # creative/list-creative-formats-response.json, which $refs the same core/format.json --
-    # but that storyboard is not selected for this agent (22 of the 198 shipped storyboards
-    # are; the step appears in neither storyboard_collected.json nor known_failures.txt).
-    # This BDD check is the only thing grading it.
-    (
-        "T-UC-005-partition-agent-type",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
-    (
-        "T-UC-005-partition-agent-asset",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
-    (
-        "T-UC-005-boundary-agent-type",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
-    (
-        "T-UC-005-boundary-agent-asset",
-        {"-valid"},
-        "upstream adcp#7338: list-creative-formats-response inlines an assets.items.oneOf that has "
-        "drifted from core/assets/asset-union.json -- the union declares 20 asset types, the "
-        "response admits 15, and pixel_tracker/vast_tracker/daast_tracker/card/published_post "
-        "are in the union only. The reference formats we serve declare pixel_tracker.",
-    ),
+    # tests/bdd/e2e_rest_known_failures.txt keeps its one #7338 row
+    # (test_discover_full_format_catalog[e2e_rest]). That ledger names this same spec-pin
+    # condition, so it is very likely graduatable too, but only a bdd-in-network run grades
+    # it and none was run here -- graduating it on an in-process measurement would be citing
+    # the wrong run, which is what the UC-005 baseline-format-id row in that file refuses on
+    # the same grounds.
     # #1721 M4: @T-UC-010-v31-account-sandbox newly wired. The true/false rows
     # pass for real; the "absent" row expects the wire to OMIT account.sandbox
     # (buyer applies the schema default) but _build_account_block
