@@ -2929,10 +2929,14 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # bool and an absent field still parse. The boundary turns that refusal
             # into an INVALID_REQUEST envelope (_boundary.py validated_request ->
             # HTTP 400), so the row grades production, not a reconstruction.
-            # Not vacuous: measured by poisoning _assert_wire_rejection's
-            # no-envelope branch (uc004_delivery.py) with a raise and re-running the
-            # slice — a2a/mcp/rest still PASS, so all three read the real captured
-            # wire envelope. Per-row evidence for the sibling partition entry below.
+            # Not vacuous, and that was measured rather than argued. The row's "invalid"
+            # resolves to _assert_wire_rejection (uc004_delivery.py), which accepts ONE
+            # outcome besides a wire envelope: a request that died building in the step.
+            # Poisoning that no-envelope branch with a raise left all three transports'
+            # bodies passing, so none of them takes it; moving the same raise to the top
+            # of the helper reddened all three, so the helper is on their path and the
+            # probe was live. The pass therefore comes from the real captured envelope.
+            # Per-row evidence for the sibling partition entry below.
             # account: only the omitted/(field absent) rows
             # pass on every transport. The other rows fail transport-asym-
             # metrically — a2a/mcp/rest never parse/resolve AccountReference
