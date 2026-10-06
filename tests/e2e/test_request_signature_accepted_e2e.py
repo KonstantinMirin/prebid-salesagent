@@ -87,10 +87,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
         ``_map_brand_json_resolver_error`` (``verifier.py`` :601) maps to exactly this
         code and ``_FailedDiscoveryJwksResolver`` (:174) raises at checklist step 7.
         Tier 3 is the SECOND consumer of the same document and is simply not reached
-        on this input — the walk fails first. The registry branch cannot produce this
-        code at all: with no ``agent_url`` there is no walk, and an unmatched keyid
+        on this input — the walk fails first. The pinned-record branch cannot produce
+        this code at all: with no ``agent_url`` there is no walk, and an unmatched keyid
         yields the generic ``request_signature_key_unknown``. So a regression that
-        resolved this key from config instead of from the published trust root —
+        resolved this key from a pinned record instead of from the published trust root —
         which would otherwise yield a byte-identical 2xx AND an identical metric
         increment — is visible here and nowhere else in this module.]
   Every 401 is read with ``rejection_code()`` (``tests/helpers/signing.py``), which
@@ -99,10 +99,10 @@ graded by a POSITIVE observable rather than by the absence of a rejection.
 
 **DOES NOT PROVE.**
 
-* The REGISTRY key-trust source (``settings.signing.counterparty_registry``). It is
-  consulted only when ``agent_url`` is falsy (``_resolution_for`` :511-545), i.e.
-  exactly when no trust root was walked, and that branch reaches no Tier 3 — so it
-  cannot satisfy this module's title and is not graded here.
+* The PINNED-RECORD key-trust source (``principals.request_signing``). It is
+  consulted only when ``agent_url`` is falsy (``_resolution_for``), i.e. exactly when
+  no trust root was walked, and that branch reaches no Tier 3 — so it cannot satisfy
+  this module's title and is not graded here.
 * The MCP and A2A naming surfaces for the accepted leg. The refused-leg sibling
   grades MCP; the accepted leg's novel evidence is the checklist-pass branch, which
   is transport-independent once the operation is named — all three transports reach

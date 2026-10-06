@@ -76,20 +76,21 @@ def test_planned_outcome_matches_the_vectors_own_expected_outcome(vector_id: str
 def test_unsigned_vectors_are_the_only_ones_without_a_credential(vector_id: str) -> None:
     """Credential assignment is derived from the wire, not chosen per vector.
 
-    Every SIGNED vector presents a principal token, because with no accepted
-    credential the resolver hands the verifier an empty JWKS resolver and every
-    signed vector short-circuits at step 7 — which would make ``negative/008``
-    (which expects exactly ``request_signature_key_unknown``) pass for the wrong
-    reason. The three UNSIGNED vectors present no credential the verifier accepts,
-    because the composition rule they grade only fires on an unauthenticated caller.
+    Every SIGNED vector presents a principal token or a keyid an onboarding record
+    pins, because with neither the resolver hands the verifier an empty JWKS resolver
+    and every signed vector short-circuits at step 7 — which would make
+    ``negative/008`` (which expects exactly ``request_signature_key_unknown``) pass for
+    the wrong reason. The three UNSIGNED vectors present no credential the verifier
+    accepts, because the composition rule they grade only fires on an unauthenticated
+    caller.
     """
     plan = TRANSPLANT[vector_id]
     headers = load_signing_vectors()[vector_id]["request"]["headers"]
     # ``negative/019`` ships ``Signature`` with NO ``Signature-Input`` — still a
     # signature ATTEMPT, graded at step 1, so it belongs on the credentialed side.
     signed = "Signature-Input" in headers or "Signature" in headers
-    expected = Credential.PRINCIPAL_TOKEN if signed else Credential.NONE
-    assert plan.credential is expected, (
+    expected = {Credential.PRINCIPAL_TOKEN, Credential.ONBOARDED_KEYS} if signed else {Credential.NONE}
+    assert plan.credential in expected, (
         f"{vector_id}: signed={signed} but planned credential is {plan.credential}. "
         "A mismatched credential column silently moves the graded step."
     )

@@ -344,29 +344,20 @@ services:
       # TOLERATE fields they do not declare. Under development strictness the five read tools
       # answered INVALID_REQUEST to it. That need is now stated outright.
       #
-      # What it must NOT claim is production, because `SigningSettings` refuses a
-      # `counterparty_registry` and both override maps under any production signal — and it
-      # is right to. The conformance corpus PUBLISHES the private keys of the keyids
-      # registered below (`_private_d_for_test_only` in keys.json), so a production
-      # deployment trusting them would let anyone at all sign as a registered counterparty.
-      # Claiming production here would mean either losing the relaxations (and with them
-      # every stateful vector) or weakening that refusal for every real deployment.
+      # Trust in the conformance runner's keys is not an environment setting: it is the
+      # onboarding record (`principals.request_signing`) that
+      # scripts/setup/storyboard_signing.py seeds on the storyboard tenant's counterparty
+      # principal, and it applies to that tenant alone.
       ENVIRONMENT: conformance
       ADCP_PYDANTIC_EXTRA_MODE: ignore
-      # The signed-requests test-kit contract
-      # (dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml), DERIVED by
-      # scripts/setup/storyboard_signing.py from the vendored keys.json and the kit's own
-      # numbers, and exported by scripts/test-stack.sh before `compose up`. Never literals
-      # here: three of the four carry key material or a graded threshold, and a copy in YAML
-      # is a 401 on every positive vector the day the corpus is re-vendored.
+      # The one deployment setting of the signed-requests test-kit contract
+      # (dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml): the pre-revoked
+      # keyid. Derived by scripts/setup/storyboard_signing.py and exported by
+      # scripts/test-stack.sh before `compose up`.
       #
       # Empty when the stack is brought up some other way, which `env_ignore_empty` on
-      # SigningSettings reads as unset — that agent simply grades nothing signed rather than
-      # failing to boot.
-      ADCP_SIGNING_COUNTERPARTY_REGISTRY: ${ADCP_SIGNING_COUNTERPARTY_REGISTRY:-}
+      # SigningSettings reads as unset.
       ADCP_SIGNING_REVOKED_KEYIDS: ${ADCP_SIGNING_REVOKED_KEYIDS:-}
-      ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES: ${ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES:-}
-      ADCP_SIGNING_REPLAY_TTL_OVERRIDES: ${ADCP_SIGNING_REPLAY_TTL_OVERRIDES:-}
 
   proxy:
     image: nginx:stable

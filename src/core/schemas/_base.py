@@ -129,6 +129,7 @@ from src.core.exceptions import (
     _details_to_wire,
 )
 from src.core.schemas.notification import PushNotificationConfig
+from src.core.signing.onboarding import RequestSigningRecord
 
 # For backward compatibility, alias AdCPPackage as LibraryPackage
 LibraryPackage: TypeAlias = AdCPPackage  # noqa: UP040 — runtime re-export used as base class
@@ -2026,6 +2027,10 @@ class Principal(SalesAgentBaseModel):
     #: choose which key set it is checked against. None means no key can be resolved for
     #: this counterparty, not that it is trusted.
     agent_url: str | None = None
+    #: The request-signing keys pinned at onboarding, or None. What a bearer-less signed
+    #: request's keyid resolves against (``src.core.signing.verifier._resolution_for``).
+    #: Server-side state, never on any wire.
+    request_signing: RequestSigningRecord | None = Field(default=None, exclude=True)
 
     @classmethod
     def from_row(cls, row: Any) -> "Principal":
@@ -2035,6 +2040,7 @@ class Principal(SalesAgentBaseModel):
             name=row.name,
             platform_mappings=row.platform_mappings,
             agent_url=row.agent_url,
+            request_signing=row.request_signing,
         )
 
     def get_adapter_id(self, adapter_name: str) -> str | None:

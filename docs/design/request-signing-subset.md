@@ -24,7 +24,7 @@ paths that can produce an `AgentResolution`:
 | path | how the location is established |
 |---|---|
 | the brand.json walk (`_resolution_for`) | the SDK resolves a `jwks_uri`; a resolution naming anything but the derived location is REFUSED with `request_signature_jwks_untrusted` and a cooldown, so the counterparty's operator gets a diagnosable answer rather than a key that never matches |
-| the counterparty registry (`build_registry_resolution`) | the location is DERIVED, not declared, so a config entry cannot name one the walk would refuse |
+| a principal's onboarding record, `principals.request_signing` (`build_pinned_resolution`) | the location is DERIVED from the principal's `agent_url`, not declared, so a pinned record cannot name one the walk would refuse |
 
 **What follows, and is the whole point:** `identity.key_origins` is not consulted. The map
 exists to declare where keys live when location can vary, and here it cannot — with one

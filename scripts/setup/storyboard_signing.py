@@ -2,50 +2,36 @@
 
 The contract is ``dist/compliance/{version}/test-kits/signed-requests-runner.yaml``. It
 names five agent-side preconditions, and this module is the ONE owner of all five — the
-three that are deployment settings (read by the server process from its environment) and
-the two that are tenant state (written to the database).
-
-Both halves are here rather than beside their consumers because they are one fact seen
-twice: the counterparty this agent trusts. Split across a compose file and a seed script,
-the ``agent_url`` in the registry and the ``agent_url`` on the principal drift, and the
-symptom is a 401 on every positive vector with nothing naming the cause —
-``_signature_credential`` looks the signer up by exactly that string
-(``src/core/resolved_identity.py``) and an anonymous caller on ``create_media_buy`` is
-``AUTH_MISSING``, which the challenge responder lifts to the same 401 a signature refusal
-produces.
+one that is a deployment setting (read by the server process from its environment) and
+the four that are tenant state (written to the database).
 
 What the contract requires, and where each lands
 ------------------------------------------------
 1. ``request_signing.required_for`` covering the graded operations -> the tenant's
    ``capability_declarations`` (:func:`declarations`).
 2. A counterparty JWKS holding ``test-ed25519-2026`` and ``test-es256-2026`` with
-   ``adcp_use: "request-signing"``, trusted as a registered test counterparty ->
-   ``ADCP_SIGNING_COUNTERPARTY_REGISTRY`` (:func:`counterparty_registry`), plus the
-   principal that JWKS resolves to (:func:`seed`).
+   ``adcp_use: "request-signing"``, trusted as a registered test counterparty -> the
+   onboarding record (``principals.request_signing``) on the counterparty principal
+   (:func:`seed`).
 3. ``test-revoked-2026`` pre-revoked before the negative phase ->
-   ``ADCP_SIGNING_REVOKED_KEYIDS``.
-4. A replay TTL of at least ``min_replay_ttl_seconds`` -> ``ADCP_SIGNING_REPLAY_TTL_OVERRIDES``.
-5. The per-keyid replay cache at its configured cap for vector 020 ->
-   ``ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES``.
+   ``ADCP_SIGNING_REVOKED_KEYIDS`` (:func:`signing_env`).
+4. A replay TTL of at least ``min_replay_ttl_seconds`` -> the record's ``replay_ttl_seconds``.
+5. The per-keyid replay cache at its configured cap for vector 020 -> the record's
+   ``replay_cap``.
 
-Why the registry and not the brand.json walk
---------------------------------------------
-``_resolution_for`` consults ``counterparty_registry`` only when there is no
-``agent_url`` to walk from, and ``agent_url`` comes from the principal the BEARER
+Why an onboarding record and not the brand.json walk
+----------------------------------------------------
+``_resolution_for`` walks brand.json from the ``agent_url`` of the principal the BEARER
 resolved. The conformance runner sends no bearer on a vector probe — the signature is the
-credential — so the walk has no input and the registry is the only path. That is the case
-the registry was built for; its docstring says so.
+credential — so the walk has no input, and the keyid is resolved against the onboarding
+records of the tenant the request addressed (security.mdx @ v3.1.1 :1090, "prior
+onboarding"). The record lives on the principal the verified signature then establishes,
+so the ``agent_url`` the keys resolve to and the ``agent_url`` the signer is looked up by
+are one column and cannot drift.
 
-Why this deployment must not signal production
------------------------------------------------
-``SigningSettings`` refuses a non-empty ``counterparty_registry`` (and both override maps)
-under any production signal, and it is right to: the private keys of the conformance
-corpus are PUBLISHED in ``keys.json``, so trusting those keyids in production would let
-anyone at all sign as a registered counterparty. The storyboard agent is a grading
-deployment that wants production's forward-compatible REQUEST BOUNDARY and nothing else
-about production, so it declares that one axis explicitly
-(``ADCP_PYDANTIC_EXTRA_MODE``) instead of claiming to be production. See the service
-definition in ``docker-compose.e2e.yml``.
+The private keys of the conformance corpus are PUBLISHED in ``keys.json``, so the record
+is seeded only into the storyboard tenant. Trust is per tenant and per principal: no
+other tenant on the deployment trusts these keyids.
 """
 
 from __future__ import annotations
@@ -86,10 +72,9 @@ STORYBOARD_VIRTUAL_HOST = _SEEDED_STORYBOARD_VIRTUAL_HOST
 
 #: The conformance runner AS A COUNTERPARTY: the ``agent_url`` its keys resolve at.
 #:
-#: A name, not a destination. Nothing dials it — a registry entry short-circuits the
-#: three-hop walk and carries its JWKS inline (``build_registry_resolution``) — but it is
-#: what ``get_principal_by_agent_url`` looks the established signer up by, and the origin
-#: the key location is derived from.
+#: A name, not a destination. Nothing dials it — the onboarding record carries the JWKS
+#: inline (``build_pinned_resolution``) — but it is what ``get_principal_by_agent_url``
+#: looks the established signer up by, and the origin the key location is derived from.
 #:
 #: Under ``.test``, which RFC 6761 §6.2 reserves precisely so it can never resolve.
 COUNTERPARTY_AGENT_URL = "https://runner.adcp-conformance.test/a2a"
@@ -142,10 +127,10 @@ REVOKED_KEYID = "test-revoked-2026"
 #: Test-kit ``stateful_vector_contract.rate_abuse.grading_target_per_keyid_cap_requests``.
 #: The runner sends this many requests and expects the NEXT one refused. It is a GRADING
 #: target and explicitly not a production recommendation — ``SigningSettings`` refuses it
-#: as a global cap and accepts it only for a named counterparty, which is what this is.
+#: as a global cap, and it exists only on the runner counterparty's onboarding record.
 GRADING_PER_KEYID_CAP = 100
 
-#: The replay-row lifetime for the runner's keyids, in seconds.
+#: The replay-row lifetime for the runner's keyids, in seconds, on the same record.
 #:
 #: Bounded on BOTH sides by the test-kit, and the window between them is narrow:
 #:
@@ -202,39 +187,15 @@ def counterparty_jwks() -> dict[str, Any]:
     }
 
 
-def counterparty_registry() -> dict[str, dict[str, Any]]:
-    """``ADCP_SIGNING_COUNTERPARTY_REGISTRY`` — every runner keyid, one counterparty.
-
-    Keyed per keyid because that is the only handle a bearer-less request offers, and the
-    setting refuses anything that looks like a pattern. All four entries name the SAME
-    counterparty and carry the same JWKS: they are one agent with four published keys, and
-    the SDK selects within the JWKS by ``kid``.
-    """
-    jwks = counterparty_jwks()
-    entry = {"agent_url": COUNTERPARTY_AGENT_URL, "jwks": jwks}
-    return {key["kid"]: dict(entry) for key in jwks["keys"]}
-
-
 def signing_env() -> dict[str, str]:
     """The storyboard agent's signing environment, as ``NAME -> value``.
 
     Read by ``scripts/test-stack.sh``, which exports these before ``docker compose up`` so
-    the service definition can interpolate them. Generated rather than written into the
-    compose file because three of the four values are DERIVED — from ``keys.json`` and from
-    the test-kit's own numbers — and a literal copy in YAML is a silent 401 the day the
-    corpus is re-vendored.
+    the service definition can interpolate them. The one deployment setting the test kit
+    needs; everything else it needs is the counterparty's onboarding record, which
+    :func:`seed` writes.
     """
-    registry = counterparty_registry()
-    compact: dict[str, Any] = {"separators": (",", ":")}
-    return {
-        "ADCP_SIGNING_COUNTERPARTY_REGISTRY": json.dumps(registry, **compact),
-        "ADCP_SIGNING_REVOKED_KEYIDS": REVOKED_KEYID,
-        # Every registered keyid, not just the two the runner signs positives with: the cap
-        # and the TTL bound how long ANY of them keeps replay rows, and a keyid left on the
-        # production floor would hold rows for ~360s and trip step 9a for a later vector.
-        "ADCP_SIGNING_PER_KEYID_CAP_OVERRIDES": json.dumps(dict.fromkeys(registry, GRADING_PER_KEYID_CAP), **compact),
-        "ADCP_SIGNING_REPLAY_TTL_OVERRIDES": json.dumps(dict.fromkeys(registry, GRADING_REPLAY_TTL_SECONDS), **compact),
-    }
+    return {"ADCP_SIGNING_REVOKED_KEYIDS": REVOKED_KEYID}
 
 
 def declarations(brand_json_url: str) -> dict[str, Any]:
@@ -317,6 +278,16 @@ def seed() -> None:
     from src.core.database.database_session import get_db_session
     from src.core.database.models import Tenant
     from src.core.database.repositories.principal import PrincipalRepository
+    from src.core.signing.onboarding import RequestSigningRecord
+
+    # Every published keyid, not just the two the runner signs positives with: the cap and
+    # the TTL bound how long ANY of them keeps replay rows, and a keyid left on the
+    # production floor would hold rows for ~360s and trip step 9a for a later vector.
+    record = RequestSigningRecord(
+        jwks=counterparty_jwks(),
+        replay_cap=GRADING_PER_KEYID_CAP,
+        replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS,
+    )
 
     with get_db_session() as session:
         # Found BY HOST. ``seed_storyboard_tenant`` gives this tenant a fresh uuid4
@@ -343,10 +314,14 @@ def seed() -> None:
                 name="Storyboard conformance runner",
                 platform_mappings={"mock": {"advertiser_id": "storyboard-conformance-runner"}},
                 agent_url=COUNTERPARTY_AGENT_URL,
+                request_signing=record,
             )
             print(f"   counterparty principal created at {COUNTERPARTY_AGENT_URL}")
         else:
+            # Re-applied rather than kept: a re-vendored keys.json must reach the record.
+            counterparty.request_signing = record
             print(f"   counterparty principal already at {COUNTERPARTY_AGENT_URL}")
+        print(f"   pinned keyids: {sorted(key['kid'] for key in record.jwks['keys'])}")
 
         _seed_webhook_storyboard_account(session, tenant.tenant_id)
         session.commit()
@@ -417,7 +392,7 @@ def _seed_webhook_storyboard_account(session: Session, tenant_id: str) -> None:
     # BOTH principals the runner can resolve as, because which one carries the request
     # depends on how it was authenticated. This tenant declares ``required_for`` signing,
     # so a SIGNED call resolves to the principal the signature establishes
-    # (``COUNTERPARTY_PRINCIPAL_ID`` — the ``agent_url`` the verifier walks to), while an
+    # (``COUNTERPARTY_PRINCIPAL_ID`` — whose onboarding record pins the runner's keyids), while an
     # unsigned call resolves to the one the BEARER names. Account resolution is scoped to
     # the RESOLVED principal's grants (#1417), so granting only the bearer leaves every
     # signed request answering ACCOUNT_NOT_FOUND — indistinguishably from no account row

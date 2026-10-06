@@ -9,6 +9,7 @@ This eliminates isinstance checks and auth extraction inside business logic.
 import logging
 from collections.abc import Callable, Mapping
 from enum import StrEnum
+from functools import partial
 from typing import Literal, overload
 
 from adcp.types import AccountReference, AccountReferenceById
@@ -194,7 +195,7 @@ def _signature_credential(
     subject: SignatureSubject | None,
     *,
     headers: Mapping[str, str],
-    tenant: TenantContext | None,
+    tenant: TenantContext,
     principal: Principal | None,
 ) -> Principal | None:
     """Read the request's RFC 9421 signature, and return the caller after it.
@@ -213,14 +214,24 @@ def _signature_credential(
     ONLY when the bearer resolved none. A request carrying both credentials is answered on
     its bearer, so a signature can never silently re-identify an authenticated caller as
     somebody else.
+
+    The verifier is handed the keyid lookup bound to the addressed tenant, because principal
+    rows are loaded here and nowhere downstream (``ruff-ownership.toml``): a bearer-less
+    signed request's keyid resolves against that tenant's onboarding records only.
     """
-    from src.core.auth_utils import get_principal_by_agent_url
+    from src.core.auth_utils import get_principal_by_agent_url, get_principal_by_signing_keyid
     from src.core.signing.verifier import verify_inbound_signature
 
     if subject is None:
         return principal
-    signer = verify_inbound_signature(subject, headers=headers, tenant=tenant, principal=principal)
-    if principal is not None or signer is None or not signer.agent_url or tenant is None:
+    signer = verify_inbound_signature(
+        subject,
+        headers=headers,
+        tenant=tenant,
+        principal=principal,
+        onboarded_signer=partial(get_principal_by_signing_keyid, tenant_id=tenant.tenant_id),
+    )
+    if principal is not None or signer is None or not signer.agent_url:
         return principal
 
     established = get_principal_by_agent_url(signer.agent_url, tenant.tenant_id)
