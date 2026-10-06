@@ -172,6 +172,17 @@ docs/TRANSFORMATION_PRESENTATION.md
 # cassini run record, rewritten by every test slice — never a repo artifact
 manifest.json
 
+# ...but a vendored conformance-vector MANIFEST.json IS a repo artifact: it carries
+# the sha256 pins that tests/unit/test_adcp_conformance_vectors_pin.py grades the
+# vector files against. The bare pattern above matches it on a case-insensitive
+# filesystem (git sets core.ignoreCase=true on macOS), so `git add` skipped it
+# SILENTLY during the 3.2.1 re-vendor (7393f9b20): the 3.1.1 manifest was deleted,
+# 75 vector files were added, and the new manifest was dropped with no error. Three
+# tests then failed on every clean clone until someone ran the refresher locally,
+# and the tree stayed clean afterwards — a file that is generated, graded, and
+# unaddable. Keeping this negation is what makes it committable.
+!tests/fixtures/adcp_conformance_vectors/**/MANIFEST.json
+
 # adcp spec fetch cache (mirrored URL paths); no code reads the local copy
 /schemas/
 # Session working notes — scratch, never a deliverable. The PR is their home.
