@@ -5,16 +5,22 @@ never names a schema file: a filename in a feature file is a second spelling of
 "which tool is this scenario exercising", and the two drift.
 
 Everything here is derived from two live sources — the tool registry and the
-pinned SDK's own module layout — so a tool cannot be graded against the wrong
+pinned SDK's own domain tree — so a tool cannot be graded against the wrong
 contract by anyone forgetting to update a table.
+
+``tests/unit/test_response_schema_category_resolves.py`` grades that derivation,
+and grades a BARE-FILENAME resolution as a failure even when it loads. Without
+it, a derivation that silently stops working goes unreported for as long as the
+basenames it falls back to happen to be unique — which is exactly what adcp
+9.0.0 did to six of these tools.
 """
 
 from __future__ import annotations
 
-import typing
+import importlib
+from functools import cache
 
-from adcp import types as adcp_types
-from pydantic import BaseModel
+from adcp.types import domains as adcp_domains
 
 from src.core.tools.registry import TOOLS
 from tests.helpers.pinned_schema import load, validator_for
@@ -24,32 +30,73 @@ def _camel(tool: str) -> str:
     return "".join(part.title() for part in tool.split("_"))
 
 
-def _category(tool: str) -> str | None:
-    """The schema's directory, read off the SDK response type's module path.
+@cache
+def _response_owners(tool: str) -> tuple[str, ...]:
+    """Every ``adcp.types.domains`` package that DECLARES *tool*'s response type.
 
-    ``GetProductsResponse`` lives in ``adcp.types.domains.media_buy.…``,
-    and its schema in ``media-buy/``. This is not decoration: two DIFFERENT
-    schemas share the basename ``list-creative-formats-response.json`` (one
-    under ``creative/``, one under ``media-buy/``), so a bare filename is
-    genuinely ambiguous and the loader refuses it rather than guessing.
+    THE DOMAIN TREE IS THE SOURCE, NOT THE FLAT ``adcp.types`` NAMESPACE, and the
+    SDK says why in ``adcp/types/domains/__init__.py``: codegen writes that tree
+    "in that layout and defines every class here, so a type name more than one
+    schema declares is unambiguous BY PATH rather than by a mangled name". The
+    category this module needs IS that path, so it asks the tree that carries it.
 
-    A response type that is a UNION of outcome branches has no ``__module__`` of
-    its own; the branches do, and they agree, so the first is read.
+    The flat namespace cannot answer. It is one `dir()` with every domain's names
+    collapsed into it, so a name two schemas declare arrives mangled — and the
+    mangling is not a stable convention this module could follow. Measured
+    against adcp 9.0.0, the flat ``*Response`` name reaches a module with no
+    category for six of the registry's tools (``get_products``,
+    ``get_media_buys``, ``get_media_buy_delivery``, ``list_creatives``,
+    ``create_media_buy``, ``update_media_buy`` all land in
+    ``adcp.types.canonical_creative``) and does not exist at all for a seventh
+    (``list_creative_formats``, renamed ``LegacyListCreativeFormatsResponse``
+    because the tool is deprecated in AdCP 3.2). Reading the flat name left all
+    seven with no category, and only ``list_creative_formats`` FAILED for it —
+    its basename is the one that genuinely collides across two categories, so the
+    loader refused it. The other six fell back to a bare filename that happened
+    to hit the right file. Graded by accident is the state this function exists to
+    prevent, and the next colliding basename is when it stops being lucky.
 
-    Returns ``None`` for a tool the SDK does not type at all — the app-owned
-    schemas in ``schemas/`` are found by bare filename, which is unambiguous
-    there.
+    Returns empty for a tool the SDK does not type at all. ``complete_task`` is
+    the live case — seller-specific, absent from the pinned tree entirely, its
+    schemas app-owned under ``app_schema_root()`` and found by bare filename,
+    which is unambiguous there.
     """
-    model = getattr(adcp_types, _camel(tool) + "Response", None)
-    if model is None:
+    name = _camel(tool) + "Response"
+    return tuple(
+        domain
+        for domain in adcp_domains.DOMAINS
+        if getattr(importlib.import_module(f"{adcp_domains.__name__}.{domain}"), name, None) is not None
+    )
+
+
+def _category(tool: str) -> str | None:
+    """The schema's directory, read off the domain package that declares the response.
+
+    ``GetProductsResponse`` is declared in ``adcp.types.domains.media_buy``, and
+    its schema lives in ``media-buy/``. The package name IS the directory, so
+    there is nothing to translate beyond the underscore.
+
+    Qualifying the ref is not decoration: two DIFFERENT schemas share the
+    basename ``list-creative-formats-response.json`` (one under ``creative/``,
+    titled "(Creative Agent)", one under ``media-buy/``), so a bare filename is
+    genuinely ambiguous there and the loader refuses it rather than guessing.
+
+    Two domains declaring one response name RAISES rather than picking the first.
+    Choosing between two live categories is the guess this module exists to not
+    make, and a wrong one grades a seller against another actor's contract while
+    looking perfectly green.
+    """
+    owners = _response_owners(tool)
+    if not owners:
         return None
-    if not (isinstance(model, type) and issubclass(model, BaseModel)):
-        branches = [arg for arg in typing.get_args(model) if isinstance(arg, type)]
-        model = branches[0] if branches else None
-    module = getattr(model, "__module__", "") or ""
-    if ".domains." not in module:
-        return None
-    return module.split(".")[-2].replace("_", "-")
+    if len(owners) > 1:
+        raise ValueError(
+            f"{tool}: {_camel(tool)}Response is declared by {len(owners)} domain packages "
+            f"({', '.join(owners)}), so its schema category is ambiguous. Pick the one the "
+            f"pinned schema for this seller's response actually lives under and say so here; "
+            f"do not let this resolve to whichever package sorts first."
+        )
+    return owners[0].replace("_", "-")
 
 
 def response_schema_ref(tool: str) -> str:
