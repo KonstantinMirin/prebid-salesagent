@@ -328,6 +328,36 @@ _EXPERIMENTAL_FEATURE_BY_BLOCK: dict[str, str] = {
     "trusted_match": "trusted_match.core",
 }
 
+# The SAME obligation's other half, and it is one conditional in the pin rather than two
+# rules: ``allOf`` on ``get-adcp-capabilities-response.json`` reads
+# ``if {"required": ["measurement"]} then supported_protocols contains "measurement" AND
+# experimental_features contains "measurement.core"``. Deriving only the feature id above
+# satisfied one branch of one ``then`` and left the other to the operator, so a tenant that
+# declared a metric catalog and nothing else emitted that block beside
+# ``supported_protocols: ["media_buy"]`` -- a document the pin refuses, from a conditional
+# this module already half-derives.
+#
+# DERIVED for the same reason the feature id is: the obligation is on the EMITTED document,
+# so a bare echo lets a declaration produce a wire the schema rejects. Splitting one
+# conditional into two operator obligations is also what made the gap invisible -- the
+# ``measurement`` protocol claim and the ``measurement`` block are the same fact.
+#
+# Honest because the claim is backed, re-verified AT THIS PIN rather than inherited: there
+# is still no ``protocols/measurement/`` bundle at 3.2.1, so no ``required_tools`` ride on
+# it, and ``#/properties/supported_protocols`` scopes it to "provider catalog/output
+# declaration (``measurement.core``)" -- which is precisely what the declared block is.
+# ``measurement`` is correspondingly in :data:`_BACKED_PROTOCOLS`.
+#
+# Only ``measurement`` appears here, and that is measured rather than minimal. Of the three
+# ``allOf`` conditionals in the pin that oblige a ``supported_protocols`` entry,
+# ``measurement_gateway``'s is unreachable (no such field on this model, so no tenant can
+# declare the block) and the third fires only on
+# ``media_buy.relationship_notifications.projection_tasks`` containing ``list_creatives``.
+# ``trusted_match`` is declarable but carries no protocol obligation at all.
+_PROTOCOL_BY_BLOCK: dict[str, SupportedProtocol] = {
+    "measurement": SupportedProtocol.measurement,
+}
+
 
 def is_block_declarable(block: str) -> bool:
     """Whether a tenant may declare *block* — i.e. whether a stored value can exist.
@@ -907,8 +937,15 @@ class CapabilityDeclarations(BaseModel):
         claim whose parent protocol is missing"
         (``specialisms/sales-non-guaranteed/index.yaml#protocol`` -> ``media-buy``).
         A replacing semantics would therefore emit a self-inconsistent wire.
+
+        The union also carries the protocols DERIVED from declared experimental blocks
+        (:data:`_PROTOCOL_BY_BLOCK`), because the pin obliges them in the same ``allOf``
+        conditional that obliges the feature id :meth:`emitted_experimental_features`
+        already derives. Deriving one and not the other is what let a measurement-only
+        tenant emit a block the pin refuses to see without its protocol.
         """
-        return _union_sorted(defaults, self.supported_protocols)
+        derived = [protocol for block, protocol in _PROTOCOL_BY_BLOCK.items() if getattr(self, block) is not None]
+        return _union_sorted(defaults, _union_sorted(derived, self.supported_protocols))
 
     def emitted_experimental_features(self) -> list[ExperimentalFeature] | None:
         """Feature ids DERIVED from the declared experimental blocks.
@@ -933,15 +970,22 @@ class CapabilityDeclarations(BaseModel):
         return [ExperimentalFeature(root=i) for i in ids] or None
 
 
-# Every key in the table must name a real declarable block. With the previous
+# Every key in BOTH derivation tables must name a real declarable block. With the previous
 # `getattr(self, block, None)` a key that no longer matched a field simply read as
 # "not declared", so renaming a block would silently stop emitting its experimental
 # feature id -- a wire regression with nothing to fail. Checked at import so the
 # mismatch is a startup error, not a quietly shorter list on a buyer's response.
-_UNKNOWN_BLOCKS = sorted(set(_EXPERIMENTAL_FEATURE_BY_BLOCK) - set(CapabilityDeclarations.model_fields))
-if _UNKNOWN_BLOCKS:
-    raise RuntimeError(
-        f"_EXPERIMENTAL_FEATURE_BY_BLOCK names blocks that are not fields of "
-        f"CapabilityDeclarations: {_UNKNOWN_BLOCKS}. Their experimental feature ids would "
-        f"never be emitted."
-    )
+#
+# ``_PROTOCOL_BY_BLOCK`` is checked by the same loop rather than beside it: both tables
+# key on a field name and both fail the same silent way, so one check that reads the
+# tables cannot be the one someone forgets to extend.
+for _table_name, _table in (
+    ("_EXPERIMENTAL_FEATURE_BY_BLOCK", _EXPERIMENTAL_FEATURE_BY_BLOCK),
+    ("_PROTOCOL_BY_BLOCK", _PROTOCOL_BY_BLOCK),
+):
+    _UNKNOWN_BLOCKS = sorted(set(_table) - set(CapabilityDeclarations.model_fields))
+    if _UNKNOWN_BLOCKS:
+        raise RuntimeError(
+            f"{_table_name} names blocks that are not fields of CapabilityDeclarations: "
+            f"{_UNKNOWN_BLOCKS}. What they derive would never be emitted."
+        )
