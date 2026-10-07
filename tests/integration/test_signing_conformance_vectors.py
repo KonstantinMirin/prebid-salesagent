@@ -235,9 +235,61 @@ _POSITIVES = sorted(vid for vid, plan in TRANSPLANT.items() if plan.outcome is O
 _UNROUTED = sorted(vid for vid, plan in TRANSPLANT.items() if not plan.route_named)
 _DRIVEN_POSITIVES = [vid for vid in _POSITIVES if TRANSPLANT[vid].route_named]
 _DRIVEN_NEGATIVES = [vid for vid in _NEGATIVES if TRANSPLANT[vid].route_named]
+#: The vector whose SUBJECT is a posture a 3.2 verifier cannot hold, so it describes an
+#: agent this seller is not.
+#:
+#: ``negative/018`` grades ``request_signature_components_unexpected`` at step 6 — the
+#: refusal a verifier owes when its ``covers_content_digest`` is ``forbidden`` and a
+#: signature covers the digest anyway. Under the 3.2 pin that policy is unadvertisable:
+#: ``allOf`` on ``get-adcp-capabilities-response.json`` fixes the value to ``required``
+#: wherever ``supported`` is true, so there is no conformant 3.2 document in which this
+#: vector's premise holds. The corpus agrees and says why it shipped no 3.2 counterpart:
+#: "``018``, because ``forbidden`` is a legacy-only posture a 3.2 verifier cannot
+#: advertise." The out-of-process runner agrees too — ``018`` is among the vectors it
+#: reports as ``profile_excluded``.
+#:
+#: INAPPLICABLE, not skipped: :func:`test_legacy_digest_policy_vector_is_inapplicable`
+#: asserts the refusal that makes it inapplicable, so this is a graded fact rather than
+#: an absence. Same treatment ``negative/028`` already gets for the protocol-method
+#: namespace this seller refuses to store.
+_PROFILE_INAPPLICABLE = ["negative/018-digest-covered-when-forbidden"]
+
+
+def _advertisable(capability: dict[str, Any]) -> dict[str, Any]:
+    """The vector's capability as a posture a 3.2 seller can actually HOLD.
+
+    Only ``covers_content_digest`` is touched, and only to the one value the pin permits:
+    ``allOf`` on ``get-adcp-capabilities-response.json`` fixes it to ``required`` wherever
+    ``supported`` is true, so a vector declaring the legacy ``either`` describes a posture
+    ``CapabilityDeclarations`` refuses to store. Left verbatim, ``posture_for_tenant``
+    downgrades the refusal to ``UNSUPPORTED_POSTURE`` and the verifier never runs — which
+    graded nothing at all and is what the "a positive that grades nothing" assertions
+    were reporting.
+
+    This REMOVES A CONSTRAINT THE VECTORS' OWN SUBJECT MAKES IRRELEVANT rather than
+    relaxing anything. Every vector still driven under a rewritten policy rejects at the
+    pre-check or at step 1 — ``request_signature_required`` for the two unsigned rows,
+    ``request_signature_header_malformed`` for the six parse rows — and the corpus README
+    says so in as many words when it explains why they got no 3.2 counterpart: the step-1
+    parse vectors "reject before covered components are considered". Step 6 is where the
+    digest policy is read, and none of them reach it.
+
+    The one vector whose outcome DOES depend on the legacy policy is ``negative/018``, and
+    it is not driven through here at all — see :data:`_PROFILE_INAPPLICABLE`. So this
+    function cannot silently convert a policy refusal into a pass: the only row that could
+    have been converted is excluded by name.
+
+    The buckets are NOT normalised. ``required_for`` is what makes the pre-check fire for
+    ``001``/``027``, so it has to stay the vector's own.
+    """
+    return {**capability, "covers_content_digest": "required"}
+
+
 #: 016 owns its own two-submission sequence — see :func:`test_replayed_nonce_vector`.
 _SINGLE_SHOT_NEGATIVES = [
-    vid for vid in _DRIVEN_NEGATIVES if TRANSPLANT[vid].harness_state is not HarnessState.REPLAY_PAIR
+    vid
+    for vid in _DRIVEN_NEGATIVES
+    if TRANSPLANT[vid].harness_state is not HarnessState.REPLAY_PAIR and vid not in _PROFILE_INAPPLICABLE
 ]
 #: Derived, not spelled: the census below asserts the partition, so the id the
 #: two-submission test drives must come from the same table the partition reads.
@@ -638,7 +690,7 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
             _claim(env, pairs[-_RATE_ABUSE_CAP:])
         try:
             with (
-                declared_posture(tenant_id=_TENANT_ID, **vector["verifier_capability"]),
+                declared_posture(tenant_id=_TENANT_ID, **_advertisable(vector["verifier_capability"])),
                 counterparty_key(_jwks_for(vector)),
                 _config_for(plan),
                 _frozen_verifier_clock(vector["reference_now"]),
@@ -872,9 +924,50 @@ def test_all_forty_vectors_are_accounted_for() -> None:
     ], f"the set of rows that cannot reach the resolver changed: {_UNROUTED}"
 
     assert len(_DRIVEN_POSITIVES) == 8, _DRIVEN_POSITIVES
-    assert len(_SINGLE_SHOT_NEGATIVES) == 26, "016 runs in its own two-submission test"
-    driven = set(_DRIVEN_POSITIVES) | set(_SINGLE_SHOT_NEGATIVES) | {_REPLAY_PAIR_VECTOR} | set(_UNROUTED)
+    assert len(_SINGLE_SHOT_NEGATIVES) == 25, "016 runs its own two-submission test; 018 is profile-inapplicable"
+    assert _PROFILE_INAPPLICABLE == ["negative/018-digest-covered-when-forbidden"], (
+        f"the set of vectors whose posture a 3.2 verifier cannot hold changed: {_PROFILE_INAPPLICABLE}"
+    )
+    driven = (
+        set(_DRIVEN_POSITIVES)
+        | set(_SINGLE_SHOT_NEGATIVES)
+        | {_REPLAY_PAIR_VECTOR}
+        | set(_UNROUTED)
+        | set(_PROFILE_INAPPLICABLE)
+    )
     assert driven == set(_VECTORS), f"vectors driven by no test at all: {sorted(set(_VECTORS) - driven)}"
+
+
+@pytest.mark.parametrize("vector_id", _PROFILE_INAPPLICABLE)
+def test_legacy_digest_policy_vector_is_inapplicable(vector_id) -> None:
+    """The vector's premise is a posture this seller cannot advertise — ASSERTED, not skipped.
+
+    ``negative/018`` grades ``request_signature_components_unexpected``, which a verifier
+    owes only while its ``covers_content_digest`` is ``forbidden``. Under the 3.2 pin that
+    value is unadvertisable, so the vector describes an agent this seller is not. An
+    unexplained exclusion is indistinguishable from an oversight, so the thing that MAKES
+    it inapplicable is what gets graded here: the store refuses the posture by name.
+
+    Two assertions, because either alone is weaker than the claim. That the vector still
+    asks for ``forbidden`` is what keeps this test honest if the corpus is re-vendored with
+    a 3.2 premise — it would then be applicable and this test would fail, which is the
+    signal we want. And that the refusal names ``covers_content_digest`` is what
+    distinguishes it from any other CONFIGURATION_ERROR the declaration might earn.
+    """
+    from src.core.exceptions import AdCPConfigurationError
+    from src.core.schemas.capability_declarations import CapabilityDeclarations
+
+    capability = _VECTORS[vector_id]["verifier_capability"]
+    assert capability["covers_content_digest"] == "forbidden", (
+        f"{vector_id} no longer asks for the legacy forbidden policy ({capability}); "
+        "if the corpus gave it a 3.2 premise it is applicable again and belongs back in "
+        "_SINGLE_SHOT_NEGATIVES"
+    )
+    with pytest.raises(AdCPConfigurationError) as refusal:
+        CapabilityDeclarations.from_tenant({"request_signing": dict(capability)})
+    assert refusal.value.field == "capability_declarations.request_signing.covers_content_digest", (
+        f"the declaration was refused for some other reason than its digest policy: {refusal.value.field}"
+    )
 
 
 @pytest.mark.parametrize("vector_id", [vid for vid in _UNROUTED if TRANSPLANT[vid].outcome is Outcome.ACCEPTED])
