@@ -78,6 +78,35 @@ class PriorCreativeState:
         )
 
 
+def _same_agent(incoming: str, stored: str | None) -> bool:
+    """Whether two ``agent_url`` spellings name the same creative agent.
+
+    ``core/format-id.json`` -- byte-identical at the 3.1 and 3.2 pins -- makes this a
+    MUST, not an optimization: "Callers comparing two ``format-id`` values MUST
+    canonicalize ``agent_url`` per the AdCP URL canonicalization rules before treating
+    two formats as the same." Both sites that decide whether a creative's format
+    CHANGED are such a caller, so both go through here.
+
+    Storage stays verbatim on purpose -- what is stored is echoed back to the buyer,
+    and ``sync_creatives`` owes the buyer its own ``format_id`` unchanged. So the two
+    sides of this comparison routinely disagree byte-for-byte while naming one agent:
+    a row written before adcp 9 carries the trailing slash that ``AnyUrl`` appended,
+    a row written after it carries the buyer's spelling, and a buyer may respell its
+    own URL between two syncs. Comparing raw reported a format change for each of
+    those, which is a wrong ``action`` on real tenant data.
+
+    ``canonical_agent_url`` is the repo's one implementation of that algorithm
+    (``src/core/schemas/_base.py``); a second normalization written here would be the
+    duplication this codebase treats as a defect. A stored ``None`` cannot name an
+    agent, so it never matches.
+    """
+    from src.core.schemas import canonical_agent_url
+
+    if stored is None:
+        return False
+    return canonical_agent_url(incoming) == canonical_agent_url(stored)
+
+
 def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, format_value) -> list[str]:
     """The part of ``changes`` derived purely by comparison -- no mutation, no agent.
 
@@ -94,7 +123,7 @@ def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, forma
 
     format_info = _extract_format_info(format_value)
     if (
-        format_info["agent_url"] != prior.agent_url
+        not _same_agent(format_info["agent_url"], prior.agent_url)
         or format_info["format_id"] != prior.format
         or format_info["parameters"] != prior.format_parameters
     ):
@@ -283,7 +312,7 @@ def _update_existing_creative(
     new_format = format_info["format_id"]
     new_params = format_info["parameters"]
     if (
-        new_agent_url != existing_creative.agent_url
+        not _same_agent(new_agent_url, existing_creative.agent_url)
         or new_format != existing_creative.format
         or new_params != existing_creative.format_parameters
     ):

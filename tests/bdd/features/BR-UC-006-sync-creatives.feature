@@ -54,6 +54,32 @@ Feature: BR-UC-006 Sync Creative Assets
     And the response should include the creative with action "unchanged"
     # POST-S2: Buyer knows action = unchanged
 
+  # core/format-id.json -- byte-identical at the 3.1 and 3.2 pins -- makes this a MUST:
+  # "Callers comparing two `format-id` values MUST canonicalize `agent_url` per the AdCP
+  # URL canonicalization rules before treating two formats as the same."
+  # So a buyer that respells the SAME agent is not changing the format, and POST-S2 owes
+  # "unchanged". Each row below is one canonicalization axis the algorithm normalizes:
+  # step 5 (empty path is "/"), step 2 (host case), step 4 (default port dropped).
+  # The spelling is varied ACROSS the two syncs, not within one request: the stored value
+  # and the resent value have to disagree for the comparison to be exercised at all.
+  # The agent is the one the Seller already knows, respelled -- not a different host --
+  # so a cell that fails is reporting on the comparison and not on agent resolution.
+  @T-UC-006-unchanged-respelled @main-flow
+  Scenario Outline: Sync creatives — respelling agent_url is not a format change (<axis>)
+    Given the Buyer is authenticated
+    And a creative with name "Summer Banner" and a known format_id
+    And the creative already exists with identical data
+    And the resync respells the same agent_url by <axis>
+    When the Buyer Agent syncs the creative
+    Then the response is compliant with the sync_creatives success spec
+    And the response should include the creative with action "unchanged"
+
+    Examples:
+      | axis                      |
+      | adding a trailing slash   |
+      | upper-casing the host     |
+      | adding the default port   |
+
   @T-UC-006-main-assign @main-flow
   Scenario: Sync creatives — with package assignments
     Given the Buyer is authenticated

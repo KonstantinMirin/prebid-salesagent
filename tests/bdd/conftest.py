@@ -5910,6 +5910,12 @@ _UC006_WIRED_SCENARIOS = frozenset(
         "T-UC-006-main-delete-missing-conflict",
         "T-UC-006-rule-039-inv5-lenient",
         "T-UC-006-main-unchanged",
+        # Same env and the same Given as main-unchanged, with the agent_url respelled
+        # between the two syncs. core/format-id.json makes canonicalizing agent_url a
+        # MUST before two format references are treated as the same, and CreativeSyncEnv
+        # already serves everything this needs -- so it executes rather than sitting on
+        # the unclassified path. salesagent-jnp2s.
+        "T-UC-006-unchanged-respelled",
         "T-UC-006-rule-033-inv1",
         "T-UC-006-rule-033-inv3",
         "T-UC-006-rule-033-inv4",

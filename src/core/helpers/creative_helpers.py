@@ -65,11 +65,37 @@ def _optional_format_parameters(
 def _extract_format_info(format_value: Any) -> FormatInfo:
     """Extract complete format information from format_id field (AdCP 2.5).
 
+    ``agent_url`` comes back VERBATIM -- the bytes the buyer sent -- and this function
+    deliberately does NOT canonicalize. It feeds both the persistence path and the
+    comparison path, and those two want different things:
+
+    * What is STORED is echoed back. ``sync_creatives`` must return the buyer's own
+      ``format_id`` unchanged (graded by the round-trip assertion in
+      ``uc006_storyboard_creative_sync.py``: "seller must accept its own format_id"),
+      and ``list_creatives`` rebuilds the reference from the column. Canonicalizing
+      here changed the echo and broke that round-trip -- measured, not theorized.
+    * What is COMPARED must be canonical. ``core/format-id.json`` -- byte-identical at
+      the 3.1 and 3.2 pins -- requires it: "Callers comparing two ``format-id`` values
+      MUST canonicalize ``agent_url`` ... before treating two formats as the same."
+
+    So the canonicalization lives at the two comparison sites in
+    ``src/core/tools/creatives/_processing.py``, NOT here. The spec's MUST is scoped to
+    comparison; it does not ask a seller to restate a buyer's URL in canonical form.
+
+    Until adcp 9 the comparison was accidentally correct: the field was typed ``AnyUrl``,
+    and ``str(AnyUrl(...))`` already applied most of the algorithm -- lowercased host,
+    dropped default port, root path on a bare authority -- so the missing call was
+    invisible, and the echo carried that normalization too. adcp 9 types it the wire
+    string (#1396), which removed the accident from both paths at once. Only the
+    comparison half is restored; the echo stays verbatim, which is what the buyer-facing
+    obligation actually asks for.
+
     Args:
         format_value: FormatId dict/object with agent_url, id, and optional parameters
 
     Returns:
-        FormatInfo with agent_url, format_id, and optional parameters (width, height, duration_ms)
+        FormatInfo with agent_url verbatim, format_id, and optional parameters
+        (width, height, duration_ms)
 
     Raises:
         ValueError: If format_value doesn't have required agent_url and id fields

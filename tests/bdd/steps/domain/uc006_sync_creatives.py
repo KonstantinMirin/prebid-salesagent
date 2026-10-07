@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from pytest_bdd import given, parsers, then, when
 
@@ -2513,6 +2515,47 @@ def given_creative_already_exists_identical(ctx: dict) -> None:
     when_sync_creative(ctx)
 
 
+#: One canonicalization axis -> the literal respelling that exercises it. Authored, not
+#: derived: calling the production canonicalizer to build these would compare the
+#: implementation with itself. Each is an inverse of a step of the algorithm in
+#: docs/reference/url-canonicalization that ``canonical_agent_url`` applies -- step 5
+#: (a bare authority carries "/"), step 2 (host case), step 4 (default port dropped).
+_AGENT_URL_RESPELLINGS: dict[str, Callable[[str], str]] = {
+    "adding a trailing slash": lambda url: url if url.endswith("/") else url + "/",
+    "upper-casing the host": lambda url: url.replace(urlsplit(url).netloc, urlsplit(url).netloc.upper(), 1),
+    "adding the default port": lambda url: url.replace(urlsplit(url).netloc, urlsplit(url).netloc + ":443", 1),
+}
+
+
+@given(parsers.parse("the resync respells the same agent_url by {axis}"))
+def given_resync_respells_agent_url(ctx: dict, axis: str) -> None:
+    """Respell the pending request's ``agent_url`` without naming a different agent.
+
+    The preceding Given has already synced this payload once, so the row holds whatever
+    the write path stores. This mutates only the spelling the NEXT sync sends, which is
+    what puts the stored value and the incoming value in disagreement -- the condition
+    ``comparison_changes`` is actually being graded on. Respelling within a single
+    request would grade nothing.
+
+    The respelling must leave the agent IDENTITY alone: ``core/format-id.json`` makes
+    canonicalization a MUST before two references are treated as the same, so every axis
+    here is one the algorithm normalizes away. A cell that changed the host would be
+    testing agent resolution instead, and would fail for a reason this scenario does not
+    name.
+    """
+    respell = _AGENT_URL_RESPELLINGS.get(axis)
+    assert respell is not None, f"No respelling registered for axis {axis!r}; have {sorted(_AGENT_URL_RESPELLINGS)}"
+
+    creative_payload = ctx["creatives"][-1]
+    before = creative_payload["format_id"]["agent_url"]
+    after = respell(before)
+    assert after != before, (
+        f"Axis {axis!r} left {before!r} unchanged, so this cell would pass without "
+        "exercising any comparison. Fix the respelling or the seeded agent_url."
+    )
+    creative_payload["format_id"]["agent_url"] = after
+
+
 @given("a creative that does not exist in the library")
 def given_creative_not_in_library(ctx: dict) -> None:
     """Set up a creative payload for a creative that has no DB row.
@@ -2639,11 +2682,25 @@ def _get_sync_creative_result(ctx: dict) -> object:
 
 @then(parsers.parse('the response should include the creative with action "{action}"'))
 def then_response_includes_creative_with_action(ctx: dict, action: str) -> None:
-    """Assert the first SyncCreativeResult has the expected action (POST-S2)."""
-    result = _get_sync_creative_result(ctx)
-    action_val = getattr(result, "action", None)
-    action_str = str(getattr(action_val, "value", action_val))
-    assert action_str == action, f"POST-S2: Expected creative action '{action}', got '{action_str}'"
+    """Assert the creative's action on the WIRE (POST-S2).
+
+    Migrated off ``require_payload`` to the wire entry, for the reason
+    ``_assert_creative_status`` gives one screen up: POST-S2 is a promise about what
+    the BUYER is told, so the response body is the authoritative observable and the
+    reconstructed payload model is a second representation of it. Reading the model
+    graded our serializer against itself and would have reported a pass on any
+    divergence between the two.
+
+    Boy-scouted here because salesagent-jnp2s' cross-vintage scenarios bind to this
+    step, and their whole verdict is this one field: a canonicalization bug shows up
+    as "updated" where "unchanged" is owed, which a payload-side read cannot be
+    trusted to see.
+    """
+    _assert_success_response(ctx)
+    entry = _wire_creatives_entry(ctx, latest_creative_id(ctx))
+    assert entry.get("action") == action, (
+        f"POST-S2: expected creative action {action!r} on the wire, got {entry.get('action')!r}"
+    )
 
 
 @then("the creative should have a status reflecting the approval workflow")
