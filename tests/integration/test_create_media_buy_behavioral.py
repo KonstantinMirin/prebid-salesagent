@@ -1342,60 +1342,21 @@ class TestInlineCreativeObligations:
 
 
 class TestProposalBasedObligations:
-    """Proposal-based media buy obligation tests.
+    """What still holds on a proposal-carrying request: product validation.
 
-    Note: proposal_id is accepted in the schema (adcp 3.6) but the proposal
-    resolution flow is not yet implemented in salesagent. These tests verify
-    the schema acceptance and current behavioral boundaries.
+    Four tests stood here that asserted DECLARATIONS -- ``"proposal_id" in
+    CreateMediaBuyRequest.model_fields``, that a constructed request echoes back the
+    field it was given -- for a flow their own docstrings called "not yet implemented".
+    The DTO is the pinned model minus a declared omission, so what it declares is
+    inherited and such a test only asserts that Python inheritance works.
+
+    Two of them also failed, and failed CORRECTLY. 3.2 makes the request's accepted
+    shapes exclusive: packages each with a budget; or packages + total_budget +
+    ``budget_allocation.mode='seller_optimized'``; or ``proposal_id`` + total_budget with
+    NO packages. A test pinning "proposal_id and total_budget coexist" alongside
+    ``packages`` was pinning a payload the pin now refuses -- a declaration test
+    outliving the declaration it was written against.
     """
-
-    def test_proposal_id_accepted_in_request_schema(self):
-        """Request schema accepts proposal_id field.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-01
-
-        Note: Schema accepts proposal_id but the business logic does not
-        currently implement proposal resolution. This test pins schema acceptance.
-        """
-        req = _make_request(proposal_id="prop_123")
-        assert req.proposal_id == "prop_123"
-
-    def test_proposal_id_field_exists_on_schema(self):
-        """CreateMediaBuyRequest has proposal_id field.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-02
-        """
-        assert "proposal_id" in CreateMediaBuyRequest.model_fields
-
-    def test_total_budget_field_exists_on_schema(self):
-        """CreateMediaBuyRequest has total_budget field for proposal-based.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-03
-        """
-        assert "total_budget" in CreateMediaBuyRequest.model_fields
-
-    def test_proposal_based_packages_derived_from_allocations(self):
-        """Schema supports the fields needed for package derivation.
-
-        Covers: UC-002-ALT-PROPOSAL-BASED-MEDIA-04
-
-        Note: Package derivation from proposal allocations is not yet
-        implemented. This test pins that the schema has the required
-        fields for when the feature is built.
-        """
-        # proposal_id and total_budget coexist on the schema
-        req = CreateMediaBuyRequest(
-            account={"account_id": "acct_test"},
-            brand={"domain": "test.com"},
-            start_time=_future(1),
-            end_time=_future(8),
-            packages=[{"product_id": "p1", "budget": 5000.0, "pricing_option_id": "cpm_usd_fixed"}],
-            proposal_id="prop_abc",
-            total_budget={"amount": 10000.0, "currency": "USD"},
-            idempotency_key=f"int-key-{uuid.uuid4().hex}",
-        )
-        assert req.proposal_id == "prop_abc"
-        assert req.total_budget is not None
 
     def test_proposal_based_product_validation(self, integration_db):
         """Derived packages still require valid product_ids.
