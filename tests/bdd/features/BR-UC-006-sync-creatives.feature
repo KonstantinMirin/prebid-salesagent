@@ -59,11 +59,17 @@ Feature: BR-UC-006 Sync Creative Assets
   # URL canonicalization rules before treating two formats as the same."
   # So a buyer that respells the SAME agent is not changing the format, and POST-S2 owes
   # "unchanged". Each row below is one canonicalization axis the algorithm normalizes:
-  # step 5 (empty path is "/"), step 2 (host case), step 4 (default port dropped).
+  # step 1 (scheme case), step 2 (host case), step 3 (userinfo stripped).
   # The spelling is varied ACROSS the two syncs, not within one request: the stored value
   # and the resent value have to disagree for the comparison to be exercised at all.
   # The agent is the one the Seller already knows, respelled -- not a different host --
   # so a cell that fails is reporting on the comparison and not on agent resolution.
+  # Every axis touches only the scheme, the host or the userinfo, never the path or the
+  # port. That is deliberate: the agent URL's shape differs by transport (in-process
+  # serves a bare authority, e2e_rest one with a port AND a path), so an axis that moved
+  # the path or the port would name a DIFFERENT agent on one of them. Two such axes --
+  # appending "/" and appending ":443" -- shipped here and failed over e2e_rest for
+  # exactly that reason: production was right and the rows were wrong.
   @T-UC-006-unchanged-respelled @main-flow
   Scenario Outline: Sync creatives — respelling agent_url is not a format change (<axis>)
     Given the Buyer is authenticated
@@ -75,10 +81,10 @@ Feature: BR-UC-006 Sync Creative Assets
     And the response should include the creative with action "unchanged"
 
     Examples:
-      | axis                      |
-      | adding a trailing slash   |
-      | upper-casing the host     |
-      | adding the default port   |
+      | axis                     |
+      | upper-casing the scheme  |
+      | upper-casing the host    |
+      | adding ignored userinfo  |
 
   @T-UC-006-main-assign @main-flow
   Scenario: Sync creatives — with package assignments

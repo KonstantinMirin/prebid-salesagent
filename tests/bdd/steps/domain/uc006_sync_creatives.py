@@ -34,7 +34,7 @@ import re
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from pytest_bdd import given, parsers, then, when
 
@@ -2533,13 +2533,39 @@ def given_creative_already_exists_identical(ctx: dict) -> None:
 
 #: One canonicalization axis -> the literal respelling that exercises it. Authored, not
 #: derived: calling the production canonicalizer to build these would compare the
-#: implementation with itself. Each is an inverse of a step of the algorithm in
-#: docs/reference/url-canonicalization that ``canonical_agent_url`` applies -- step 5
-#: (a bare authority carries "/"), step 2 (host case), step 4 (default port dropped).
+#: implementation with itself. Each inverts a step of the algorithm in
+#: docs/reference/url-canonicalization that ``canonical_agent_url`` applies -- step 1
+#: (scheme case), step 2 (host case), step 3 (userinfo stripped).
+#:
+#: Every axis touches ONLY the scheme, the host or the userinfo, and that restriction is
+#: the whole design. Two earlier axes -- appending "/" and appending ":443" -- were
+#: identity-preserving for a bare authority and NOT for an agent URL carrying a port or a
+#: path, which is what e2e_rest serves
+#: (``https://creative-agent.adcp.test:8443/api/creative-agent``). Measured there:
+#: appending "/" turns ``/api/creative-agent`` into a genuinely different path, because
+#: canonicalization deliberately does not rstrip -- the spec keeps ``/a`` and ``/a/``
+#: distinct, and step 5 covers an EMPTY path only. Appending ":443" to ``:8443`` produced
+#: ``:8443:443``, which the canonicalizer rejects outright. So those two rows asserted
+#: "same agent" about URLs that named different agents, and production was right to
+#: report a change. The axes below are shape-independent: they hold for a bare authority
+#: and for one with a port and a path alike, so the same three rows grade every transport.
+def _authority_tail(parts: SplitResult) -> str:
+    """The path-and-port half of a URL, as a comparable string that never raises.
+
+    ``SplitResult.port`` raises ``ValueError`` on a netloc carrying two colons
+    (``host:8443:443``), which is precisely the malformed authority a bad respelling
+    produces -- so reading it to decide whether a respelling is safe would crash on the
+    one input the check exists to reject. The port is taken off the netloc textually
+    instead, leaving the rejection to the caller's own assertion message.
+    """
+    _, _, port = parts.netloc.rpartition(":")
+    return f"{parts.path!r}:{port if port != parts.netloc else ''}"
+
+
 _AGENT_URL_RESPELLINGS: dict[str, Callable[[str], str]] = {
-    "adding a trailing slash": lambda url: url if url.endswith("/") else url + "/",
+    "upper-casing the scheme": lambda url: url.partition("://")[0].upper() + "://" + url.partition("://")[2],
     "upper-casing the host": lambda url: url.replace(urlsplit(url).netloc, urlsplit(url).netloc.upper(), 1),
-    "adding the default port": lambda url: url.replace(urlsplit(url).netloc, urlsplit(url).netloc + ":443", 1),
+    "adding ignored userinfo": lambda url: url.replace(urlsplit(url).netloc, "ignored-user@" + urlsplit(url).netloc, 1),
 }
 
 
@@ -2555,9 +2581,18 @@ def given_resync_respells_agent_url(ctx: dict, axis: str) -> None:
 
     The respelling must leave the agent IDENTITY alone: ``core/format-id.json`` makes
     canonicalization a MUST before two references are treated as the same, so every axis
-    here is one the algorithm normalizes away. A cell that changed the host would be
-    testing agent resolution instead, and would fail for a reason this scenario does not
-    name.
+    here is one the algorithm normalizes away. A cell that named a different agent would
+    be testing agent resolution instead, and would fail for a reason this scenario does
+    not name.
+
+    Both guards below are STRUCTURAL and authored. Neither calls
+    ``canonical_agent_url``: asking production's normalizer whether the respelling
+    preserved identity, and then asking production whether it preserved identity, is one
+    question asked twice. Checking that the path and the port came through untouched says
+    the same thing without consulting the implementation under test -- and it is the guard
+    whose absence let two shape-dependent axes ship. They changed the string, so the
+    first assertion passed; they also moved the path or mangled the port, which only
+    e2e_rest's port-and-path agent URL exposed.
     """
     respell = _AGENT_URL_RESPELLINGS.get(axis)
     assert respell is not None, f"No respelling registered for axis {axis!r}; have {sorted(_AGENT_URL_RESPELLINGS)}"
@@ -2568,6 +2603,14 @@ def given_resync_respells_agent_url(ctx: dict, axis: str) -> None:
     assert after != before, (
         f"Axis {axis!r} left {before!r} unchanged, so this cell would pass without "
         "exercising any comparison. Fix the respelling or the seeded agent_url."
+    )
+    before_parts, after_parts = urlsplit(before), urlsplit(after)
+    assert _authority_tail(after_parts) == _authority_tail(before_parts), (
+        f"Axis {axis!r} respelled {before!r} as {after!r}, which moves the path or the port "
+        f"({_authority_tail(before_parts)} -> {_authority_tail(after_parts)}). Those name a "
+        "DIFFERENT agent -- canonicalization keeps '/a' and '/a/' distinct and cannot reconcile "
+        "two ports -- so the cell would assert 'unchanged' about a real change. An axis must "
+        "touch only the scheme, the host or the userinfo."
     )
     creative_payload["format_id"]["agent_url"] = after
 
