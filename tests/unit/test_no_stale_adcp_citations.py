@@ -188,7 +188,15 @@ def test_the_dangling_root_marker_still_matches_a_citation():
 # ---------------------------------------------------------------------------
 
 # A version token: 3.1.1, 6.6.0, 3.1.0-beta.3, …
-_VERSION = r"[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:-[A-Za-z0-9.]+)?"
+# Two prerelease spellings, because the two things this guard reads version numbers
+# out of use different ones. The AdCP SPEC version is SemVer and hyphenates
+# (``3.1.0-beta.3``); the adcp SDK version is a Python package version and PEP 440
+# attaches the prerelease with no separator (``9.0.0b1``, which release-please emits
+# for the beta series). Matching only the hyphen form made this guard read
+# ``adcp==9.0.0b1`` as a claim of ``9.0.0``, compare that against the real pin, and
+# report every correct file as stale -- its own two detector tests failed with it,
+# which is what identified the guard rather than the files as wrong.
+_VERSION = r"[0-9]+\.[0-9]+(?:\.[0-9]+)?(?:(?:a|b|c|rc)[0-9]+)?(?:-[A-Za-z0-9.]+)?"
 
 # Claim forms. Each requires a present-tense connective binding THIS project to
 # a version — "targets X", "via the adcp==X SDK", "(an) implementation of …
