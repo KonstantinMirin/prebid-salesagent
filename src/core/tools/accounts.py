@@ -24,6 +24,8 @@ from adcp.types import BrandReference as LibraryBrandReference
 from adcp.types import PaginationRequest, PaginationResponse
 from adcp.types.domains.core.account_ref import AccountReference1, AccountReference2
 from adcp.types.domains.core.business_entity import BusinessEntity
+from adcp.types.domains.core.notification_config import EventType as LibraryAccountEventType
+from adcp.types.domains.enums.notification_type import NotificationType as LibraryNotificationType
 from pydantic import BaseModel
 
 from src.core.audit_logger import get_audit_logger
@@ -934,11 +936,24 @@ def _check_sandbox_capability(entry_sandbox: bool | None, tenant: TenantContext 
     ]
 
 
-# Media-buy-anchored notification event types. These describe the lifecycle of a
-# media buy's delivery reporting, not an account, so they do not belong on the
-# account surface. There is deliberately no account-lifecycle event type either
-# (no account.status_changed) -- poll list_accounts or use push_notification_config.
-_MEDIA_BUY_ANCHORED_EVENT_TYPES = frozenset({"scheduled", "final", "delayed", "adjusted", "impairment"})
+# The event types that do not belong on the account surface: every member of the
+# notification-type vocabulary that the account surface's own enum does not declare.
+#
+# DERIVED from the two pinned enums rather than listed, because the list was wrong. It
+# read ``{scheduled, final, delayed, adjusted, impairment}`` -- five members, where the
+# pin's own migration text names six media-buy-anchored types, "(`scheduled`, `final`,
+# `delayed`, `adjusted`, `window_update`, `impairment`)". ``window_update`` was missing,
+# and nothing caught it because the request DTO types this field with the account-surface
+# enum and refuses the value before this check runs.
+#
+# The difference is the honest set for the question this gate asks. It is wider than
+# "media-buy-anchored": it also carries ``capabilities.changed`` and ``principal.changed``,
+# which are no more account-anchored than ``scheduled`` is, so refusing them here is the
+# same rule rather than an extension of it. Both enums spell their values dotted
+# (``creative.status_changed``), so the difference compares like with like.
+_EVENT_TYPES_OFF_THE_ACCOUNT_SURFACE = frozenset(
+    {member.value for member in LibraryNotificationType} - {member.value for member in LibraryAccountEventType}
+)
 
 
 def _check_notification_configs(configs: Iterable[NotificationConfig] | None) -> list[GateFailure] | None:
@@ -973,7 +988,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
             seen_subscribers.add(subscriber_id)
 
         for event_index, event_type in enumerate(getattr(config, "event_types", None) or []):
-            if enum_value(event_type) in _MEDIA_BUY_ANCHORED_EVENT_TYPES:
+            if enum_value(event_type) in _EVENT_TYPES_OFF_THE_ACCOUNT_SURFACE:
                 return [
                     GateFailure(
                         failure_class="notification_config_invalid",
