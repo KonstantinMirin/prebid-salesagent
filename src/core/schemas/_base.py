@@ -84,9 +84,6 @@ from adcp.types import ListTasksResponse as LibraryListTasksResponse
 from adcp.types.aliases import (
     LegacyUpdateMediaBuyErrorResponse as AdCPUpdateMediaBuyError,
 )
-from adcp.types.aliases import (
-    LegacyUpdateMediaBuySuccessResponse as AdCPUpdateMediaBuySuccess,
-)
 from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
@@ -136,6 +133,14 @@ from adcp.types.domains.media_buy.get_media_buys_response import (
 )
 from adcp.types.domains.media_buy.get_media_buys_response import (
     Snapshot as LibraryGetMediaBuysSnapshot,
+)
+from adcp.types.domains.media_buy.update_media_buy_response import (
+    # The concrete class, NOT adcp.types.aliases.LegacyUpdateMediaBuySuccessResponse.
+    # That alias is declared `X: TypeAlias = UpdateMediaBuyResponse1`, and mypy refuses
+    # an explicit TypeAlias as a base class ("Invalid base class") even though it is a
+    # plain class at runtime. UpdateMediaBuySuccess below subclasses it, so the import
+    # has to name the class the alias points at.
+    UpdateMediaBuyResponse1 as AdCPUpdateMediaBuySuccess,
 )
 from adcp.types.domains.media_buy.update_media_buy_response import (
     UpdateMediaBuyResponse3 as AdCPUpdateMediaBuySubmitted,

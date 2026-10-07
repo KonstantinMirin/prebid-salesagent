@@ -1,8 +1,9 @@
 # AdCP Spec Version
 
-Prebid Sales Agent targets **AdCP spec version 3.2.1** via the `adcp==9.0.0`
-Python SDK (pinned exactly in `pyproject.toml`; 9.0.0 is a local integration
-build consumed by revision — see `[tool.uv.sources]`).
+Prebid Sales Agent targets **AdCP spec version 3.2.1** via the `adcp==9.0.0b1`
+Python SDK (pinned exactly in `pyproject.toml`). That is upstream's
+`v9.0.0-beta.1` release from PyPI; the fork revision previously consumed through
+`[tool.uv.sources]` is gone, and the override with it.
 
 > **The rest of this document still describes the 3.1.1 target.** The SDK bump
 > moved the pin; re-vendoring the pinned schema tree and the trust-root fixtures
@@ -59,7 +60,7 @@ job downloads), and only falls back to a personal `~/projects/adcp` clone.
 
 ## `status` vs `media_buy_status` on media-buy responses
 
-The SDK **pin** (`adcp==9.0.0`, spec **3.2.1**) fixes the request/response
+The SDK **pin** (`adcp==9.0.0b1`, spec **3.2.1**) fixes the request/response
 *type shapes* we build against. It does **not** always fix the graded
 *behavior*. One field is worth spelling out: the `media_buy_status` dual-emit
 on create-/update-media-buy responses.

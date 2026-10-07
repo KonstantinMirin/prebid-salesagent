@@ -22,7 +22,7 @@ The Prebid Sales Agent is a server that:
 
 ## AdCP Compatibility
 
-This implementation targets **AdCP spec version 3.2.1** via the `adcp==9.0.0`
+This implementation targets **AdCP spec version 3.2.1** via the `adcp==9.0.0b1`
 Python SDK. The protocol is pre-1.0 — request/response shapes still move between
 spec releases, and SDK bumps can change them. See
 [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the SDK-to-spec mapping

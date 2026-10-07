@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "9.0.0"
-source = { git = "https://github.com/KonstantinMirin/adcp-client-python?rev=3ee02a042c189747c6cf99f04f5f25445f850a95#3ee02a042c189747c6cf99f04f5f25445f850a95" }
+version = "9.0.0b1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -93,6 +93,10 @@ dependencies = [
     { name = "sse-starlette" },
     { name = "tldextract" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/54/f4a28a2ffa515fddca53989833a0e0aa714752023d12580101272f6264e0/adcp-9.0.0b1.tar.gz", hash = "sha256:f6e3c5cf783936d97ff240fe516f74b0020b5ef9c525c4fcd24ccf72ba053cf9", size = 39929928, upload-time = "2026-10-06T18:01:34.17Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fe/5b/3625986a80711008413c9193d3748aab7076dec838b23106b53aeac294dd/adcp-9.0.0b1-py3-none-any.whl", hash = "sha256:d83dadb62c2d47fb3801aff185d6653b9fdfa367c0def05690cdae530b39947e", size = 42188860, upload-time = "2026-10-06T18:01:29.424Z" },
 ]
 
 [[package]]
@@ -195,7 +199,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", git = "https://github.com/KonstantinMirin/adcp-client-python?rev=3ee02a042c189747c6cf99f04f5f25445f850a95" },
+    { name = "adcp", specifier = "==9.0.0b1" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },
