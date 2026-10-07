@@ -127,6 +127,25 @@ _PROFILE_SLUG_EXCEPTIONS: dict[str, str] = {"positive/basic-post": "001-post-wit
 
 
 @lru_cache(maxsize=1)
+def load_root_signing_vectors() -> dict[str, dict[str, Any]]:
+    """The ROOT corpus verbatim, keyed by id — no profile selection.
+
+    For the graders that are defined over the vectors AS VENDORED rather than over the
+    documents a 3.2 seller is driven with: L1(a) signature-base conformance, whose whole
+    subject is canonicalization against spec-authored bytes and which declares no posture
+    at all. :func:`load_signing_vectors` is the profile-selected set and is what L2 drives.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    for bucket in ("positive", "negative"):
+        directory = VECTORS_DIR / bucket
+        if not directory.is_dir():
+            raise AssertionError(f"Conformance vector directory not vendored: {directory}")
+        for path in sorted(directory.glob("*.json")):
+            out[f"{bucket}/{path.stem}"] = json.loads(path.read_text())
+    return out
+
+
+@lru_cache(maxsize=1)
 def load_signing_vectors() -> dict[str, dict[str, Any]]:
     """Every request vector, keyed by its ROOT id (``"positive/001-basic-post"``).
 
@@ -148,7 +167,7 @@ def load_signing_vectors() -> dict[str, dict[str, Any]]:
         directory = VECTORS_DIR / bucket
         if not directory.is_dir():
             raise AssertionError(f"Conformance vector directory not vendored: {directory}")
-        counterparts = {
+        counterparts: dict[str, Path] = {
             path.stem.split("-", 1)[1]: path for path in sorted((VECTORS_DIR / "profile-3.2" / bucket).glob("*.json"))
         }
         for path in sorted(directory.glob("*.json")):
@@ -182,8 +201,23 @@ def load_signing_keys() -> dict[str, Any]:
 
 
 def vectors_with_expected_signature_base() -> dict[str, dict[str, Any]]:
-    """The L1(a) set: every vector file shipping ``expected_signature_base``."""
-    return {vid: v for vid, v in load_signing_vectors().items() if "expected_signature_base" in v}
+    """The L1(a) set: every ROOT vector file shipping ``expected_signature_base``.
+
+    Reads :func:`load_root_signing_vectors`, NOT the profile-selected set, because L1 is
+    defined over "the vectors' ORIGINAL untouched URLs" (see
+    ``tests/unit/test_signing_conformance_signature_base.py``) and canonicalization is
+    policy-independent: L1 declares no posture, it computes a base and compares it to
+    spec-authored bytes, so which digest policy a 3.2 seller may advertise does not bear
+    on it.
+
+    Routing L1 through the selected set was a real regression and
+    ``test_l1_signature_base_set_is_pinned_by_name`` caught it: the set grew 13 -> 15
+    because the counterparts for ``negative/016`` and ``positive/004`` ship the field
+    where their roots do not. The name count growing hid a content LOSS — under the
+    selection, ``positive/001``'s own no-digest base stopped being graded anywhere, and a
+    base without ``content-digest`` is a distinct canonicalization case from one with it.
+    """
+    return {vid: v for vid, v in load_root_signing_vectors().items() if "expected_signature_base" in v}
 
 
 # ---------------------------------------------------------------------------
@@ -192,9 +226,15 @@ def vectors_with_expected_signature_base() -> dict[str, dict[str, Any]]:
 
 #: The real surface the vectors are transplanted onto.
 #: ``TOOLS["create_media_buy"].rest == RestBinding("POST", "/media-buys")`` under the
-#: router's ``/api/v1`` prefix — the vectors' OWN operation — which is why every
-#: vector's ``verifier_capability`` is fed to the posture BYTE-IDENTICAL, with no
-#: ``required_for`` rewrite anywhere.
+#: router's ``/api/v1`` prefix — the vectors' OWN operation — which is why no
+#: ``required_for`` rewrite is needed anywhere: the buckets are fed to the posture
+#: verbatim.
+#:
+#: The capability is no longer fed BYTE-IDENTICAL, and this comment used to say it was.
+#: ``covers_content_digest`` is rewritten to the one value a 3.2 seller may advertise —
+#: see ``_advertisable`` in the L2 module for why that removes a constraint rather than
+#: relaxing an assertion. The buckets, which are what this paragraph is actually about,
+#: are still untouched.
 TRANSPLANT_PREFIX = "/api/v1"
 TRANSPLANT_OPERATION_SEGMENT = "media-buys"
 #: The registry key ``TRANSPLANT_OPERATION_SEGMENT`` dispatches, and therefore the DTO
