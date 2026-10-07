@@ -7,7 +7,7 @@
 import copy
 import re
 import warnings
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -44,6 +44,7 @@ from adcp.types import (
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
     ProtocolEnvelope,
+    is_canonical_format_kind,
 )
 from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
@@ -520,21 +521,6 @@ class CanonicalFormatIdentity:
 CreativeFormatIdentity = FormatIdentity | CanonicalFormatIdentity
 
 
-def canonical_format_kinds() -> frozenset[str]:
-    """The pinned ``core/canonical-format-kind.json`` vocabulary.
-
-    DERIVED from the SDK's generated type, which is the pin. The seller has to own this check:
-    the schema ``$ref``s a closed 16-member enum, and the SDK types the field as an open
-    ``str`` on both the input and the state models -- measured, it accepts
-    ``format_kind="not_a_real_kind"`` -- so nothing upstream refuses a value outside the
-    vocabulary.
-    """
-    members = getattr(_LibraryCanonicalFormatKind, "__args__", None)
-    if members is None:
-        members = [member.value for member in _LibraryCanonicalFormatKind]
-    return frozenset(str(member) for member in members)
-
-
 def _option_identity(option_ref: object) -> FormatOptionIdentity | None:
     """The identity of a ``format_option_ref``, or ``None`` when the creative carries none."""
     if option_ref is None:
@@ -546,7 +532,11 @@ def _option_identity(option_ref: object) -> FormatOptionIdentity | None:
     return FormatOptionIdentity(str(domain) if domain is not None else None, str(option_id))
 
 
-def creative_format_identity(creative: object) -> CreativeFormatIdentity:
+def creative_format_identity(
+    creative: object,
+    *,
+    supported_kinds: Iterable[str] = _LibraryCanonicalFormatKind,
+) -> CreativeFormatIdentity:
     """Which format this creative names, by whichever arm it carries.
 
     THE ONE reader of a creative's format identity. Every caller that needs to know what
@@ -555,12 +545,26 @@ def creative_format_identity(creative: object) -> CreativeFormatIdentity:
     canonical creative has no ``format_id`` at all, and a seller that reads the attribute
     directly sees ``None`` and reports a missing field the buyer was never required to send.
 
+    ``supported_kinds`` is a PARAMETER for the reason the SDK's own
+    ``is_canonical_format_kind`` makes it one: the set that matters is this seller's, not the
+    pinned library's. A seller may support a kind promoted in a spec newer than the pin, or
+    only four of the sixteen, and neither is expressible by anything the library knows --
+    "I accept the request and then tell you I cannot process this creative" is a seller's
+    answer, not a type error.
+
+    CEILING, deliberate and temporary: the default is the pin's sixteen kinds, because this
+    seller has no configured vocabulary of its own yet (measured: ``supported_format_kinds``
+    appears nowhere in ``src/``). Until it does, a kind defined after the pin is refused --
+    exactly the pin-as-ceiling behaviour the SDK removed from its models. The upgrade path is
+    to thread a seller-owned set (a tenant column or an adapter capability) into this
+    argument; the seam is here so that change touches one call rather than every caller.
+
     Raises:
         ValueError: if the creative carries neither arm, both arms, or a ``format_kind``
-            outside the pinned vocabulary. The model's own oneOf validator refuses the first
-            two on construction, so reaching them here means an object that did not come
-            through a DTO; the third is this function's own check, since the SDK types
-            ``format_kind`` open (see :func:`canonical_format_kinds`).
+            outside ``supported_kinds``. The model's own oneOf validator refuses the first two
+            on construction, so reaching them here means an object that did not come through a
+            DTO. The third is the seller's own check: ``format_kind`` is an open ``str`` on
+            every SDK model, in both directions, and the SDK never validates it for you.
     """
     format_id = getattr(creative, "format_id", None)
     kind = getattr(creative, "format_kind", None)
@@ -569,8 +573,8 @@ def creative_format_identity(creative: object) -> CreativeFormatIdentity:
     if format_id is not None:
         return format_id_identity(format_id)
     kind_value = str(kind)
-    if kind_value not in canonical_format_kinds():
-        raise ValueError(f"format_kind {kind_value!r} is not in the pinned canonical vocabulary")
+    if not is_canonical_format_kind(kind_value, supported_kinds):
+        raise ValueError(f"format_kind {kind_value!r} is not one this seller supports")
     return CanonicalFormatIdentity(kind_value, _option_identity(getattr(creative, "format_option_ref", None)))
 
 
