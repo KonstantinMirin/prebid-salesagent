@@ -25,7 +25,12 @@ from src.core.database.models import (
     Product,
 )
 from src.core.database.repositories.effects import SessionEffectsMixin
-from src.core.schemas import CreativeStatus
+from src.core.schemas import (
+    CanonicalFormatIdentity,
+    CreativeFormatIdentity,
+    CreativeStatus,
+    FormatIdentity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -332,8 +337,7 @@ class CreativeRepository(SessionEffectsMixin):
         *,
         creative_id: str | None = None,
         name: str,
-        agent_url: str,
-        format: str,
+        identity: CreativeFormatIdentity,
         format_parameters: dict | None = None,
         principal_id: str,
         # Must stay a member of the AdCP CreativeStatus enum: list_creatives parses this
@@ -348,12 +352,28 @@ class CreativeRepository(SessionEffectsMixin):
         Generates a creative_id if not provided.
         Does NOT commit - the caller handles that.
         """
+        # THE ONE mapping from a format identity to its columns. The caller hands over which
+        # arm the creative carries and this decides where it lands, so the two arms cannot
+        # drift apart across call sites: a canonical creative writes format_kind and leaves
+        # the deprecated pair null, a legacy one does the reverse, and neither is expressible
+        # as "both" because the identity type is one or the other.
+        legacy = identity if isinstance(identity, FormatIdentity) else None
+        canonical = identity if isinstance(identity, CanonicalFormatIdentity) else None
         db_creative = Creative(
             tenant_id=self._tenant_id,
             creative_id=creative_id or str(uuid.uuid4()),
             name=name,
-            agent_url=agent_url,
-            format=format,
+            agent_url=legacy.agent_url if legacy else None,
+            format=legacy.id if legacy else None,
+            format_kind=canonical.kind if canonical else None,
+            format_option_ref=(
+                {
+                    "publisher_domain": canonical.option.publisher_domain,
+                    "format_option_id": canonical.option.format_option_id,
+                }
+                if canonical and canonical.option
+                else None
+            ),
             format_parameters=cast(dict | None, format_parameters),
             principal_id=principal_id,
             status=status,

@@ -28,7 +28,7 @@ from src.core.exceptions import (
 from src.core.format_resolver import find_format, is_agent_backed, is_generative
 from src.core.helpers import _extract_format_info, _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
-from src.core.schemas import CreativeStatusEnum, SyncCreativeResult
+from src.core.schemas import CreativeStatusEnum, SyncCreativeResult, creative_format_identity
 from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.tenant_context import TenantContext
@@ -1047,8 +1047,11 @@ def _create_new_creative(
     db_creative = creative_repo.create(
         creative_id=creative.creative_id or None,
         name=creative.name,
-        agent_url=format_info["agent_url"],
-        format=format_info["format_id"],
+        # The identity the buyer gave, by whichever arm. Passing the two legacy strings here
+        # could only ever persist the deprecated arm, and for a canonical creative there was
+        # nothing to pass: its ``format`` property is None, so ``_extract_format_info`` had
+        # no agent_url or id to read.
+        identity=creative_format_identity(creative),
         format_parameters=cast(dict | None, format_info["parameters"]),
         principal_id=principal_id,
         status=creative_status,
