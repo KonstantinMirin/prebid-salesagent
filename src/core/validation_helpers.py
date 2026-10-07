@@ -254,10 +254,20 @@ def format_validation_error(validation_error: ValidationError, label: str = "req
         else:
             error_details.append(f"  • {field_path}: {msg}")
 
+    # The version segment is DERIVED, like the other two sites that emit a schema URL
+    # (``signing/trust_root.py`` _SCHEMA_BASE and the A2A extension uri). This one was
+    # hardcoded `/schemas/v1/` -- a version this project has never pinned -- so a buyer
+    # handed a field-type error was pointed at a path that does not correspond to the
+    # schemas their request was graded against. trust_root's comment says of its own
+    # derivation that "the two cannot drift"; this third site drifted because it never
+    # derived.
+    from adcp import get_adcp_spec_version
+
     error_msg = (
         f"Invalid {label}: The following fields do not match the AdCP specification:\n\n"
         + "\n".join(error_details)
-        + "\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/v1/ for correct field types."
+        + f"\n\nPlease check the AdCP spec at https://adcontextprotocol.org/schemas/{get_adcp_spec_version()}/"
+        + " for correct field types."
     )
 
     return error_msg
