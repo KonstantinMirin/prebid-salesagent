@@ -16,6 +16,9 @@ import logging
 from adcp import EventType, TimeUnit
 from adcp.types import ReportingCapabilities as LibraryReportingCapabilities
 from adcp.types._generated import MediaChannel
+from adcp.types.domains.core.reporting_capabilities import DateRangeSupport
+from adcp.types.domains.enums.available_metric import AvailableMetric
+from adcp.types.domains.enums.reporting_frequency import ReportingFrequency
 from adcp.types.domains.pricing_options.time_option import Parameters as TimeParameters
 
 # Import our extended Product (includes implementation_config) and the local
@@ -360,13 +363,18 @@ def default_reporting_capabilities() -> LibraryReportingCapabilities:
     products by hand -- never on the wire model. A fresh instance per call, so no lists
     are shared between products. Retired by salesagent-3cs7o.21 (NOT NULL with a backfill).
     """
+    # THE PINNED VOCABULARIES, by member rather than by string. Each of these three fields
+    # is typed with a closed enum, so pydantic coerced the literals and they worked -- which
+    # is exactly why they survived: a string that happens to be a member looks identical to
+    # one that is not until the value changes. ``AvailableMetric`` alone has 49 members, and
+    # this seller referenced it nowhere while naming one of them by hand.
     return LibraryReportingCapabilities(
-        available_reporting_frequencies=["daily"],
+        available_reporting_frequencies=[ReportingFrequency.daily],
         expected_delay_minutes=1440,
         timezone="UTC",
         supports_webhooks=False,
-        available_metrics=["impressions"],
-        date_range_support="date_range",
+        available_metrics=[AvailableMetric.impressions],
+        date_range_support=DateRangeSupport.date_range,
     )
 
 
