@@ -87,6 +87,7 @@ from adcp.types.aliases import (
 from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
+from adcp.types.canonical_creative import CanonicalFormatKind as _LibraryCanonicalFormatKind
 
 # The GENERATED format reference, reached at its generated path because adcp 9 gives it no
 # public name. ``adcp.types.FormatId`` is gone and both candidate public names --
@@ -477,6 +478,100 @@ def format_id_identity(format_id: LibraryFormatId) -> FormatIdentity:
         The ``FormatIdentity`` comparison key for federation identity.
     """
     return FormatIdentity(canonical_agent_url(format_id.agent_url), format_id.id)
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class FormatOptionIdentity:
+    """A ``format_option_ref``'s identity. ``publisher_domain`` is ``None`` for product scope.
+
+    ``core/format-option-ref.json`` is itself a oneOf: publisher scope requires
+    ``publisher_domain`` and ``format_option_id``; product scope requires only the option id.
+    Flattening the two arms to one optional domain keeps the identity comparable while
+    preserving the distinction, because a publisher-catalog option and a product-local option
+    that happen to share an id are different options.
+    """
+
+    publisher_domain: str | None
+    format_option_id: str
+
+
+@dataclass(frozen=True, slots=True, order=True)
+class CanonicalFormatIdentity:
+    """The canonical arm: a ``format_kind`` from the pinned vocabulary, plus optional option ref.
+
+    The sibling of :class:`FormatIdentity`, which is the deprecated arm. A creative carries
+    exactly one of the two -- ``core/creative-asset.json`` and the listed-creative item schema
+    both declare the pair as a oneOf whose arms forbid each other -- so the two types are kept
+    DISTINCT rather than merged into one shape with nullable halves. A function taking
+    :data:`CreativeFormatIdentity` must then handle both arms to type-check, which is what
+    stops the legacy arm being assumed.
+    """
+
+    kind: str
+    option: FormatOptionIdentity | None = None
+
+
+#: A creative's format identity: the deprecated named-format arm or the canonical arm.
+#:
+#: Exactly one, never both and never neither. ``format_id`` is "DEPRECATED in 3.2. Legacy
+#: named-format path retained for older 3.x peers"; ``format_kind`` is the "Canonical 3.2
+#: path". The state mirrors the input -- a creative synced by one arm is listed by that same
+#: arm -- so this is a carried identity rather than something resolved on the way through.
+CreativeFormatIdentity = FormatIdentity | CanonicalFormatIdentity
+
+
+def canonical_format_kinds() -> frozenset[str]:
+    """The pinned ``core/canonical-format-kind.json`` vocabulary.
+
+    DERIVED from the SDK's generated type, which is the pin. The seller has to own this check:
+    the schema ``$ref``s a closed 16-member enum, and the SDK types the field as an open
+    ``str`` on both the input and the state models -- measured, it accepts
+    ``format_kind="not_a_real_kind"`` -- so nothing upstream refuses a value outside the
+    vocabulary.
+    """
+    members = getattr(_LibraryCanonicalFormatKind, "__args__", None)
+    if members is None:
+        members = [member.value for member in _LibraryCanonicalFormatKind]
+    return frozenset(str(member) for member in members)
+
+
+def _option_identity(option_ref: object) -> FormatOptionIdentity | None:
+    """The identity of a ``format_option_ref``, or ``None`` when the creative carries none."""
+    if option_ref is None:
+        return None
+    option_id = getattr(option_ref, "format_option_id", None)
+    if option_id is None:
+        return None
+    domain = getattr(option_ref, "publisher_domain", None)
+    return FormatOptionIdentity(str(domain) if domain is not None else None, str(option_id))
+
+
+def creative_format_identity(creative: object) -> CreativeFormatIdentity:
+    """Which format this creative names, by whichever arm it carries.
+
+    THE ONE reader of a creative's format identity. Every caller that needs to know what
+    format a creative conforms to comes through here rather than reaching for ``format_id``,
+    because reaching for ``format_id`` is what silently assumes the deprecated arm: a
+    canonical creative has no ``format_id`` at all, and a seller that reads the attribute
+    directly sees ``None`` and reports a missing field the buyer was never required to send.
+
+    Raises:
+        ValueError: if the creative carries neither arm, both arms, or a ``format_kind``
+            outside the pinned vocabulary. The model's own oneOf validator refuses the first
+            two on construction, so reaching them here means an object that did not come
+            through a DTO; the third is this function's own check, since the SDK types
+            ``format_kind`` open (see :func:`canonical_format_kinds`).
+    """
+    format_id = getattr(creative, "format_id", None)
+    kind = getattr(creative, "format_kind", None)
+    if (format_id is None) == (kind is None):
+        raise ValueError("a creative carries exactly one of format_id and format_kind")
+    if format_id is not None:
+        return format_id_identity(format_id)
+    kind_value = str(kind)
+    if kind_value not in canonical_format_kinds():
+        raise ValueError(f"format_kind {kind_value!r} is not in the pinned canonical vocabulary")
+    return CanonicalFormatIdentity(kind_value, _option_identity(getattr(creative, "format_option_ref", None)))
 
 
 class WireSerializerMixin:

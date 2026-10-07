@@ -17,7 +17,13 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.format_resolver import is_dialled_agent_url
-from src.core.schemas import Creative, CreativePolicy, CreativeStatusEnum
+from src.core.schemas import (
+    CanonicalFormatIdentity,
+    Creative,
+    CreativePolicy,
+    CreativeStatusEnum,
+    creative_format_identity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +70,20 @@ def _validate_creative_input(
     """
     # Create temporary schema object for validation (AdCP v1 spec compliant)
     # Only include AdCP spec fields + internal fields
+    # WHICHEVER ARM the buyer used, carried through unchanged. The identity is the one of
+    # format_id / format_kind the creative names, and the state mirrors the input -- a
+    # creative synced by one arm is listed by that arm -- so neither is translated here.
+    # Carrying only format_id made a canonical creative unrepresentable: the receiving
+    # model's oneOf refuses a creative with neither identity.
+    identity_members: dict[str, Any] = (
+        {"format_id": creative.format_id}
+        if creative.format_id is not None
+        else {"format_kind": creative.format_kind, "format_option_ref": creative.format_option_ref}
+    )
     schema_data: dict[str, Any] = {
         "creative_id": creative.creative_id or str(uuid.uuid4()),
         "name": creative.name,
-        "format_id": creative.format_id,
+        **identity_members,
         # Handed through as the model it is. The sync input types the asset map with a
         # different generated ``Assets`` class from the listing model's; the receiving
         # ``Creative.assets`` adopts the sibling instance (see the validator there).
@@ -101,21 +117,29 @@ def _validate_creative_input(
     if not creative.name or str(creative.name).strip() == "":
         raise AdCPValidationError(field="name")
 
-    if not creative.format_id:
-        raise AdCPValidationError(field="format_id")
-
-    # Use validated format (auto-upgraded from string if needed)
-    format_value = validated_creative.format
-
-    if format_value is None:
+    # The format identity, by whichever arm the creative carries. This used to demand
+    # ``format_id`` and refuse anything without it -- so a canonical creative, which the spec
+    # says new creatives should send, cleared the boundary and was then rejected by name on a
+    # field it was never required to supply.
+    try:
+        identity = creative_format_identity(creative)
+    except ValueError as exc:
+        # Neither arm, both arms, or a format_kind outside the pinned vocabulary. The model's
+        # oneOf refuses the first two on construction, so what reaches here is the third.
         raise AdCPValidationError(
-            details=ValidationDetails(rejected_value=str(creative.format_id)),
-            field="format_id",
-        )
+            details=ValidationDetails(rejected_value=str(creative.format_kind)),
+            field="format_kind",
+        ) from exc
 
-    # Validate format exists in creative agent
-    agent_url = str(format_value.agent_url)
-    format_id = format_value.id
+    if isinstance(identity, CanonicalFormatIdentity):
+        # The canonical arm names a KIND from a closed vocabulary, not a reference to a
+        # format some agent hosts. There is no agent to ask, so the registry walk below does
+        # not apply and the vocabulary check above is the whole of its validation.
+        return validated_creative
+
+    # The deprecated arm names a format a creative agent must actually serve.
+    agent_url = identity.agent_url
+    format_id = identity.id
 
     # Skip external validation for adapter-provided formats (non-HTTP URLs)
     # These formats are served by the adapter itself (e.g., broadstreet://default)
