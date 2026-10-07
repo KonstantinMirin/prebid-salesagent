@@ -150,6 +150,7 @@ from adcp.signing.canonical import build_signature_base, parse_signature_input_h
 from adcp.signing.digest import compute_content_digest_sha256, content_digest_matches
 
 from tests.factories import PrincipalFactory, TenantFactory
+from tests.factories.account import seed_default_account
 from tests.factories.principal import plaintext_token_for
 from tests.harness._base import BareIntegrationEnv
 from tests.helpers.app_state import preserved_global_app_state
@@ -431,6 +432,54 @@ def _seed_tenant() -> Any:
     return TenantFactory(tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST)
 
 
+def _account_natural_keys_named_by_vectors() -> set[tuple[str, str | None, bool | None]]:
+    """Every ``(brand_domain, operator, sandbox)`` the vendored vector bodies name.
+
+    DERIVED from the corpus, never spelled here. The 3.2.1 re-vendor added an ``account``
+    to these bodies that the 3.1.1 ones did not carry, and a literal copy would have to be
+    re-checked by hand at the next re-vendor -- whereas a derivation follows it. Today this
+    returns exactly one key across 35 of the 40 vectors; the other five carry no account.
+    """
+    keys: set[tuple[str, str | None, bool | None]] = set()
+    for vector in _VECTORS.values():
+        raw = vector.get("request", {}).get("body") or ""
+        try:
+            body = json.loads(raw) if isinstance(raw, str) else raw
+        except json.JSONDecodeError:  # a vector whose body is deliberately not JSON
+            continue
+        account = body.get("account") if isinstance(body, dict) else None
+        if not isinstance(account, dict):
+            continue
+        domain = (account.get("brand") or {}).get("domain")
+        if domain:
+            keys.add((domain, account.get("operator"), account.get("sandbox")))
+    return keys
+
+
+def _seed_accounts_named_by_vectors(principal_id: str) -> None:
+    """The accounts the vector bodies reference, each with the grant that exposes it.
+
+    Without these every vector carrying an ``account`` is refused ACCOUNT_NOT_FOUND by
+    ``create_media_buy`` BEFORE the verifier runs -- so a negative grades the wrong
+    refusal and a positive grades nothing at all, which is what the
+    "the verifier never ran" assertions report.
+
+    The GRANT is the half that is easy to miss: account resolution is scoped to the
+    caller's accessible set (#1417), so a row without its ``AgentAccountAccess`` join
+    fails ACCOUNT_NOT_FOUND *identically* to no row. ``seed_default_account`` owns both
+    halves, which is why this calls it rather than inserting here.
+    """
+    for brand_domain, operator, sandbox in sorted(_account_natural_keys_named_by_vectors()):
+        seed_default_account(
+            _TENANT_ID,
+            principal_id,
+            # Derived from the key, so re-seeding is idempotent and two ids cannot
+            # collide on one natural key.
+            account_id=f"acc-vec-{brand_domain.replace('.', '-')}",
+            natural_key=(brand_domain, operator, sandbox),
+        )
+
+
 def _seed_principal(tenant: Any) -> str:
     """The counterparty's Principal, carrying the ``agent_url`` key resolution reads.
 
@@ -579,6 +628,11 @@ def _vector_case(vector_id: str) -> Iterator[tuple[BareIntegrationEnv, str | Non
     with BareIntegrationEnv(tenant_id=_TENANT_ID, principal_id=_PRINCIPAL_ID) as env:
         tenant = _seed_tenant()
         token = _seed_principal(tenant) if plan.credential is Credential.PRINCIPAL_TOKEN else None
+        if token is not None:
+            # Tied to the principal because the grant has to name one. The three vectors
+            # that present no token resolve no principal and so could not reach account
+            # resolution anyway -- they are refused on the credential first.
+            _seed_accounts_named_by_vectors(_PRINCIPAL_ID)
         _forget(env, pairs)
         if plan.harness_state is HarnessState.CAP_OVERRIDE:
             _claim(env, pairs[-_RATE_ABUSE_CAP:])
