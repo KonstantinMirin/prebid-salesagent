@@ -278,10 +278,29 @@ tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url
 # THIS ROW IS NOT GRADUATED, because nothing here measured e2e_rest. Only a bdd-in-network
 # run grades this ledger, and none was run. Graduating on the in-process result would be
 # citing the wrong measurement -- exactly what the UC-005 baseline-format-id row above
-# refuses for its own repaired assertion. The paragraph beginning "SCOPE OF THE GAP" is now
-# stale in one respect: the compliance Then it describes should pass over e2e_rest once the
-# pin is read there too, so expect this row to XPASS on the next in-network run and
-# graduate it then, on that run.
+# refuses for its own repaired assertion.
+#
+# THE REASON ABOVE IS NOW STALE, AND THE ROW STAYS ANYWAY (2026-10-07). The in-network run
+# innet_061026_1351 (bdd_e2e.json) settled both halves, and they disagree:
+#
+#   - #7338 IS satisfied over e2e_rest. The 23 other uc005 e2e_rest nodes are
+#     XPASS(strict) citing #7338 -- they pass over real HTTP against the live server
+#     (POST /api/v1/creative-formats -> 200 OK). No uc005 e2e_rest record shows a #7338
+#     FAILURE; the only pixel_tracker mentions left are those 23 XPASS reason strings.
+#     So the asset union no longer blocks this transport, and the "SCOPE OF THE GAP"
+#     paragraph above (every uc005 success path fails this check over e2e_rest) no longer
+#     holds.
+#   - but THIS node still fails, for an unrelated reason:
+#       AssertionError: E2E catalog needs at least display, video, audio categories,
+#       got: {'native', 'video', 'dooh', 'display'}   -- extra in the right set: 'audio'
+#     The live e2e catalog carries no `audio` category. That is catalog CONTENT, nothing
+#     to do with the pinned asset union.
+#
+# So this row is now an xfail whose recorded reason is not the defect it is absorbing --
+# the same shape as the six in-process #7338 entries, which were failing on an ambiguous
+# schema filename while ledgered for the asset union. Re-point it at the missing `audio`
+# category (or seed the category) rather than graduating it; #7338 is no longer what holds
+# it here.
 tests/bdd/test_uc005_discover_creative_formats.py::test_discover_full_format_catalog[e2e_rest]
 
 # --- UC-010 targeting granularity has no per-tenant surface (3) ---
