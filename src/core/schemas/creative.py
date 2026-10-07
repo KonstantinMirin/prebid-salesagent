@@ -5,6 +5,7 @@ These classes handle creative lifecycle management, sync operations, listing,
 assignments, and admin approval workflows.
 """
 
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, ClassVar, Literal
@@ -191,8 +192,9 @@ class CreativeAssetRequest(LibraryCreativeAsset):
     # adding nullability is a change mypy accepts outright.
     format_id: LibraryFormatId | None = None
 
-    @model_validator(mode="after")
-    def _exactly_one_format_identifier(self) -> "CreativeAssetRequest":
+    @model_validator(mode="before")
+    @classmethod
+    def _exactly_one_format_identifier(cls, data: Any) -> Any:
         """core/creative-asset.json is a oneOf: format_id XOR format_kind.
 
         Raised at the ITEM, which is where a oneOf failure belongs. core/error.json requires
@@ -211,11 +213,30 @@ class CreativeAssetRequest(LibraryCreativeAsset):
         JSON Schema keyword" -- so the issue was dropped from ``issues[]`` and the buyer got
         an envelope with no structured reason. This rejection CAN be substantiated as
         ``oneOf``, so it says so (see ``SELLER_RAISED_KEYWORDS``).
+
+        ``mode="before"``, and that is the whole reason this runs at all. The generated
+        parent carries ``_require_schema_required_group``, the "at least one" half of the
+        same oneOf, as an AFTER validator raising a plain ``ValueError``:
+
+            CreativeAsset requires at least one of these field groups: format_id | format_kind
+
+        Pydantic runs the parent's after-validators before the subclass's, so for the case
+        that matters most -- a creative carrying NEITHER identity -- the parent failed first
+        and the buyer got ``value_error`` with an empty ``issues[]``. Measured: four
+        integration rows asserted ``oneOf`` and read ``value_error`` or nothing. A before
+        validator precedes every after validator in the hierarchy, so the keyword-bearing
+        refusal is the one the buyer sees, and the parent's is unreachable rather than
+        suppressed.
         """
-        supplied = sum(identifier is not None for identifier in (self.format_id, self.format_kind))
+        # The raw payload on the wire path, an instance on the model-to-model path
+        # (``from_attributes=True``). Both answer "which identity did the caller supply".
+        if isinstance(data, Mapping):
+            supplied = sum(data.get(name) is not None for name in ("format_id", "format_kind"))
+        else:
+            supplied = sum(getattr(data, name, None) is not None for name in ("format_id", "format_kind"))
         if supplied != 1:
             raise PydanticCustomError("oneOf", "provide exactly one of format_id or format_kind")
-        return self
+        return data
 
     @model_validator(mode="after")
     def _trackers_bind_tracking_events(self) -> "CreativeAssetRequest":
