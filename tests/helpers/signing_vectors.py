@@ -3,7 +3,11 @@
 #1291 B3 (``salesagent-z6nr.14``). Two things live here, and nothing else:
 
 1. **The loader** — reads the vendored, sha256-pinned snapshot under
-   ``tests/fixtures/adcp_conformance_vectors/3.1.1/request-signing/`` offline.
+   ``tests/fixtures/adcp_conformance_vectors/<pin>/request-signing/`` offline. That
+   ``<pin>`` is DERIVED, never spelled: :data:`VECTORS_DIR` builds it from
+   ``EXPECTED_SPEC_VERSION``, so do not re-hardcode a version here — this line said
+   ``3.1.1`` for a while after the pin moved to 3.2.1, which is the stale-orienting-text
+   failure the surrounding effort kept paying for.
    Same shape as :mod:`tests.helpers.pinned_schema`: a missing file is a HARD
    ``AssertionError``, never a skip, so a re-vendor that drops a vector cannot
    quietly shrink the graded set.
@@ -111,16 +115,47 @@ def load_vector_manifest() -> dict[str, Any]:
     return json.loads(_read("MANIFEST.json"))
 
 
+#: The one root vector whose 3.2 counterpart cannot be found by slug.
+#:
+#: Matching is by SLUG, never by number: ``negative/001-no-signature-header`` and
+#: ``profile-3.2/negative/001-base64url-sf-binary`` share a number and are unrelated
+#: vectors, so a number fallback would silently grade the wrong document. Only this one
+#: pair needs naming, and the corpus README says why: "Root ``positive/001`` (basic POST)
+#: and ``positive/002`` (POST with content-digest) are the same request in 3.2, so both
+#: map to ``profile-3.2/positive/001-post-with-content-digest.json``."
+_PROFILE_SLUG_EXCEPTIONS: dict[str, str] = {"positive/basic-post": "001-post-with-content-digest"}
+
+
 @lru_cache(maxsize=1)
 def load_signing_vectors() -> dict[str, dict[str, Any]]:
-    """Every request vector, keyed by id (``"positive/001-basic-post"``)."""
+    """Every request vector, keyed by its ROOT id (``"positive/001-basic-post"``).
+
+    PROFILE-SELECTED: where a ``profile-3.2/`` counterpart exists, its document is what
+    gets driven, under the root vector's id. The root corpus is a 3.1 corpus — 35 of its
+    40 vectors declare ``covers_content_digest: "either"`` and one declares
+    ``"forbidden"`` — and a 3.2 seller must refuse both, so driving the root document
+    configures a posture the seller rejects and the verifier never runs at all. The
+    counterparts exist for exactly this reason and were vendored alongside the root
+    corpus; this is the same profile selection the out-of-process storyboard runner
+    performs, which reports the root vectors it drops as ``profile_excluded``.
+
+    Keyed on the ROOT id on purpose, so the vector registries and
+    ``test_all_forty_vectors_are_accounted_for`` keep naming one stable set and the
+    graded count cannot quietly fall when a counterpart appears or disappears.
+    """
     out: dict[str, dict[str, Any]] = {}
     for bucket in ("positive", "negative"):
         directory = VECTORS_DIR / bucket
         if not directory.is_dir():
             raise AssertionError(f"Conformance vector directory not vendored: {directory}")
+        counterparts = {
+            path.stem.split("-", 1)[1]: path for path in sorted((VECTORS_DIR / "profile-3.2" / bucket).glob("*.json"))
+        }
         for path in sorted(directory.glob("*.json")):
-            out[f"{bucket}/{path.stem}"] = json.loads(path.read_text())
+            slug = path.stem.split("-", 1)[1]
+            named = _PROFILE_SLUG_EXCEPTIONS.get(f"{bucket}/{slug}")
+            source = VECTORS_DIR / "profile-3.2" / bucket / f"{named}.json" if named else counterparts.get(slug, path)
+            out[f"{bucket}/{path.stem}"] = json.loads(source.read_text())
     return out
 
 
