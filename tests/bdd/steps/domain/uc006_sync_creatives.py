@@ -2479,8 +2479,24 @@ def given_creative_does_not_exist(ctx: dict) -> None:
 
 
 @given("the creative already exists in the Seller's library for this principal")
-def given_creative_already_exists(ctx: dict) -> None:
-    """Pre-seed the creative in the DB so sync produces action="updated"."""
+def given_creative_already_exists(ctx: dict, stored_name: str | None = None) -> None:
+    """Pre-seed the creative in the DB so sync reaches the UPDATE branch.
+
+    ``stored_name`` is the name the ROW carries, which defaults to the request's own
+    name. Pass a different one when the scenario needs the resync to be a REAL update:
+    ``action`` is ``"updated"`` only if something actually differs, so a row seeded
+    identically answers ``"unchanged"`` -- correctly. A caller that asserts ``"updated"``
+    has to supply the difference it is asserting about.
+
+    This matters because the row is written by the FACTORY, which sets the column
+    directly and bypasses the sync write path. The agent_url therefore cannot be relied
+    on to supply the difference: ``comparison_changes`` canonicalizes before comparing
+    (``_same_agent``), so the factory's spelling and the request's spelling name one
+    agent and the format reads as unchanged. Before that canonicalization existed, a
+    trailing-slash mismatch between the two supplied a spurious ``format`` change and
+    these scenarios passed on it -- which is exactly the vacuous pass salesagent-jnp2s
+    uncovered, not a behavior to preserve.
+    """
     from tests.factories import CreativeFactory
 
     env = ctx["env"]
@@ -2494,7 +2510,7 @@ def given_creative_already_exists(ctx: dict) -> None:
         tenant=tenant,
         principal=principal,
         creative_id=creative_id,
-        name=creative_payload["name"],
+        name=stored_name if stored_name is not None else creative_payload["name"],
         agent_url=fmt_id["agent_url"],
         format=fmt_id["id"],
     )
@@ -3415,7 +3431,12 @@ def given_creative_reaching_the_agent(ctx: dict, creative_state: str, format_kin
     if creative_state == "existing":
         # The update branch is unreachable for a creative that is not already on
         # file, so two of the four sites can only be graded from a seeded row.
-        given_creative_already_exists(ctx)
+        #
+        # The row carries a DIFFERENT name, because the outline's existing_* rows assert
+        # action "updated" and that is only true if the resync changes something. Seeded
+        # identically, the row answers "unchanged" -- which is the correct answer and
+        # would make those rows wrong rather than the production path wrong.
+        given_creative_already_exists(ctx, stored_name="Agent-served Creative (prior revision)")
 
     # The persisted set BEFORE the request. A preview must leave it exactly as
     # it found it -- which for a new creative means "still empty" and for an
