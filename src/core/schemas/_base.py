@@ -453,6 +453,28 @@ class FormatIdentity:
     agent_url: str
     id: str
 
+    @property
+    def storage_key(self) -> str:
+        """This identity as one indexable string, for comparing a stored reference.
+
+        A persisted ``format_id`` has to serve two obligations that a single value cannot:
+        the bytes the buyer sent are echoed back verbatim (the sync storyboard grades
+        "seller must accept its own format_id", and canonicalizing on the write path broke
+        that round-trip -- measured), while a COMPARISON must canonicalize first, because
+        ``core/format-id.json`` makes that a MUST. So a row keeps the assertion verbatim and
+        this key beside it.
+
+        That is why a column comparison on the stored spelling could not be correct: the
+        filter received canonical pairs and the column held whatever arrived, so the same
+        agent differing in host case, a default port or an IDN form read as two agents. The
+        key is built from the canonical form, so the comparison is exact rather than
+        tolerant, and it is a single column so it can be indexed.
+
+        ``\\x1f`` separates the halves: the unit separator cannot occur in a URL or an id,
+        so no pair can collide with another by spelling.
+        """
+        return f"{self.agent_url}\x1f{self.id}"
+
 
 def format_id_identity(format_id: LibraryFormatId) -> FormatIdentity:
     """Return the federation identity of a FormatId: its canonical ``agent_url`` and ``id``.
