@@ -173,6 +173,61 @@ def suite_table(run: Run, out) -> None:
     print(f"  {'total':16}{sum(totals.values()):>7}" + "".join(f"{totals[o]:>8}" for o in OUTCOMES), file=out)
 
 
+def _skip_cause(reason: str) -> str:
+    """What pytest recorded as the cause of a skip, or a STATED absence.
+
+    ``outcomes()`` hands over the longrepr of the phase that did not pass, which for
+    a skip is the ``(file, lineno, "Skipped: <cause>")`` triple -- behind the xdist
+    worker banner, which is why the cause is searched for rather than read off the
+    first line. Grouping on the banner instead produces a histogram by WORKER, which
+    is a meaningless answer that looks like an answer.
+
+    A skip with no recorded cause returns a named bucket rather than an empty string,
+    so it is counted and shown instead of disappearing into a blank row.
+    """
+    marker = "Skipped: "
+    at = reason.find(marker)
+    if at < 0:
+        return "(no cause recorded)"
+    return reason[at + len(marker) :].strip().splitlines()[0].rstrip("'\")").strip()[:104] or "(no cause recorded)"
+
+
+def skips_section(run: Run, out) -> None:
+    """Every skip in the run, grouped by cause, per suite.
+
+    WHY THIS EXISTS, and it is not tidiness. ``suite_table`` above prints a
+    ``skipped`` COLUMN, and a column is a number without its cause -- so
+    ``unit 6646 passed / 3 failed / 40 skipped`` was read as holding steady against
+    another run's ``6677 / 3 / 9`` when the two differ by THIRTY-ONE guards that did
+    not ask their question. The pinned AdCP bundle was absent in one tree, so
+    ``requires_pinned_bundle`` skipped them, and the smaller graded set reported the
+    better-looking number (salesagent-13wao).
+
+    The skip itself is correct and stays: a guard with no valid input must refuse,
+    never pass. What failed was the AGGREGATE, which is why this is a reporting fix
+    and not a change to any guard. ``compare_runs`` already catches this ACROSS runs
+    -- pass -> skip is a regression there, and it names all thirty-one -- so this
+    covers the case with no baseline to compare against, where nothing else looks.
+
+    Three outcomes, deliberately distinguishable, because "no skips" and "skips whose
+    cause was not recorded" and "skips with causes" must not render the same:
+    a cause breakdown, a counted ``(no cause recorded)`` bucket, or an explicit
+    statement that the run recorded none.
+    """
+    print("\nSKIPS (a skip is not a pass: these items did not ask their question)", file=out)
+    seen = False
+    for suite, tests in run.items():
+        causes = collections.Counter(_skip_cause(reason) for outcome, reason in tests.values() if outcome == "skipped")
+        if not causes:
+            continue
+        seen = True
+        print(f"  {suite}: {sum(causes.values())} skipped", file=out)
+        for cause, count in causes.most_common():
+            print(f"      {count:>5}  {cause}", file=out)
+    if not seen:
+        print("  no suite in this run recorded a skip", file=out)
+
+
 def storyboard_section(summaries: dict[str, dict], out) -> None:
     print("\nSTORYBOARD (runner summaries)", file=out)
     if not summaries:
@@ -279,6 +334,7 @@ def report(
     run_sb = read_storyboard(run_dir)
     print(f"RUN {run_dir}", file=out)
     suite_table(run, out)
+    skips_section(run, out)
     storyboard_section(run_sb, out)
     groups = failure_groups(run, run_sb)
     groups_section(groups, limit, out)

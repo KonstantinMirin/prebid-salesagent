@@ -219,3 +219,91 @@ def test_failures_are_grouped_by_signature_with_instance_values_blanked(tmp_path
 def test_an_absent_run_directory_is_not_measured(tmp_path: pathlib.Path, capsys) -> None:
     assert main([str(tmp_path / "nowhere")]) == 2
     assert "NOT MEASURED" in capsys.readouterr().err
+
+
+# ── A skip count without its causes is how 31 silent guards read as green ──
+#
+# `unit 6646 passed / 3 failed / 40 skipped` was compared against another run's
+# `6677 / 3 / 9` and called "holding steady". The two differ by THIRTY-ONE guards
+# that did not ask their question: the pinned AdCP bundle was absent in one tree,
+# `requires_pinned_bundle` skipped them, and the smaller graded set produced the
+# better-looking number (salesagent-13wao).
+#
+# The skip is correct and stays — a guard with no valid input must refuse, never
+# pass. The AGGREGATE was the defect, so the fix is here rather than in any guard.
+# These three cases pin the property that makes the misreading impossible: the
+# three states must not render the same.
+
+
+_BANNER = "[gw3] linux -- Python 3.12.15 /app/.tox/unit/bin/python"
+
+
+def _skipped(cause: str | None) -> tuple[str, str]:
+    """A skipped item whose longrepr has pytest's real shape under xdist.
+
+    The worker BANNER comes first and the cause sits inside the
+    ``(file, lineno, "Skipped: …")`` triple behind it. Reading the first line
+    instead of the skipping phase yields a histogram by worker — which is what
+    both of this row's own extraction attempts did before using the repo's
+    ``outcomes()`` helper, so the shape is reproduced here rather than simplified.
+    """
+    if cause is None:
+        return ("skipped", _BANNER)
+    return ("skipped", f"{_BANNER}\n('/app/tests/unit/test_x.py', 12, \"Skipped: {cause}\")")
+
+
+def test_a_skip_is_reported_with_its_cause_not_only_its_count(tmp_path) -> None:
+    """The bundle-absent run must name the bundle, so no reader calls it an improvement."""
+    bundle = "pinned AdCP compliance tree not provisioned under /app/tests/storyboard/runner"
+    run = _write_run(
+        tmp_path / "absent",
+        {
+            "unit": {
+                "tests/unit/test_a.py::test_one": _skipped(bundle),
+                "tests/unit/test_b.py::test_two": _skipped(bundle),
+                "tests/unit/test_c.py::test_three": _skipped("permission bits do not constrain root"),
+                "tests/unit/test_d.py::test_four": ("passed", ""),
+            }
+        },
+    )
+    out = io.StringIO()
+    report(run, {}, limit=5, out=out)
+    text = out.getvalue()
+
+    assert "unit: 3 skipped" in text, f"the per-suite skip total is missing:\n{text}"
+    assert f"2  {bundle}" in text, (
+        f"the two bundle-absent skips are not attributed to the bundle, so a reader sees a "
+        f"count with no cause — which is the whole defect:\n{text}"
+    )
+    assert "1  permission bits do not constrain root" in text
+
+
+def test_a_skip_with_no_recorded_cause_is_counted_rather_than_blank(tmp_path) -> None:
+    """An unattributable skip must occupy a named bucket, not vanish into an empty row."""
+    run = _write_run(tmp_path / "nocause", {"unit": {"tests/unit/test_a.py::test_one": _skipped(None)}})
+    out = io.StringIO()
+    report(run, {}, limit=5, out=out)
+    text = out.getvalue()
+
+    assert "unit: 1 skipped" in text
+    assert "1  (no cause recorded)" in text, (
+        f"a skip whose cause pytest did not record rendered as a blank row, which reads as "
+        f"'nothing to see' rather than 'we cannot tell':\n{text}"
+    )
+    assert _BANNER not in text.split("SKIPS", 1)[1].split("STORYBOARD", 1)[0], (
+        "the xdist worker banner leaked into the skip causes — grouping on it gives a "
+        "histogram by worker, which looks like an answer and is not"
+    )
+
+
+def test_a_run_with_no_skips_says_so_rather_than_printing_nothing(tmp_path) -> None:
+    """Silence must not be reusable as 'nothing was excluded'. Third state, stated."""
+    run = _write_run(tmp_path / "clean", {"unit": {"tests/unit/test_a.py::test_one": ("passed", "")}})
+    out = io.StringIO()
+    report(run, {}, limit=5, out=out)
+    text = out.getvalue()
+
+    assert "no suite in this run recorded a skip" in text, (
+        f"a run with no skips printed an empty SKIPS section, which is indistinguishable "
+        f"from a run whose skips were not recorded:\n{text}"
+    )
