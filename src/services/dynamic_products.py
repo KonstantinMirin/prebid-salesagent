@@ -20,6 +20,7 @@ from sqlalchemy.orm import attributes
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Product
+from src.core.database.repositories.product import ProductRepository
 from src.core.signals_agent_registry import get_signals_agent_registry
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,19 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
     """
     variants = []
 
-    with get_db_session() as session:
-        # Get all dynamic product templates for this tenant
-        stmt = select(Product).filter_by(tenant_id=tenant_id, is_dynamic=True, archived_at=None)
-        templates = session.scalars(stmt).all()
+    # IMPORTED HERE, NOT AT MODULE LEVEL, and this is the fix rather than a style
+    # choice (salesagent-uvca5). ``patch`` rebinds an attribute on a module; a
+    # module-level ``from ... import ProductUoW`` holds the class object itself, so
+    # a patch of ``src.core.database.repositories.uow.ProductUoW`` could not reach
+    # it and whether a test's patch landed depended on whether anything earlier in
+    # the process had already imported this module. Importing at call time looks the
+    # name up after the patch is in place, every time. ``src/core/tools/products.py``
+    # (355, 784) does the same for the same reason. Do not hoist this to module level.
+    from src.core.database.repositories.uow import ProductUoW
+
+    with ProductUoW(tenant_id) as uow:
+        assert uow.products is not None  # inside the context manager the repo is bound
+        templates = uow.products.list_dynamic_templates()
 
         if not templates:
             logger.debug(f"No dynamic product templates found for tenant {tenant_id}")
@@ -108,7 +118,7 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
 
                 # Generate variants from signals
                 template_variants = generate_variants_from_signals(
-                    session, template, template_signals, brief, our_agent_url
+                    uow.products, template, template_signals, brief, our_agent_url
                 )
                 variants.extend(template_variants)
 
@@ -116,18 +126,29 @@ async def generate_variants_for_brief(tenant_id: str, brief: str, our_agent_url:
                 logger.error(f"Error generating variants for template {template.product_id}: {e}", exc_info=True)
                 continue
 
-        session.commit()
-
     return variants
 
 
 def generate_variants_from_signals(
-    session, template: Product, signals: list[dict], brief: str, our_agent_url: str | None = None
+    products: ProductRepository,
+    template: Product,
+    signals: list[dict],
+    brief: str,
+    our_agent_url: str | None = None,
 ) -> list[Product]:
     """Generate product variants from template and signals.
 
+    Takes the REPOSITORY, not a session. A session parameter is what made this
+    module reach a real database out of a unit test: the module-level
+    ``from ... import get_db_session`` binds the function object, so patching the
+    attribute on ``database_session`` could not reach it, and whether the patch
+    landed depended on whether anything earlier in the process had imported this
+    module (salesagent-uvca5). A repository has no such seam -- the caller's UoW
+    owns the session -- and ``uow.session`` is deprecated precisely so a session
+    cannot be handed down from one.
+
     Args:
-        session: Database session
+        products: Tenant-scoped ProductRepository from the caller's ProductUoW
         template: Dynamic product template
         signals: List of signal dicts from signals agent
         brief: Buyer's brief (for variant customization)
@@ -152,9 +173,10 @@ def generate_variants_from_signals(
             # Generate variant ID (deterministic)
             variant_id = generate_variant_id(template.product_id, activation_key)
 
-            # Check if variant already exists
-            stmt = select(Product).filter_by(tenant_id=template.tenant_id, product_id=variant_id)
-            existing = session.scalars(stmt).first()
+            # Check if variant already exists. The repository scopes to its own
+            # tenant, which is the tenant the templates were selected for, so this
+            # is the same row the explicit tenant_id filter used to reach.
+            existing = products.get_by_id(variant_id)
 
             if existing:
                 # Update existing variant
@@ -171,7 +193,8 @@ def generate_variants_from_signals(
             # Create new variant from template
             variant = create_variant_from_template(template, signal, activation_key, variant_id, brief)
 
-            session.add(variant)
+            # create() validates tenant_id and flushes; the UoW commits on exit.
+            products.create(variant)
             variants.append(variant)
 
             logger.info(

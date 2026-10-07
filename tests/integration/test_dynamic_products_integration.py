@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from src.core.database.repositories.product import ProductRepository
 from src.services.dynamic_products import (
     archive_expired_variants,
     create_variant_from_template,
@@ -303,6 +304,16 @@ def factory_env(integration_db):
         yield env
 
 
+def _products(env, template) -> ProductRepository:
+    """The repository ``generate_variants_from_signals`` takes, on the test's session.
+
+    Built from ``template.tenant_id`` rather than the test's tenant variable because
+    that is the invariant production relies on: the repository is scoped to the tenant
+    whose templates were selected, and ``create()`` raises on any mismatch.
+    """
+    return ProductRepository(env._session, template.tenant_id)
+
+
 class TestGenerateVariantsFromSignals:
     """generate_variants_from_signals creates Product variants in the DB."""
 
@@ -313,7 +324,7 @@ class TestGenerateVariantsFromSignals:
         signals = [_make_signal(segment_id="seg_1", name="Premium")]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "test brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "test brief", "https://our.example.com/mcp"
         )
 
         assert len(variants) == 1
@@ -333,7 +344,7 @@ class TestGenerateVariantsFromSignals:
 
         # First call — creates
         v1 = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
         factory_env._session.flush()
         first_id = v1[0].product_id
@@ -341,7 +352,7 @@ class TestGenerateVariantsFromSignals:
 
         # Second call — updates
         v2 = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
 
         assert len(v2) == 1
@@ -357,7 +368,7 @@ class TestGenerateVariantsFromSignals:
         signals = [{"signal_agent_segment_id": "seg_bad", "deployments": []}]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
         factory_env._session.commit()
 
@@ -373,7 +384,7 @@ class TestGenerateVariantsFromSignals:
         ]
 
         variants = generate_variants_from_signals(
-            factory_env._session, template, signals, "brief", "https://our.example.com/mcp"
+            _products(factory_env, template), template, signals, "brief", "https://our.example.com/mcp"
         )
 
         assert len(variants) == 2

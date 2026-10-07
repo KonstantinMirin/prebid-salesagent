@@ -83,6 +83,25 @@ class ProductRepository:
         )
         return list(self._session.execute(stmt).unique().scalars().all())
 
+    def list_dynamic_templates(self) -> list[Product]:
+        """Live dynamic product templates for the tenant.
+
+        A TEMPLATE, not a variant: ``is_dynamic`` marks the row the signals-driven
+        variants are generated FROM, and the generated variants carry
+        ``is_dynamic_variant`` instead. ``archived_at IS NULL`` keeps retired
+        templates from producing new variants.
+
+        Deliberately not ``list_all()`` filtered in Python: that query fetches every
+        product for the tenant with two eager loads, so filtering afterwards would
+        load the whole catalogue to find a handful of templates.
+        """
+        stmt = select(Product).where(
+            Product.tenant_id == self._tenant_id,
+            Product.is_dynamic.is_(True),
+            Product.archived_at.is_(None),
+        )
+        return list(self._session.scalars(stmt).all())
+
     def list_all_with_inventory(self) -> list[Product]:
         """Get all products with pricing, inventory profile, and tenant loaded.
 
