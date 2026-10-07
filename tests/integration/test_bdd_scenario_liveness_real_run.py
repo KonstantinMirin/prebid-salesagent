@@ -166,6 +166,13 @@ def _run_bdd_slice(tmp_path: Path, test_file: str, marker_expr: str, *, extra_ar
     env = dict(os.environ)
     env.pop("BDD_E2E_ENABLED", None)
     env["BDD_LIVENESS_ARTIFACT"] = str(artifact)
+    # The nested run writes the PAYLOAD artifact as well, and this test never looks at it.
+    # The mirror of the leak fixed in test_payload_capture_xdist.py, which redirected the
+    # payload artifact it reads and let the liveness one land in the shared path: each test
+    # redirected what it looked at and leaked what it did not. Harmless today only because
+    # the payload artifact's cwd-relative default has no reader (run_all_tests.sh feeds
+    # compare_payloads from the tox paths), which is not a property to rely on.
+    env["BDD_PAYLOAD_ARTIFACT"] = str(tmp_path / "payloads.json")
     env.setdefault("ADCP_TESTING", "true")
     # Measure EVERY transport. The BDD conftest's single-transport optimization
     # deselects mcp/rest for any scenario carrying a strict xfail, which is

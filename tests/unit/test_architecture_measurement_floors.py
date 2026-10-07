@@ -10,6 +10,7 @@ thing being counted disappears and the count keeps reporting success.
 
 from __future__ import annotations
 
+import ast
 import configparser
 import json
 import sys
@@ -580,4 +581,96 @@ def test_every_env_that_runs_the_bdd_suite_scopes_both_artifacts() -> None:
         "test-results/, which is the path the `unit` env reads — and `unit` declares no "
         "`depends`, so under `tox -p` this env writes the file while the unit suite reads it. "
         "Set it to a {toxworkdir} path, as the other bdd envs do."
+    )
+
+
+# ── Floor 6: a test that spawns pytest over bdd must redirect both artifacts ─
+#
+# THE THIRD DOOR. Floors 3-4 made the reader refuse a narrowed artifact and
+# Floor 5 stopped two tox envs sharing the path, and neither touched the writer
+# that was actually doing it: `test_payload_capture_xdist.py` spawns a nested
+# pytest over three bdd modules (9 collected), redirected the PAYLOAD artifact
+# it reads, and let the LIVENESS one land at the cwd-relative test-results/
+# default. That is the artifact two full runs' guards refused as "narrowed BY
+# PATH" — the refusal was right and the writer was a test (salesagent-peq79).
+#
+# Floor 5's population could not see it: that floor derives over `tox.ini`
+# envs, and this writer is a subprocess spawned from the `integration` env,
+# which sets no override to inherit. A derivation whose population excludes the
+# case it exists for is worse than a declaration, because a declaration would
+# at least have been visibly incomplete.
+#
+# THE PAIR WERE EXACT MIRRORS, which is the finding rather than a detail:
+# `test_payload_capture_xdist.py` redirected the payload artifact and leaked
+# the liveness one; `test_bdd_scenario_liveness_real_run.py` redirected the
+# liveness artifact and leaked the payload one. Each redirected what it LOOKED
+# AT and leaked what it did not, so neither author was careless — the rule
+# "redirect the artifact you assert on" produces this. The rule has to be
+# "redirect every artifact the nested run WRITES".
+#
+# COLLECT-ONLY IS NOT IN THE POPULATION, and that is derived too rather than
+# assumed: `scenario_liveness.pytest_sessionfinish` returns early on
+# `collectonly` (Floor 2), so such a session writes no artifact and has nothing
+# to redirect.
+
+
+_BDD_ARTIFACT_WRITERS_HINT = "tests/bdd/"
+
+
+def _bdd_path_constants(tree: ast.AST) -> list[str]:
+    """Path-shaped string constants naming the bdd suite.
+
+    A CONSTANT, so comments are invisible to this (they are absent from the AST),
+    and ``startswith`` so a prose mention inside a docstring -- "the ledger at
+    tests/bdd/e2e_rest_known_failures.txt" -- is not mistaken for an argument.
+    Three files mention a bdd path only in prose and are correctly excluded.
+    """
+    return [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and node.value.startswith(_BDD_ARTIFACT_WRITERS_HINT)
+    ]
+
+
+def _spawns_a_real_pytest(tree: ast.AST) -> bool:
+    """Whether some call's first argument is a pytest argv that actually RUNS tests."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        argv = [
+            arg.value for arg in ast.walk(node.args[0]) if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+        ]
+        if "pytest" in argv and not any(a.startswith("--collect-only") or a == "--co" for a in argv):
+            return True
+    return False
+
+
+def test_a_test_that_runs_the_bdd_suite_redirects_every_artifact_it_writes() -> None:
+    """A nested bdd run must not emit an artifact into a path something else grades."""
+    from scripts.audit.storyboard_spec import ARTIFACT_ENV_VAR as LIVENESS_VAR
+    from tests.bdd.payload_capture import ARTIFACT_ENV_VAR as PAYLOAD_VAR
+
+    tests_root = Path(__file__).resolve().parents[1]
+    writers: dict[Path, list[str]] = {}
+    for source in sorted(tests_root.rglob("*.py")):
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        if _bdd_path_constants(tree) and _spawns_a_real_pytest(tree):
+            body = source.read_text(encoding="utf-8")
+            writers[source] = sorted(
+                {LIVENESS_VAR, PAYLOAD_VAR} - {v for v in (LIVENESS_VAR, PAYLOAD_VAR) if v in body}
+            )
+
+    assert writers, (
+        "no test appears to spawn a real pytest over a bdd path — the derivation above has "
+        "stopped matching how these tests are written, so this floor is grading nothing"
+    )
+    leaking = {str(path.relative_to(tests_root)): missing for path, missing in writers.items() if missing}
+    assert not leaking, (
+        f"these tests spawn a nested pytest over the bdd suite without redirecting every "
+        f"artifact that run writes: {leaking}. Unredirected, the artifact lands at its "
+        "cwd-relative default under test-results/ — the liveness one is read by thirteen "
+        "storyboard guards, which then refuse it as a narrowed run. Point each at tmp_path, "
+        "as the other bdd-spawning tests do."
     )
