@@ -943,8 +943,21 @@ class Creative(Base):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     principal_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
-    format: Mapped[str] = mapped_column(String(100), nullable=False)
+    # THE FORMAT IDENTITY, in two arms, exactly one of which a row carries. AdCP 3.2
+    # identifies a creative by the deprecated ``format_id`` (``agent_url`` + ``format``
+    # below) OR by the canonical ``format_kind`` with an optional ``format_option_ref``, and
+    # the schemas declare the pair as a oneOf whose arms forbid each other. All four are
+    # nullable for that reason: the legacy pair used to be NOT NULL, so a canonical creative
+    # had nowhere to be stored at all.
+    #
+    # The exclusivity is not a CHECK constraint. It is a protocol rule the request and state
+    # models both enforce on the way in, and ``creative_format_identity`` is the one reader
+    # that asks a row which arm it carries. A constraint here would be a fifth statement of
+    # the same rule and a fifth place for it to drift.
+    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    format: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    format_kind: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    format_option_ref: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
     # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
     # column through the closed spec enum, so a non-member default (this was "pending")
     # makes every row written with the field omitted unreadable. No CHECK constraint or
