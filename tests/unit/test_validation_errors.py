@@ -7,6 +7,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.validation_helpers import first_validation_error_field, format_validation_error
 from tests.factories.request import PackageRequestFactory
 from tests.helpers import assert_construction_rejects
+from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
 
 def test_first_validation_error_field_uses_bracket_notation():
@@ -147,7 +148,15 @@ def test_validation_error_formatting():
         assert "brand_manifest.BrandManifest.target_audience" in error_msg
         assert "Expected string, got object" in error_msg
         assert "AdCP spec requires this field to be a simple string" in error_msg
-        assert "https://adcontextprotocol.org/schemas/v1/" in error_msg
+        # Asserted against EXPECTED_SPEC_VERSION, not a literal and not
+        # get_adcp_spec_version(). Production derives the segment from the SDK at
+        # runtime; this constant is hand-authored in tests/helpers/adcp_pin.py with its
+        # own drift guard, so the two reach the same string by independent paths and
+        # must agree. A literal here would go stale at the next bump -- which is the
+        # defect this assertion previously carried: it pinned `/schemas/v1/`, a version
+        # this project has never used, and kept asserting it after production started
+        # deriving.
+        assert f"https://adcontextprotocol.org/schemas/{EXPECTED_SPEC_VERSION}/" in error_msg
 
 
 def test_validation_error_formatting_missing_field():
