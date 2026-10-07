@@ -2063,10 +2063,15 @@ def then_one_advisory_names_the_creative(ctx: dict, code: str) -> None:
         f"expected exactly one errors[] entry naming creative {creative_id!r}, got {len(advisories)}: "
         f"{require_payload(ctx).errors!r}"
     )
-    actual = getattr(advisories[0].code, "value", advisories[0].code)
-    assert actual == code, (
-        f"advisory code is {actual!r}, expected {code!r} — a code outside the wire-standard set collapses "
-        "to SERVICE_UNAVAILABLE, which tells the buyer to retry a row only the seller can repair"
+    # ``.code`` directly. ``core/error.json`` makes it required, and this response's
+    # ``errors[]`` holds the library ``core.error.Error``, whose ``code`` is typed ``str`` --
+    # so there is nothing to unwrap and nothing to tolerate. A getattr with a fallback stood
+    # here, which would have survived a missing code; the absence of a required field is a
+    # crash, not a default.
+    assert advisories[0].code == code, (
+        f"advisory code is {advisories[0].code!r}, expected {code!r} — a code outside the wire-standard "
+        "set collapses to SERVICE_UNAVAILABLE, which tells the buyer to retry a row only the seller "
+        "can repair"
     )
 
 
