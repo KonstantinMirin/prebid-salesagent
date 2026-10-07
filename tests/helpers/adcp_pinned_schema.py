@@ -62,6 +62,19 @@ class PinnedSchemaError(Exception):
     """
 
 
+def installed_spec_version() -> str:
+    """The FULL spec version the installed SDK pins (e.g. ``3.2.1``).
+
+    The one reader of it, so a caller comparing a version against the pin cannot
+    accidentally compare against the ``<major>.<minor>`` SCHEMA DIRECTORY instead —
+    ``_schemas/3.2/`` holds spec ``3.2.1``, and a check against the directory name
+    would pass today and go quiet at the next patch release.
+    """
+    import adcp
+
+    return str(adcp.get_adcp_spec_version())
+
+
 def schema_root() -> Path:
     """The installed adcp SDK's schema tree for the pinned spec version.
 
@@ -71,7 +84,7 @@ def schema_root() -> Path:
     """
     import adcp
 
-    spec_version = adcp.get_adcp_spec_version()
+    spec_version = installed_spec_version()
     major_minor = ".".join(spec_version.split(".")[:2])
     root = Path(adcp.__file__).parent / "_schemas" / major_minor
     if not root.is_dir():

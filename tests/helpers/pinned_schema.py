@@ -137,6 +137,9 @@ from tests.helpers.adcp_pinned_schema import (
 from tests.helpers.adcp_pinned_schema import (
     _resolve_filename as _resolve_in_sdk_tree,
 )
+from tests.helpers.adcp_pinned_schema import (
+    installed_spec_version as _installed_spec_version,
+)
 
 __all__ = [
     "PinnedSchemaError",
@@ -146,6 +149,7 @@ __all__ = [
     "normalize_ref",
     "recovery_by_code",
     "schema_root",
+    "tree_ref_for_index_ref",
     "validate_against_pinned_schema",
     "validator_for",
 ]
@@ -197,6 +201,73 @@ def _site_rooted_path(uri: str) -> str | None:
     if f"{parsed.scheme}://{parsed.netloc}" != _SITE_ORIGIN:
         return None
     return parsed.path if parsed.path.startswith(_SITE_ROOT_PREFIX) else None
+
+
+def tree_ref_for_index_ref(ref: str) -> str:
+    """Upstream's ``index.json`` ``$ref``, as a ref this module's resolvers accept.
+
+    The index changed spelling at the pin boundary, and nothing was taught to read
+    it. Measured on the installed trees:
+
+    ====  ============  ==========  ===============================================
+    pin   ``$ref``s     absolute    the ``sync-creatives`` response entry
+    ====  ============  ==========  ===============================================
+    3.1   437           0  (0%)     ``creative/sync-creatives-response.json``
+    3.2   633           633 (100%)  ``https://adcontextprotocol.org/schemas/3.2.1/creative/sync-creatives-response.json``
+    ====  ============  ==========  ===============================================
+
+    This is the same move :func:`_resolve_site_rooted` already records for the
+    generated tree's own 1314 internal ``$ref``s — 3.2 put them behind upstream's
+    origin, naming the spec version. It happened to the index too.
+
+    A tree-relative ref (the 3.1 form, and the app tree's) is returned unchanged, so
+    this is identity for every ref that already resolved.
+
+    THE VERSION IS VERIFIED, NOT STRIPPED, and that is the whole point of doing this
+    here rather than relaxing :func:`normalize_ref`. That function refuses a ref
+    carrying a version precisely because "quietly redirecting it hides that the
+    version it named was ignored"; keeping the refusal and narrowing it to a
+    MISMATCH preserves the guarantee while accepting upstream's new spelling. The
+    comparison is against the installed SDK's spec version (``3.2.1``), NOT the
+    schema directory it lives in (``3.2``) — a check against the directory would
+    pass today and go quiet at the next patch release, which is the failure this
+    docstring exists to prevent.
+
+    The origin is not re-checked here: :func:`_site_rooted_path` owns that rule, so
+    ``https://evil.example/schemas/3.2.1/core/error.json`` returns ``None`` there and
+    falls through unchanged, to be refused downstream. One origin rule, one place.
+
+    Measured, because "falls through" is only safe if something catches it — and WHICH
+    thing catches it depends on the caller, so both were checked:
+
+    - through :class:`~tests.helpers.adcp_schema_validator.AdCPSchemaValidator`, which
+      runs this and then :func:`normalize_ref`, the ``"://"`` refusal fires:
+      ``Cannot resolve schema reference 'https://evil.example/…'``;
+    - through :func:`load` directly, which skips ``normalize_ref``, it reaches
+      :func:`_resolve_filename` and dies as ``not found under any of: …``.
+
+    Refused on both paths. The second message names containment rather than origin,
+    which is worth knowing before debugging one.
+    """
+    path = _site_rooted_path(ref)
+    if path is None:
+        return ref
+
+    match = _VERSION_PREFIX.match(path[len(_SITE_ROOT_PREFIX) :])
+    if not match:
+        raise PinnedSchemaError(
+            f"Index ref {ref!r} is site-rooted but names no spec version "
+            f"({_SITE_ROOT_PREFIX}<major>.<minor>.<patch>/...), so it selects no pinned tree"
+        )
+
+    named, remainder = match.group(1), match.group(2)
+    pinned = _installed_spec_version()
+    if named != pinned:
+        raise PinnedSchemaError(
+            f"Index ref {ref!r} names spec version {named!r} but the installed pin is "
+            f"{pinned!r}. Resolving it would grade against a version the ref did not name."
+        )
+    return remainder
 
 
 class _PinnedSource(NamedTuple):
