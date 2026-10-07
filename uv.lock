@@ -75,7 +75,7 @@ wheels = [
 [[package]]
 name = "adcp"
 version = "9.0.0b1"
-source = { registry = "https://pypi.org/simple" }
+source = { editable = "../sdk-v9-integrated" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -94,9 +94,55 @@ dependencies = [
     { name = "tldextract" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5f/54/f4a28a2ffa515fddca53989833a0e0aa714752023d12580101272f6264e0/adcp-9.0.0b1.tar.gz", hash = "sha256:f6e3c5cf783936d97ff240fe516f74b0020b5ef9c525c4fcd24ccf72ba053cf9", size = 39929928, upload-time = "2026-10-06T18:01:34.17Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/fe/5b/3625986a80711008413c9193d3748aab7076dec838b23106b53aeac294dd/adcp-9.0.0b1-py3-none-any.whl", hash = "sha256:d83dadb62c2d47fb3801aff185d6653b9fdfa367c0def05690cdae530b39947e", size = 42188860, upload-time = "2026-10-06T18:01:29.424Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "a2a-sdk", specifier = ">=1.0.1,<1.0.2" },
+    { name = "alembic", marker = "extra == 'dev'", specifier = ">=1.13.0" },
+    { name = "asgi-lifespan", marker = "extra == 'dev'", specifier = ">=2.1.0" },
+    { name = "black", marker = "extra == 'dev'", specifier = ">=23.0.0" },
+    { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.1" },
+    { name = "cryptography", specifier = ">=41.0.0" },
+    { name = "datamodel-code-generator", extras = ["http"], marker = "extra == 'dev'", specifier = "==0.64.0" },
+    { name = "email-validator", specifier = ">=2.0.0" },
+    { name = "freezegun", marker = "extra == 'dev'", specifier = "==1.5.5" },
+    { name = "httpcore", specifier = ">=1.0.9,<2.0" },
+    { name = "httpcore2", specifier = ">=2.5,<3.0" },
+    { name = "httpx", specifier = ">=0.28.1,<1.0" },
+    { name = "httpx2", specifier = ">=2.5.0,<3.0" },
+    { name = "idna", specifier = ">=3.18,<4" },
+    { name = "jsonschema", specifier = ">=4.20.0" },
+    { name = "mcp", specifier = ">=2.0.0,<3.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = "==1.20.2" },
+    { name = "opentelemetry-api", marker = "extra == 'observability'", specifier = ">=1.25,<2" },
+    { name = "opentelemetry-sdk", marker = "extra == 'dev'", specifier = ">=1.25,<2" },
+    { name = "pdoc3", marker = "extra == 'docs'", specifier = ">=0.10.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=4.4.0" },
+    { name = "protobuf", specifier = ">=6.31.0,<8" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'pg'", specifier = ">=3.1.0" },
+    { name = "psycopg-pool", marker = "extra == 'pg'", specifier = ">=3.2.0" },
+    { name = "pydantic", specifier = ">=2.13.0,<3" },
+    { name = "pyright", marker = "extra == 'dev'", specifier = "==1.1.414" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.0.0" },
+    { name = "pytest-xdist", marker = "extra == 'dev'", specifier = ">=3.8,<4" },
+    { name = "respx", marker = "extra == 'dev'", specifier = ">=0.20.0" },
+    { name = "rfc8785", specifier = ">=0.1.4" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
+    { name = "sse-starlette", specifier = ">=3.0.0" },
+    { name = "tldextract", specifier = ">=5.1.0" },
+    { name = "types-protobuf", marker = "extra == 'dev'", specifier = ">=7.34.1.20260408" },
+    { name = "typing-extensions", specifier = ">=4.14.1" },
+]
+provides-extras = ["dev", "docs", "pg", "observability"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "datamodel-code-generator", specifier = "==0.64.0" },
+    { name = "mypy", specifier = "==1.20.2" },
+    { name = "pre-commit", specifier = ">=4.4.0" },
+    { name = "types-protobuf", specifier = ">=7.34.1.20260408" },
 ]
 
 [[package]]
@@ -199,7 +245,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", specifier = "==9.0.0b1" },
+    { name = "adcp", editable = "../sdk-v9-integrated" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },

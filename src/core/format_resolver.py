@@ -11,10 +11,12 @@ creative agent-based format discovery per AdCP v2.4.
 import json
 import logging
 from collections.abc import Iterable, Mapping
+from fnmatch import fnmatch
 from typing import Any
 
-from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported
+from adcp.canonical_formats import CANONICAL_CREATIVE_AGENT_URL, format_is_supported, load_default_registry
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.registries.v1_canonical_mapping import V1Pattern as LibraryV1GlobPattern
 from pydantic import ValidationError
 
 from src.core.database.database_session import get_db_session
@@ -95,6 +97,69 @@ def format_identity(ref: FormatRef) -> FormatIdentity:
     elif isinstance(ref, Mapping):
         ref = LibraryFormatId.model_validate({"agent_url": CANONICAL_CREATIVE_AGENT_URL, **ref})
     return format_id_identity(ref)
+
+
+def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
+    """The canonical ``format_kind`` a deprecated ``format_id`` projects to.
+
+    THE ONE direction that resolves. ``registries/v1-canonical-mapping.json`` is
+    "authoritative for v1 -> v2 projection only", and the reverse is forbidden outright:
+    a seller MUST NOT synthesize a v1 ``format_id`` by inverting a structural match,
+    because the registry's id slugs carry no ``agent_url`` half and a glob entry has no
+    single literal to invert to. That asymmetry is why the canonical kind -- not the
+    legacy reference -- is the identity everything inside this seller shares.
+
+    Two of the normative six steps are implementable from what a seller holds today, and
+    they are tried in the spec's order:
+
+    1. **The agent's own projection.** ``core/format-id.json`` lets a format declare its
+       canonical projection, and ``CanonicalProjectionReference.kind`` is required when it
+       does. An explicit declaration outranks any inference, so it is consulted first.
+    2. **The registry glob.** 45 mappings carry a ``v1_pattern.format_id_glob`` and a
+       ``v2.canonical``; measured, all 7 distinct targets are members of the pinned
+       vocabulary, so a match yields a usable kind without further checking.
+
+    The remaining steps -- structural match and ambiguous-family -- need the format's
+    declared structure rather than its id, and a seller-published
+    ``v1_format_ref[]`` needs ``Product.format_options[]``, which this seller does not
+    carry yet. Until those exist this fails CLOSED, which is the sixth step and the only
+    safe end to the order: a kind guessed from an unmatched id would be a fabricated
+    identity, and every comparison downstream keys on it.
+
+    Args:
+        ref: the deprecated reference, in any shape :func:`format_identity` accepts.
+        spec: the fetched format declaration, when the caller already has it. Passing it
+            is what makes step 1 reachable; without it only the registry is consulted.
+
+    Returns:
+        A ``format_kind`` from the pinned vocabulary.
+
+    Raises:
+        ValueError: when neither step resolves. The caller decides how to refuse -- this
+            module does not mint an error code for a projection it could not make.
+    """
+    declared = getattr(spec, "canonical", None) if spec is not None else None
+    if declared is not None:
+        kind = getattr(declared, "kind", None)
+        if kind is not None:
+            return str(kind)
+
+    legacy_id = format_ref_id(ref)
+    if legacy_id is not None:
+        for mapping in load_default_registry().mappings:
+            # The registry's ``v1_pattern`` is a closed two-arm union, and the arms ARE the
+            # two normative steps: ``format_id_glob`` is step 3 (38 of the 45 mappings),
+            # ``structural`` is step 4 (the other 7). Discriminated by type rather than by
+            # ``getattr``, so the untried arm is a visible skip instead of a silent miss --
+            # a structural entry needs the format's declared shape, which this does not have.
+            pattern = mapping.v1_pattern
+            if isinstance(pattern, LibraryV1GlobPattern) and fnmatch(legacy_id, pattern.format_id_glob):
+                return str(mapping.v2.canonical)
+
+    raise ValueError(
+        f"no canonical projection for legacy format_id {legacy_id!r}: the agent declares none "
+        "and no registry pattern matches"
+    )
 
 
 def same_format(left: FormatRef, right: FormatRef) -> bool:
