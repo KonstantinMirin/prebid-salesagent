@@ -24,6 +24,7 @@ from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Creative,
     Error,
+    FormatId,
     ListCreativesRequest,
     ListCreativesResponse,
     canonical_agent_url,
@@ -268,6 +269,14 @@ def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignm
 #: the buyer selected.
 _ALWAYS_ON_THE_WIRE = frozenset({"creative_id", "name", "format_id", "status", "created_date", "updated_date"})
 
+#: Every parameter ``FormatId`` declares beyond the identity pair, derived from the model.
+#:
+#: ``core/format-id.json`` parameterizes a named format (AdCP 2.5 format templates) and the
+#: stored ``format_parameters`` document holds whatever was synced. Listing the parameters by
+#: name here is what dropped ``pixel_ratio``: three of the four were copied on readback, so a
+#: creative synced with a pixel ratio was listed without one.
+_FORMAT_ID_PARAMETERS = frozenset(FormatId.model_fields) - {"agent_url", "id"}
+
 #: The two `fields` members that do not name one response field. list-creatives-request.json
 #: says so for the first: "The 'concept' value returns both concept_id and concept_name";
 #: and a snapshot is either the object or the machine-readable reason it is absent, so
@@ -501,44 +510,44 @@ def _list_creatives_impl(
                     else "https://placeholder.example.com/missing.jpg"
                 )
 
-            # Build Creative directly with explicit types to satisfy mypy
-            from src.core.schemas import FormatId
-
-            # Build FormatId with optional parameters (AdCP 2.5 format templates)
-            format_kwargs: dict[str, Any] = {
-                "agent_url": db_creative.agent_url,
-                "id": db_creative.format or "",
-            }
-            # Add format parameters if present
-            if db_creative.format_parameters:
-                params = db_creative.format_parameters
-                if "width" in params:
-                    format_kwargs["width"] = params["width"]
-                if "height" in params:
-                    format_kwargs["height"] = params["height"]
-                if "duration_ms" in params:
-                    format_kwargs["duration_ms"] = params["duration_ms"]
-
-            format_obj = FormatId(**format_kwargs)
-
-            # Ensure datetime fields are timezone-aware (database may store naive datetimes)
-            if isinstance(db_creative.created_at, datetime):
-                created_at_dt = (
-                    db_creative.created_at.replace(tzinfo=UTC)
-                    if db_creative.created_at.tzinfo is None
-                    else db_creative.created_at
+            # THE STORED ARM, echoed back. A listed creative carries exactly one format
+            # identity -- the item schema's oneOf forbids both and forbids neither -- and the
+            # state mirrors the input: a creative synced by format_id lists by format_id, one
+            # synced by format_kind lists by format_kind. Building a FormatId unconditionally
+            # answered a canonical creative with a legacy identity over two null columns,
+            # which the response model refuses on construction.
+            format_obj: FormatId | None = None
+            if db_creative.agent_url is not None:
+                format_obj = FormatId(
+                    agent_url=db_creative.agent_url,
+                    id=db_creative.format or "",
+                    # EVERY parameter the model declares, taken from the stored document.
+                    # This copied three by name -- width, height, duration_ms -- and
+                    # ``FormatId`` declares four: ``pixel_ratio`` was stored on sync and
+                    # silently dropped on every readback, so a parameterized format came
+                    # back as a different format than the buyer sent. Deriving the set from
+                    # the model means a parameter added to the pin arrives without this
+                    # line changing.
+                    **{
+                        name: value
+                        for name, value in (db_creative.format_parameters or {}).items()
+                        if name in _FORMAT_ID_PARAMETERS
+                    },
                 )
-            else:
-                created_at_dt = datetime.now(UTC)
 
-            if isinstance(db_creative.updated_at, datetime):
-                updated_at_dt = (
-                    db_creative.updated_at.replace(tzinfo=UTC)
-                    if db_creative.updated_at.tzinfo is None
-                    else db_creative.updated_at
-                )
-            else:
-                updated_at_dt = datetime.now(UTC)
+            # The columns are ``DateTime(timezone=True)``, so what the ORM read hands back is
+            # a tz-aware datetime or NULL -- nothing else is representable. This used to
+            # ``isinstance``-check for ``datetime`` and patch a missing ``tzinfo``, defending
+            # against two states the column type forbids; the ORM read is the boundary, and
+            # past it the declared type is the fact.
+            #
+            # NULL is the one state the column does permit, and the response requires both
+            # dates, so a row written outside the server default is read as "now". That
+            # substitutes a value the seller does not know -- the same shape as the status
+            # fabrication BR-RULE-149 grades -- and is left as-is here rather than widened
+            # into a second change.
+            created_at_dt = db_creative.created_at or datetime.now(UTC)
+            updated_at_dt = db_creative.updated_at or datetime.now(UTC)
 
             # AdCP v1 spec compliant - only spec fields
             # Get assets dict from database (all production data uses AdCP v2.4 format)
@@ -623,7 +632,13 @@ def _list_creatives_impl(
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
+                # Exactly one arm reaches the model. ``format_obj`` is None for a canonical
+                # creative and ``format_kind`` is None for a legacy one, so the oneOf the
+                # item schema declares is satisfied by whichever row was stored rather than
+                # by a rule restated here.
                 format_id=format_obj,
+                format_kind=db_creative.format_kind,
+                format_option_ref=db_creative.format_option_ref,
                 assets=coerced_assets,
                 # tags is typed list[str] but read from the untyped blob, where an
                 # external producer may write a malformed value (a bare string, or
