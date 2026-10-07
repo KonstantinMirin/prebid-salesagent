@@ -45,6 +45,16 @@ def test_dispatches_survive_the_worker_to_controller_trip(tmp_path: Path, integr
     env = {
         **os.environ,
         "BDD_PAYLOAD_ARTIFACT": str(artifact),
+        # Redirected for the same reason as the payload artifact above, and this one is
+        # NOT optional: the nested pytest writes a liveness artifact too, this test never
+        # looks at it, and its default path is the cwd-relative
+        # ``test-results/bdd_scenario_liveness.json`` that thirteen storyboard guards
+        # read. Without this line the three modules below land there as a 9-item
+        # path-narrowed artifact, and those guards correctly refuse it -- which is what
+        # made three unit tests fail on two separate full runs a day apart. Scoping the
+        # bdd tox envs does not help: this subprocess inherits the `integration` env,
+        # which declares no override.
+        "BDD_LIVENESS_ARTIFACT": str(tmp_path / "liveness.json"),
         "BDD_E2E_ENABLED": "false",
     }
     result = subprocess.run(  # noqa: S603 - fixed argv, no shell
