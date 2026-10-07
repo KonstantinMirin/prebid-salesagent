@@ -21,6 +21,7 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from pydantic import TypeAdapter
 
 pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
@@ -473,7 +474,13 @@ class TestSignalSchemaContract:
                 SignalDeployment(platform="test_platform", is_live=True, type="platform", scope="platform-wide")
             ],
             "pricing_options": [
-                VendorPricingOption.model_validate(
+                # Through a TypeAdapter, not ``VendorPricingOption.model_validate``: adcp 9
+                # types VendorPricingOption as an Annotated UNION of its eleven arms rather
+                # than a RootModel, and a union has no ``model_validate`` (at adcp 6.6.0 it
+                # was a RootModel, which is why the old call worked). The adapter validates
+                # against the whole pinned union, so this still grades the spec shape instead
+                # of a hand-picked arm -- this payload resolves to VendorPricingOption7.
+                TypeAdapter(VendorPricingOption).validate_python(
                     {"pricing_option_id": "cpm_usd", "cpm": 3.50, "currency": "USD", "model": "cpm"}
                 )
             ],
