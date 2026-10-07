@@ -143,20 +143,16 @@ dev = [
     "virtualenv>=21.7.13",
 ]
 
-[tool.uv.sources]
-# adcp 9.0.0 is not on PyPI: it is the local integration build of upstream main
-# plus adcontextprotocol/adcp-client-python#1392 (the domain-tree inversion and
-# the open ``format_kind``). It is consumed from the public fork by revision, so
-# `uv sync --frozen` inside the Dockerfile — which runs with only pyproject.toml
-# and uv.lock in the build context, long before `COPY . .` — can fetch it over
-# the network. A path dependency cannot work there (the directory is outside the
-# build context) and a committed wheel is forbidden (salesagent-cnb23: a 41.7 MB
-# binary in git history).
+# No [tool.uv.sources] for adcp. It is an ordinary PyPI dependency again:
+# upstream published v9.0.0-beta.1, so the fork revision this used to consume by
+# git rev is gone, and the whole rationale for the override went with it — that
+# rationale was about `uv sync --frozen` in the Dockerfile needing to fetch the
+# SDK over the network from a build context holding only pyproject.toml and
+# uv.lock, which a PyPI dependency satisfies directly.
 #
-# Local iteration against an SDK worktree checked out beside this one:
+# Local iteration against an SDK worktree checked out beside this one still
+# works the same way, overlaying an editable install on the synced version:
 #     uv pip install --no-deps -e ../acp-v9
-# which overlays the editable install on top of the synced revision.
-# adcp now comes from PyPI (9.0.0b1 = upstream v9.0.0-beta.1); no git override.
 
 [tool.ruff]
 line-length = 120
