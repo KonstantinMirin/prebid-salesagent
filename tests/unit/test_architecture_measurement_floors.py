@@ -10,6 +10,7 @@ thing being counted disappears and the count keeps reporting success.
 
 from __future__ import annotations
 
+import configparser
 import json
 import sys
 from pathlib import Path
@@ -486,3 +487,97 @@ def test_the_writer_records_the_paths_the_reader_judges(tmp_path) -> None:
     artifact.write_text(json.dumps({"run": scope, "scenarios": []}), encoding="utf-8")
     with pytest.raises(storyboard_spec.StoryboardAuditError):
         scenario_liveness_join.load_artifact(artifact)
+
+
+# ── Floor 5: a suite-wide bdd env must not write a path another env reads ───
+#
+# The artifact's integrity does not only depend on the reader refusing a
+# narrowed run (Floors 3-4). It also depends on nobody CLOBBERING the file
+# mid-read, and that was a tox.ini asymmetry: `BDD_PAYLOAD_ARTIFACT` was
+# scoped to {toxworkdir} for all three bdd envs while `BDD_LIVENESS_ARTIFACT`
+# was scoped for bdd_e2e alone, so `bdd` and `bdd_inprocess` fell through to
+# the cwd-relative default that the `unit` env READS. Neither `unit` nor
+# `quality` declares `depends`, so under `tox -p` writer and readers run in
+# the same wave. Fixed by scoping both; this guard is what stops the next
+# bdd-ish env from reintroducing it (salesagent-peq79).
+#
+# DERIVED, NOT SPELLED, in two directions — a guard that listed `bdd`,
+# `bdd_inprocess`, `bdd_e2e` would be the same object as the declaration it
+# replaces, and the next env would be invisible to it:
+#
+#   * the ENV LIST comes from what each env COLLECTS (an argument naming the
+#     bdd suite directory), so a new env is caught by behaving like one
+#     rather than by being named like one;
+#   * the VARIABLE NAMES come from the modules that own them —
+#     `storyboard_spec.ARTIFACT_ENV_VAR` and `payload_capture.ARTIFACT_ENV_VAR`.
+#     The two do not share a convention (`BDD_LIVENESS_ARTIFACT` is plural-less
+#     and `BDD_PAYLOAD_ARTIFACT` is singular; `BDD_PAYLOADS_ARTIFACT` is read by
+#     nothing and cost one lane a dozen no-op redirects), so a hardcoded string
+#     here could be the wrong one and nothing would say so.
+
+
+def _tox_sections() -> configparser.ConfigParser:
+    """tox.ini parsed as plain config. Substitutions are left unexpanded.
+
+    Presence of a KEY is all this floor asks about, and no tox invocation is
+    needed to answer that — the same reason the CI shard manifest guard reads
+    its workflow as YAML rather than running it.
+    """
+    parsed = configparser.ConfigParser(interpolation=None, strict=False)
+    parsed.read(Path(__file__).resolve().parents[2] / "tox.ini", encoding="utf-8")
+    return parsed
+
+
+def _setenv_keys(parsed: configparser.ConfigParser, section: str) -> set[str]:
+    """The env-var names *section* sets, plus those it inherits from ``[testenv]``.
+
+    The base is included so hoisting a variable into ``[testenv]`` is a
+    refactor this floor accepts rather than a failure it invents.
+    """
+    keys: set[str] = set()
+    for name in ("testenv", section):
+        if not parsed.has_section(name) and name != "testenv":
+            continue
+        for line in (parsed[name].get("setenv", "") or "").splitlines():
+            if "=" in line:
+                keys.add(line.split("=", 1)[0].strip())
+    return keys
+
+
+def _collects_the_bdd_suite(commands: str) -> bool:
+    """Whether *commands* collect the bdd suite DIRECTORY, not a file inside it.
+
+    An env that names individual modules is narrower than the suite, and the
+    reader refuses its artifact anyway (Floor 4) — so it is not what this floor
+    is about. Compared per whitespace-separated argument so that naming the
+    directory AND a module does not read as naming only the directory.
+    """
+    suite = {"tests/bdd", "tests/bdd/"}
+    return any(arg in suite for arg in commands.split())
+
+
+def test_every_env_that_runs_the_bdd_suite_scopes_both_artifacts() -> None:
+    """A suite-wide bdd env must write both artifacts somewhere private to it."""
+    from scripts.audit.storyboard_spec import ARTIFACT_ENV_VAR as LIVENESS_VAR
+    from tests.bdd.payload_capture import ARTIFACT_ENV_VAR as PAYLOAD_VAR
+
+    parsed = _tox_sections()
+    suite_envs = [
+        section
+        for section in parsed.sections()
+        if section.startswith("testenv:") and _collects_the_bdd_suite(parsed[section].get("commands", "") or "")
+    ]
+    assert suite_envs, (
+        "no tox env appears to collect the bdd suite directory — the derivation above has "
+        "stopped matching how tox.ini spells its commands, so this floor is grading nothing"
+    )
+
+    unscoped = {section: sorted({LIVENESS_VAR, PAYLOAD_VAR} - _setenv_keys(parsed, section)) for section in suite_envs}
+    offenders = {section: missing for section, missing in unscoped.items() if missing}
+    assert not offenders, (
+        f"these tox envs run the whole bdd suite without scoping {sorted({LIVENESS_VAR, PAYLOAD_VAR})}: "
+        f"{offenders}. Unscoped, the artifact lands at its cwd-relative default under "
+        "test-results/, which is the path the `unit` env reads — and `unit` declares no "
+        "`depends`, so under `tox -p` this env writes the file while the unit suite reads it. "
+        "Set it to a {toxworkdir} path, as the other bdd envs do."
+    )
