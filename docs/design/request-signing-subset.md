@@ -236,9 +236,10 @@ omits `content-digest` and would be refused at step 6 first.
 The in-process suite said the same thing on the real wire at the time: declaring `required`
 turned 16 `test_signing_conformance_vectors.py` rows red, 7 of them positive vectors this
 seller then REFUSED with `request_signature_components_incomplete`, and 8 negatives whose own
-graded code was pre-empted at step 6. That module no longer exists on this tree; the vector
-corpus is consumed by the out-of-process storyboard runner, so the in-process half of this
-measurement is history rather than a prediction about today.
+graded code was pre-empted at step 6. That module is LIVE, at
+`tests/integration/test_signing_conformance_vectors.py` — so the in-process half of this
+measurement is a statement about today, not history, and it grades the root corpus in-process
+while the storyboard runner grades it out-of-process.
 
 ### Why the 3.1.1 reading does not carry forward
 
