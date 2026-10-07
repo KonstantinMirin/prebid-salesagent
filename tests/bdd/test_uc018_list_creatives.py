@@ -2243,14 +2243,32 @@ def then_operation_succeeds_with_full_array(ctx: dict) -> None:
 
 # ── The fields projection ────────────────────────────────────────────
 #
-# The six members list-creatives-response.json marks REQUIRED on every creative item.
-# They are on the wire whatever the buyer selected, because `fields` cannot express keeping
-# them and a projection that dropped one would violate the schema the selection was made
-# against. Read off the pinned schema rather than typed out here, so a future required
-# member is picked up by both sides at once.
-_REQUIRED_CREATIVE_FIELDS = frozenset(
-    validator_for("creative/list-creatives-response.json").schema["properties"]["creatives"]["items"]["required"]
+# What list-creatives-response.json puts on every creative item whatever the buyer selected,
+# because `fields` cannot express keeping it and a projection that dropped it would violate
+# the schema the selection was made against.
+#
+# TWO keywords say this, and reading only the first is what made this set wrong. `required`
+# names five members. The item ALSO carries a `oneOf` whose two arms are "Listed creative
+# (named-format reference)" -> requires format_id, forbids format_kind, and "Listed creative
+# (canonical format kind)" -> requires format_kind, forbids format_id. So exactly one format
+# identity is mandatory on every item, and WHICH one is a property of the creative rather
+# than of the selection -- the request schema names it in those words, "the selected format
+# identity", when it lists what selecting localization automatically includes.
+#
+# A creative therefore cannot be projected down to no identity at all. Reading `required`
+# alone concluded that `format_id` was droppable, and graded a seller that kept it -- which
+# is the only schema-valid thing to do -- as carrying a member the buyer had not selected.
+_CREATIVE_ITEM_SCHEMA = validator_for("creative/list-creatives-response.json").schema["properties"]["creatives"][
+    "items"
+]
+
+#: The format-identity members, derived from the oneOf arms rather than named here, so an
+#: arm added or renamed by a future pin is picked up instead of silently missed.
+_FORMAT_IDENTITY_FIELDS = frozenset(
+    member for arm in _CREATIVE_ITEM_SCHEMA.get("oneOf", ()) for member in arm.get("required", ())
 )
+
+_REQUIRED_CREATIVE_FIELDS = frozenset(_CREATIVE_ITEM_SCHEMA["required"])
 
 #: The two `fields` members that name more than one response member. The request schema
 #: states the first ("The 'concept' value returns both concept_id and concept_name"); the
@@ -2285,7 +2303,11 @@ def then_only_selected_and_required_fields(ctx: dict) -> None:
     # The required members, the selected ones, and the members the `fields` vocabulary
     # cannot name: a buyer with no way to ask for `assets` had no way to decline it either,
     # so a projection that dropped it would answer a selection the buyer never made.
-    permitted = set(_REQUIRED_CREATIVE_FIELDS) | _UNSELECTABLE_WIRE_FIELDS
+    # The required members, the selected ones, the members `fields` cannot name, and the
+    # creative's format identity -- which the item's `oneOf` makes mandatory whatever the
+    # buyer selected, so a seller that dropped it would answer the selection with a document
+    # that fails the schema the selection was made against.
+    permitted = set(_REQUIRED_CREATIVE_FIELDS) | _UNSELECTABLE_WIRE_FIELDS | _FORMAT_IDENTITY_FIELDS
     for field in selected:
         permitted.update(_FIELD_SELECTS_ON_THE_WIRE.get(field, (field,)))
 
@@ -2298,6 +2320,14 @@ def then_only_selected_and_required_fields(ctx: dict) -> None:
         )
         missing = sorted(_REQUIRED_CREATIVE_FIELDS - set(entry))
         assert not missing, f"creative {entry['creative_id']!r} is missing required members: {missing}"
+        # Exactly one identity, not merely "an identity is permitted": the oneOf arms forbid
+        # each other, so a creative carrying both is as invalid as one carrying neither, and
+        # a permit-list alone would grade both as fine.
+        identities = sorted(_FORMAT_IDENTITY_FIELDS & set(entry))
+        assert len(identities) == 1, (
+            f"creative {entry['creative_id']!r} must carry exactly one format identity "
+            f"({sorted(_FORMAT_IDENTITY_FIELDS)}), carries {identities}"
+        )
 
 
 # ── The v3.1 boolean filters, and the enrichments read off the creative platform ──
