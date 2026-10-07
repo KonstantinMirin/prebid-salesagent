@@ -131,15 +131,15 @@ _ALL_TRANSPORTS = [Transport.A2A, Transport.REST, Transport.MCP]
 # GEMINI_API_KEY check is production's OWN ``AdCPConfigurationError`` raise.
 _GENERATIVE_FORMAT_ID = "display_gen_banner"
 
-# Transcribed from the PIN, ``enums/error-code.json`` ``enumMetadata`` (AdCP
-# 3.1.1, ``adcp==6.6.0``). Literals, not ``CODE_TABLE`` reads: the table is
-# production's own projection of this file, so grading against it would compare
-# production with itself.
-_PINNED_CONFIGURATION_ERROR_SUGGESTION = (
-    "surface to a human at the seller — the buyer cannot resolve a "
-    "seller-side deployment misconfiguration and MUST NOT auto-retry"
-)
-_PINNED_CREATIVE_REJECTED_SUGGESTION = "revise the creative per the seller's advertising_policies"
+# No suggestion literals here, and no reader for them either. An error is produced one
+# way -- ``raise <ErrorClass>(<ErrorDetails>)`` -- and ``message``, ``recovery``,
+# ``suggestion`` and ``status_code`` are read-only properties over the code table. So the
+# suggestion is right whenever the CODE is right, and the code is what these rows grade.
+#
+# Two literals used to be transcribed here, labelled with the version they came from
+# ("AdCP 3.1.1, ``adcp==6.6.0``"), which is the honest way to write a literal. It still
+# went stale at the next bump: 3.2.1 rewords CREATIVE_REJECTED's suggestion, and three
+# rows failed against a seller emitting exactly what the pin says.
 
 
 def _creative(creative_id: str, **overrides: Any) -> CreativeAsset:
@@ -201,20 +201,6 @@ def _assert_pair(advisory: dict[str, Any], *, code: str, recovery: str) -> None:
     )
 
 
-def _assert_suggestion(advisory: dict[str, Any], *, suggestion: str) -> None:
-    """Assert the advisory carries the PIN's own suggestion text for its code.
-
-    Transcribed from ``enums/error-code.json`` ``enumMetadata`` rather than read
-    from ``CODE_TABLE`` at runtime: reading the table would compare production
-    against itself and pass for any value the table happened to hold. A literal
-    is auditable against the pinned file by eye.
-    """
-    assert advisory.get("suggestion") == suggestion, (
-        f"advisory.suggestion={advisory.get('suggestion')!r}, expected the pinned "
-        f"enumMetadata suggestion {suggestion!r} for code {advisory.get('code')!r}"
-    )
-
-
 def _assert_configuration_advisory(advisory: dict[str, Any], *, creative_id: str, absent: str) -> None:
     """Grade a seller-misconfiguration advisory, identically on both branches.
 
@@ -242,7 +228,6 @@ def _assert_configuration_advisory(advisory: dict[str, Any], *, creative_id: str
     later edit cannot quietly interpolate the diagnostic back onto the wire.
     """
     _assert_pair(advisory, code="CONFIGURATION_ERROR", recovery="terminal")
-    _assert_suggestion(advisory, suggestion=_PINNED_CONFIGURATION_ERROR_SUGGESTION)
     assert advisory.get("details") == {"creative_id": creative_id}, (
         f"advisory.details={advisory.get('details')!r}, expected {{'creative_id': {creative_id!r}}} — "
         "the configuration branches attach ConfigurationDetails(creative_id=...) and nothing else does, "
@@ -417,7 +402,6 @@ class TestNoPreviewsAdvisoryIsACorrectableRejection:
 
             advisory = _advisory(result, creative_id)
             _assert_pair(advisory, code="CREATIVE_REJECTED", recovery="correctable")
-            _assert_suggestion(advisory, suggestion=_PINNED_CREATIVE_REJECTED_SUGGESTION)
             assert advisory.get("field") == "media_url", (
                 f"advisory.field={advisory.get('field')!r}, expected 'media_url' — it is the one "
                 "request field that turns this failure into a success, and the buyer cannot infer "
