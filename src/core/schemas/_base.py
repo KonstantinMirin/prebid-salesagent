@@ -2170,6 +2170,27 @@ class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
 AnyTargeting = Targeting | TargetingInput
 
 
+def _adopt_sibling(value: Any, annotation: Any) -> Any:
+    """Re-validate *value* into the model its target field declares.
+
+    AdCP 3.2 splits several shapes into an input schema and a readback schema, and the
+    two are SIBLINGS -- identical field sets, neither a subclass of the other. So a
+    name-keyed echo hands the input arm to a field typed as the readback arm and pydantic
+    refuses it. Adopt by reading attributes, never by dumping in the caller.
+
+    Known limitation: only a directly-annotated model is adopted, not one inside a
+    ``list[...]``.
+    """
+    if not isinstance(value, BaseModel):
+        return value
+    for candidate in (annotation, *getattr(annotation, "__args__", ())):
+        if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+            if isinstance(value, candidate):
+                return value
+            return candidate.model_validate(value, from_attributes=True)
+    return value
+
+
 class Budget(SalesAgentBaseModel):
     """Budget object with multi-currency support (AdCP spec compliant)."""
 
@@ -2575,7 +2596,7 @@ class Package(LibraryPackage):
         silently winning.
         """
         echoed = {
-            name: getattr(request_package, name)
+            name: _adopt_sibling(getattr(request_package, name), cls.model_fields[name].annotation)
             for name in cls.model_fields.keys() & type(request_package).model_fields.keys()
             if name not in cls.SELLER_DECIDED
         }
@@ -2819,7 +2840,9 @@ class MediaPackage(SalesAgentBaseModel):
     # Accept library FormatId (not our extended FormatId) to avoid validation errors
     # when Product from library returns LibraryFormatId instances
     format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
-    targeting_overlay: Targeting | None = None
+    # Either arm: this carrier is built from a REQUEST package, whose overlay is the
+    # input subclass, and read by adapters that only touch dimensions both declare.
+    targeting_overlay: AnyTargeting | None = None
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package

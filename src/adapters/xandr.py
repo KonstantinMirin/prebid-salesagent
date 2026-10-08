@@ -18,11 +18,11 @@ from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPIn
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AnyTargeting,
     MediaPackage,
     Principal,
     Product,
     ReportingPeriod,
-    Targeting,
 )
 from src.core.security.outbound_http import OutboundError
 
@@ -601,10 +601,17 @@ class XandrAdapter(AdServerAdapter):
         }
         return mapping.get(product_id, "display")
 
-    def _create_targeting_profile(self, targeting: Targeting) -> int:
+    def _create_targeting_profile(self, targeting: AnyTargeting) -> int:
         """Create targeting profile in Xandr.
 
         Maps from AdCP Targeting model's flat field structure to Xandr's profile API format.
+
+        EITHER ARM. ``MediaPackage.targeting_overlay`` holds whichever of the two sibling
+        overlays its builder had -- AdCP 3.2 split the shape into an input schema and a
+        readback schema, and they are siblings with identical field sets and neither a
+        subclass of the other -- so this reads only dimensions both declare. Narrowing with
+        a cast at the call site is what hid the split from the type checker in the first
+        place, so the annotation widens instead.
         """
         profile_data: dict[str, Any] = {
             "profile": {

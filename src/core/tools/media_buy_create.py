@@ -3368,10 +3368,7 @@ async def _create_media_buy_impl(
                     cpm=cpm,
                     impressions=int(float(total_budget) / cpm * 1000),
                     format_ids=cast(list[Any], format_ids_to_use),
-                    targeting_overlay=cast(
-                        "Targeting | None",
-                        matching_package.targeting_overlay if matching_package else None,
-                    ),
+                    targeting_overlay=(matching_package.targeting_overlay if matching_package else None),
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
                     creative_ids=(
