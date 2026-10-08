@@ -11,6 +11,7 @@ errors to reach production.
 """
 
 import pytest
+from adcp.types import LegacyProduct as LibraryProduct
 from sqlalchemy import delete
 
 from src.core.database.database_session import get_db_session
@@ -141,6 +142,58 @@ class TestSchemaFieldMapping:
         for field in critical_fields:
             assert field in schema_fields, f"Critical field '{field}' missing from Product schema"
             assert field in db_columns, f"Critical field '{field}' missing from ProductModel database"
+
+    def test_every_field_this_repo_adds_to_product_is_backed_by_storage(self):
+        """A field OUR subclass adds -- not inherited from the pin -- must be stored.
+
+        The companion to the converter test above, and the other direction. That one
+        grades the READER: an attribute the converter names and the ORM model lacks.
+        This grades the WRITER: a field this seller declares for itself and then has
+        nowhere to put. Nothing upstream will ever supply such a field, so a conversion
+        that reads one off a database row raises AttributeError -- the #161 fault
+        arriving from the opposite side.
+
+        Scoped to what this seller declares for ITSELF, which is the distinction
+        critical pattern #7 draws. ``Product`` inherits the pinned parent's fields by
+        construction (pattern #1), so ``model_fields`` is the pin's CEILING and never a
+        floor for the ``products`` table -- asserting a column for every pinned field is
+        the inverted obligation the 41-name allowlist used to encode. Subtracting the
+        parent's fields leaves only what we added, and that set we do owe storage for.
+
+        Derived from the models rather than listed, so an SDK bump that adds a spec field
+        changes nothing here. Measured at adcp 9.0.0b1: the set is ``allowed_principal_ids``,
+        ``countries``, ``implementation_config`` -- all columns -- and the 38 unmapped
+        inherited fields are correctly out of scope.
+        """
+        schema_fields = set(Product.model_fields.keys())
+        library_fields = set(LibraryProduct.model_fields.keys())
+
+        # Storage is columns UNION relationship-backed attributes. ``pricing_options``
+        # lives in its own table, so a columns-only check would call it missing.
+        storage = {column.name for column in ProductModel.__table__.columns} | set(
+            ProductModel.__mapper__.relationships.keys()
+        )
+
+        locally_added = schema_fields - library_fields
+
+        # A derivation that matches nothing is green, so prove the populations are real
+        # before trusting the subtraction below.
+        assert locally_added, (
+            "derivation is vacuous: Product declares no field the library parent lacks, "
+            "so this test would pass no matter what storage looked like. Either the "
+            "LibraryProduct import no longer names the pinned parent, or the local "
+            "subclass stopped adding fields -- fix the derivation, do not delete it."
+        )
+        assert storage, "derivation is vacuous: ProductModel exposes no columns or relationships"
+
+        unbacked = locally_added - storage
+
+        assert not unbacked, (
+            f"Fields added by this repo with no database column and no relationship: {unbacked}. "
+            f"These are not inherited from the pinned AdCP Product, so nothing upstream will "
+            f"ever supply them -- a conversion that reads one off a database row raises "
+            f"AttributeError. Add the column (with a migration) or drop the field."
+        )
 
     def test_database_field_access_validation(self, integration_db):
         """Test that all database fields can be accessed without AttributeError."""
