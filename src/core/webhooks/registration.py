@@ -657,6 +657,24 @@ def accept_push_notification_config(
             field=field_prefix,
             details=ValidationDetails(received_type=type(config).__name__),
         )
+    # THE URL GATE RUNS FIRST, and the order is load-bearing rather than incidental.
+    # ``_accept`` opens with the registration SSRF gate, so letting the correlation
+    # check jump ahead of it means an UNSAFE DESTINATION gets refused for a missing
+    # ``operation_id`` instead of for being unsafe — the buyer is told to add a
+    # correlation id to a webhook pointed at a blocked address, and the security
+    # verdict never reaches them. Measured, not foreseen: writing the check above this
+    # line reddened
+    # ``test_protocol_webhook_ssrf.py::test_sync_creatives_rejects_unsafe_push_config_url``,
+    # which builds a raw dict with an unsafe URL and no ``operation_id`` and grades
+    # ``.url``. The egress scenarios did not catch it because
+    # ``PushNotificationConfigRequestFactory`` defaults ``operation_id``, so their
+    # documents are only wrong in one way.
+    #
+    # An unsafe destination is refused unconditionally; an absent correlation id is a
+    # lesser, correctable omission. So the value is BUILT first — which is what runs
+    # the URL half — and the correlation rule applies to a registration that already
+    # cleared it.
+    registration = _accept(config=coerced, field_prefix=field_prefix)
     if "operation_id" in declared_by.model_fields and not coerced.operation_id:
         raise AdCPInvalidRequestError(field=f"{field_prefix}.operation_id")
-    return _accept(config=coerced, field_prefix=field_prefix)
+    return registration
