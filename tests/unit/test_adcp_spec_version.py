@@ -5,6 +5,7 @@ import tomllib
 from pathlib import Path
 
 import adcp
+from packaging.version import Version
 
 from scripts.audit.storyboard_spec import pinned_version
 
@@ -270,12 +271,21 @@ def test_published_timestamps_render_one_spelling() -> None:
 
 
 def _pyproject_adcp_pin() -> str:
-    """Return the exact `adcp==` version pinned in pyproject.toml."""
+    """Return the PUBLIC `adcp==` version pinned in pyproject.toml.
+
+    Normalized through PEP 440 for the reason
+    ``tests/unit/test_no_stale_adcp_citations.py::pinned_sdk_version`` gives at
+    length: a fork wheel pins ``adcp==9.0.0b1+prs1435.1415``, a local version
+    identifier is not part of the public version, and so CLAUDE.md's
+    ``adcp==9.0.0b1`` is a true statement about the release this repo targets.
+    Comparing raw made this guard demand the local segment in prose that is
+    rebuilt-and-rewritten every time the wheel is.
+    """
     with (_REPO / "pyproject.toml").open("rb") as fh:
         deps = tomllib.load(fh)["project"]["dependencies"]
     pins = [d.split("==", 1)[1].strip() for d in deps if d.replace(" ", "").startswith("adcp==")]
     assert len(pins) == 1, f"expected exactly one exact adcp pin in pyproject.toml, found {pins}"
-    return pins[0]
+    return Version(pins[0]).public
 
 
 # Prose calling a version the CURRENT/pinned one, in the shapes no primitive

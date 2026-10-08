@@ -83,6 +83,8 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
 
+from packaging.version import Version
+
 from scripts.audit.storyboard_spec import pinned_version
 from tests.unit._architecture_helpers import REPO_ROOT, iter_git_tracked_files
 
@@ -261,11 +263,31 @@ def pinned_spec_version() -> str:
 
 
 def pinned_sdk_version() -> str:
-    """The ``adcp==`` SDK version this repo pins, read from pyproject.toml."""
+    """The PUBLIC ``adcp==`` SDK version this repo pins, read from pyproject.toml.
+
+    Normalized through PEP 440 rather than compared raw, because the pin can carry a
+    LOCAL version identifier: a fork wheel pins ``adcp==9.0.0b1+prs1435.1415``, and a
+    local segment is by definition not part of the public version. ``adcp==9.0.0b1``
+    in CLAUDE.md, README.md and docs/adcp-spec-version.md is therefore a TRUE statement
+    about the release this repo targets, and the raw comparison called all three stale.
+    Fixing it the other way — writing the local segment into those three files — churns
+    them on every rebuild of the fork wheel to say nothing new.
+
+    ``Version(...).public`` parses; it is not ``split("+")[0]``, which works until a
+    version carries something the hand-rolled split does not expect.
+
+    NORMALIZING ONLY THIS SIDE IS LOAD-BEARING. The claim side stays raw, because a
+    local segment absorbs almost anything appended to it:
+    ``Version("9.0.0b1+prs1435.1415-notthepin.1").public`` is ``"9.0.0b1"``, so
+    normalizing both sides would make
+    :func:`test_detector_flags_a_current_tense_claim_with_the_wrong_version` stop
+    detecting its own deliberately-wrong version and the guard would refuse nothing.
+    Probed in both directions at the commit that introduced this.
+    """
     pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     pins = [dep for dep in pyproject["project"]["dependencies"] if dep.replace(" ", "").startswith("adcp==")]
     assert len(pins) == 1, f"expected exactly one adcp== pin in pyproject.toml, got {pins}"
-    return pins[0].replace(" ", "").split("==", 1)[1]
+    return Version(pins[0].replace(" ", "").split("==", 1)[1]).public
 
 
 def _expected_for(kind: str) -> str:
