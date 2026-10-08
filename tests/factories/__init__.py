@@ -28,7 +28,12 @@ from tests.factories.core import (
     SignalsAgentFactory,
     TenantFactory,
 )
-from tests.factories.creative import CreativeAssignmentFactory, CreativeFactory, stamp_format_identity
+from tests.factories.creative import (
+    CreativeAssignmentFactory,
+    CreativeFactory,
+    seeded_format_identity,
+    stamp_format_identity,
+)
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.delivery_simulation import DeliverySimulationConfigFactory
 from tests.factories.format import FormatFactory, FormatIdFactory
@@ -104,6 +109,7 @@ __all__ = [
     "CreativeAssetRequestFactory",
     "CreativeAssignmentFactory",
     "CreativeFactory",
+    "seeded_format_identity",
     "stamp_format_identity",
     "CreateMediaBuyRequestFactory",
     "DeliverySimulationConfigFactory",
