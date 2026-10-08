@@ -45,7 +45,7 @@ from typing import Any, TypedDict
 from pydantic import ValidationError
 
 from src.core.errors.details import ValidationDetails
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPInvalidRequestError, AdCPValidationError
 from src.core.schema_helpers import require_push_notification_config, to_push_notification_config
 
 # The push-config spelling of the block, as a narrowing subtype of the one Authentication
@@ -391,6 +391,33 @@ def _accept(
     # recovery="correctable", i.e. exactly what
     # tests/helpers/webhook_credential_refusal.py grades). Keeping a second copy
     # of the rule here would be a place for the two to drift apart.
+
+    # THE REGISTRATION-PATH REFUSAL. ``operation_id`` is optional on
+    # ``core/push-notification-config.json`` and REQUIRED on
+    # ``core/mcp-webhook-payload.json``, so a registration that omits it names a
+    # webhook whose envelope cannot be built -- and AdCP 3.2.1 ``L3/webhooks.mdx``
+    # :141 forbids closing that gap from the receiver URL ("Sellers MUST NOT derive
+    # operation_id by parsing push_notification_config.url"). The same line grants
+    # the seller the way out it is taking here: "Sellers MAY reject a webhook
+    # registration that omits operation_id with INVALID_REQUEST."
+    #
+    # This seller takes the MAY, and the alternative is why. Without it the
+    # registration is accepted, every later delivery is refused by the one envelope
+    # builder (``webhooks/delivery.py``), and both senders log that refusal and
+    # continue -- so the buyer registers a webhook, receives a success, and is never
+    # told that nothing will ever arrive on it. PERMANENT SILENCE, with the seller's
+    # own reason sitting in a log line the buyer cannot read. A correctable refusal
+    # the buyer can act on at registration time is strictly better than a delivery
+    # channel that was never going to fire.
+    #
+    # Raised HERE, in the one gate body, rather than at each of the surfaces that
+    # call it: the condition is a property of the registration document, and the
+    # routes differ only in WHERE they ask. A tool surface asks at ingest and the
+    # buyer gets this refusal synchronously; the delivery scheduler asks at send
+    # time and converts it into a suppressed send (:666's reporting shape).
+    if not config.operation_id:
+        raise AdCPInvalidRequestError(field=f"{field_prefix}.operation_id")
+
     return ValidatedWebhookRegistration(config=config)
 
 
@@ -499,6 +526,72 @@ def stored_registration_fields(document: Mapping[str, Any]) -> dict[str, Any]:
     from an absent one for an echo obligation.
     """
     return {field: value for field in PushNotificationConfig.model_fields if (value := document.get(field))}
+
+
+#: The field a reporting registration's correlation value is carried on, named once
+#: because two surfaces answer for it: the scheduler suppresses the stream and
+#: ``get_media_buy_delivery`` flags it, and a field path spelled twice is a field path
+#: that drifts.
+REPORTING_STREAM_ID_FIELD = "reporting_webhook.operation_id"
+
+
+def reporting_stream_id_missing(document: Mapping[str, Any]) -> bool:
+    """Is this stored ``reporting_webhook`` registration unable to carry a correlation id?
+
+    THE REPORTING-PATH CONDITION, and it is deliberately NOT the registration-path
+    one. AdCP 3.2.1 ``L3/webhooks.mdx`` :652-673 scopes the fail-closed ``MUST NOT``
+    to 3.3 and makes 3.2 opt-in guidance; this seller has adopted the interim
+    agreement, so :666 is the rule it follows: "A registration without a
+    buyer-supplied ID cannot enable this interim delivery path. Flag the missing
+    value for the buyer and suppress scheduled sends; do not fabricate an ID or
+    extract one from the URL."
+
+    So the reporting route does not reject the REGISTRATION the way :141 lets the
+    push-config route reject one. ``core/reporting-webhook.json`` does not define
+    ``operation_id`` at the 3.2 pin — the field rides that schema's
+    ``additionalProperties: true`` — so refusing a ``create_media_buy`` over its
+    absence would refuse a document the published schema accepts. The two sanctioned
+    shapes differ by route and this is the reporting one: accept, then suppress and
+    flag.
+
+    Read off the REGISTRATION DOCUMENT, never off a ``push_notification_config``
+    row that happens to share the URL: :669 says the reporting registration's value
+    "is independent of any task-status ``push_notification_config.operation_id``",
+    so borrowing one would be fabricating a correlation id from the wrong stream.
+    """
+    return not document.get("operation_id")
+
+
+#: Where a media buy's reporting registration is stashed. Named HERE and nowhere else:
+#: ``media_buys.raw_request`` is a persistence document, and a reader that spells its key
+#: inline is a second place that has to be edited when the stash shape moves.
+_STASHED_REPORTING_WEBHOOK = "reporting_webhook"
+
+
+def suppressed_reporting_stream(raw_request: Mapping[str, Any] | None) -> bool:
+    """Does this media buy's stored request register a reporting stream with no id?
+
+    The same question :func:`reporting_stream_id_missing` answers, reached from a media
+    buy's ``raw_request`` rather than from the registration document — for a reader that
+    holds the buy and not the registration.
+
+    It exists so that reader does not have to know where a registration is stashed. That
+    is cohesion and it is also what
+    ``tests/unit/test_architecture_webhook_ingest_validation.py`` enforces: a module
+    under ``src/core/tools/`` that NAMES ``reporting_webhook`` must be built against the
+    ingest gate, because naming the field is how the five hand-rolled
+    pull-the-url-out-and-store-it copies looked. A delivery READ is not an ingest and
+    has no registration to gate, so it asks this package instead of spelling the key and
+    then needing an allowlist row for a gate it has no use for.
+    """
+    registration = (raw_request or {}).get(_STASHED_REPORTING_WEBHOOK)
+    if not registration:
+        # No reporting stream registered at all, so none is suppressed. An early
+        # return rather than an ``and``: the stash is a JSON document, so the read
+        # is typed ``Any | None``, and narrowing it by returning is what makes the
+        # delegation below type-check without a cast.
+        return False
+    return reporting_stream_id_missing(registration)
 
 
 def accept_push_notification_config(

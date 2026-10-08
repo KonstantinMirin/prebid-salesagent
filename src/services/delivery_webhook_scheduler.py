@@ -21,12 +21,17 @@ from src.core.database.database_session import get_db_session
 from src.core.database.models import PersistedMediaBuyStatus, WebhookDeliveryLog
 from src.core.database.models import PushNotificationConfig as DBPushNotificationConfig
 from src.core.database.repositories import MediaBuyRepository
-from src.core.exceptions import AdCPValidationError
+from src.core.exceptions import AdCPSalesAgentError, AdCPValidationError
 from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
 from src.core.webhooks.delivery import WebhookTaskContext
-from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
+from src.core.webhooks.registration import (
+    REPORTING_STREAM_ID_FIELD,
+    accept_push_notification_config,
+    reporting_stream_id_missing,
+    stored_registration_fields,
+)
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -117,6 +122,29 @@ class DeliveryWebhookScheduler:
                         else:
                             errors += 1
 
+                    except AdCPSalesAgentError as refusal:
+                        # A SELLER'S REFUSAL, told apart from a failure to send. This arm
+                        # is what narrows the ``except Exception`` below to the thing it
+                        # was written for — keeping ONE buy's transport or infrastructure
+                        # fault from killing the batch — because until it existed that
+                        # handler also absorbed every deliberate refusal raised anywhere
+                        # under the send, including the envelope builder's missing-
+                        # ``operation_id`` refusal, under the same "Error sending report"
+                        # sentence and with the same traceback.
+                        #
+                        # Logged with the refusal's CODE and FIELD, which are the two
+                        # facts that make the affected streams enumerable; no text is
+                        # read off it, because ``message`` is a read-only property over
+                        # CODE_TABLE and reads the same for every raise of the code
+                        # (ADR-010). Still counted as an error and still not re-raised:
+                        # the batch owes the other buys their reports.
+                        logger.error(
+                            "Refusing to send delivery report for media buy %s: %s on %s",
+                            media_buy.media_buy_id,
+                            refusal.error_code,
+                            refusal.field or "the registration",
+                        )
+                        errors += 1
                     except Exception as e:
                         logger.error(f"Error sending report for media buy {media_buy.media_buy_id}: {e}", exc_info=True)
                         errors += 1
@@ -275,6 +303,39 @@ class DeliveryWebhookScheduler:
             webhook_url = reporting_webhook.get("url")
             if not webhook_url:
                 logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
+                return False
+
+            # SUPPRESS THE STREAM, which is this route's sanctioned shape. AdCP 3.2.1
+            # L3/webhooks.mdx :666 — "A registration without a buyer-supplied ID cannot
+            # enable this interim delivery path. Flag the missing value for the buyer
+            # and suppress scheduled sends; do not fabricate an ID or extract one from
+            # the URL."
+            #
+            # Decided HERE, before the delivery is assembled, rather than discovered
+            # downstream. The one envelope builder refuses this registration either way
+            # (operation_id is REQUIRED on core/mcp-webhook-payload.json), but the
+            # refusal reached this function as an exception, and the batch loop's
+            # ``except Exception`` logged it as an error and moved on — so a buyer whose
+            # registration predates the correlation agreement got silence, counted as a
+            # send error rather than named as a suppressed stream. Asking the question
+            # where the answer is actionable turns that into a stated verdict.
+            #
+            # The buyer's half of :666 — the flag — is not a log line and cannot be:
+            # this runs in a background batch with no request to answer. It is carried
+            # by ``get_media_buy_delivery``, which reads the same registration and
+            # raises the same code as an advisory, on the read path :667 points the
+            # buyer at while they arrange support.
+            if reporting_stream_id_missing(reporting_webhook):
+                logger.error(
+                    "Suppressing scheduled delivery report for media buy %s: its %s is absent, "
+                    "so there is no correlation id to echo and AdCP 3.2.1 L3/webhooks.mdx :666 "
+                    "forbids fabricating one or reading it off the URL. The buyer must re-register "
+                    "with an id before reports resume (tenant=%s, principal=%s)",
+                    media_buy_id,
+                    REPORTING_STREAM_ID_FIELD,
+                    media_buy.tenant_id,
+                    media_buy.principal_id,
+                )
                 return False
 
             # A stored row still wins: a real registration outranks whatever the
