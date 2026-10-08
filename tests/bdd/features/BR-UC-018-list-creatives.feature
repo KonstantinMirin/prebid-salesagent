@@ -1022,6 +1022,42 @@ Feature: BR-UC-018 List Creatives
     # creative_lifecycle: format_id object filter exact-matches both (agent_url, id)
     # @source repo=adcp ref=v3.2.1 commit=467fd93d7 path=static/compliance/source/protocols/creative/index.yaml
 
+  @T-UC-018-format-id-filter-canonicalizes-stored-agent-url @schema-v3.2 @v3-1 @list-filter @format-id-object
+  Scenario: A creative stored under a respelled agent_url is still returned by a format_id filter naming the canonical form
+    Given the buyer synced a creative whose format_id agent_url differs from the canonical form only in host case and a default port
+    When the Buyer Agent sends list_creatives with filters.format_ids carrying that format_id in canonical form
+    Then the response is compliant with the list_creatives spec
+    And the creatives array should include the creative stored under the respelled agent_url
+    And the creatives array should NOT include the creative stored under a genuinely different agent_url
+    # core/format-id.json, on agent_url: "Callers comparing two `format-id` values MUST
+    # canonicalize `agent_url` per the AdCP URL canonicalization rules before treating two
+    # formats as the same." The filter IS such a caller, and the two sides of the comparison
+    # routinely disagree byte-for-byte while naming one agent: what is STORED is the buyer's
+    # own spelling, because sync_creatives owes that spelling back verbatim on readback.
+    #
+    # Falsifiable in both directions by construction: one creative is stored under the
+    # respelled spelling (host case + an explicit default port, both of which the
+    # canonicalization normalizes away) and must come back, and one is stored under a
+    # genuinely different agent that no canonicalization makes equal and must not.
+    # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/format-id.json property=agent_url
+
+  @T-UC-018-parameterized-format-id-roundtrip @schema-v3.2 @v3-1 @format-id-object
+  Scenario: A creative synced with a parameterized format_id is listed with every declared parameter intact
+    Given the buyer synced a creative on a format_id parameterized by width, height and pixel_ratio
+    When the Buyer Agent sends list_creatives with no filters for the same account
+    Then the response is compliant with the list_creatives spec
+    And the listed creative's format_id should carry every parameter the buyer sent, pixel_ratio included
+    # core/format-id.json declares width, height, duration_ms and pixel_ratio on the
+    # reference object itself, and creative/list-creatives-response.json requires format_id
+    # on every listed creative — so a listed format_id that dropped a parameter the buyer
+    # sent names a DIFFERENT format than the one synced.
+    #
+    # pixel_ratio is named in the outcome on purpose rather than left to "every parameter":
+    # it is the one a by-name readback dropped, because the reference was reassembled from
+    # partial columns and only three of the four were copied. An outcome that said only
+    # "parameters are preserved" passed throughout that defect.
+    # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/format-id.json
+
   @T-UC-018-storyboard-filter-by-concept-id @schema-v3.1 @v3-1 @list-filter @concept-id
   Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
     Given the authenticated principal has creatives grouped under concept "concept_summer_2026" and other creatives under different concepts

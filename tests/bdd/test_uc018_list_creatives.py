@@ -98,10 +98,11 @@ from typing import Any, NamedTuple
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
-from src.core.schemas import CreativeFormatIdentity
+from src.core.schemas import CreativeFormatIdentity, FormatId, canonical_agent_url
 from tests.bdd.steps._outcome_helpers import error_envelope_or_none, require_payload, wire_dict, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
+from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 from tests.helpers.envelope_assertions import assert_envelope_shape
 from tests.helpers.pinned_schema import validator_for
 
@@ -128,6 +129,7 @@ def _seed_creative(
     concept_name: str | None = None,
     tags: Sequence[str] | None = None,
     agent_url: str | None = None,
+    format_params: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> Any:
     """Seed one approved creative owned by *principal*, optionally concept- or tag-bearing.
@@ -156,6 +158,10 @@ def _seed_creative(
         kwargs["format"] = fmt
     if agent_url is not None:
         kwargs["agent_url"] = agent_url
+    if format_params is not None:
+        # Parameters of the REFERENCE, not a sidecar: core/format-id.json declares width,
+        # height, duration_ms and pixel_ratio on the format_id object itself.
+        kwargs["format_params"] = format_params
     # An explicit name (the ``name_contains`` filter is a name substring match), a
     # non-approved status, and explicit created_at / updated_at so the ordering
     # assertions have distinct, deterministic sort keys instead of every row sharing one
@@ -1579,6 +1585,166 @@ def given_creatives_in_two_formats(ctx: dict) -> None:
     ctx["format_filter_id"] = _CONCEPT_FORMATS[0]
 
 
+#: A spelling of the reference creative agent's URL that the AdCP canonicalization normalizes
+#: away entirely: uppercase host plus an explicit default port. Canonically EQUAL to
+#: ``DEFAULT_CREATIVE_AGENT_URL`` and byte-DIFFERENT from it, which is the whole point —
+#: a creative stores the buyer's own spelling, because sync_creatives owes that spelling back.
+_RESPELLED_AGENT_URL = "https://Creative.AdContextProtocol.ORG:443"
+
+#: An agent no canonicalization makes equal to the reference one. The counter-example that
+#: stops the canonicalizing filter from degrading into "match on id alone".
+_UNRELATED_AGENT_URL = "https://other-creative.example.com"
+
+_RESPELLED_LABEL = "creative stored under the respelled agent_url"
+_UNRELATED_LABEL = "creative stored under a genuinely different agent"
+
+
+@given(
+    "the buyer synced a creative whose format_id agent_url differs from the canonical form "
+    "only in host case and a default port"
+)
+def given_creative_under_respelled_agent_url(ctx: dict) -> None:
+    """Seed one creative under a canonically-equal respelling, and one under a different agent.
+
+    The respelling is asserted to be BOTH byte-different and canonically equal before
+    anything is seeded. Without that guard the scenario is unfalsifiable in the quiet
+    direction: a respelling the canonicalization happens not to touch would make the filter
+    match for the boring reason, and the obligation would go ungraded while reading green.
+    """
+    assert _RESPELLED_AGENT_URL != DEFAULT_CREATIVE_AGENT_URL, (
+        "the respelling is byte-identical to the canonical form, so this scenario grades nothing"
+    )
+    assert canonical_agent_url(_RESPELLED_AGENT_URL) == canonical_agent_url(DEFAULT_CREATIVE_AGENT_URL), (
+        "the respelling is NOT canonically equal to the reference agent_url, so a filter that "
+        "matched it would be wrong rather than right"
+    )
+    assert canonical_agent_url(_UNRELATED_AGENT_URL) != canonical_agent_url(DEFAULT_CREATIVE_AGENT_URL), (
+        "the counter-example agent canonicalizes to the reference one, so excluding it cannot fail"
+    )
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    respelled = _seed_creative(
+        tenant, principal, _CONCEPT_FORMATS[0], name=_RESPELLED_LABEL, agent_url=_RESPELLED_AGENT_URL
+    )
+    unrelated = _seed_creative(
+        tenant, principal, _CONCEPT_FORMATS[0], name=_UNRELATED_LABEL, agent_url=_UNRELATED_AGENT_URL
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [
+        _Seeded(respelled.creative_id, _RESPELLED_LABEL, "approved", (), None),
+        _Seeded(unrelated.creative_id, _UNRELATED_LABEL, "approved", (), None),
+    ]
+    # The buyer sends the CANONICAL spelling; neither stored creative carries it verbatim.
+    ctx["format_filter_agent_url"] = DEFAULT_CREATIVE_AGENT_URL
+    ctx["format_filter_id"] = _CONCEPT_FORMATS[0]
+
+
+@then("the creatives array should include the creative stored under the respelled agent_url")
+def then_respelled_creative_returned(ctx: dict) -> None:
+    """The creative whose stored agent_url is only canonically equal must come back.
+
+    core/format-id.json makes canonicalizing agent_url before treating two references as the
+    same format a MUST, and this filter is such a caller. A comparison against the stored
+    spelling misses here, which is what it did while the filter compared the raw column.
+    """
+    returned = set(_wire_creative_ids(ctx))
+    expected = _ids_labelled(ctx, _RESPELLED_LABEL)
+    assert expected <= returned, (
+        "the format_ids filter did not match a creative whose stored agent_url is canonically "
+        f"equal to the filter's: expected {sorted(expected)} among {sorted(returned)}"
+    )
+
+
+@then("the creatives array should NOT include the creative stored under a genuinely different agent_url")
+def then_unrelated_agent_creative_excluded(ctx: dict) -> None:
+    """And exactly that one creative, so canonicalizing has not become id-only matching.
+
+    Asserted as an exact set rather than a bare exclusion: a filter that canonicalized the
+    agent_url away entirely would return BOTH creatives and still pass a containment check
+    on the first outcome.
+    """
+    _assert_returned_exactly(ctx, _ids_labelled(ctx, _RESPELLED_LABEL), "the canonically-matching creative")
+
+
+#: Every parameter ``core/format-id.json`` declares beyond the identity pair, read OFF the
+#: pinned model. Listing them here is the defect this scenario grades: the readback copied
+#: three by name and the model declares four, so a parameterized format came back as a
+#: different format than the buyer sent. Deriving the set means a parameter the pin adds is
+#: graded without editing this line.
+_DECLARED_FORMAT_ID_PARAMETERS = frozenset(FormatId.model_fields) - {"agent_url", "id"}
+
+#: One value per declared parameter, so NONE of them can be dropped unnoticed. Chosen to be
+#: valid for a display reference: a 2x-density 300x250 with a duration, which the reference
+#: object permits regardless of the shape it parameterizes.
+_PARAMETERIZED_REFERENCE = {"width": 300, "height": 250, "pixel_ratio": 2.0, "duration_ms": 15000.0}
+
+_PARAMETERIZED_LABEL = "creative on a parameterized format_id"
+
+
+@given("the buyer synced a creative on a format_id parameterized by width, height and pixel_ratio")
+def given_creative_on_parameterized_format_id(ctx: dict) -> None:
+    """Seed one creative whose asserted reference carries EVERY declared parameter.
+
+    The scenario names three, and the seed carries all four the pin declares — the Then
+    grades the full declared set, so a parameter added to the pin is covered without the
+    scenario naming it. The guard below is what makes that non-vacuous: if the pin ever
+    declares a parameter this fixture does not set, the Then would be asserting over a value
+    nobody sent.
+    """
+    missing = _DECLARED_FORMAT_ID_PARAMETERS - set(_PARAMETERIZED_REFERENCE)
+    assert not missing, (
+        f"core/format-id.json declares parameters this fixture does not seed: {sorted(missing)}; "
+        "add them, or the round-trip assertion silently stops covering them"
+    )
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    creative = _seed_creative(
+        tenant,
+        principal,
+        _CONCEPT_FORMATS[0],
+        name=_PARAMETERIZED_LABEL,
+        format_params=_PARAMETERIZED_REFERENCE,
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [_Seeded(creative.creative_id, _PARAMETERIZED_LABEL, "approved", (), None)]
+
+
+@then("the listed creative's format_id should carry every parameter the buyer sent, pixel_ratio included")
+def then_parameterized_format_id_roundtrips(ctx: dict) -> None:
+    """Every declared parameter survives the readback, compared value by value.
+
+    Asserted over the DERIVED declared set rather than a list written here, and each value
+    compared rather than merely present: a readback that emitted the keys with null values
+    would pass a presence check while still having lost the buyer's reference.
+    """
+    entries = _wire_creatives(ctx)
+    assert len(entries) == 1, f"expected the one seeded creative on the wire, got {len(entries)}"
+    listed = entries[0]["format_id"]
+    assert listed is not None, "the listed creative carries no format_id at all"
+
+    dropped = {
+        name: (expected, listed.get(name))
+        for name, expected in _PARAMETERIZED_REFERENCE.items()
+        if listed.get(name) != expected
+    }
+    assert not dropped, (
+        "the listed format_id does not name the format the buyer synced; these parameters "
+        f"came back changed or absent (expected, got): {dropped}"
+    )
+
+
+def _dispatch_format_ids_filter(ctx: dict) -> None:
+    """Send ``filters.format_ids`` carrying the one {agent_url, id} object the Given named."""
+    dispatch_request(
+        ctx,
+        filters={"format_ids": [{"agent_url": ctx["format_filter_agent_url"], "id": ctx["format_filter_id"]}]},
+    )
+
+
 @when(
     parsers.re(
         r"the Buyer Agent sends list_creatives with filters\.format_ids carrying one format_id object "
@@ -1591,10 +1757,19 @@ def when_list_creatives_format_ids(ctx: dict, format_id: str) -> None:
     format_ids items are format_id OBJECTS (core/format-id.json), never bare strings, so
     the filter names both members of the seeded creative's format.
     """
-    dispatch_request(
-        ctx,
-        filters={"format_ids": [{"agent_url": ctx["format_filter_agent_url"], "id": ctx["format_filter_id"]}]},
-    )
+    _dispatch_format_ids_filter(ctx)
+
+
+@when("the Buyer Agent sends list_creatives with filters.format_ids carrying that format_id in canonical form")
+def when_list_creatives_format_ids_canonical(ctx: dict) -> None:
+    """The same one-object filter, with the Given having put the CANONICAL agent_url in ctx.
+
+    A separate binding rather than a reworded reuse, because the scenario's point is which
+    SPELLING the buyer sends: here the canonical one, against a creative stored under a
+    respelled one. Both bindings dispatch through the one helper, so the two scenarios cannot
+    drift apart in how the filter is shaped.
+    """
+    _dispatch_format_ids_filter(ctx)
 
 
 @when(

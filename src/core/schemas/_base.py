@@ -616,6 +616,26 @@ class CreativeFormatIdentity:
         return self.legacy.storage_key if self.legacy is not None else None
 
     @property
+    def wire_format_kind(self) -> str | None:
+        """The ``format_kind`` a RESPONSE carries -- ``None`` whenever a retained assertion is.
+
+        THE ONE place the wire's single arm is chosen, because the wire and the internal model
+        disagree on purpose. Internally a legacy creative carries BOTH: the retained assertion
+        is what the buyer asserted, and ``kind`` is what it projects to, which is the identity
+        logic keys on. On the wire they are a oneOf whose arms forbid each other --
+        ``creative/list-creatives-response.json``'s item schema declares
+        ``required: [format_id], not: {required: [format_kind]}`` and the mirror of it -- and
+        the state mirrors the INPUT: a creative synced by ``format_id`` is listed by
+        ``format_id``.
+
+        Emitting the projected kind beside the assertion is the bug this property exists to
+        make unavailable. It is not a theoretical one: the response model refuses both-arms on
+        construction, so every listing of a legacy creative raised rather than answering, and
+        the BDD readback scenarios are what caught it.
+        """
+        return None if self.assertion is not None else self.kind
+
+    @property
     def label(self) -> str:
         """How this identity is spelled to a human -- an operator's UI, a log, a Slack message.
 

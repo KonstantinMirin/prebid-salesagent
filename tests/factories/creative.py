@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
@@ -26,15 +27,20 @@ def _seeded_identity(obj) -> CreativeFormatIdentity:
     """The format identity a factory-built row carries, through the PRODUCTION builder.
 
     A test says which arm the creative carries -- a legacy reference via ``agent_url`` +
-    ``format``, or a canonical kind via ``canonical_kind`` -- and the four stored columns are
-    derived from that by the same code the sync path runs, including the v1 -> v2 projection.
-    So a factory row and a synced row cannot differ in shape, which is what a factory seeding
-    the columns by hand could not promise: the identity used to be three partial columns and
-    the factory set two of them.
+    ``format`` (optionally parameterized by ``format_params``), or a canonical kind via
+    ``canonical_kind`` -- and the four stored columns are derived from that by the same code
+    the sync path runs, including the v1 -> v2 projection. So a factory row and a synced row
+    cannot differ in shape, which is what a factory seeding the columns by hand could not
+    promise: the identity used to be three partial columns and the factory set two of them.
+
+    ``format_params`` is spread onto the reference rather than kept beside it, because that
+    is what a parameterized ``format_id`` IS -- ``core/format-id.json`` declares width,
+    height, duration_ms and pixel_ratio on the reference object itself. A scenario that needs
+    a parameterized format therefore seeds one reference, not a reference plus a blob.
     """
     if obj.canonical_kind is not None:
         return CreativeFormatIdentity(kind=obj.canonical_kind)
-    reference = FormatId(agent_url=obj.agent_url, id=obj.format)
+    reference = FormatId(agent_url=obj.agent_url, id=obj.format, **(obj.format_params or {}))
     return creative_identity_of(SimpleNamespace(format_id=reference, format_kind=None))
 
 
@@ -44,6 +50,7 @@ def stamp_format_identity(
     format_id: str = "display_300x250",
     agent_url: str = DEFAULT_CREATIVE_AGENT_URL,
     canonical_kind: str | None = None,
+    format_params: dict[str, Any] | None = None,
 ) -> CreativeFormatIdentity:
     """Stamp the four stored identity columns onto a MOCK creative row, and return them.
 
@@ -57,7 +64,14 @@ def stamp_format_identity(
 
     For a row that goes through the real session, use ``CreativeFactory`` instead.
     """
-    identity = _seeded_identity(SimpleNamespace(canonical_kind=canonical_kind, agent_url=agent_url, format=format_id))
+    identity = _seeded_identity(
+        SimpleNamespace(
+            canonical_kind=canonical_kind,
+            agent_url=agent_url,
+            format=format_id,
+            format_params=format_params,
+        )
+    )
     for column, value in _identity_columns(identity).items():
         setattr(row, column, value)
     return identity
@@ -70,7 +84,7 @@ class CreativeFactory(SQLAlchemyModelFactory):
         sqlalchemy_session_persistence = "commit"
         # The identity knobs are inputs, not columns: `_seeded_identity` turns them into the
         # four columns that exist.
-        exclude = ("principal", "agent_url", "format", "canonical_kind", "identity")
+        exclude = ("principal", "agent_url", "format", "format_params", "canonical_kind", "identity")
 
     # Composite PK fields
     creative_id = factory.Sequence(lambda n: f"creative_{n:04d}")
@@ -84,10 +98,12 @@ class CreativeFactory(SQLAlchemyModelFactory):
 
     # --- Format identity: knobs in, four columns out ---
     # `agent_url` + `format` name the legacy reference a creative asserts (the default, and
-    # what most scenarios exercise); `canonical_kind` instead builds a creative identified
-    # by its canonical kind, which asserts no reference at all.
+    # what most scenarios exercise), `format_params` parameterizes it (width, height,
+    # duration_ms, pixel_ratio -- the reference's own members); `canonical_kind` instead
+    # builds a creative identified by its canonical kind, which asserts no reference at all.
     agent_url = DEFAULT_CREATIVE_AGENT_URL
     format = "display_300x250"
+    format_params = None
     canonical_kind = None
     identity = factory.LazyAttribute(_seeded_identity)
     # Each column read off the ONE production mapping by its own name, so a column added to

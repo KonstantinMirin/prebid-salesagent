@@ -500,17 +500,20 @@ def _list_creatives_impl(
                     else "https://placeholder.example.com/missing.jpg"
                 )
 
-            # THE RETAINED ASSERTION, echoed back VERBATIM. A listed creative carries exactly
-            # one format identity -- the item schema's oneOf forbids both and forbids neither
-            # -- and the state mirrors the input: a creative synced by format_id lists by
-            # format_id, one synced by format_kind lists by format_kind.
+            # THE STORED IDENTITY, read once and asked for the one arm the wire carries. The
+            # item schema's oneOf forbids both arms and forbids neither, and the state mirrors
+            # the input: a creative synced by format_id lists by format_id, one synced by
+            # format_kind lists by format_kind. ``assertion`` is the retained reference echoed
+            # back VERBATIM; ``wire_format_kind`` is None whenever that assertion is present,
+            # which is where the exclusivity is decided.
             #
             # One column, one model, nothing reassembled. The reference used to be rebuilt
             # from three partial columns here, copying the parameters by name, and ``FormatId``
             # declares four of them: ``pixel_ratio`` was stored on sync and dropped on every
             # readback, so a parameterized format came back as a different format than the
             # buyer sent. A document that went in whole comes back whole.
-            format_obj = CreativeFormatIdentity.from_row(db_creative).assertion
+            stored_identity = CreativeFormatIdentity.from_row(db_creative)
+            format_obj = stored_identity.assertion
 
             # The columns are ``DateTime(timezone=True)``, so what the ORM read hands back is
             # a tz-aware datetime or NULL -- nothing else is representable. This used to
@@ -609,12 +612,13 @@ def _list_creatives_impl(
             creative = Creative(
                 creative_id=db_creative.creative_id,
                 name=db_creative.name,
-                # Exactly one arm reaches the model. ``format_obj`` is None for a canonical
-                # creative and ``format_kind`` is None for a legacy one, so the oneOf the
-                # item schema declares is satisfied by whichever row was stored rather than
-                # by a rule restated here.
+                # Exactly one arm reaches the model, and the identity decides which: a legacy
+                # creative stores BOTH the assertion and the kind it projects to, so reading
+                # the kind column straight onto the wire emitted both arms and the model
+                # refused the response on construction. ``wire_format_kind`` is the one place
+                # that exclusivity lives -- not a rule restated here.
                 format_id=format_obj,
-                format_kind=db_creative.format_kind,
+                format_kind=stored_identity.wire_format_kind,
                 format_option_ref=db_creative.format_option_ref,
                 assets=coerced_assets,
                 # tags is typed list[str] but read from the untyped blob, where an
