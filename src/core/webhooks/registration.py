@@ -42,7 +42,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from src.core.errors.details import ValidationDetails
 from src.core.exceptions import AdCPInvalidRequestError, AdCPValidationError
@@ -376,6 +376,10 @@ def _accept(
     sees -- ``tests/integration/test_webhook_hmac_credentials_ingest_refusal.py``
     and ``tests/helpers/webhook_credential_refusal.py`` grade exactly this text
     and that a credential refusal is not mislabelled as a URL refusal.
+
+    The URL and credential halves live here because they hold of EVERY registration
+    this seller accepts, from every surface. The correlation-id refusal does NOT,
+    and so is not here: see :func:`accept_push_notification_config`.
     """
     url = str(config.url) if config.url is not None else None
     reject_unsafe_webhook_registration_url(url, field=f"{field_prefix}.url")
@@ -391,32 +395,6 @@ def _accept(
     # recovery="correctable", i.e. exactly what
     # tests/helpers/webhook_credential_refusal.py grades). Keeping a second copy
     # of the rule here would be a place for the two to drift apart.
-
-    # THE REGISTRATION-PATH REFUSAL. ``operation_id`` is optional on
-    # ``core/push-notification-config.json`` and REQUIRED on
-    # ``core/mcp-webhook-payload.json``, so a registration that omits it names a
-    # webhook whose envelope cannot be built -- and AdCP 3.2.1 ``L3/webhooks.mdx``
-    # :141 forbids closing that gap from the receiver URL ("Sellers MUST NOT derive
-    # operation_id by parsing push_notification_config.url"). The same line grants
-    # the seller the way out it is taking here: "Sellers MAY reject a webhook
-    # registration that omits operation_id with INVALID_REQUEST."
-    #
-    # This seller takes the MAY, and the alternative is why. Without it the
-    # registration is accepted, every later delivery is refused by the one envelope
-    # builder (``webhooks/delivery.py``), and both senders log that refusal and
-    # continue -- so the buyer registers a webhook, receives a success, and is never
-    # told that nothing will ever arrive on it. PERMANENT SILENCE, with the seller's
-    # own reason sitting in a log line the buyer cannot read. A correctable refusal
-    # the buyer can act on at registration time is strictly better than a delivery
-    # channel that was never going to fire.
-    #
-    # Raised HERE, in the one gate body, rather than at each of the surfaces that
-    # call it: the condition is a property of the registration document, and the
-    # routes differ only in WHERE they ask. A tool surface asks at ingest and the
-    # buyer gets this refusal synchronously; the delivery scheduler asks at send
-    # time and converts it into a suppressed send (:666's reporting shape).
-    if not config.operation_id:
-        raise AdCPInvalidRequestError(field=f"{field_prefix}.operation_id")
 
     return ValidatedWebhookRegistration(config=config)
 
@@ -603,6 +581,11 @@ def accept_push_notification_config(
     config: dict[str, Any] | PushNotificationConfig | None,
     *,
     field_prefix: str = "push_notification_config",
+    # The PINNED SCHEMA the buyer's document came from, which decides whether the
+    # correlation-id refusal below applies at all. Defaulted to the push config
+    # because that is what every protocol surface sends; the account-level gate is
+    # the one caller that holds a different pinned shape and says so.
+    declared_by: type[BaseModel] = PushNotificationConfig,
 ) -> ValidatedWebhookRegistration:
     """Accept a config-shaped registration, normalizing model-or-dict ONCE.
 
@@ -622,6 +605,51 @@ def accept_push_notification_config(
     What remains genuinely ours is what the schema does NOT say: the registration
     SSRF gate on the URL, and the refusal of an ``HMAC-SHA256`` registration with no
     usable secret (the schema is silent on both — see the module docstring).
+
+    THE CORRELATION-ID REFUSAL lives here, and this is the one funnel it belongs in.
+    ``operation_id`` is optional on ``core/push-notification-config.json`` and
+    REQUIRED on ``core/mcp-webhook-payload.json``, and AdCP 3.2.1 ``L3/webhooks.mdx``
+    :143 forbids the one bridge between them ("Sellers MUST NOT derive
+    ``operation_id`` by parsing ``push_notification_config.url``"). So a registration
+    without it names a webhook whose conformant body can never be built, and :141
+    grants the seller the way out it takes here: "Sellers MAY reject a webhook
+    registration that omits ``operation_id`` with ``INVALID_REQUEST``."
+
+    The alternative is why. Without this, the registration is accepted, every later
+    delivery is refused by the one envelope builder
+    (:func:`src.core.webhooks.delivery.build_webhook_envelope`), and both senders log
+    that refusal and continue -- so the buyer registers a webhook, receives a success,
+    and is never told that nothing will ever arrive on it. PERMANENT SILENCE, with the
+    seller's own reason in a log line the buyer cannot read.
+
+    WHY NOT IN ``_accept``, the shared gate body. Two other registration shapes reach
+    that body and the rule is wrong for both, which was MEASURED rather than reasoned:
+    written there, it failed ``test_notification_config_gate_accepts_authentication``.
+
+    * An ACCOUNT-LEVEL subscription (``core/notification-config.json``) is routed
+      through this very function by ``accounts._check_notification_configs``, because
+      its ``url`` and ``authentication`` carry the same contract in the pin's own
+      words. But that schema declares NO ``operation_id`` -- so there is nothing for
+      its buyer to supply, and refusing one would reject every conformant
+      subscription. ``declared_by.model_fields`` is the pin's own answer to "does this
+      shape carry a correlation id", so that caller passes its own type and the rule
+      skips itself. A hand-written "push only" condition would be a second opinion
+      about a pinned field set, which is the 2-of-4 field list this module exists to
+      delete, one level up.
+    * The ADMIN registration form reaches ``_accept`` through
+      :func:`accept_push_notification_primitives`, which has no ``operation_id``
+      parameter -- and must not grow one. The value is the BUYER's, generated per task
+      invocation (:141: "Buyers SHOULD supply ``operation_id`` ... and generate a
+      unique value per task invocation"), and an operator typing one would be
+      fabricating a correlation id, which :143 forbids as squarely as reading one off
+      the URL. So an admin-registered push config cannot carry one, and refusing it
+      for the omission would break the form while fixing nothing. What that surface
+      produces instead is a stored row the sender refuses, and the refusal now has an
+      enumerable record (``context_manager._log_webhook_refusal``) -- which is the
+      honest answer when there is no buyer on the call. That the admin surface can
+      register a task-notification webhook no conformant envelope can be built for is
+      a REAL GAP, reported rather than papered over: closing it means that surface
+      registering something other than a per-task push config.
     """
     coerced = to_push_notification_config(config, field_prefix=field_prefix)
     if coerced is None:
@@ -629,4 +657,6 @@ def accept_push_notification_config(
             field=field_prefix,
             details=ValidationDetails(received_type=type(config).__name__),
         )
+    if "operation_id" in declared_by.model_fields and not coerced.operation_id:
+        raise AdCPInvalidRequestError(field=f"{field_prefix}.operation_id")
     return _accept(config=coerced, field_prefix=field_prefix)

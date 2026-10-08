@@ -1028,6 +1028,17 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
         # `exc.field` is the gate's own pointer -- it is built from this prefix, so
         # it names the refused half (`.url` or `.authentication.credentials`)
         # without carrying any refused host or credential into buyer-facing text.
+        #
+        # ``declared_by`` names the pinned schema this document actually came from,
+        # and it is load-bearing rather than documentation. The gate's
+        # correlation-id refusal (AdCP 3.2.1 L3/webhooks.mdx :141) derives its own
+        # applicability from ``declared_by.model_fields``, and
+        # ``core/notification-config.json`` declares NO ``operation_id`` -- an
+        # account-level subscription has no such field, so there is nothing for its
+        # buyer to supply. Passing the push type here would refuse every conformant
+        # subscription at ``notification_configs[j].operation_id``, a pointer naming
+        # a field this schema does not have. Measured: that is exactly what happened
+        # when the rule was written unconditionally in the shared gate body.
         try:
             accept_push_notification_config(
                 {
@@ -1035,6 +1046,7 @@ def _check_notification_configs(configs: Iterable[NotificationConfig] | None) ->
                     "authentication": getattr(config, "authentication", None),
                 },
                 field_prefix=f"notification_configs[{index}]",
+                declared_by=NotificationConfig,
             )
         except AdCPValidationError as exc:
             return [
