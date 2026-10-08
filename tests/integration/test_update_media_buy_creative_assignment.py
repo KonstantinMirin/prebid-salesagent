@@ -10,6 +10,7 @@ from src.core.database.models import Creative as DBCreative
 from src.core.database.models import CreativeAssignment as DBAssignment
 from src.core.schemas import UpdateMediaBuyRequest, UpdateMediaBuyResponse, UpdateMediaBuyResult
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories import stamp_format_identity
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_write_seam import (
     assert_status_move_carried_bookkeeping,
@@ -90,8 +91,6 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 1",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={"platform_creative_id": "gam_123"},
         )
@@ -100,11 +99,11 @@ def test_update_media_buy_assigns_creatives_to_package(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 2",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={"platform_creative_id": "gam_456"},
         )
+        for creative in (creative1, creative2):
+            stamp_format_identity(creative, format_id="display")
         session.add_all([creative1, creative2])
         session.commit()
 
@@ -249,8 +248,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 1",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={},
         )
@@ -259,8 +256,6 @@ def test_update_media_buy_replaces_creatives(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 2",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={},
         )
@@ -269,11 +264,11 @@ def test_update_media_buy_replaces_creatives(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 3",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={},
         )
+        for creative in (creative1, creative2, creative3):
+            stamp_format_identity(creative, format_id="display")
         session.add_all([creative1, creative2, creative3])
 
         # Create existing assignments (creative_1 already assigned)
@@ -427,8 +422,6 @@ def test_creative_assignments_with_weights(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 1",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={},
         )
@@ -437,11 +430,11 @@ def test_creative_assignments_with_weights(integration_db):
             tenant_id="test_tenant",
             principal_id="test_principal",
             name="Creative 2",
-            agent_url="https://creative.adcontextprotocol.org",
-            format="display",
             status="ready",
             data={},
         )
+        for creative in (creative1, creative2):
+            stamp_format_identity(creative, format_id="display")
         session.add_all([creative1, creative2])
         session.commit()
 
@@ -579,18 +572,16 @@ def test_creative_assignments_replaces_all(integration_db):
 
         # Create three creatives
         for cid in ["c1", "c2", "c3"]:
-            session.add(
-                DBCreative(
-                    creative_id=cid,
-                    tenant_id="test_tenant",
-                    principal_id="test_principal",
-                    name=f"Creative {cid}",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display",
-                    status="ready",
-                    data={},
-                )
+            creative = DBCreative(
+                creative_id=cid,
+                tenant_id="test_tenant",
+                principal_id="test_principal",
+                name=f"Creative {cid}",
+                status="ready",
+                data={},
             )
+            stamp_format_identity(creative, format_id="display")
+            session.add(creative)
         session.flush()
 
         # Pre-existing assignments: c1 (weight 50) and c2 (weight 50)
