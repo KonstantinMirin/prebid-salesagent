@@ -18,11 +18,11 @@ from src.core.exceptions import AdCPAdapterError, AdCPConfigurationError, AdCPIn
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AnyTargeting,
     MediaPackage,
     Principal,
     Product,
     ReportingPeriod,
-    Targeting,
 )
 from src.core.security.outbound_http import OutboundError
 
@@ -601,10 +601,15 @@ class XandrAdapter(AdServerAdapter):
         }
         return mapping.get(product_id, "display")
 
-    def _create_targeting_profile(self, targeting: Targeting) -> int:
+    def _create_targeting_profile(self, targeting: AnyTargeting) -> int:
         """Create targeting profile in Xandr.
 
         Maps from AdCP Targeting model's flat field structure to Xandr's profile API format.
+
+        Takes either overlay arm. AdCP 3.2 splits the overlay into an input schema and a
+        readback schema, and a media buy's overlay reaches here from the buyer's REQUEST,
+        so it is the input arm. Every dimension read below -- the geo pairs, the device
+        form factors -- is declared by both, which is what ``AnyTargeting`` is for.
         """
         profile_data: dict[str, Any] = {
             "profile": {

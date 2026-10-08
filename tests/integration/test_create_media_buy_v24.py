@@ -24,7 +24,7 @@ from sqlalchemy import delete, select
 
 from src.core.database.database_session import get_db_session
 from src.core.resolved_identity import AccountIdentity
-from src.core.schemas import CreateMediaBuyRequest, PackageRequest, Targeting
+from src.core.schemas import CreateMediaBuyRequest, PackageRequest, TargetingInput
 from src.core.schemas.account import Account
 from src.core.tenant_context import TenantContext
 from tests.factories import AccountFactory
@@ -290,19 +290,25 @@ class TestCreateMediaBuyV24Format:
         assert package["package_id"]  # Should have generated ID
 
     async def test_create_media_buy_with_targeting_overlay_mcp(self, setup_test_tenant):
-        """Test MCP path with packages containing Targeting objects.
+        """Test MCP path with packages carrying a nested targeting overlay.
 
         This tests another potential serialization issue with nested Pydantic objects.
+
+        The overlay is a ``TargetingInput``, not a ``Targeting``: AdCP 3.2 splits the
+        overlay into an input schema and a readback schema, and ``PackageRequest``
+        declares the input arm. The two are siblings with identical fields and neither
+        is a subclass of the other, so handing a ``Targeting`` to a request builds a
+        shape no buyer can send -- which is why the DTO refuses it.
         """
         from src.core.tools.media_buy_create import _create_media_buy_impl
 
-        # Create PackageRequest with nested Targeting object
+        # Create PackageRequest with a nested overlay in the request's own arm
         packages = [
             PackageRequest(
                 product_id=setup_test_tenant["product_id_eur"],  # Use EUR product
                 pricing_option_id=setup_test_tenant["pricing_option_id_eur"],  # Required field
                 budget=8000.0,  # Float budget, currency from pricing_option
-                targeting_overlay=Targeting(
+                targeting_overlay=TargetingInput(
                     geo_countries=["US", "CA"],
                 ),
             )
