@@ -21,7 +21,6 @@ from adcp.types import LegacyCreativeFilters as CreativeFilters
 from adcp.types import PaginationRequest
 from adcp.types.domains.creative.list_creatives_request import Sort
 
-from src.core.schemas import CreativeFormatIdentity, FormatId
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -40,19 +39,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 _make_identity = make_identity  # Canonical version from tests.harness
-
-
-def _parameterized_identity(format_id: str = "display_300x250", **parameters) -> CreativeFormatIdentity:
-    """The identity of a legacy reference that pins format parameters.
-
-    ``agent_url`` + ``format`` are the factory's knobs for an unparameterized reference; a
-    reference that pins width/height/duration_ms is one ``FormatId`` the factory's own
-    ``identity`` input takes whole, so the four stored columns are still derived by
-    ``_identity_columns`` rather than assigned here. The parameters are part of WHICH format
-    the reference names, and they are stored inside ``legacy_format_id`` verbatim -- which is
-    what ``list_creatives`` echoes back on ``format_id``.
-    """
-    return CreativeFormatIdentity.of_legacy(FormatId(agent_url=DEFAULT_AGENT_URL, id=format_id, **parameters))
 
 
 def _seed_tagged(tenant, principal, *, creative_id: str, name: str, tags: list[str]):
@@ -617,7 +603,7 @@ class TestListResponseShape:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_fmt_params",
-                identity=_parameterized_identity(width=300, height=250, duration_ms=15000),
+                format_params={"width": 300, "height": 250, "duration_ms": 15000},
             )
 
             response = env.call_impl()
@@ -859,7 +845,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_format_params",
-                identity=_parameterized_identity(width=728, height=90, duration_ms=15000),
+                format_params={"width": 728, "height": 90, "duration_ms": 15000},
             )
             response = env.call_impl()
 
@@ -878,7 +864,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_partial_params",
-                identity=_parameterized_identity(width=300),
+                format_params={"width": 300},
             )
             response = env.call_impl()
 
