@@ -87,31 +87,42 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 #: one supplied the key rather than only that some key was found.
 REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
 
-#: An ``agent_url`` whose brand.json walk FAILS, deterministically and with no network.
+#: An ``agent_url`` whose brand.json walk FAILS at the capabilities hop, for real.
 #:
-#: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
-#: (``adcp/signing/ip_pinned_transport.py`` ``resolve_and_validate_host`` via
-#: ``build_async_ip_pinned_transport``), so a loopback authority is refused as a
-#: reserved range and ``async_resolve_agent`` raises ``AgentResolverError
-#: ("capabilities_unreachable")`` in microseconds. That is a REAL failure of the real
-#: walk — not a patched resolver — which is what a test grading "the walk failed" needs
-#: if it is not to be a mock asserting on itself. A public-looking hostname would
-#: instead put a DNS lookup in the test's critical path.
+#: UNRESOLVABLE in the DNS sense, and that is the whole point: the name is the
+#: obligation. ``async_resolve_agent`` raises
+#: ``AgentResolverError("capabilities_unreachable")`` because the host does not
+#: resolve, which is the TRANSIENT hop failure ``security.mdx`` :1376 describes
+#: ("Capabilities fetch failed (DNS, TCP, TLS, timeout, non-2xx) … Surface as
+#: transient") and the code both callers of this constant assert. ``.invalid`` is
+#: RFC 2606 reserved, so the lookup fails immediately and offline — a REAL failure of
+#: the real walk, not a patched resolver.
 #:
-#: THE SCHEME IS LOAD-BEARING and must stay ``https``. ``security.mdx`` :1358 makes the
-#: capabilities fetch of agent URL ``A`` HTTPS-only, and the pinned SDK enforces that
-#: BEFORE the reserved-range check, so an ``http://`` spelling short-circuits to
-#: ``AgentResolverError("invalid_agent_url")`` ("brand.json URL must use https://") and
-#: never reaches the SSRF refusal this constant exists to provoke. This value was
-#: ``http://`` and therefore stopped producing the mechanism the paragraph above
-#: describes: ``_map_agent_resolver_error`` sends ``invalid_agent_url`` to
-#: ``request_signature_jwks_untrusted``, so both callers graded a trust-boundary
-#: rejection while claiming to grade an unreachable capabilities hop. Measured against
-#: adcp 9.0.0b1+prs1435.1415:
+#: DO NOT substitute a reserved-range authority (``https://127.0.0.1:1``,
+#: ``https://10.0.0.1``). It is a TERMINAL trust-boundary rejection, not a transient
+#: hop failure, and the SDK says so on the exception itself: such a refusal carries
+#: ``signature_code=request_signature_jwks_untrusted`` while leaving
+#: ``code=capabilities_unreachable``. ``_map_agent_resolver_error`` reads ``code``
+#: today, so a loopback authority happens to yield the transient code — and stops the
+#: moment the map reads the ``signature_code`` the resolver sets precisely because one
+#: resolver code fans out to several spec codes. This constant was briefly
+#: ``https://127.0.0.1:1/a2a`` and was green only on that accident.
 #:
-#:   https://127.0.0.1:1/a2a       -> capabilities_unreachable (reserved range)
-#:   http://127.0.0.1:1/a2a        -> invalid_agent_url        (scheme)
-UNRESOLVABLE_AGENT_URL = "https://127.0.0.1:1/a2a"
+#: Measured against adcp 9.0.0b1+prs1435.1415, ``code`` / ``signature_code`` / what the
+#: current map returns:
+#:
+#:   https://unreachable.invalid/a2a  capabilities_unreachable  None             -> capabilities_unreachable
+#:   https://127.0.0.1:1/a2a          capabilities_unreachable  jwks_untrusted   -> capabilities_unreachable
+#:   https://10.0.0.1/a2a             capabilities_unreachable  jwks_untrusted   -> capabilities_unreachable
+#:   http://127.0.0.1:1/a2a           invalid_agent_url         None             -> jwks_untrusted
+#:
+#: Only the first row carries no ``signature_code``, so only the first is stable under
+#: both the current map and a map that reads ``signature_code``.
+#:
+#: The scheme must stay ``https``: :1358 makes the capabilities fetch HTTPS-only and the
+#: SDK enforces it before anything else, so an ``http://`` spelling short-circuits to
+#: ``invalid_agent_url`` (bottom row) and never reaches the hop failure at all.
+UNRESOLVABLE_AGENT_URL = "https://unreachable.invalid/a2a"
 
 #: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
 #: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
