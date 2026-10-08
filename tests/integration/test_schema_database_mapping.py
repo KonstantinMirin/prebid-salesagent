@@ -31,8 +31,14 @@ from tests.utils.database_helpers import (
 class TestSchemaFieldMapping:
     """Test that schema fields map correctly to database fields."""
 
-    def test_product_schema_database_field_alignment(self, factory_session):
+    def test_every_attribute_the_converter_reads_resolves_on_the_orm_model(self, factory_session):
         """Converting a real product row exercises every ORM attribute the converter reads.
+
+        RENAMED from ``test_product_schema_database_field_alignment``, which is what it
+        no longer does. It grades converter-to-ORM resolution, not schema-to-database
+        alignment, and nothing covers the latter — by design, see WHAT IT USED TO GRADE
+        below. A name promising the old coverage would leave the next reader believing
+        an obligation is enforced that is deliberately not.
 
         WHAT THIS GRADES, and why it RUNS the converter instead of comparing name sets.
         The fault this module exists for is named in its own header: ``'Product' object
@@ -87,15 +93,44 @@ class TestSchemaFieldMapping:
         factory_session.commit()
         factory_session.refresh(product)
 
-        # The whole assertion. An unbacked attribute read raises AttributeError out of
+        # The primary assertion. An unbacked attribute read raises AttributeError out of
         # this call; a read that resolves but carries the wrong shape fails Product's own
         # validation. Both are the defect this module was opened for.
         converted = convert_product_model_to_schema(product, adapter_type="mock")
 
+        # A guard that grades less and stays green is the failure mode to design against,
+        # and "it did not raise" is exactly that: a converter gutted to return only the
+        # pin's seven required fields reads almost nothing and still passes the call
+        # above. So assert the TRANSFER, not just the absence of an exception. Measured
+        # on this fixture, the converter supplies 14 fields; the floor sits just under
+        # that so a legitimately-absent optional does not trip it, while dropping to the
+        # required-only set does.
+        supplied = converted.model_fields_set
+        assert len(supplied) >= 12, (
+            f"the converter supplied only {len(supplied)} fields ({sorted(supplied)}); it supplies 14 "
+            f"on this fixture. A sharp drop means it stopped reading the row, which makes the "
+            f"AttributeError check above vacuous — it would pass on a converter that reads nothing."
+        )
+
+        # A count alone is satisfiable by garbage, so pin values that can only have come
+        # off this row. Compared by IDENTIFYING VALUE rather than by object: the row holds
+        # format_ids as raw dicts and Product coerces them to FormatReference models, so
+        # asserting the two containers equal would be grading pydantic's coercion rather
+        # than the converter's read.
         assert converted.product_id == product.product_id, (
             f"the converter returned product_id {converted.product_id!r} for the row "
             f"{product.product_id!r}; it read the wrong attribute"
         )
+        assert converted.delivery_type == product.delivery_type, (
+            f"delivery_type {converted.delivery_type!r} does not match the row's {product.delivery_type!r}"
+        )
+        assert [reference.id for reference in converted.format_ids] == [
+            entry["id"] for entry in product.effective_format_ids
+        ], (
+            f"format_ids {converted.format_ids!r} does not carry the row's effective format ids "
+            f"{product.effective_format_ids!r}"
+        )
+
         db_columns = {column.name for column in ProductModel.__table__.columns}
 
         # The floor, hand-named on purpose: no derivation from one side can assert that a
