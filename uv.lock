@@ -74,8 +74,8 @@ wheels = [
 
 [[package]]
 name = "adcp"
-version = "9.0.0b1"
-source = { editable = "../sdk-v9-integrated" }
+version = "9.0.0b1+prs1435.1415"
+source = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415/adcp-9.0.0b1%2Bprs1435.1415-py3-none-any.whl" }
 dependencies = [
     { name = "a2a-sdk" },
     { name = "cryptography" },
@@ -93,6 +93,9 @@ dependencies = [
     { name = "sse-starlette" },
     { name = "tldextract" },
     { name = "typing-extensions" },
+]
+wheels = [
+    { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415/adcp-9.0.0b1%2Bprs1435.1415-py3-none-any.whl", hash = "sha256:ca6e42115c976067375e91b077bda385b1cd0cf6ffcb9140d9c529dd2e952298" },
 ]
 
 [package.metadata]
@@ -136,14 +139,6 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.14.1" },
 ]
 provides-extras = ["dev", "docs", "pg", "observability"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "datamodel-code-generator", specifier = "==0.64.0" },
-    { name = "mypy", specifier = "==1.20.2" },
-    { name = "pre-commit", specifier = ">=4.4.0" },
-    { name = "types-protobuf", specifier = ">=7.34.1.20260408" },
-]
 
 [[package]]
 name = "adcp-sales-agent"
@@ -245,7 +240,7 @@ requires-dist = [
     { name = "a2a-cli", specifier = ">=0.2.0" },
     { name = "a2a-sdk", extras = ["http-server"], specifier = ">=1.0.1" },
     { name = "a2wsgi", specifier = ">=1.10.0" },
-    { name = "adcp", editable = "../sdk-v9-integrated" },
+    { name = "adcp", url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415/adcp-9.0.0b1%2Bprs1435.1415-py3-none-any.whl" },
     { name = "alembic", specifier = ">=1.13.0" },
     { name = "allure-pytest", marker = "extra == 'ui-tests'", specifier = "==2.16.0" },
     { name = "authlib", specifier = ">=1.6.12" },
