@@ -87,17 +87,39 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 #: one supplied the key rather than only that some key was found.
 REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
 
-#: An ``agent_url`` whose brand.json walk FAILS, deterministically and with no network.
+#: An ``agent_url`` whose capabilities hop CANNOT BE REACHED, deterministically.
 #:
 #: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
 #: (``adcp/signing/ip_pinned_transport.py`` ``resolve_and_validate_host`` via
-#: ``build_async_ip_pinned_transport``), so a loopback authority is refused as a
-#: reserved range and ``async_resolve_agent`` raises ``AgentResolverError
-#: ("capabilities_unreachable")`` in microseconds. That is a REAL failure of the real
-#: walk — not a patched resolver — which is what a test grading "the walk failed" needs
-#: if it is not to be a mock asserting on itself. A public-looking hostname would
-#: instead put a DNS lookup in the test's critical path.
-UNRESOLVABLE_AGENT_URL = "http://127.0.0.1:1/a2a"
+#: ``build_async_ip_pinned_transport``), so ``resolve_agent`` raises
+#: ``AgentResolverError("capabilities_unreachable")`` off a DNS miss, in single-digit
+#: milliseconds. ``.invalid`` is RFC 2606 §2 reserved and guaranteed never to resolve,
+#: so the miss costs one NXDOMAIN and cannot become a real destination. That is a REAL
+#: failure of the real walk — not a patched resolver — which is what a test grading
+#: "the walk failed" needs if it is not to be a mock asserting on itself.
+#:
+#: UNREACHABLE, NOT REFUSED, and the distinction is the whole choice of value. A DNS
+#: failure is the capabilities hop's own transient row — "Capabilities fetch failed
+#: (DNS, TCP, TLS, timeout, non-2xx)" in the 3.2.1 discovery-chain table — so the walk
+#: carries no ``signature_code`` and the wire code is
+#: ``request_signature_capabilities_unreachable``, which is what this constant is named
+#: for. The two banned-destination URLs that preceded it both answer
+#: ``request_signature_jwks_untrusted`` instead, for two different reasons, and neither
+#: grades an unreachable counterparty:
+#:
+#: * ``http://127.0.0.1:1/a2a`` — step 1 of the pinned chain is HTTPS-only
+#:   (``security.mdx`` § "Discovering an agent's signing keys via ``brand_json_url``",
+#:   step 1, :1358), and 9.x enforces that at canonicalization BEFORE the reserved-range
+#:   check, so the URL short-circuits to ``invalid_agent_url`` and the hop is never
+#:   attempted. Measured: 6.6.0 answered ``capabilities_unreachable`` here, which is why
+#:   this value read correctly for as long as it did.
+#: * ``https://127.0.0.1:1/a2a`` — reaches the reserved-range check and is refused by it,
+#:   which is a TERMINAL trust-boundary rejection: the resolver attaches
+#:   ``signature_code=request_signature_jwks_untrusted`` (the pinned enum scopes that code
+#:   to a "resolved network destination" failing SSRF and trust-boundary validation). It
+#:   answers ``capabilities_unreachable`` only on a verifier that drops
+#:   ``signature_code`` — so a test pinned to this value grades that bug, not the walk.
+UNRESOLVABLE_AGENT_URL = "https://unreachable.invalid/a2a"
 
 #: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
 #: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
