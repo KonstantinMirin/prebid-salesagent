@@ -1361,6 +1361,41 @@ class BaseTestEnv:
             self.__dict__["_signing"] = build_signing_capability(self)
         return self.__dict__["_signing"]
 
+    def repoint_signing_agent_url(self, agent_url: str) -> Any:
+        """Move this buyer's PUBLISHED ``agent_url`` to *agent_url*, keeping its key.
+
+        One variable away from :meth:`enable_request_signing`: the same counterparty,
+        the same keypair, the same signature — and a trust root the seller cannot walk
+        to. The capability is minted first if it has not been, so a scenario can say
+        "this buyer signs" and "its agent_url is unwalkable" as two Givens in either
+        order.
+
+        NO TRANSPORT BRANCH, and that is the point. The write goes through
+        :func:`~tests.harness.signing_capability.attach_agent_url`, whose session is
+        bound to the LIVE SERVER's database in e2e mode and to this process's in
+        every other, so all four transports read the re-pointed row by the one
+        mechanism production reads it by: ``token -> Principal.agent_url``. There is
+        no in-process shortcut here to diverge from the e2e leg.
+
+        The two process-global caches for *agent_url* are cleared, so the walk
+        actually RUNS rather than being answered from a neighbour scenario's verdict:
+        ``AGENT_RESOLUTION_CACHE`` would serve a resolution for 3600 s, and
+        ``_RESOLUTION_FAILURES`` would serve a previous failure's code for the refetch
+        cooldown. Both are keyed by ``agent_url``, so clearing this one key leaves
+        every other counterparty in the process untouched. Without this the scenario's
+        outcome would depend on execution order, which under xdist and
+        ``pytest-randomly`` is not an order anyone chose.
+        """
+        from src.core.signing import verifier
+        from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
+        from tests.harness.signing_capability import attach_agent_url
+
+        capability = self.enable_request_signing()
+        attach_agent_url(self, agent_url)
+        AGENT_RESOLUTION_CACHE.pop(agent_url, None)
+        verifier._RESOLUTION_FAILURES.pop(agent_url, None)
+        return capability
+
     def declare_request_signing(
         self,
         *,

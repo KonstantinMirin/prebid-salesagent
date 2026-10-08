@@ -87,41 +87,48 @@ COUNTERPARTY_KID = "buyer-request-signing-1"
 #: one supplied the key rather than only that some key was found.
 REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
 
-#: An ``agent_url`` whose brand.json walk FAILS at the capabilities hop, for real.
+#: An ``agent_url`` whose capabilities hop CANNOT BE REACHED, deterministically.
 #:
-#: UNRESOLVABLE in the DNS sense, and that is the whole point: the name is the
-#: obligation. ``async_resolve_agent`` raises
-#: ``AgentResolverError("capabilities_unreachable")`` because the host does not
-#: resolve, which is the TRANSIENT hop failure ``security.mdx`` :1376 describes
-#: ("Capabilities fetch failed (DNS, TCP, TLS, timeout, non-2xx) … Surface as
-#: transient") and the code both callers of this constant assert. ``.invalid`` is
-#: RFC 2606 reserved, so the lookup fails immediately and offline — a REAL failure of
-#: the real walk, not a patched resolver.
+#: The SDK resolves and validates the host SYNCHRONOUSLY before any socket is opened
+#: (``adcp/signing/ip_pinned_transport.py`` ``resolve_and_validate_host`` via
+#: ``build_async_ip_pinned_transport``), so ``resolve_agent`` raises
+#: ``AgentResolverError("capabilities_unreachable")`` off a DNS miss, in single-digit
+#: milliseconds. ``.invalid`` is RFC 2606 2 reserved and guaranteed never to resolve,
+#: so the miss costs one NXDOMAIN and cannot become a real destination. That is a REAL
+#: failure of the real walk -- not a patched resolver -- which is what a test grading
+#: "the walk failed" needs if it is not to be a mock asserting on itself.
 #:
-#: DO NOT substitute a reserved-range authority (``https://127.0.0.1:1``,
-#: ``https://10.0.0.1``). It is a TERMINAL trust-boundary rejection, not a transient
-#: hop failure, and the SDK says so on the exception itself: such a refusal carries
-#: ``signature_code=request_signature_jwks_untrusted`` while leaving
-#: ``code=capabilities_unreachable``. ``_map_agent_resolver_error`` reads ``code``
-#: today, so a loopback authority happens to yield the transient code — and stops the
-#: moment the map reads the ``signature_code`` the resolver sets precisely because one
-#: resolver code fans out to several spec codes. This constant was briefly
-#: ``https://127.0.0.1:1/a2a`` and was green only on that accident.
+#: UNREACHABLE, NOT REFUSED, and the distinction is the whole choice of value. A DNS
+#: failure is the capabilities hop's own transient row -- "Capabilities fetch failed
+#: (DNS, TCP, TLS, timeout, non-2xx)" in the 3.2.1 discovery-chain table (:1376) -- so the
+#: walk carries no ``signature_code`` and the wire code is
+#: ``request_signature_capabilities_unreachable``, which is what this constant is named
+#: for. The two banned-destination URLs that preceded it both answer
+#: ``request_signature_jwks_untrusted`` instead, for two different reasons, and neither
+#: grades an unreachable counterparty:
 #:
-#: Measured against adcp 9.0.0b1+prs1435.1415, ``code`` / ``signature_code`` / what the
+#: * ``http://127.0.0.1:1/a2a`` -- step 1 of the pinned chain is HTTPS-only
+#:   (``security.mdx`` :1358), and 9.x enforces that at canonicalization BEFORE the
+#:   reserved-range check, so the URL short-circuits to ``invalid_agent_url`` and the hop
+#:   is never attempted. Measured: 6.6.0 answered ``capabilities_unreachable`` here, which
+#:   is why this value read correctly for as long as it did.
+#: * ``https://127.0.0.1:1/a2a`` -- reaches the reserved-range check and is refused by it,
+#:   which is a TERMINAL trust-boundary rejection: the resolver attaches
+#:   ``signature_code=request_signature_jwks_untrusted`` (the pinned enum scopes that code
+#:   to a "resolved network destination" failing SSRF and trust-boundary validation). It
+#:   answers ``capabilities_unreachable`` only on a verifier that drops ``signature_code``
+#:   -- so a test pinned to this value grades that bug, not the walk.
+#:
+#: Measured against adcp 9.0.0b1+prs1435.1415 -- ``code`` / ``signature_code`` / what the
 #: current map returns:
 #:
-#:   https://unreachable.invalid/a2a  capabilities_unreachable  None             -> capabilities_unreachable
-#:   https://127.0.0.1:1/a2a          capabilities_unreachable  jwks_untrusted   -> capabilities_unreachable
-#:   https://10.0.0.1/a2a             capabilities_unreachable  jwks_untrusted   -> capabilities_unreachable
-#:   http://127.0.0.1:1/a2a           invalid_agent_url         None             -> jwks_untrusted
+#:   https://unreachable.invalid/a2a  capabilities_unreachable  None            -> capabilities_unreachable
+#:   https://127.0.0.1:1/a2a          capabilities_unreachable  jwks_untrusted  -> capabilities_unreachable
+#:   https://10.0.0.1/a2a             capabilities_unreachable  jwks_untrusted  -> capabilities_unreachable
+#:   http://127.0.0.1:1/a2a           invalid_agent_url         None            -> jwks_untrusted
 #:
 #: Only the first row carries no ``signature_code``, so only the first is stable under
 #: both the current map and a map that reads ``signature_code``.
-#:
-#: The scheme must stay ``https``: :1358 makes the capabilities fetch HTTPS-only and the
-#: SDK enforces it before anything else, so an ``http://`` spelling short-circuits to
-#: ``invalid_agent_url`` (bottom row) and never reaches the hop failure at all.
 UNRESOLVABLE_AGENT_URL = "https://unreachable.invalid/a2a"
 
 #: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
