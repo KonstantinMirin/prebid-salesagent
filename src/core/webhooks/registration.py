@@ -38,6 +38,7 @@ the recovery value derives from the SDK's bundled pinned
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
@@ -403,10 +404,27 @@ def accept_push_notification_primitives(
 ) -> ValidatedWebhookRegistration:
     """Accept a registration already destructured into primitives.
 
-    For the A2A protobuf shape, whose ``authentication`` carries a SINGULAR
-    free-form ``scheme`` string rather than the tool path's ``schemes`` list, and
-    which also carries ``token`` — passed through here so the value keeps it, since
-    the pinned schema requires the seller to echo it verbatim in every payload.
+    THE ONLY ``src/`` CALLER IS THE ADMIN FORM
+    (:mod:`src.admin.blueprints.principals`, the per-principal webhook route),
+    which holds ``request.form`` strings rather than a config-shaped document.
+    This docstring said "for the A2A protobuf shape" and that is no longer true of
+    any caller — a comment that lies about what a function is for is how a defect
+    survives review, and this one hid a real gap for a while: the admin surface
+    registers a STANDING push config, while ``push_notification_config`` is a
+    PER-REQUEST registration whose ``operation_id`` the buyer generates per task
+    invocation (``L3/webhooks.mdx`` :136). So this path cannot supply one, and the
+    rows it writes are refused by the one envelope builder at delivery time.
+    That gap is tracked upstream of this function, not papered over inside it.
+
+    The SHAPE the signature takes is still the flattened one the A2A protobuf used:
+    a SINGULAR free-form ``scheme`` string rather than the tool path's ``schemes``
+    list, plus ``token`` — passed through so the value keeps it, since the pinned
+    schema requires the seller to echo it verbatim in every payload. That shape is
+    why the function exists; the A2A route that once fed it does not.
+
+    It must NOT grow an ``operation_id`` parameter. The value is the buyer's, and
+    an operator typing one would be fabricating a correlation id — which :143
+    forbids as squarely as deriving one from the receiver URL.
 
     The URL gate runs BEFORE the model is built, deliberately: a blocked-but-
     well-formed URL (a metadata address, say) is a valid ``uri`` to pydantic, and
@@ -460,6 +478,44 @@ def _coerce_primitives_to_config(
     """
     payload = {key: value for key, value in document.items() if value is not None}
     return require_push_notification_config(payload, field_prefix=field_prefix)
+
+
+def stored_registration_fields(document: Mapping[str, Any]) -> dict[str, Any]:
+    """Project a STORED webhook document onto the fields the pinned config declares.
+
+    For a sender that has to rebuild a registration out of a document it read
+    back -- a media buy's ``raw_request["reporting_webhook"]``, a workflow step's
+    ``request_data["push_notification_config"]`` -- rather than receiving one
+    through the ingest gate.
+
+    The field set is DERIVED from :class:`PushNotificationConfig`, never listed
+    here. Both callers used to list it, and both listed the same two of the four
+    fields the pinned schema defines::
+
+        registration_config = {"url": url}
+        if document.get("authentication"):
+            registration_config["authentication"] = document["authentication"]
+
+    so ``operation_id`` and ``token`` were dropped on every read. Both carry echo
+    obligations the seller MUST honour (``webhooks.mdx`` :142), and
+    ``operation_id`` is REQUIRED on ``core/mcp-webhook-payload.json``, so dropping
+    it did not degrade the payload -- it made the envelope unbuildable, and
+    ``build_webhook_envelope`` then refused every delivery these two paths
+    attempted. This is the same lossy-projection defect
+    :class:`ValidatedWebhookRegistration` was introduced to delete one level up,
+    reintroduced by the two callers that build the document instead of receiving
+    it.
+
+    Only TRUTHY values are carried, which preserves the ``if
+    document.get("authentication")`` semantics both call sites had exactly: a
+    stored ``authentication: {}`` keeps meaning "no authentication" and keeps
+    delivering unsigned. The gate refuses an empty block, so forwarding one would
+    turn a delivered webhook into a refusal -- a change that needs an owner
+    sign-off (#1802 made one for a legacy scheme) and is not a projection's to
+    make. An empty ``operation_id`` or ``token`` is likewise indistinguishable
+    from an absent one for an echo obligation.
+    """
+    return {field: value for field in PushNotificationConfig.model_fields if (value := document.get(field))}
 
 
 def accept_push_notification_config(

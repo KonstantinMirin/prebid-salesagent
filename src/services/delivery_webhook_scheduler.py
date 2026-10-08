@@ -26,7 +26,7 @@ from src.core.schemas import GetMediaBuyDeliveryResponse
 from src.core.tools.media_buy_delivery import delivery_for_media_buy
 from src.core.utils import utc_flight_start
 from src.core.webhooks.delivery import WebhookTaskContext
-from src.core.webhooks.registration import accept_push_notification_config
+from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 logger = logging.getLogger(__name__)
@@ -303,15 +303,21 @@ class DeliveryWebhookScheduler:
                 # solely request. The gate owns that rule — re-checking len(schemes)
                 # here would be a second vocabulary for it.
                 #
-                # The authentication block is forwarded only when TRUTHY, preserving
-                # the previous `if auth_config:` exactly: an empty dict keeps meaning
-                # "no authentication" and keeps delivering unsigned. The gate refuses
-                # an empty block, and turning today's unsigned delivery into a refusal
-                # is a delivered -> never-delivered change that needs an owner sign-off
-                # (#1802 made one for a legacy scheme); it is not a refactor's to make.
-                registration_config = {"url": webhook_url}
-                if reporting_webhook.get("authentication"):
-                    registration_config["authentication"] = reporting_webhook["authentication"]
+                # The field set is DERIVED from the pinned config by
+                # stored_registration_fields, which also owns the truthy-only rule
+                # this site used to spell inline (an empty authentication block
+                # keeps meaning "no authentication" and keeps delivering unsigned).
+                #
+                # It used to list `url` and `authentication` and nothing else, so a
+                # reporting registration's `operation_id` was dropped on every read
+                # and build_webhook_envelope then refused the delivery: the seller
+                # MUST echo it into mcp-webhook-payload.operation_id, where it is
+                # REQUIRED, and webhooks.mdx :143 forbids recovering it from the URL.
+                # `reporting_webhook.operation_id` is the AdCP 3.2 interim
+                # correlation agreement (webhooks.mdx :656-673), carried as an
+                # additive field under core/reporting-webhook.json's
+                # `additionalProperties: true`; from 3.3 the field is standardized.
+                registration_config = stored_registration_fields(reporting_webhook)
 
                 try:
                     push_notification_config = accept_push_notification_config(
