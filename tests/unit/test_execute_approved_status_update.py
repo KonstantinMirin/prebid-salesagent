@@ -99,7 +99,6 @@ def _make_mock_product():
     pricing_option.rate = Decimal("10.00")
     pricing_option.currency = "USD"
     pricing_option.is_fixed = True
-    pricing_option.root = pricing_option  # Self-reference for getattr(po, "root", po)
     product.pricing_options = [pricing_option]
 
     return product

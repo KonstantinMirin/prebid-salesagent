@@ -8,7 +8,7 @@ import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
 from src.core.database.models import PricingOption, Product
-from src.core.schemas.pricing import PricingOption as PricingOptionSchema
+from src.core.schemas.pricing import CpmPricingOption
 from tests.factories.core import TenantFactory
 from tests.factories.request import _RequestFactory
 
@@ -115,12 +115,15 @@ class PricingOptionRequestFactory(_RequestFactory):
     type, and because the fifteen pricing mutators that would make it earn its keep are
     scheduled work that needs the name to exist first (salesagent-b341x.4).
 
-    IT BINDS A ``RootModel``. ``src.core.schemas.pricing.PricingOption.model_fields`` is
-    ``{'root': ...}`` — a nine-member discriminated union — so this factory works through
-    pydantic's ``RootModel(**data)`` kwargs path: ``build()`` returns the RootModel and
-    ``model_dump()`` returns the root dict. The declared attributes below are the CPM
-    member's fields; a ``pricing_model="cpc"`` variant selects a different member and
-    needs that member's own companion fields supplied at ``build()`` time.
+    IT BINDS ONE UNION MEMBER, ``CpmPricingOption``, because the declared attributes below
+    ARE the CPM member's fields. A ``pricing_model="cpc"`` variant is a different member
+    and needs its own factory rather than kwargs here.
+
+    It used to bind a local ``RootModel`` wrapper over the nine-member union, reaching the
+    member through pydantic's ``RootModel(**data)`` kwargs path. The wrapper is deleted
+    (nothing ever held one: ``Product.pricing_options`` is typed with the arms), and the
+    payload is byte-identical either way — ``model_dump()`` on the wrapper returned the
+    root dict, which is what dumping the member directly returns.
 
     ``payload()`` carries ``max_bid: False``, which the hand-written literal it replaces
     did not. That is the pinned model's OWN default for the field surfaced by the dump
@@ -129,7 +132,7 @@ class PricingOptionRequestFactory(_RequestFactory):
     """
 
     class Meta:
-        model = PricingOptionSchema
+        model = CpmPricingOption
 
     pricing_option_id = "po_default"
     pricing_model = "cpm"

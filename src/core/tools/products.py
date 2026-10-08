@@ -518,16 +518,14 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
             #        false = at least one option without fixed_price.
             #        Products with both fixed and auction options match both.
             if req.filters.is_fixed_price is not None:
-                # PricingOption is a Pydantic RootModel — unwrap via .root
-                # to access inner variant fields (fixed_price lives on the variant)
+                # ``fixed_price`` is read off the element directly: Product.pricing_options
+                # holds the union MEMBERS and all nine declare the field. The comment here
+                # used to say the element was a RootModel to unwrap via ``.root``, which was
+                # never true of this list.
                 if req.filters.is_fixed_price:
-                    has_matching_pricing = any(
-                        getattr(po, "fixed_price", None) is not None for po in product.pricing_options
-                    )
+                    has_matching_pricing = any(po.fixed_price is not None for po in product.pricing_options)
                 else:
-                    has_matching_pricing = any(
-                        getattr(po, "fixed_price", None) is None for po in product.pricing_options
-                    )
+                    has_matching_pricing = any(po.fixed_price is None for po in product.pricing_options)
                 if not has_matching_pricing:
                     continue
 
@@ -597,7 +595,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                     # Product has no country restrictions, matches any country filter
                     pass
                 else:
-                    # Extract country codes from filter (Country is RootModel[str])
+                    # Extract country codes from filter. ``Country`` is NOT a RootModel --
+                    # at adcp 9 it is ``ScalarStr``, a ``str`` subclass, so the value IS the
+                    # string and ``.upper()`` can be called on it directly. ``.root`` still
+                    # answers behind a deprecation shim ("Country.root is deprecated; the
+                    # value IS a str"), which is what the read below is still using; the
+                    # per-type cleanup for that and its eleven siblings is
+                    # https://github.com/prebid/salesagent/issues/2339.
                     request_countries: set[str] = set()
                     for country in req.filters.countries:
                         request_countries.add(country.root.upper())

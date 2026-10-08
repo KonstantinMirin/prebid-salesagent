@@ -207,9 +207,9 @@ from pydantic import (
 from pydantic_core import InitErrorDetails, PydanticCustomError
 from pydantic_core import ValidationError as PydanticCoreValidationError
 
-# The pricing option types (nine local member subclasses, the AdCPPricingOption
-# union, and the PricingOption wrapper) live in src.core.schemas.pricing; the
-# package __init__ star-exports the members and the union from there.
+# The pricing option types (nine local member subclasses and the AdCPPricingOption
+# union over them) live in src.core.schemas.pricing; the package __init__
+# star-exports the members and the union from there.
 
 
 class Error(_LibraryError):
@@ -1745,7 +1745,7 @@ class PricingOption(SalesAgentBaseModel):
 
     Production pricing options are the discriminated-union subclasses in
     ``src.core.schemas.pricing`` (``Product.pricing_options`` is typed with
-    that module's RootModel wrapper). This flat model is retained only because
+    that module's union over them). This flat model is retained only because
     ledgered schema-validation tests (T-UC-001-boundary-pricing-xor in
     tests/integration/test_get_products_behavioral.py and
     tests/unit/test_null_field_exclusion.py) still grade its XOR validator;
