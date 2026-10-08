@@ -16,6 +16,7 @@ from src.core.database.repositories.creative import (
     CreativeListResult,
     CreativeRepository,
 )
+from src.core.schemas import CreativeFormatIdentity, FormatId
 from tests.factories import (
     CreativeAssignmentFactory,
     CreativeFactory,
@@ -249,8 +250,9 @@ class TestCreativeRepoCreate:
             result = repo.create(
                 creative_id="c_new",
                 name="Test Banner",
-                agent_url="https://agent.example.com",
-                format="display_300x250",
+                identity=CreativeFormatIdentity.of_legacy(
+                    FormatId(agent_url="https://agent.example.com", id="display_300x250")
+                ),
                 principal_id="p1",
                 data={"assets": build_assets(image_spec("banner"))},
             )
@@ -270,8 +272,9 @@ class TestCreativeRepoCreate:
             repo = CreativeRepository(session, "test_tenant")
             result = repo.create(
                 name="Auto ID",
-                agent_url="https://agent.example.com",
-                format="display_300x250",
+                identity=CreativeFormatIdentity.of_legacy(
+                    FormatId(agent_url="https://agent.example.com", id="display_300x250")
+                ),
                 principal_id="p1",
             )
 
