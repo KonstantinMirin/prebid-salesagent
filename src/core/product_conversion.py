@@ -538,13 +538,16 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         product_data["expires_at"] = product_model.expires_at
 
     # Internal fields (not in AdCP spec, but in our extended Product schema)
-    # Use effective_implementation_config to auto-resolve from inventory profile if set
-    if hasattr(product_model, "effective_implementation_config"):
-        product_data["implementation_config"] = product_model.effective_implementation_config
-    elif hasattr(product_model, "implementation_config"):
-        product_data["implementation_config"] = product_model.implementation_config
-    else:
-        product_data["implementation_config"] = None
+    # ``effective_implementation_config`` resolves from the inventory profile when one is
+    # set and falls back to the product's own column when it is not, so it is the whole
+    # answer. It is an unconditional ``@property`` on the ORM model
+    # (``database/models.py``:594), and all three callers pass an ORM row, so the two
+    # ``hasattr`` fallbacks this replaced could never run: a raw-column branch and a
+    # ``None`` branch, both unreachable. Asking a model we declare whether it has an
+    # attribute we declared is a data-model smell — and worse than dead here, because
+    # ``hasattr`` swallows an ``AttributeError`` raised INSIDE the getter, so a genuine
+    # fault in the property would have been masked by silently reading the raw column.
+    product_data["implementation_config"] = product_model.effective_implementation_config
 
     # Principal access control (internal field)
     product_data["allowed_principal_ids"] = getattr(product_model, "allowed_principal_ids", None)
