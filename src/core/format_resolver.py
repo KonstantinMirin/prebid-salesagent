@@ -26,6 +26,7 @@ from src.core.schemas import (
     CreativeFormatIdentity,
     Format,
     FormatIdentity,
+    LibraryCreativeAsset,
     creative_format_identity,
     format_id_identity,
 )
@@ -168,7 +169,7 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
     )
 
 
-def creative_identity_of(creative: Any, *, spec: Format | None = None) -> CreativeFormatIdentity:
+def creative_identity_of(creative: LibraryCreativeAsset, *, spec: Format | None = None) -> CreativeFormatIdentity:
     """A creative's format identity, with a legacy reference PROJECTED to its canonical kind.
 
     THE ONE edge where the two identities meet. ``creative_format_identity`` reads whichever
@@ -184,13 +185,15 @@ def creative_identity_of(creative: Any, *, spec: Format | None = None) -> Creati
     seller holding.
 
     Args:
-        creative: anything carrying the two arms -- a request DTO, a response model.
+        creative: the pinned sync input, or this repo's DTO subclass of it. Typed rather than
+            duck-read: both declare the two arms, so ``format_id`` is a plain attribute and
+            mypy holds every caller to a real model instead of to whatever answers.
         spec: the fetched format declaration, when the caller already has it. Passing it is
             what makes the agent's own explicit projection (step 1) reachable; without it
             only the registry glob (step 3) is consulted.
     """
     kind: str | None = None
-    format_id = getattr(creative, "format_id", None)
+    format_id = creative.format_id
     if format_id is not None:
         try:
             kind = canonical_kind_for(format_id, spec=spec)

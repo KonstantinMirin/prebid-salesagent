@@ -89,6 +89,7 @@ from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
 from adcp.types.canonical_creative import CanonicalFormatKind as _LibraryCanonicalFormatKind
+from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
 
 # The GENERATED format reference, reached at its generated path because adcp 9 gives it no
 # public name. ``adcp.types.FormatId`` is gone and both candidate public names --
@@ -648,7 +649,7 @@ class CreativeFormatIdentity:
 
 
 def creative_format_identity(
-    creative: object,
+    creative: LibraryCreativeAsset,
     *,
     kind: str | None = None,
     supported_kinds: Iterable[str] = _LibraryCanonicalFormatKind,
@@ -660,6 +661,15 @@ def creative_format_identity(
     because reaching for ``format_id`` is what silently assumes the deprecated arm: a
     canonical creative has no ``format_id`` at all, and a seller that reads the attribute
     directly sees ``None`` and reports a missing field the buyer was never required to send.
+
+    Typed with the PINNED sync input, which declares all three members this reads, so they
+    are plain attribute access and mypy holds the callers to it. The parameter was ``object``
+    and the reads were ``getattr(..., None)``, which looked like three types needing a duck
+    and was not: the local DTO is a SUBCLASS of this one, and the listing response model --
+    the apparent third -- never reaches here at all, because the sync gate calls this on the
+    REQUEST while building the response separately and the listing path goes through
+    ``CreativeFormatIdentity.from_row``. The only caller the ducks were serving was a test
+    shim, which now builds a real DTO.
 
     This reads the arms; it does not PROJECT. ``kind`` is supplied by the caller that holds
     the projection -- ``src.core.format_resolver.creative_identity_of``, the one edge that
@@ -687,8 +697,8 @@ def creative_format_identity(
             DTO. The third is the seller's own check: ``format_kind`` is an open ``str`` on
             every SDK model, in both directions, and the SDK never validates it for you.
     """
-    format_id = getattr(creative, "format_id", None)
-    declared_kind = getattr(creative, "format_kind", None)
+    format_id = creative.format_id
+    declared_kind = creative.format_kind
     if (format_id is None) == (declared_kind is None):
         raise ValueError("a creative carries exactly one of format_id and format_kind")
     if format_id is not None:
@@ -701,14 +711,16 @@ def creative_format_identity(
     kind_value = str(declared_kind)
     if not is_canonical_format_kind(kind_value, supported_kinds):
         raise ValueError(f"format_kind {kind_value!r} is not one this seller supports")
-    option_ref = getattr(creative, "format_option_ref", None)
-    option_id = getattr(option_ref, "format_option_id", None)
-    domain = getattr(option_ref, "publisher_domain", None)
+    # Both arms of core/format-option-ref.json's oneOf declare format_option_id AND
+    # publisher_domain (measured: identical three-field sets, differing only in the `scope`
+    # discriminator), so the only variance is whether the creative carries a reference at
+    # all. The absent case is a branch; the members are plain reads.
+    option_ref = creative.format_option_ref
     return CreativeFormatIdentity(
         kind=kind_value,
         option=(
-            FormatOptionIdentity(str(domain) if domain is not None else None, str(option_id))
-            if option_id is not None
+            FormatOptionIdentity(option_ref.publisher_domain, option_ref.format_option_id)
+            if option_ref is not None
             else None
         ),
     )
@@ -2595,6 +2607,22 @@ class Package(LibraryPackage):
         nothing, and a *decided* key that IS a shared buyer field raises rather than
         silently winning.
         """
+        # ORDERING CONSTRAINT for whoever builds effective-targeting resolution (GH #2345):
+        # the resolver MUST run BEFORE this adoption, not after.
+        #
+        # ``_adopt_sibling`` re-validates through ``from_attributes=True``, and the adopted
+        # model reports ALL of its fields as ``model_fields_set`` -- so once a value has been
+        # adopted, "the buyer omitted this dimension" and "the buyer explicitly nulled it"
+        # are indistinguishable. The WIRE is unaffected either way (both serialize absent
+        # under exclude_none, which is what core/targeting-input.json's "Null is a command
+        # and MUST NOT appear in ... package readback" and core/targeting.json's "MUST NOT
+        # contain null" both require), so nothing is wrong today.
+        #
+        # But the distinction is exactly what a resolver needs: core/package.json calls this
+        # field "Complete effective targeting accepted for this package, including targeting
+        # bound through configured product selection", so an OMITTED dimension should inherit
+        # the product's bound value while a NULLED one should stay cleared. A resolver placed
+        # after this line would have nothing left to read.
         echoed = {
             name: _adopt_sibling(getattr(request_package, name), cls.model_fields[name].annotation)
             for name in cls.model_fields.keys() & type(request_package).model_fields.keys()

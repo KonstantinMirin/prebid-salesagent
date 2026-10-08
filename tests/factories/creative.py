@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import factory
@@ -12,6 +11,7 @@ from src.core.database.models import Creative, CreativeAssignment
 from src.core.database.repositories.creative import _identity_columns
 from src.core.format_resolver import creative_identity_of
 from src.core.schemas import CreativeFormatIdentity, FormatId
+from src.core.schemas.creative import CreativeAssetRequest
 
 from .core import TenantFactory
 from .creative_asset import build_assets, image_spec
@@ -23,25 +23,56 @@ from .principal import PrincipalFactory
 DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _seeded_identity(obj) -> CreativeFormatIdentity:
-    """The format identity a factory-built row carries, through the PRODUCTION builder.
+def _identity_for(
+    *,
+    agent_url: str,
+    format_id: str,
+    format_params: dict[str, Any] | None = None,
+    canonical_kind: str | None = None,
+) -> CreativeFormatIdentity:
+    """The format identity a seeded creative carries, through the PRODUCTION accessor.
 
     A test says which arm the creative carries -- a legacy reference via ``agent_url`` +
-    ``format`` (optionally parameterized by ``format_params``), or a canonical kind via
-    ``canonical_kind`` -- and the four stored columns are derived from that by the same code
-    the sync path runs, including the v1 -> v2 projection. So a factory row and a synced row
-    cannot differ in shape, which is what a factory seeding the columns by hand could not
-    promise: the identity used to be three partial columns and the factory set two of them.
+    ``format_id`` (optionally parameterized by ``format_params``), or a canonical kind via
+    ``canonical_kind`` -- and the stored columns are derived from that by the same code the
+    sync path runs, including the v1 -> v2 projection. So a seeded row and a synced row
+    cannot differ in shape, which is what seeding the columns by hand could not promise:
+    the identity used to be three partial columns and the factory set two of them.
 
     ``format_params`` is spread onto the reference rather than kept beside it, because that
     is what a parameterized ``format_id`` IS -- ``core/format-id.json`` declares width,
     height, duration_ms and pixel_ratio on the reference object itself. A scenario that needs
     a parameterized format therefore seeds one reference, not a reference plus a blob.
+
+    The DTO is built FOR REAL, and BOTH arms go through the accessor. A ``SimpleNamespace``
+    stood here -- a duck that happened to answer three attribute reads -- and it was the only
+    caller keeping those reads defensive in production. The canonical branch also used to
+    return a hand-built identity, skipping the accessor and with it the seller's vocabulary
+    check, so a scenario could seed a kind production would refuse.
     """
-    if obj.canonical_kind is not None:
-        return CreativeFormatIdentity(kind=obj.canonical_kind)
-    reference = FormatId(agent_url=obj.agent_url, id=obj.format, **(obj.format_params or {}))
-    return creative_identity_of(SimpleNamespace(format_id=reference, format_kind=None))
+    identity_arm: dict[str, Any] = (
+        {"format_kind": canonical_kind}
+        if canonical_kind is not None
+        else {"format_id": FormatId(agent_url=agent_url, id=format_id, **(format_params or {}))}
+    )
+    return creative_identity_of(
+        CreativeAssetRequest(
+            creative_id="seeded-identity",
+            name="seeded identity",
+            assets={},
+            **identity_arm,
+        )
+    )
+
+
+def _seeded_identity(obj) -> CreativeFormatIdentity:
+    """``factory_boy`` adapter: the factory stub's knobs, named for :func:`_identity_for`."""
+    return _identity_for(
+        agent_url=obj.agent_url,
+        format_id=obj.format,
+        format_params=obj.format_params,
+        canonical_kind=obj.canonical_kind,
+    )
 
 
 def stamp_format_identity(
@@ -64,13 +95,11 @@ def stamp_format_identity(
 
     For a row that goes through the real session, use ``CreativeFactory`` instead.
     """
-    identity = _seeded_identity(
-        SimpleNamespace(
-            canonical_kind=canonical_kind,
-            agent_url=agent_url,
-            format=format_id,
-            format_params=format_params,
-        )
+    identity = _identity_for(
+        agent_url=agent_url,
+        format_id=format_id,
+        format_params=format_params,
+        canonical_kind=canonical_kind,
     )
     for column, value in _identity_columns(identity).items():
         setattr(row, column, value)
