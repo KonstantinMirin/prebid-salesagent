@@ -49,15 +49,14 @@ class TestSchemaFieldMapping:
         a real row: an attribute it names and the model lacks raises ``AttributeError``
         right here.
 
-        One conversion covers the read set, not just the fields this fixture populates,
-        because every optional read in the converter is guarded by ``if product_model.X:``
-        — and the guard itself performs the read. A falsy value skips the assignment,
-        never the attribute access. Measured with a recording proxy over this fixture:
-        26 of the converter's 27 distinct ``product_model`` reads execute. The 27th,
-        ``product_model.implementation_config`` at ``product_conversion.py``:533, sits in
-        an ``elif hasattr(...)`` branch that is dead whenever
-        ``effective_implementation_config`` exists — which on the real ORM model is
-        always — so no fixture can reach it and nothing in production does either.
+        One conversion covers the WHOLE read set, not just the fields this fixture
+        populates, because every optional read in the converter is guarded by
+        ``if product_model.X:`` — and the guard itself performs the read. A falsy value
+        skips the assignment, never the attribute access. Measured with a recording proxy
+        over this fixture: 26 of the converter's 26 distinct ``product_model`` reads
+        execute. It was 26 of 27 until the dead ``elif hasattr(...)`` fallback at
+        ``product_conversion.py``:530-535 was deleted; that branch held the only read no
+        fixture could reach, so removing it closed the gap rather than hiding it.
 
         WHAT IT USED TO GRADE, and why that was wrong. The expected set was
         ``Product.model_fields`` — the WHOLE pinned schema surface — minus a
