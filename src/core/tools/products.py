@@ -595,7 +595,13 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                     # Product has no country restrictions, matches any country filter
                     pass
                 else:
-                    # Extract country codes from filter (Country is RootModel[str])
+                    # Extract country codes from filter. ``Country`` is NOT a RootModel --
+                    # at adcp 9 it is ``ScalarStr``, a ``str`` subclass, so the value IS the
+                    # string and ``.upper()`` can be called on it directly. ``.root`` still
+                    # answers behind a deprecation shim ("Country.root is deprecated; the
+                    # value IS a str"), which is what the read below is still using; the
+                    # per-type cleanup for that and its eleven siblings is
+                    # https://github.com/prebid/salesagent/issues/2339.
                     request_countries: set[str] = set()
                     for country in req.filters.countries:
                         request_countries.add(country.root.upper())
