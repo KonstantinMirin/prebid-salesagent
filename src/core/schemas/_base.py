@@ -570,15 +570,18 @@ class CreativeFormatIdentity:
         THE ONE place the three derived members are built from the one reference, so the
         comparison form and the verbatim form cannot drift apart. The parameters come off
         ``model_fields`` rather than a list of names.
+
+        ``getattr`` with NO default, deliberately: the names are read off this very model's
+        field set, so every one of them resolves, and a default would be guarding against a
+        name the derivation cannot produce. The dynamic read is irreducible -- the name is in
+        a variable -- but its fallback is not.
         """
         return cls(
             kind=kind,
             legacy=format_id_identity(format_id),
             legacy_parameters=tuple(
                 sorted(
-                    (name, value)
-                    for name in _FORMAT_ID_PARAMETERS
-                    if (value := getattr(format_id, name, None)) is not None
+                    (name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(format_id, name)) is not None
                 )
             ),
             assertion=format_id,
@@ -3149,7 +3152,19 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
+        # ``isinstance`` rather than ``!= "asap"``, which is how the sibling validator on
+        # CreateMediaBuyRequest already spells it. Behaviour-neutral -- a ``datetime`` is
+        # never equal to the string, so the literal test is subsumed -- and it narrows the
+        # union for the type checker, which could not rule the ``Literal`` out of
+        # ``datetime | Literal['asap'] | None`` on a ``!=`` comparison.
+        #
+        # The check STAYS. On this class ``start_time`` and ``end_time`` are plain
+        # ``datetime``, not ``AwareDatetime`` as they are on CreateMediaBuyRequest, so
+        # pydantic accepts a naive value at the field level and this validator is the only
+        # thing that refuses one (measured: the refusal a naive datetime gets is this
+        # function's own message). Deleting it as "duplicating the declared type" would make
+        # update_media_buy accept naive flight times.
+        if isinstance(self.start_time, datetime) and self.start_time.tzinfo is None:
             raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")
