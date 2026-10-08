@@ -414,6 +414,18 @@ def convert_product_model_to_schema(product_model, adapter_type: str | None = No
         )
     product_data["format_ids"] = effective_formats
 
+    # format_options: the CANONICAL half of the same MUST. core/product.json's root anyOf
+    # accepts format_ids, format_options, or both, so this is carried when the product
+    # declares it and omitted when it does not -- it is not derived from format_ids, and
+    # could not be: the projection runs v1 -> v2 only, and inventing a declaration from a
+    # named format would be the synthesis the registry forbids.
+    #
+    # Handed through as the stored document. The DTO declares this field by inheritance as
+    # the pin's sixteen-branch discriminated union over format_kind, so the model validates
+    # the document into the right branch and nothing here reshapes it.
+    if product_model.format_options:
+        product_data["format_options"] = product_model.format_options
+
     # publisher_properties: Use effective_properties which returns AdCP 2.0.0 discriminated union format
     effective_props = product_model.effective_properties
     if not effective_props:

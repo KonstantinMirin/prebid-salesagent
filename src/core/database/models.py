@@ -375,9 +375,24 @@ class Product(Base, JSONValidatorMixin):
     product_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # THE TWO HALVES of a product's format declaration. core/product.json makes it a MUST
+    # with three satisfying shapes -- "Products MUST carry format_ids, format_options, or
+    # BOTH" (a root anyOf) -- so neither column can be NOT NULL on the strength of the spec
+    # alone, and `format_ids` keeps the NOT NULL it already had rather than gaining one.
+    #
     # Type hint: list of FormatId dicts with {agent_url: str, id: str}
     # Validated at database level via CHECK constraint (see migration: rename_formats_to_format_ids)
     format_ids: Mapped[list[dict[str, str]]] = mapped_column(JSONType, nullable=False)
+    # The canonical half: core/product-format-declaration.json documents, each requiring
+    # `format_kind` + `params` and admitting fifteen more members. Stored as the document it
+    # is -- the pinned type is a sixteen-branch discriminated union over `format_kind`, and
+    # the DTO already declares it by inheritance, so nothing here reshapes it.
+    #
+    # Each declaration's `v1_format_ref[]` rides INSIDE it, which is what makes serving a
+    # legacy peer a lookup rather than a synthesis: the projection runs one way only, so a
+    # seller that wants a v1 projection asserts one, and `canonical_formats_only` says there
+    # is none.
+    format_options: Mapped[list[dict] | None] = mapped_column(JSONType, nullable=True)
     # Type hint: targeting template dict structure
     targeting_template: Mapped[dict] = mapped_column(JSONType, nullable=False)
     delivery_type: Mapped[str] = mapped_column(String(50), nullable=False)
