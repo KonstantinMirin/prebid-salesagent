@@ -1567,7 +1567,7 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
     holds no production import.
     """
     from adcp.signing.constants import ADCP_USE_REQUEST, ADCP_USE_WEBHOOK
-    from adcp.signing.errors import REQUEST_SIGNATURE_KEY_PURPOSE_INVALID, SignatureVerificationError
+    from adcp.signing.errors import SignatureVerificationError
     from adcp.signing.jwks import StaticJwksResolver
     from adcp.signing.verifier import VerifierCapability, VerifyOptions, verify_request_signature
     from adcp.signing.webhook_signer import WEBHOOK_TAG as _TAG
@@ -1576,12 +1576,27 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
     headers = dict(signed.headers)
     _precheck_webhook_has_required_components(headers)
 
-    # FIXME(#1291): the retry below exists only because adcp-client-python's webhook
-    # verifier pins expected_adcp_use to the deprecated "webhook-signing" value and
-    # gives no way to widen it (WebhookVerifyOptions has no expected_adcp_use field).
-    # Delete this retry and call verify_webhook_signature directly once
-    # https://github.com/adcontextprotocol/adcp-client-python/issues/1018 lands.
-    def _attempt(expected_adcp_use: str) -> Any:
+    # The accept-SET, stated once, in one attempt. This was a two-attempt retry --
+    # ``request-signing`` first, then ``webhook-signing`` on an ``adcp_use`` refusal --
+    # because adcp-client-python#1018 pinned the webhook verifier's expected purpose to
+    # the deprecated value alone and ``VerifyOptions`` exposed no way to widen it. #1018
+    # landed (CLOSED 2026-08-16) and ``VerifyOptions`` now carries
+    # ``accepted_adcp_uses``, so the spec's set is expressible directly: step 8 (:1478)
+    # and the taxonomy row (:1560) both make the accept-set exactly
+    # ``{request-signing, webhook-signing}``, which is now what we hand the verifier
+    # instead of simulating it by trying one value and then the other.
+    #
+    # STILL the request verifier, NOT ``verify_webhook_signature``, and that is a
+    # deliberate hold rather than leftover scaffolding. That route forces
+    # ``signing_profile_version="3.1"`` ("the rc.4 webhook-v1 corpus retains legacy
+    # Base64URL signatures"), while this seller derives its signing profile from the pin
+    # (``request_signer`` -> ``signing_profile_for_adcp_version``), which is 3.2 at the
+    # current pin. Whether those two can meet is unsettled -- forcing 3.1 here broke
+    # ``test_emitted_challenge_verifies_against_the_published_jwks`` in a module run and
+    # not in isolation, so the result is order-dependent and the question is open, not
+    # answered. Switching routes on an unproven profile change would trade a verified
+    # call for an unverified one.
+    try:
         return verify_request_signature(
             method="POST",
             url=signed.url,
@@ -1599,19 +1614,14 @@ def verify_as_conformant_receiver(signed: CapturedWebhook, jwks: dict[str, Any])
                 # test's, not production's.
                 jwks_resolver=StaticJwksResolver(jwks),
                 expected_tag=_TAG,
-                expected_adcp_use=expected_adcp_use,
+                accepted_adcp_uses=frozenset({ADCP_USE_REQUEST, ADCP_USE_WEBHOOK}),
             ),
         )
-
-    try:
-        return _attempt(ADCP_USE_REQUEST)
     except SignatureVerificationError as exc:
-        if exc.code != REQUEST_SIGNATURE_KEY_PURPOSE_INVALID or "adcp_use" not in str(exc):
-            raise _retag_to_webhook(exc) from exc
-        try:
-            return _attempt(ADCP_USE_WEBHOOK)
-        except SignatureVerificationError as retried:
-            raise _retag_to_webhook(retried) from retried
+        # The webhook taxonomy, not the request one. Calling the request verifier means
+        # refusals arrive as ``request_signature_*``; a conformant webhook receiver
+        # reports ``webhook_signature_*``, which is what the callers grade.
+        raise _retag_to_webhook(exc) from exc
 
 
 def just_after_provisioning() -> datetime:
