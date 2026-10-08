@@ -90,6 +90,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.admin_accounts",
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
+    "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -6141,6 +6142,17 @@ ENV_ROUTES: list[EnvRoute] = [
         # carries its own identity tag rather than @inventory_profile, so detect_uc
         # returns None for it and no coarse bucket claims it.
         when=lambda m: "pricing_option_announcement" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-format-options",
+        # BR-UC-GET-PRODUCTS format-option announcement: stores real products.format_options
+        # documents and reads them back off get_products, so it takes the UC-GET-PRODUCTS
+        # branch, exactly like its pricing sibling above. It carries its own identity tag, so
+        # detect_uc returns None for it and no coarse bucket claims it -- which is why the row
+        # is needed at all: without it the scenarios auto-xfail at fixture setup with
+        # "No harness wired for None" and grade nothing while reading green.
+        when=lambda m: "format_option_announcement" in m,
         env_builder=_build_product_env,
     ),
     EnvRoute(
