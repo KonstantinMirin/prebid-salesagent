@@ -23,11 +23,11 @@ from src.core.logging_config import log_safe
 from src.core.resolved_identity import ResolvedIdentity
 from src.core.schemas import (
     Creative,
+    CreativeFormatIdentity,
     Error,
-    FormatId,
     ListCreativesRequest,
     ListCreativesResponse,
-    canonical_agent_url,
+    format_id_identity,
 )
 from src.core.tools.creatives._assets import ASSET_MAP
 
@@ -269,14 +269,6 @@ def _assignments_block(assignments_by_creative: dict[str, list[DBCreativeAssignm
 #: the buyer selected.
 _ALWAYS_ON_THE_WIRE = frozenset({"creative_id", "name", "format_id", "status", "created_date", "updated_date"})
 
-#: Every parameter ``FormatId`` declares beyond the identity pair, derived from the model.
-#:
-#: ``core/format-id.json`` parameterizes a named format (AdCP 2.5 format templates) and the
-#: stored ``format_parameters`` document holds whatever was synced. Listing the parameters by
-#: name here is what dropped ``pixel_ratio``: three of the four were copied on readback, so a
-#: creative synced with a pixel ratio was listed without one.
-_FORMAT_ID_PARAMETERS = frozenset(FormatId.model_fields) - {"agent_url", "id"}
-
 #: The two `fields` members that do not name one response field. list-creatives-request.json
 #: says so for the first: "The 'concept' value returns both concept_id and concept_name";
 #: and a snapshot is either the object or the machine-readable reason it is absent, so
@@ -412,13 +404,12 @@ def _list_creatives_impl(
             field="filters.has_served",
         )
     creative_ids = req_filters.creative_ids if req_filters else None
-    # format_id is an object (core/format-id.json); the repository matches both members, and
-    # the agent_url half goes through the ONE canonicalization the spec makes a MUST before
-    # two references may be treated as the same format.
+    # format_id is an object (core/format-id.json), and the identity it names is the pair
+    # ``format_id_identity`` builds — which is also where the agent_url canonicalization the
+    # spec makes a MUST is applied. The repository matches the stored comparison key against
+    # these, so both sides come from the ONE builder rather than from a tuple assembled here.
     format_ids = (
-        [(canonical_agent_url(f.agent_url), f.id) for f in req_filters.format_ids]
-        if req_filters and req_filters.format_ids
-        else None
+        [format_id_identity(f) for f in req_filters.format_ids] if req_filters and req_filters.format_ids else None
     )
     created_after_dt = req_filters.created_after if req_filters else None
     created_before_dt = req_filters.created_before if req_filters else None
@@ -465,7 +456,6 @@ def _list_creatives_impl(
         result = uow.creatives.get_by_principal(
             principal_id,
             statuses=statuses,
-            format=None,
             tags=tags,
             tags_any=tags_any,
             has_variables=has_variables,
@@ -510,30 +500,17 @@ def _list_creatives_impl(
                     else "https://placeholder.example.com/missing.jpg"
                 )
 
-            # THE STORED ARM, echoed back. A listed creative carries exactly one format
-            # identity -- the item schema's oneOf forbids both and forbids neither -- and the
-            # state mirrors the input: a creative synced by format_id lists by format_id, one
-            # synced by format_kind lists by format_kind. Building a FormatId unconditionally
-            # answered a canonical creative with a legacy identity over two null columns,
-            # which the response model refuses on construction.
-            format_obj: FormatId | None = None
-            if db_creative.agent_url is not None:
-                format_obj = FormatId(
-                    agent_url=db_creative.agent_url,
-                    id=db_creative.format or "",
-                    # EVERY parameter the model declares, taken from the stored document.
-                    # This copied three by name -- width, height, duration_ms -- and
-                    # ``FormatId`` declares four: ``pixel_ratio`` was stored on sync and
-                    # silently dropped on every readback, so a parameterized format came
-                    # back as a different format than the buyer sent. Deriving the set from
-                    # the model means a parameter added to the pin arrives without this
-                    # line changing.
-                    **{
-                        name: value
-                        for name, value in (db_creative.format_parameters or {}).items()
-                        if name in _FORMAT_ID_PARAMETERS
-                    },
-                )
+            # THE RETAINED ASSERTION, echoed back VERBATIM. A listed creative carries exactly
+            # one format identity -- the item schema's oneOf forbids both and forbids neither
+            # -- and the state mirrors the input: a creative synced by format_id lists by
+            # format_id, one synced by format_kind lists by format_kind.
+            #
+            # One column, one model, nothing reassembled. The reference used to be rebuilt
+            # from three partial columns here, copying the parameters by name, and ``FormatId``
+            # declares four of them: ``pixel_ratio`` was stored on sync and dropped on every
+            # readback, so a parameterized format came back as a different format than the
+            # buyer sent. A document that went in whole comes back whole.
+            format_obj = CreativeFormatIdentity.from_row(db_creative).assertion
 
             # The columns are ``DateTime(timezone=True)``, so what the ORM read hands back is
             # a tz-aware datetime or NULL -- nothing else is representable. This used to

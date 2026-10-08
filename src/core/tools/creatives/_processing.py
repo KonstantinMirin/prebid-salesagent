@@ -14,7 +14,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
 from adcp.types import LegacyCreativeAsset as CreativeAsset
 
@@ -25,10 +25,10 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPServiceUnavailableError,
 )
-from src.core.format_resolver import find_format, is_agent_backed, is_generative
-from src.core.helpers import _extract_format_info, _validate_creative_assets
+from src.core.format_resolver import creative_identity_of, find_format, is_agent_backed, is_generative
+from src.core.helpers import _validate_creative_assets
 from src.core.helpers.outbound_error_mapping import raise_mapped_outbound_error
-from src.core.schemas import CreativeStatusEnum, SyncCreativeResult, creative_format_identity
+from src.core.schemas import CreativeFormatIdentity, CreativeStatusEnum, SyncCreativeResult
 from src.core.schemas import Error as AdCPErrorDetail
 from src.core.security.outbound_http import OperatorEndpoint, OutboundError
 from src.core.tenant_context import TenantContext
@@ -59,9 +59,11 @@ class PriorCreativeState:
     """
 
     name: str | None
-    agent_url: str | None
-    format: str | None
-    format_parameters: dict | None
+    #: The stored format identity, read through the ONE row reader. The three partial
+    #: columns this used to snapshot were one value decomposed, and comparing them took
+    #: three comparisons plus a private agent_url normalization; the identity carries its
+    #: own comparison form, so "did the format change?" is one ``!=``.
+    identity: CreativeFormatIdentity
     #: The upsert-rewritten data fields as the row held them, so an update can report
     #: which of them it actually changed instead of listing all five every time.
     upsert_fields: dict[str, Any]
@@ -71,40 +73,9 @@ class PriorCreativeState:
         row_data = existing_creative.data or {}
         return cls(
             name=existing_creative.name,
-            agent_url=existing_creative.agent_url,
-            format=existing_creative.format,
-            format_parameters=existing_creative.format_parameters,
+            identity=CreativeFormatIdentity.from_row(existing_creative),
             upsert_fields={key: row_data.get(key) for key in _UPSERT_FIELDS},
         )
-
-
-def _same_agent(incoming: str, stored: str | None) -> bool:
-    """Whether two ``agent_url`` spellings name the same creative agent.
-
-    ``core/format-id.json`` -- byte-identical at the 3.1 and 3.2 pins -- makes this a
-    MUST, not an optimization: "Callers comparing two ``format-id`` values MUST
-    canonicalize ``agent_url`` per the AdCP URL canonicalization rules before treating
-    two formats as the same." Both sites that decide whether a creative's format
-    CHANGED are such a caller, so both go through here.
-
-    Storage stays verbatim on purpose -- what is stored is echoed back to the buyer,
-    and ``sync_creatives`` owes the buyer its own ``format_id`` unchanged. So the two
-    sides of this comparison routinely disagree byte-for-byte while naming one agent:
-    a row written before adcp 9 carries the trailing slash that ``AnyUrl`` appended,
-    a row written after it carries the buyer's spelling, and a buyer may respell its
-    own URL between two syncs. Comparing raw reported a format change for each of
-    those, which is a wrong ``action`` on real tenant data.
-
-    ``canonical_agent_url`` is the repo's one implementation of that algorithm
-    (``src/core/schemas/_base.py``); a second normalization written here would be the
-    duplication this codebase treats as a defect. A stored ``None`` cannot name an
-    agent, so it never matches.
-    """
-    from src.core.schemas import canonical_agent_url
-
-    if stored is None:
-        return False
-    return canonical_agent_url(incoming) == canonical_agent_url(stored)
 
 
 def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, format_value) -> list[str]:
@@ -116,17 +87,20 @@ def comparison_changes(creative: CreativeAsset, prior: PriorCreativeState, forma
     ``None`` incoming name that differs from the prior one still reports ``name``
     as changed even though the live branch assigns nothing (the assignment keeps its
     ``is not None`` guard at the call site).
+
+    ``format_value`` is unused: the incoming identity is read off the creative, which is
+    where ``format_id`` and ``format_kind`` both live. It stays in the signature because the
+    two callers pass the same validated value they pass to the mutation.
     """
     changes: list[str] = []
     if creative.name != prior.name:
         changes.append("name")
 
-    format_info = _extract_format_info(format_value)
-    if (
-        not _same_agent(format_info["agent_url"], prior.agent_url)
-        or format_info["format_id"] != prior.format
-        or format_info["parameters"] != prior.format_parameters
-    ):
+    # ONE comparison, and it is the identity's own. ``CreativeFormatIdentity`` compares its
+    # canonical members and deliberately excludes the verbatim assertion: the same agent
+    # respelled (host case, a default port, a trailing slash ``AnyUrl`` used to append) is the
+    # same agent, and comparing raw spellings reported a format change on every respelling.
+    if creative_identity_of(creative) != prior.identity:
         changes.append("format")
     return changes
 
@@ -306,20 +280,14 @@ def _update_existing_creative(
         name_value = creative.name
         if name_value is not None:
             existing_creative.name = str(name_value)
-    # Extract complete format info including parameters (AdCP 2.5)
-    format_info = _extract_format_info(format_value)
-    new_agent_url = format_info["agent_url"]
-    new_format = format_info["format_id"]
-    new_params = format_info["parameters"]
-    if (
-        not _same_agent(new_agent_url, existing_creative.agent_url)
-        or new_format != existing_creative.format
-        or new_params != existing_creative.format_parameters
-    ):
-        existing_creative.agent_url = new_agent_url
-        existing_creative.format = new_format
-        # Cast TypedDict to dict for SQLAlchemy column type
-        existing_creative.format_parameters = cast(dict | None, new_params)
+    # The identity the buyer sent this time, with its canonical kind projected. Written only
+    # when it differs from the stored one, and the difference is the identity's own equality
+    # -- which canonicalizes agent_url, the comparison ``core/format-id.json`` makes a MUST,
+    # and ignores the verbatim spelling it retains. Four columns move together or not at all,
+    # through the one repository mapping that ``create`` also uses.
+    incoming_identity = creative_identity_of(creative)
+    if incoming_identity != prior.identity:
+        creative_repo.set_identity(existing_creative, incoming_identity)
 
     # Determine creative status based on approval mode
     creative_format = creative.format_id
@@ -1040,19 +1008,14 @@ def _create_new_creative(
     creative_status = CreativeStatusEnum.pending_review.value
     needs_approval = False
 
-    # Extract complete format info including parameters (AdCP 2.5)
-    # Use validated format_value (already auto-upgraded from string)
-    format_info = _extract_format_info(format_value)
-
     db_creative = creative_repo.create(
         creative_id=creative.creative_id or None,
         name=creative.name,
-        # The identity the buyer gave, by whichever arm. Passing the two legacy strings here
-        # could only ever persist the deprecated arm, and for a canonical creative there was
-        # nothing to pass: its ``format`` property is None, so ``_extract_format_info`` had
-        # no agent_url or id to read.
-        identity=creative_format_identity(creative),
-        format_parameters=cast(dict | None, format_info["parameters"]),
+        # The identity the buyer gave, with a legacy reference projected to its canonical
+        # kind. ONE value for all four columns: the three legacy strings this used to pass
+        # could only ever persist the deprecated arm, and a parameter the hand-written
+        # extraction did not name was dropped on the way in.
+        identity=creative_identity_of(creative),
         principal_id=principal_id,
         status=creative_status,
         data=data,

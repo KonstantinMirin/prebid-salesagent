@@ -10,9 +10,9 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, cast
+from typing import Any, NamedTuple
 
-from sqlalchemy import SQLColumnExpression, and_, case, func, or_, select
+from sqlalchemy import SQLColumnExpression, case, func, or_, select
 from sqlalchemy.orm import Session, attributes
 
 from src.core.database.models import (
@@ -26,7 +26,6 @@ from src.core.database.models import (
 )
 from src.core.database.repositories.effects import SessionEffectsMixin
 from src.core.schemas import (
-    CanonicalFormatIdentity,
     CreativeFormatIdentity,
     CreativeStatus,
     FormatIdentity,
@@ -45,6 +44,28 @@ class CreativeListResult(NamedTuple):
 
     creatives: list[Creative]
     total_count: int
+
+
+def _identity_columns(identity: CreativeFormatIdentity) -> dict[str, Any]:
+    """THE ONE mapping from a format identity to the four columns that store it.
+
+    The identity is one object, so there is no arm to pick and nothing for a create and an
+    update to disagree about: the kind IS the identity, and the retained assertion lands in
+    both of the columns its two obligations need — ``legacy_format_id`` verbatim, because the
+    echo owes the buyer its own ``format_id`` back, and ``legacy_format_key`` canonical and
+    indexed, because ``core/format-id.json`` makes canonicalizing before a comparison a MUST.
+
+    A repository is a persistence edge, which is where a model legitimately becomes a
+    document; nothing upstream serializes.
+    """
+    return {
+        "format_kind": identity.kind,
+        "format_option_ref": identity.option.document if identity.option else None,
+        "legacy_format_id": (
+            identity.assertion.model_dump(exclude_none=True) if identity.assertion is not None else None
+        ),
+        "legacy_format_key": identity.legacy_key,
+    }
 
 
 def _assignment_count_of(creative: type[Creative]) -> SQLColumnExpression[int]:
@@ -130,12 +151,11 @@ class CreativeRepository(SessionEffectsMixin):
         principal_id: str,
         *,
         statuses: list[str] | None = None,
-        format: str | None = None,
         tags: list[str] | None = None,
         tags_any: list[str] | None = None,
         has_variables: bool | None = None,
         creative_ids: list[str] | None = None,
-        format_ids: list[tuple[str, str]] | None = None,
+        format_ids: list[FormatIdentity] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
         search: str | None = None,
@@ -155,8 +175,9 @@ class CreativeRepository(SessionEffectsMixin):
         singular sibling. It used to be a single ``status`` string, which silently
         answered a two-status request with a one-status query.
 
-        ``format_ids`` carries (agent_url, id) pairs — the pin's format_id is an object,
-        so matching one member alone would return another agent's like-named format.
+        ``format_ids`` carries ``FormatIdentity`` values — the pin's format_id is an object,
+        so matching one member alone would return another agent's like-named format, and the
+        identity type is what carries the canonicalization the comparison requires.
         """
         # Build base query - filter by tenant AND principal for security
         stmt = select(Creative).filter_by(
@@ -185,34 +206,18 @@ class CreativeRepository(SessionEffectsMixin):
         else:
             stmt = stmt.where(Creative.status != ARCHIVED_STATUS)
 
-        if format:
-            stmt = stmt.where(Creative.format == format)
-
         if creative_ids:
             stmt = stmt.where(Creative.creative_id.in_(creative_ids))
 
         if format_ids:
-            # format_id is an OBJECT in v3.1 (core/format-id.json: agent_url + id), and the
-            # two columns that store it are independent — so each pair must match together.
-            #
-            # CEILING: the pairs arrive with agent_url in the spec's canonical form, but the
-            # column holds whatever the write path stored, so the comparison accepts the
-            # canonical spelling and the same URL without its trailing slash. Two agent_urls
-            # differing in anything else the canonicalization normalizes (case, a default
-            # port, an IDN host) read as different agents here, where format_id_identity
-            # would treat them as one. Closing that means storing the canonical form on the
-            # write path; a column comparison cannot canonicalize.
-            stmt = stmt.where(
-                or_(
-                    *[
-                        and_(
-                            Creative.agent_url.in_([agent_url, agent_url.rstrip("/")]),
-                            Creative.format == format_id,
-                        )
-                        for agent_url, format_id in format_ids
-                    ]
-                )
-            )
+            # One indexed IN over the stored comparison key. A ``format_id`` is an OBJECT
+            # (core/format-id.json: agent_url + id) and comparing two of them canonicalizes
+            # agent_url first, which the schema makes a MUST -- so the column holds
+            # ``FormatIdentity.storage_key`` of what was stored and the filter builds the same
+            # key from what the buyer asked for. Both sides go through the ONE key builder, so
+            # the comparison is exact: an agent differing only in host case, a default port,
+            # an IDN form or a trailing slash is the same agent on both sides.
+            stmt = stmt.where(Creative.legacy_format_key.in_([identity.storage_key for identity in format_ids]))
 
         # v3.1 concept_ids filter: concepts group related creatives across sizes
         # and formats (e.g. Flashtalking concepts, Celtra campaign folders). The
@@ -338,7 +343,6 @@ class CreativeRepository(SessionEffectsMixin):
         creative_id: str | None = None,
         name: str,
         identity: CreativeFormatIdentity,
-        format_parameters: dict | None = None,
         principal_id: str,
         # Must stay a member of the AdCP CreativeStatus enum: list_creatives parses this
         # value through the closed spec enum, so a non-member default (this was "pending")
@@ -352,29 +356,11 @@ class CreativeRepository(SessionEffectsMixin):
         Generates a creative_id if not provided.
         Does NOT commit - the caller handles that.
         """
-        # THE ONE mapping from a format identity to its columns. The caller hands over which
-        # arm the creative carries and this decides where it lands, so the two arms cannot
-        # drift apart across call sites: a canonical creative writes format_kind and leaves
-        # the deprecated pair null, a legacy one does the reverse, and neither is expressible
-        # as "both" because the identity type is one or the other.
-        legacy = identity if isinstance(identity, FormatIdentity) else None
-        canonical = identity if isinstance(identity, CanonicalFormatIdentity) else None
         db_creative = Creative(
             tenant_id=self._tenant_id,
             creative_id=creative_id or str(uuid.uuid4()),
             name=name,
-            agent_url=legacy.agent_url if legacy else None,
-            format=legacy.id if legacy else None,
-            format_kind=canonical.kind if canonical else None,
-            format_option_ref=(
-                {
-                    "publisher_domain": canonical.option.publisher_domain,
-                    "format_option_id": canonical.option.format_option_id,
-                }
-                if canonical and canonical.option
-                else None
-            ),
-            format_parameters=cast(dict | None, format_parameters),
+            **_identity_columns(identity),
             principal_id=principal_id,
             status=status,
             created_at=datetime.now(UTC),
@@ -383,6 +369,16 @@ class CreativeRepository(SessionEffectsMixin):
         self._session.add(db_creative)
         self._session.flush()
         return db_creative
+
+    def set_identity(self, creative: Creative, identity: CreativeFormatIdentity) -> None:
+        """Replace a creative's stored format identity, all four columns together.
+
+        The same mapping ``create`` uses, so an update cannot write a combination a create
+        never would — which is what happened while the identity was three partial columns and
+        each path assigned them itself.
+        """
+        for column, value in _identity_columns(identity).items():
+            setattr(creative, column, value)
 
     def update_data(self, creative: Creative, data: dict) -> None:
         """Update the JSONB data field on a creative and flag it as modified."""

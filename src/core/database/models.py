@@ -943,21 +943,32 @@ class Creative(Base):
     tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     principal_id: Mapped[str] = mapped_column(String(100), primary_key=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    # THE FORMAT IDENTITY, in two arms, exactly one of which a row carries. AdCP 3.2
-    # identifies a creative by the deprecated ``format_id`` (``agent_url`` + ``format``
-    # below) OR by the canonical ``format_kind`` with an optional ``format_option_ref``, and
-    # the schemas declare the pair as a oneOf whose arms forbid each other. All four are
-    # nullable for that reason: the legacy pair used to be NOT NULL, so a canonical creative
-    # had nowhere to be stored at all.
+    # THE FORMAT IDENTITY. AdCP 3.2 is canonical-first and the projection between the two
+    # identities runs ONE WAY -- v1 -> v2 resolves through a normative order, and a seller
+    # MUST NOT synthesize a v1 ``format_id`` by inverting a structural match -- so
+    # ``format_kind`` is the identity every layer shares and the deprecated ``format_id`` is
+    # a RETAINED BUYER ASSERTION: stored verbatim, echoed to a legacy peer, never what
+    # business logic keys on.
     #
-    # The exclusivity is not a CHECK constraint. It is a protocol rule the request and state
-    # models both enforce on the way in, and ``creative_format_identity`` is the one reader
-    # that asks a row which arm it carries. A constraint here would be a fifth statement of
-    # the same rule and a fifth place for it to drift.
-    agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
-    format: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # ``format_kind`` is nullable because a legacy reference only has a kind once something
+    # projects it, and the sixth normative step is to fail closed rather than guess one.
+    #
+    # The assertion needs TWO columns because one value cannot serve both obligations: the
+    # echo must be VERBATIM (sync_creatives owes the buyer its own format_id back), while a
+    # COMPARISON must canonicalize ``agent_url`` first, which ``core/format-id.json`` makes
+    # a MUST. So ``legacy_format_id`` keeps the document as sent -- agent_url, id and every
+    # parameter ``FormatId`` declares -- and ``legacy_format_key`` carries
+    # ``FormatIdentity.storage_key`` of it, indexed, so the comparison is exact rather than
+    # tolerant and a filter can use the index.
+    #
+    # ``CreativeFormatIdentity.from_row`` is the ONE reader of these four. The two-arm
+    # exclusivity is not a CHECK constraint: it is a protocol rule the request and state
+    # models both enforce as a oneOf on the way in, and restating it here would be another
+    # place for it to drift.
     format_kind: Mapped[str | None] = mapped_column(String(100), nullable=True)
     format_option_ref: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    legacy_format_id: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
+    legacy_format_key: Mapped[str | None] = mapped_column(String, nullable=True)
     # AdCP CreativeStatus member: the buyer-facing reader (list_creatives) parses this
     # column through the closed spec enum, so a non-member default (this was "pending")
     # makes every row written with the field omitted unreadable. No CHECK constraint or
@@ -967,10 +978,6 @@ class Creative(Base):
 
     # Data field stores creative content and metadata as JSON
     data: Mapped[dict] = mapped_column(JSONType, nullable=False, default=dict)
-
-    # Format parameters for parameterized FormatId (AdCP 2.5 format templates)
-    # Stores width, height, duration_ms when format is parameterized
-    format_parameters: Mapped[dict | None] = mapped_column(JSONType, nullable=True)
 
     # Relationships and metadata
     group_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -992,7 +999,10 @@ class Creative(Base):
         Index("idx_creatives_tenant", "tenant_id"),
         Index("idx_creatives_principal", "tenant_id", "principal_id"),
         Index("idx_creatives_status", "status"),
-        Index("idx_creatives_format_namespace", "agent_url", "format"),  # AdCP v2.4 format namespacing
+        # The retained assertion's canonical comparison key. One column, so the
+        # list_creatives format_ids filter is an indexed IN over keys rather than a
+        # disjunction of per-pair column comparisons.
+        Index("idx_creatives_legacy_format_key", "legacy_format_key"),
     )
 
 

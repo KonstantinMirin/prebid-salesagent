@@ -8,7 +8,7 @@ import copy
 import re
 import warnings
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -517,55 +517,131 @@ class FormatOptionIdentity:
     publisher_domain: str | None
     format_option_id: str
 
+    @property
+    def document(self) -> dict[str, str | None]:
+        """This option ref as the ``core/format-option-ref.json`` document a column stores."""
+        return {"publisher_domain": self.publisher_domain, "format_option_id": self.format_option_id}
 
-@dataclass(frozen=True, slots=True, order=True)
-class CanonicalFormatIdentity:
-    """The canonical arm: a ``format_kind`` from the pinned vocabulary, plus optional option ref.
 
-    The sibling of :class:`FormatIdentity`, which is the deprecated arm. A creative carries
-    exactly one of the two -- ``core/creative-asset.json`` and the listed-creative item schema
-    both declare the pair as a oneOf whose arms forbid each other -- so the two types are kept
-    DISTINCT rather than merged into one shape with nullable halves. A function taking
-    :data:`CreativeFormatIdentity` must then handle both arms to type-check, which is what
-    stops the legacy arm being assumed.
+#: Every parameter ``core/format-id.json`` declares beyond the identity pair, read OFF the
+#: model. A hand-written list here is the defect that dropped ``pixel_ratio``: three of the
+#: four parameters were copied by name, so a creative synced with a pixel ratio came back as
+#: a different format than the buyer sent.
+_FORMAT_ID_PARAMETERS: frozenset[str] = frozenset(LibraryFormatId.model_fields) - {"agent_url", "id"}
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeFormatIdentity:
+    """A creative's format identity: the canonical kind, plus the legacy assertion it retains.
+
+    ONE type, not a two-arm union, because the projection between the two identities runs one
+    way only. ``registries/v1-canonical-mapping.json`` is "authoritative for v1 -> v2
+    projection only" and a seller MUST NOT synthesize a v1 ``format_id`` by inverting a
+    structural match -- so the canonical kind is the only representation every layer can
+    share, and a union of co-equal arms made every consumer branch on which one arrived.
+
+    The members have different jobs and are not interchangeable:
+
+    * ``kind`` is THE identity -- what logic keys on and what is compared. ``None`` when the
+      creative carries a legacy reference that nothing projects: the sixth normative step is
+      to fail closed, and a kind guessed from an unmatched id would be a fabricated identity.
+    * ``option`` narrows the kind to one of the enclosing product's concrete options.
+    * ``legacy`` and ``legacy_parameters`` are the assertion's COMPARISON form, canonical per
+      ``core/format-id.json``'s MUST. A parameter is part of which format a reference names --
+      a parameterized template pinned to 300x250 is not the one pinned to 728x90 -- so the
+      parameters are compared alongside the pair.
+    * ``assertion`` is the reference VERBATIM, as the buyer sent it. ``compare=False``: it is
+      echoed to a legacy peer and never compared, because the same agent respelled (host
+      case, a default port, a trailing slash) is the same agent, and comparing raw spellings
+      reported a format change on every such respelling.
     """
 
-    kind: str
+    kind: str | None = None
     option: FormatOptionIdentity | None = None
+    legacy: FormatIdentity | None = None
+    legacy_parameters: tuple[tuple[str, Any], ...] = ()
+    assertion: LibraryFormatId | None = field(default=None, compare=False)
 
+    @classmethod
+    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str | None = None) -> "CreativeFormatIdentity":
+        """The identity of a retained legacy assertion, with the kind it projects to if any.
 
-#: A creative's format identity: the deprecated named-format arm or the canonical arm.
-#:
-#: Exactly one, never both and never neither. ``format_id`` is "DEPRECATED in 3.2. Legacy
-#: named-format path retained for older 3.x peers"; ``format_kind`` is the "Canonical 3.2
-#: path". The state mirrors the input -- a creative synced by one arm is listed by that same
-#: arm -- so this is a carried identity rather than something resolved on the way through.
-CreativeFormatIdentity = FormatIdentity | CanonicalFormatIdentity
+        THE ONE place the three derived members are built from the one reference, so the
+        comparison form and the verbatim form cannot drift apart. The parameters come off
+        ``model_fields`` rather than a list of names.
+        """
+        return cls(
+            kind=kind,
+            legacy=format_id_identity(format_id),
+            legacy_parameters=tuple(
+                sorted(
+                    (name, value)
+                    for name in _FORMAT_ID_PARAMETERS
+                    if (value := getattr(format_id, name, None)) is not None
+                )
+            ),
+            assertion=format_id,
+        )
 
+    @classmethod
+    def from_row(cls, row: Any) -> "CreativeFormatIdentity":
+        """Build from the ``Creative`` ORM row, the one shape a stored identity is loaded from.
 
-def _option_identity(option_ref: object) -> FormatOptionIdentity | None:
-    """The identity of a ``format_option_ref``, or ``None`` when the creative carries none."""
-    if option_ref is None:
-        return None
-    option_id = getattr(option_ref, "format_option_id", None)
-    if option_id is None:
-        return None
-    domain = getattr(option_ref, "publisher_domain", None)
-    return FormatOptionIdentity(str(domain) if domain is not None else None, str(option_id))
+        Every site that needs to know what format a stored creative conforms to comes through
+        here. Each used to reassemble a ``FormatId`` out of the partial columns itself, which
+        is how three of the four declared parameters came to be copied by name.
+
+        The ORM read IS the boundary: ``legacy_format_id`` is a JSON column, so what comes
+        back is a document or NULL, and the declared type is the fact past that point.
+        """
+        legacy_document = row.legacy_format_id
+        identity = cls.of_legacy(FormatId.model_validate(legacy_document)) if legacy_document is not None else cls()
+        option_document = row.format_option_ref
+        return replace(
+            identity,
+            kind=row.format_kind,
+            option=(
+                FormatOptionIdentity(option_document.get("publisher_domain"), str(option_document["format_option_id"]))
+                if option_document
+                else None
+            ),
+        )
+
+    @property
+    def legacy_key(self) -> str | None:
+        """The retained assertion's indexable comparison key, or ``None`` when there is none."""
+        return self.legacy.storage_key if self.legacy is not None else None
+
+    @property
+    def label(self) -> str:
+        """How this identity is spelled to a human -- an operator's UI, a log, a Slack message.
+
+        The kind when there is one, because that is the identity; otherwise the legacy id the
+        buyer asserted. Never a comparison: nothing parses this back.
+        """
+        if self.kind is not None:
+            return self.kind
+        return self.legacy.id if self.legacy is not None else ""
 
 
 def creative_format_identity(
     creative: object,
     *,
+    kind: str | None = None,
     supported_kinds: Iterable[str] = _LibraryCanonicalFormatKind,
 ) -> CreativeFormatIdentity:
-    """Which format this creative names, by whichever arm it carries.
+    """Which format this creative names, read off whichever arm it carries.
 
     THE ONE reader of a creative's format identity. Every caller that needs to know what
     format a creative conforms to comes through here rather than reaching for ``format_id``,
     because reaching for ``format_id`` is what silently assumes the deprecated arm: a
     canonical creative has no ``format_id`` at all, and a seller that reads the attribute
     directly sees ``None`` and reports a missing field the buyer was never required to send.
+
+    This reads the arms; it does not PROJECT. ``kind`` is supplied by the caller that holds
+    the projection -- ``src.core.format_resolver.creative_identity_of``, the one edge that
+    runs the normative v1 -> v2 order -- because the registry and the fetched format
+    declaration are protocol inputs a schema module has no business reaching for.
 
     ``supported_kinds`` is a PARAMETER for the reason the SDK's own
     ``is_canonical_format_kind`` makes it one: the set that matters is this seller's, not the
@@ -589,15 +665,30 @@ def creative_format_identity(
             every SDK model, in both directions, and the SDK never validates it for you.
     """
     format_id = getattr(creative, "format_id", None)
-    kind = getattr(creative, "format_kind", None)
-    if (format_id is None) == (kind is None):
+    declared_kind = getattr(creative, "format_kind", None)
+    if (format_id is None) == (declared_kind is None):
         raise ValueError("a creative carries exactly one of format_id and format_kind")
     if format_id is not None:
-        return format_id_identity(format_id)
-    kind_value = str(kind)
+        # The legacy arm. Its projected kind, when the caller resolved one, is checked against
+        # the seller's vocabulary on the same terms a buyer-declared kind is: a projection
+        # landing outside what this seller supports is not an identity it can key on.
+        if kind is not None and not is_canonical_format_kind(kind, supported_kinds):
+            raise ValueError(f"format_kind {kind!r} is not one this seller supports")
+        return CreativeFormatIdentity.of_legacy(format_id, kind=kind)
+    kind_value = str(declared_kind)
     if not is_canonical_format_kind(kind_value, supported_kinds):
         raise ValueError(f"format_kind {kind_value!r} is not one this seller supports")
-    return CanonicalFormatIdentity(kind_value, _option_identity(getattr(creative, "format_option_ref", None)))
+    option_ref = getattr(creative, "format_option_ref", None)
+    option_id = getattr(option_ref, "format_option_id", None)
+    domain = getattr(option_ref, "publisher_domain", None)
+    return CreativeFormatIdentity(
+        kind=kind_value,
+        option=(
+            FormatOptionIdentity(str(domain) if domain is not None else None, str(option_id))
+            if option_id is not None
+            else None
+        ),
+    )
 
 
 class WireSerializerMixin:
@@ -702,13 +793,13 @@ class WireSerializerMixin:
         """
         excluded = info.exclude or ()
         included = info.include
-        for field in self._always_include_null_fields():
-            if field in data or field in excluded:
+        for name in self._always_include_null_fields():
+            if name in data or name in excluded:
                 continue
-            if included is not None and field not in included:
+            if included is not None and name not in included:
                 continue
-            if getattr(self, field, None) is None:
-                data[field] = None
+            if getattr(self, name, None) is None:
+                data[name] = None
         return data
 
 

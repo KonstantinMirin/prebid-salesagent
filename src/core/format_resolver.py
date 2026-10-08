@@ -22,7 +22,13 @@ from pydantic import ValidationError
 from src.core.database.database_session import get_db_session
 from src.core.errors.details import EntityRefDetails
 from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
-from src.core.schemas import Format, FormatIdentity, format_id_identity
+from src.core.schemas import (
+    CreativeFormatIdentity,
+    Format,
+    FormatIdentity,
+    creative_format_identity,
+    format_id_identity,
+)
 from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
 
@@ -160,6 +166,37 @@ def canonical_kind_for(ref: FormatRef, *, spec: Format | None = None) -> str:
         f"no canonical projection for legacy format_id {legacy_id!r}: the agent declares none "
         "and no registry pattern matches"
     )
+
+
+def creative_identity_of(creative: Any, *, spec: Format | None = None) -> CreativeFormatIdentity:
+    """A creative's format identity, with a legacy reference PROJECTED to its canonical kind.
+
+    THE ONE edge where the two identities meet. ``creative_format_identity`` reads whichever
+    arm the creative carries; this wraps it with the only direction that resolves, so every
+    layer past here keys on ``identity.kind`` instead of branching on which arm arrived.
+
+    A projection that does not resolve leaves ``kind`` as ``None`` and is NOT a refusal. The
+    sixth normative step is to fail closed, and failing closed here means "this reference has
+    no canonical kind", not "this creative is invalid": ``core/creative-asset.json`` keeps
+    ``format_id`` as a supported branch through 4.x, so refusing a legacy creative whose id
+    no registry pattern matches would refuse spec-legal traffic. The retained assertion is
+    then the only identity the creative has, which is exactly what the one-way rule leaves a
+    seller holding.
+
+    Args:
+        creative: anything carrying the two arms -- a request DTO, a response model.
+        spec: the fetched format declaration, when the caller already has it. Passing it is
+            what makes the agent's own explicit projection (step 1) reachable; without it
+            only the registry glob (step 3) is consulted.
+    """
+    kind: str | None = None
+    format_id = getattr(creative, "format_id", None)
+    if format_id is not None:
+        try:
+            kind = canonical_kind_for(format_id, spec=spec)
+        except ValueError:
+            logger.debug("No canonical projection for %r; the retained assertion is its only identity", format_id)
+    return creative_format_identity(creative, kind=kind)
 
 
 def same_format(left: FormatRef, right: FormatRef) -> bool:
