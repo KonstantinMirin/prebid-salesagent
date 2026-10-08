@@ -404,10 +404,27 @@ def accept_push_notification_primitives(
 ) -> ValidatedWebhookRegistration:
     """Accept a registration already destructured into primitives.
 
-    For the A2A protobuf shape, whose ``authentication`` carries a SINGULAR
-    free-form ``scheme`` string rather than the tool path's ``schemes`` list, and
-    which also carries ``token`` — passed through here so the value keeps it, since
-    the pinned schema requires the seller to echo it verbatim in every payload.
+    THE ONLY ``src/`` CALLER IS THE ADMIN FORM
+    (:mod:`src.admin.blueprints.principals`, the per-principal webhook route),
+    which holds ``request.form`` strings rather than a config-shaped document.
+    This docstring said "for the A2A protobuf shape" and that is no longer true of
+    any caller — a comment that lies about what a function is for is how a defect
+    survives review, and this one hid a real gap for a while: the admin surface
+    registers a STANDING push config, while ``push_notification_config`` is a
+    PER-REQUEST registration whose ``operation_id`` the buyer generates per task
+    invocation (``L3/webhooks.mdx`` :136). So this path cannot supply one, and the
+    rows it writes are refused by the one envelope builder at delivery time.
+    That gap is tracked upstream of this function, not papered over inside it.
+
+    The SHAPE the signature takes is still the flattened one the A2A protobuf used:
+    a SINGULAR free-form ``scheme`` string rather than the tool path's ``schemes``
+    list, plus ``token`` — passed through so the value keeps it, since the pinned
+    schema requires the seller to echo it verbatim in every payload. That shape is
+    why the function exists; the A2A route that once fed it does not.
+
+    It must NOT grow an ``operation_id`` parameter. The value is the buyer's, and
+    an operator typing one would be fabricating a correlation id — which :143
+    forbids as squarely as deriving one from the receiver URL.
 
     The URL gate runs BEFORE the model is built, deliberately: a blocked-but-
     well-formed URL (a metadata address, say) is a valid ``uri`` to pydantic, and
