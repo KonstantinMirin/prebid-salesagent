@@ -72,17 +72,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, NoReturn
 
-from adcp.signing.agent_resolver import AgentResolution, AgentResolverError, resolve_agent
+from adcp.signing.agent_resolver import (
+    AgentResolution,
+    AgentResolverError,
+    request_signature_code,
+    resolve_agent,
+)
 from adcp.signing.canonical import split_structured_field
 from adcp.signing.errors import (
-    REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON,
-    REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS,
-    REQUEST_SIGNATURE_BRAND_JSON_MALFORMED,
-    REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE,
-    REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING,
-    REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE,
     REQUEST_SIGNATURE_HEADER_MALFORMED,
-    REQUEST_SIGNATURE_JWKS_UNAVAILABLE,
     REQUEST_SIGNATURE_JWKS_UNTRUSTED,
     REQUEST_SIGNATURE_REQUIRED,
     SignatureVerificationError,
@@ -603,53 +601,55 @@ def _resolution_for(
 
 
 def _map_agent_resolver_error(exc: AgentResolverError) -> str:
-    """``AgentResolverError.code`` -> the ``request_signature_*`` code security.mdx assigns it.
+    """``AgentResolverError`` -> the ``request_signature_*`` code security.mdx assigns it.
 
-    ``adcp/signing/errors.py``'s "brand.json discovery chain" block gives each hop of the
-    3-hop walk its own code precisely so a caller can tell a retryable transport failure
-    (``*_unreachable``) apart from a misconfiguration (``*_missing`` / ``*_malformed``) —
-    collapsing all of them onto ``request_signature_key_unknown`` erases that distinction and
-    gives a counterparty with a briefly unreachable capabilities endpoint the wrong diagnosis
-    AND the wrong retry advice.
+    Delegation, because the SDK owns this table and reads one thing a copy here cannot:
+    ``request_signature_code`` consults ``exc.signature_code`` FIRST and only then the
+    per-resolver-code table (``adcp/signing/agent_resolver.py``). That precedence is the
+    whole mechanism — one resolver code fans out to several spec codes, so the resolver
+    attaches the hop's specific outcome to the exception, and a caller re-deriving from
+    ``exc.code`` alone cannot see it.
+
+    Which is what the hand-written copy this replaces got wrong. Keying on ``exc.code``
+    only, it answered an https ``agent_url`` pointing at a private destination with
+    ``request_signature_capabilities_unreachable`` — the resolver code — while the
+    exception carried ``signature_code=request_signature_jwks_untrusted``, because an
+    SSRF-refused destination is terminal. The pinned enum classifies
+    ``capabilities_unreachable`` as ``transient`` with "retry once after a 1-5 s jittered
+    backoff", so the copy told a caller to retry a destination this verifier refuses every
+    time. Giving a discovery failure the wrong retry advice is the exact disease this
+    mapping exists to cure; the copy had it pointing the other way.
+
+    ONE row moves by adopting the SDK's table, recorded here because nothing else records
+    it: ``brand_json_resolution_failed`` carrying ``jwks_origin_mismatch`` now answers
+    ``request_signature_brand_json_unreachable`` rather than
+    ``request_signature_jwks_unavailable``. The SDK leaves that outcome out of its
+    brand.json table deliberately (``_BRAND_JSON_SPEC_CODES``' own comment, ``agent_resolver.py``
+    :988-993 — the document parsed and matched, and no ``jwks_uri`` could be derived from the
+    matched entry, which the discovery-chain table does not describe), so it falls through to the brand.json hop's
+    own code. Both codes carry ``recovery: transient`` in the pinned enum, so the recovery
+    class does NOT change and no caller's retry behaviour moves with this row.
+
+    AND THE CORRECT CODE FOR THAT OUTCOME IS AN OPEN QUESTION, filed as
+    prebid/salesagent#2346. Neither candidate's pinned description is true of it:
+    ``brand_json_unreachable`` is "a DNS, TCP, TLS, timeout, or non-2xx failure" and the
+    document WAS fetched and parsed; ``jwks_unavailable`` is "a transient network or
+    service failure" and no JWKS fetch was attempted. Both say ``transient``, while an
+    origin mismatch is an operator misconfiguration that no retry can fix, so the real
+    defect is the recovery class and it is the same inversion this function fixes one row
+    over. Two terminal codes are shaped like the condition
+    (``key_origin_mismatch``, ``brand_origin_mismatch``) and the comment deleted with the
+    hand-written table had already rejected the first on step-7 grounds. Choosing between
+    them is a protocol-behaviour decision needing the spec text and a version citation, so
+    this function does not make it.
+
+    No default arm, also deliberately. ``_SPEC_CODE_BY_RESOLVER_CODE`` has a row for every
+    member of ``AgentResolverErrorCode`` and the SDK's lookup takes no default, so a
+    resolver code added upstream fails loudly here instead of being absorbed into whichever
+    code a fallback happened to name — which is how a failed capabilities fetch came to be
+    reported as ``jwks_unavailable`` in the first place.
     """
-    if exc.code == "invalid_agent_url":
-        # Trust-boundary rejection (URL wouldn't canonicalize / SSRF-banned host) — matches
-        # the SDK's own reference choice for this ONE code, even though that function's
-        # blanket JWKS_UNAVAILABLE treatment of everything else is the disease this fixes.
-        return REQUEST_SIGNATURE_JWKS_UNTRUSTED
-    if exc.code == "capabilities_unreachable":
-        return REQUEST_SIGNATURE_CAPABILITIES_UNREACHABLE
-    if exc.code in ("capabilities_invalid", "brand_json_url_missing"):
-        # Step 2 reads identity.brand_json_url off the capabilities body; a body we cannot
-        # parse at all means that field was never obtainable either.
-        return REQUEST_SIGNATURE_BRAND_JSON_URL_MISSING
-    if exc.code == "jwks_fetch_failed":
-        return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
-    if exc.code == "brand_json_resolution_failed":
-        return _map_brand_json_resolver_error(exc.__cause__)
-    logger.warning("Unmapped AgentResolverError code %r; defaulting to JWKS_UNAVAILABLE", exc.code)
-    return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
-
-
-def _map_brand_json_resolver_error(cause: BaseException | None) -> str:
-    """``BrandJsonResolverError.code`` -> the ``request_signature_*`` code security.mdx assigns it."""
-    code = getattr(cause, "code", None)
-    if code in ("fetch_failed", "redirect_loop", "redirect_depth_exceeded"):
-        return REQUEST_SIGNATURE_BRAND_JSON_UNREACHABLE
-    if code in ("invalid_body", "schema_invalid", "invalid_house", "invalid_url"):
-        return REQUEST_SIGNATURE_BRAND_JSON_MALFORMED
-    if code == "agent_ambiguous":
-        return REQUEST_SIGNATURE_BRAND_JSON_AMBIGUOUS
-    if code == "agent_not_found":
-        return REQUEST_SIGNATURE_AGENT_NOT_IN_BRAND_JSON
-    if code == "jwks_origin_mismatch":
-        # Fires when agent.url's origin != brand.json's origin and the agents[] entry declares
-        # no explicit jwks_uri — genuinely "no valid jwks_uri could be derived" rather than a
-        # key-origin consistency failure on an already-resolved key (that check is separate,
-        # step 7, and runs on a resolution this failure never produces).
-        return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
-    logger.warning("Unmapped BrandJsonResolverError code %r; defaulting to JWKS_UNAVAILABLE", code)
-    return REQUEST_SIGNATURE_JWKS_UNAVAILABLE
+    return request_signature_code(exc)
 
 
 def _jwks_resolver(resolution: AgentResolution | None, *, agent_url: str | None = None) -> Any:
