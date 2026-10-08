@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from src.core.database.database_session import get_db_session
 from src.core.database.models import Creative as DBCreative
+from src.core.schemas import CreativeFormatIdentity
 from tests.factories.creative_asset import (
     build_assets,
     image_spec,
@@ -698,7 +699,10 @@ class TestFormatChangeOnUpdate:
 
             with get_db_session() as session:
                 db = session.scalars(select(DBCreative).filter_by(creative_id="c_fmt_change")).first()
-                assert "728x90" in db.format
+                stored = CreativeFormatIdentity.from_row(db).assertion
+                assert stored is not None and str(stored.id) == "display_728x90", (
+                    f"the update must replace the stored format reference with format B; stored {stored!r}"
+                )
 
 
 # ── CREATE Edge Cases (covers lines 543-570, 687-702, 787-821) ────────────

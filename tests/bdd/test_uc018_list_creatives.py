@@ -98,6 +98,7 @@ from typing import Any, NamedTuple
 
 from pytest_bdd import given, parsers, scenarios, then, when
 
+from src.core.schemas import CreativeFormatIdentity
 from tests.bdd.steps._outcome_helpers import error_envelope_or_none, require_payload, wire_dict, wire_field
 from tests.bdd.steps.generic._auth import authenticate_env_as
 from tests.bdd.steps.generic._dispatch import dispatch_request
@@ -1569,7 +1570,12 @@ def given_creatives_in_two_formats(ctx: dict) -> None:
         _Seeded(sibling.creative_id, "video creative on this agent", "approved", (), None),
         _Seeded(decoy.creative_id, "display creative on another agent", "approved", (), None),
     ]
-    ctx["format_filter_agent_url"] = wanted.agent_url
+    # The filter names the agent_url the seeded creative ASSERTS, read off its stored
+    # identity -- the same spelling the buyer would send, which is what the decoy on another
+    # agent makes falsifiable.
+    wanted_assertion = CreativeFormatIdentity.from_row(wanted).assertion
+    assert wanted_assertion is not None, "the seeded creative must assert a legacy format_id to filter on"
+    ctx["format_filter_agent_url"] = str(wanted_assertion.agent_url)
     ctx["format_filter_id"] = _CONCEPT_FORMATS[0]
 
 
