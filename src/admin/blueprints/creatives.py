@@ -19,7 +19,7 @@ from src.core.exceptions import AdCPValidationError
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
-from src.core.webhooks.registration import accept_push_notification_config
+from src.core.webhooks.registration import accept_push_notification_config, stored_registration_fields
 from src.services.protocol_webhook_service import get_protocol_webhook_service
 
 # TODO: Missing module - these functions need to be implemented
@@ -226,20 +226,24 @@ async def _call_webhook_for_creative_status(
             # first silently delivered under a scheme the buyer did not solely request.
             # The gate owns that rule.
             #
-            # The authentication block is forwarded only when TRUTHY, matching the
-            # previous `or {}` behaviour: an empty block keeps meaning "no
-            # authentication" and keeps delivering unsigned, because turning today's
-            # unsigned delivery into a refusal is a delivered -> never-delivered change
-            # that needs an owner sign-off (#1802 made one for a legacy scheme).
+            # The field set is DERIVED from the pinned config by
+            # stored_registration_fields, which also owns the truthy-only rule this
+            # site used to spell inline (an empty authentication block keeps meaning
+            # "no authentication" and keeps delivering unsigned).
+            #
+            # It used to list `url` and `authentication` and nothing else -- the same
+            # two of the pinned schema's four fields the delivery-report scheduler
+            # listed -- so a stashed `operation_id` was dropped on every read and
+            # build_webhook_envelope then refused the delivery: the seller MUST echo
+            # it, it is REQUIRED on core/mcp-webhook-payload.json, and webhooks.mdx
+            # :143 forbids recovering it from the URL.
             cfg_dict = step.request_data.get("push_notification_config") or {}
             url = cfg_dict.get("url")
             if not url:
                 logger.error(f"No push notification URL present for creative {creative_id}")
                 return False
 
-            registration_config = {"url": url}
-            if cfg_dict.get("authentication"):
-                registration_config["authentication"] = cfg_dict["authentication"]
+            registration_config = stored_registration_fields(cfg_dict)
 
             try:
                 push_notification_config = accept_push_notification_config(
