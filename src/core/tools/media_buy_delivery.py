@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPValidationError,
 )
 from src.core.helpers import enum_value
+from src.core.webhooks.registration import REPORTING_STREAM_ID_FIELD, suppressed_reporting_stream
 
 
 def _validate_attribution_window(attribution_window: "AttributionWindow | None") -> None:
@@ -210,6 +211,27 @@ def get_media_buy_delivery(
         # Per-buy adapter failures degrade (UC-004): record an advisory error and continue
         # with the other buys instead of aborting the whole multi-buy request.
         adapter_errors: list[Error] = []
+        # THE BUYER'S HALF OF THE SUPPRESSED REPORTING STREAM. AdCP 3.2.1
+        # ``L3/webhooks.mdx`` :666 asks for two things of a ``reporting_webhook``
+        # registered without a correlation id — "Flag the missing value for the buyer
+        # and suppress scheduled sends" — and :667 names THIS read as where the buyer
+        # goes meanwhile: "Existing buyers need to update their registration with an ID
+        # before reports resume. They can use get_media_buy_delivery while arranging
+        # support."
+        #
+        # The suppression is the scheduler's (``delivery_webhook_scheduler``), which
+        # runs in a background batch with no request to answer; the flag has to ride a
+        # response, and this is the response the spec sends the buyer to. An advisory,
+        # not a raised failure: the delivery data IS the answer the buyer asked for, so
+        # by the advisory rule (error-architecture.md § Which lane a failure takes) the
+        # response stays a success and ``errors[]`` reports what is degraded.
+        #
+        # It is NOT flagged at ``create_media_buy`` instead, and the reason is the
+        # route's own shape: ``core/reporting-webhook.json`` does not define
+        # ``operation_id`` at the 3.2 pin, so a registration omitting it is a document
+        # the published schema accepts, and :666 governs buyers who ALREADY registered
+        # one — for whom no create-time response exists any more.
+        suppressed_stream_errors: list[Error] = []
         found_ids = {buy_id for buy_id, _ in target_media_buys}
         if req.media_buy_ids:
             for requested_id in req.media_buy_ids:
@@ -253,6 +275,18 @@ def get_media_buy_delivery(
         total_conversion_value: float | None = None
 
         for media_buy_id, buy in target_media_buys:
+            # Flagged BEFORE the try, so a buy whose adapter read also fails still
+            # reports its suppressed stream: the two advisories are independent facts
+            # and the adapter branch below ``continue``s.
+            if suppressed_reporting_stream(buy.raw_request):
+                suppressed_stream_errors.append(
+                    Error.of(  # structural-guard: advisory per-buy result in GetMediaBuyDeliveryResponse.errors[]
+                        ErrorCode.INVALID_REQUEST,
+                        field=REPORTING_STREAM_ID_FIELD,
+                        details=EntityRefDetails(media_buy_id=media_buy_id),
+                    )
+                )
+
             try:
                 # Determine status from the persisted lifecycle column,
                 # date-refined only for serving states — the same single
@@ -587,7 +621,7 @@ def get_media_buy_delivery(
         )
 
         # Normalize advisory error codes to guaranteed-standard wire codes.
-        advisory_errors = not_found_errors + adapter_errors
+        advisory_errors = not_found_errors + adapter_errors + suppressed_stream_errors
 
         # Create AdCP-compliant response
         response = GetMediaBuyDeliveryResponse(

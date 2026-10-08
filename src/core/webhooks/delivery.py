@@ -27,6 +27,8 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
+from src.core.exceptions import AdCPInvalidRequestError
+
 if TYPE_CHECKING:
     from adcp.types import McpWebhookPayload
     from adcp.webhooks import GeneratedTaskStatus
@@ -213,12 +215,23 @@ def build_webhook_envelope(
         # registration without one names no deliverable webhook. adcp 6.6.0 typed the
         # parameter ``str | None`` and built a schema-invalid body; adcp 9 types it ``str``
         # and refuses. This is the same refusal, raised by the seller with the reason.
-        raise ValueError(
-            "push_notification_config carries no operation_id, so this delivery has "
-            "nothing to echo: operation_id is REQUIRED on core/mcp-webhook-payload.json "
-            "and compliance/universal/webhook-emission.yaml req. 1 forbids recovering it "
-            "from the receiver URL."
-        )
+        #
+        # TYPED, not ``ValueError``. It used to be a bare ``ValueError`` carrying the
+        # reason as a sentence, and the two senders then could not tell it apart from
+        # an arbitrary runtime fault: both held an ``except Exception`` whose job was to
+        # keep a transport failure from breaking the work around it, so a DELIBERATE
+        # refusal with a buyer-correctable cause went into the same log-and-continue as
+        # a dropped socket. ``AdCPInvalidRequestError`` is the code AdCP 3.2.1
+        # ``L3/webhooks.mdx`` :141 names for this condition, and being a typed refusal
+        # is what lets each sender give it the shape its own route is owed: the
+        # registration gate answers the buyer, the scheduler suppresses the stream.
+        #
+        # No text is authored here. ``message``/``recovery``/``suggestion`` are
+        # read-only over CODE_TABLE (ADR-010); ``field`` is the one locatable fact, and
+        # it names ``operation_id`` without a container prefix because this builder
+        # serves both registration shapes -- a ``push_notification_config`` and a
+        # ``reporting_webhook``. Each sender's own refusal names the prefixed field.
+        raise AdCPInvalidRequestError(field="operation_id")
 
     return create_mcp_webhook_payload(
         task_id=task.task_id,
