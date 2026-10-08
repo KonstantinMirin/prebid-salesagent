@@ -64,6 +64,7 @@ from src.core.schemas import (
     CreateMediaBuySuccess,
     PricingOption,
 )
+from tests.factories import stamp_format_identity
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_create import MediaBuyCreateEnv
 from tests.helpers.envelope_assertions import assert_envelope_shape, raises_adcp
@@ -280,8 +281,9 @@ class TestCreativeMissingUrl:
         # Build a mock DB creative that is missing URL
         mock_creative = MagicMock()
         mock_creative.creative_id = "creative_1"
-        mock_creative.format = "display_300x250_image"
-        mock_creative.agent_url = "https://creative.example.com"
+        stamp_format_identity(
+            mock_creative, format_id="display_300x250_image", agent_url="https://creative.example.com"
+        )
         mock_creative.data = {}  # No URL field
 
         # Build a mock format spec (non-generative, so URL is required)
@@ -323,8 +325,9 @@ class TestCreativeMissingUrl:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "creative_1"
-        mock_creative.format = "display_300x250_image"
-        mock_creative.agent_url = "https://creative.example.com"
+        stamp_format_identity(
+            mock_creative, format_id="display_300x250_image", agent_url="https://creative.example.com"
+        )
         mock_creative.data = {"url": "https://example.com/ad.jpg"}
 
         mock_format_spec = MagicMock()
@@ -501,8 +504,7 @@ class TestMultipleInvalidCreativesAccumulated:
         for i in range(1, 4):
             c = MagicMock()
             c.creative_id = f"creative_{i}"
-            c.format = f"format_{i}"
-            c.agent_url = "https://creative.example.com"
+            stamp_format_identity(c, format_id=f"format_{i}", agent_url="https://creative.example.com")
             c.data = {}
             creatives.append(c)
 
