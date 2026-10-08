@@ -9,7 +9,7 @@ SDK 5.7 type:ignore tracking (adcontextprotocol/adcp-client-python#913):
 
 import logging
 import uuid
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any
 
 from adcp.types import ValidationMode
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
@@ -22,124 +22,11 @@ if TYPE_CHECKING:
 
     from src.core.database.models import Product as DBProduct
     from src.core.resolved_identity import ResolvedIdentity
-    from src.core.schemas import FormatId, PackageRequest, Product
+    from src.core.schemas import PackageRequest, Product
 
 from src.core.errors.details import CreativeRejectionDetails
 
 logger = logging.getLogger(__name__)
-
-
-class FormatParameters(TypedDict, total=False):
-    """Optional format parameters for parameterized FormatId (AdCP 2.5)."""
-
-    width: int
-    height: int
-    duration_ms: float
-
-
-class FormatInfo(TypedDict):
-    """Complete format information extracted from FormatId."""
-
-    agent_url: str
-    format_id: str
-    parameters: FormatParameters | None
-
-
-def _optional_format_parameters(
-    *,
-    width: Any = None,
-    height: Any = None,
-    duration_ms: Any = None,
-) -> FormatParameters | None:
-    """Build FormatParameters from optional width/height/duration_ms (omit if all absent)."""
-    params: FormatParameters = {}
-    if width is not None:
-        params["width"] = int(width)
-    if height is not None:
-        params["height"] = int(height)
-    if duration_ms is not None:
-        params["duration_ms"] = float(duration_ms)
-    return params or None
-
-
-def _extract_format_info(format_value: Any) -> FormatInfo:
-    """Extract complete format information from format_id field (AdCP 2.5).
-
-    ``agent_url`` comes back VERBATIM -- the bytes the buyer sent -- and this function
-    deliberately does NOT canonicalize. It feeds both the persistence path and the
-    comparison path, and those two want different things:
-
-    * What is STORED is echoed back. ``sync_creatives`` must return the buyer's own
-      ``format_id`` unchanged (graded by the round-trip assertion in
-      ``uc006_storyboard_creative_sync.py``: "seller must accept its own format_id"),
-      and ``list_creatives`` rebuilds the reference from the column. Canonicalizing
-      here changed the echo and broke that round-trip -- measured, not theorized.
-    * What is COMPARED must be canonical. ``core/format-id.json`` -- byte-identical at
-      the 3.1 and 3.2 pins -- requires it: "Callers comparing two ``format-id`` values
-      MUST canonicalize ``agent_url`` ... before treating two formats as the same."
-
-    So the canonicalization lives at the two comparison sites in
-    ``src/core/tools/creatives/_processing.py``, NOT here. The spec's MUST is scoped to
-    comparison; it does not ask a seller to restate a buyer's URL in canonical form.
-
-    Until adcp 9 the comparison was accidentally correct: the field was typed ``AnyUrl``,
-    and ``str(AnyUrl(...))`` already applied most of the algorithm -- lowercased host,
-    dropped default port, root path on a bare authority -- so the missing call was
-    invisible, and the echo carried that normalization too. adcp 9 types it the wire
-    string (#1396), which removed the accident from both paths at once. Only the
-    comparison half is restored; the echo stays verbatim, which is what the buyer-facing
-    obligation actually asks for.
-
-    Args:
-        format_value: FormatId dict/object with agent_url, id, and optional parameters
-
-    Returns:
-        FormatInfo with agent_url verbatim, format_id, and optional parameters
-        (width, height, duration_ms)
-
-    Raises:
-        ValueError: If format_value doesn't have required agent_url and id fields
-
-    Note:
-        This function supports parameterized format templates (AdCP 2.5).
-        Parameters are only included if they are present and non-None.
-    """
-    agent_url: str
-    format_id: str
-    parameters: FormatParameters | None = None
-
-    if isinstance(format_value, dict):
-        agent_url_val = format_value.get("agent_url")
-        format_id_val = format_value.get("id")
-        if not agent_url_val or not format_id_val:
-            raise ValueError(f"format_id must have both 'agent_url' and 'id' fields. Got: {format_value}")
-        agent_url = str(agent_url_val)
-        format_id = format_id_val
-        parameters = _optional_format_parameters(
-            width=format_value.get("width"),
-            height=format_value.get("height"),
-            duration_ms=format_value.get("duration_ms"),
-        )
-
-    elif isinstance(format_value, LibraryFormatId):
-        agent_url = str(format_value.agent_url)
-        format_id = format_value.id
-        parameters = _optional_format_parameters(
-            width=format_value.width,
-            height=format_value.height,
-            duration_ms=format_value.duration_ms,
-        )
-
-    elif isinstance(format_value, str):
-        raise ValueError(
-            f"format_id must be an object with 'agent_url' and 'id' fields (AdCP v2.4). "
-            f"Got string: '{format_value}'. "
-            f"String format_id is no longer supported - all formats must be namespaced."
-        )
-    else:
-        raise ValueError(f"Invalid format_id format. Expected object with agent_url and id, got: {type(format_value)}")
-
-    return {"agent_url": agent_url, "format_id": format_id, "parameters": parameters}
 
 
 def _extract_format_namespace(format_value: Any) -> tuple[str, str]:
@@ -259,10 +146,16 @@ def _detect_snippet_type(snippet: str) -> str:
 
 
 def validate_creative_format_against_product(
-    creative_format_id: "FormatId",
+    creative_format_id: LibraryFormatId,
     product: "Product | DBProduct",
 ) -> tuple[bool, str | None]:
     """Validate that a creative's format_id matches the product's supported formats.
+
+    Typed with the PINNED class, not the local subclass. The body reads ``agent_url`` and
+    ``id`` and asks ``format_identity`` for the rest, all of which the library type declares
+    -- and the references that reach here come from both sides: a buyer's request model
+    builds the library class, a stored assertion is revalidated into the local one. Naming
+    the subclass refused the library instance for no behaviour the function uses.
 
     Args:
         creative_format_id: FormatId object with agent_url and id fields

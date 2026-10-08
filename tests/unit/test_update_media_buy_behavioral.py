@@ -42,6 +42,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.tools.media_buy_update import _update_media_buy_impl
+from tests.factories.creative import stamp_format_identity
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.harness.media_buy_update import MediaBuyUpdateEnv
 
@@ -1004,8 +1005,9 @@ class TestUC003UpdateCreativeIds:
             c = MagicMock()
             c.creative_id = cid
             c.status = statuses[i] if statuses else "active"
-            c.agent_url = "http://test.com"
-            c.format = formats[i] if formats else "display"
+            # The four stored identity columns, through the production mapping. A MagicMock
+            # answers a Mock for anything unstubbed, which is not a state they can hold.
+            stamp_format_identity(c, format_id=formats[i] if formats else "display", agent_url="http://test.com")
             creatives.append(c)
 
         # Creative existence/status via repository (shared validation helper).
@@ -1124,8 +1126,7 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            c1.agent_url = "http://test.com"
-            c1.format = "video"
+            stamp_format_identity(c1, format_id="video", agent_url="http://test.com")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -1170,8 +1171,7 @@ class TestUC003UpdateCreativeIds:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "active"
-            c1.agent_url = "http://test.com"
-            c1.format = "display"
+            stamp_format_identity(c1, format_id="display", agent_url="http://test.com")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -2226,8 +2226,7 @@ class TestUC003ExtJ:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "rejected"
-            c1.agent_url = "http://test.com"
-            c1.format = "display"
+            stamp_format_identity(c1, format_id="display", agent_url="http://test.com")
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1]
 
@@ -2268,14 +2267,12 @@ class TestUC003ExtJ:
             c1 = MagicMock()
             c1.creative_id = "C1"
             c1.status = "error"
-            c1.agent_url = "http://test.com"
-            c1.format = "display"
+            stamp_format_identity(c1, format_id="display", agent_url="http://test.com")
 
             c2 = MagicMock()
             c2.creative_id = "C2"
             c2.status = "rejected"
-            c2.agent_url = "http://test.com"
-            c2.format = "display"
+            stamp_format_identity(c2, format_id="display", agent_url="http://test.com")
 
             uow.creatives.get_by_ids.side_effect = None
             uow.creatives.get_by_ids.return_value = [c1, c2]

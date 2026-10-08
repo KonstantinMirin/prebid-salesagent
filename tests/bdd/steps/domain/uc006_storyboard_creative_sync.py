@@ -562,6 +562,7 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     buyer-facing contract and the DB read localizes the fault.
     """
     from src.core.database.repositories.creative import CreativeRepository
+    from src.core.schemas import CreativeFormatIdentity
     from tests.harness.client import AdCPTestClient
 
     first = _first_creative_result(ctx, "a persisted creative whose format_id roundtrips verbatim")
@@ -612,9 +613,16 @@ def then_format_id_roundtrips_verbatim(ctx: dict) -> None:
     repo = CreativeRepository(session, env._tenant_id)
     db_creative = repo.get_by_id(first.creative_id, env._principal_id)
     assert db_creative is not None, f"Creative {first.creative_id!r} not found in DB after sync"
-    assert db_creative.format == captured["id"], (
-        f"format_id.id did not roundtrip: expected {captured['id']!r}, stored {db_creative.format!r}"
+    # The row keeps the buyer's reference VERBATIM in ``legacy_format_id``; ``assertion`` is
+    # that reference, which is the half this step grades. The canonical comparison key beside
+    # it would answer a different question.
+    stored = CreativeFormatIdentity.from_row(db_creative).assertion
+    assert stored is not None, (
+        f"the synced creative retained no legacy format_id at all: expected {captured!r}, stored nothing"
     )
-    assert db_creative.agent_url == captured["agent_url"], (
-        f"format_id.agent_url did not roundtrip: expected {captured['agent_url']!r}, stored {db_creative.agent_url!r}"
+    assert str(stored.id) == captured["id"], (
+        f"format_id.id did not roundtrip: expected {captured['id']!r}, stored {str(stored.id)!r}"
+    )
+    assert str(stored.agent_url) == captured["agent_url"], (
+        f"format_id.agent_url did not roundtrip: expected {captured['agent_url']!r}, stored {str(stored.agent_url)!r}"
     )

@@ -36,6 +36,7 @@ from src.core.schemas import (
     UpdateMediaBuyRequest,
 )
 from src.core.schemas.account import Account
+from tests.factories import stamp_format_identity
 from tests.factories.account import DEFAULT_TEST_ACCOUNT_ID, seed_default_account
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.helpers.media_buy_approval import run_approval
@@ -178,17 +179,15 @@ def mb_creatives(integration_db, mb_identity):
                 )
             ).first()
             if not existing:
-                session.add(
-                    DBCreative(
-                        creative_id=cid,
-                        tenant_id=mb_identity.tenant_id,
-                        principal_id=mb_identity.principal_id,
-                        name=f"Test Creative {cid}",
-                        agent_url="https://creative.adcontextprotocol.org",
-                        format="display_300x250",
-                        data={},
-                    )
+                creative = DBCreative(
+                    creative_id=cid,
+                    tenant_id=mb_identity.tenant_id,
+                    principal_id=mb_identity.principal_id,
+                    name=f"Test Creative {cid}",
+                    data={},
                 )
+                stamp_format_identity(creative, format_id="display_300x250")
+                session.add(creative)
         session.commit()
     return creative_ids
 

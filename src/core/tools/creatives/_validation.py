@@ -18,7 +18,6 @@ from src.core.exceptions import (
 )
 from src.core.format_resolver import is_dialled_agent_url
 from src.core.schemas import (
-    CanonicalFormatIdentity,
     Creative,
     CreativePolicy,
     CreativeStatusEnum,
@@ -131,15 +130,18 @@ def _validate_creative_input(
             field="format_kind",
         ) from exc
 
-    if isinstance(identity, CanonicalFormatIdentity):
-        # The canonical arm names a KIND from a closed vocabulary, not a reference to a
-        # format some agent hosts. There is no agent to ask, so the registry walk below does
-        # not apply and the vocabulary check above is the whole of its validation.
+    if identity.legacy is None:
+        # No retained assertion, so the creative named a KIND from a closed vocabulary rather
+        # than a reference to a format some agent hosts. There is no agent to ask: the
+        # registry walk below does not apply and the vocabulary check above is the whole of
+        # its validation. Asked of the identity rather than by branching on its type —
+        # the identity is one shape now, and what varies is whether it retains an assertion.
         return validated_creative
 
-    # The deprecated arm names a format a creative agent must actually serve.
-    agent_url = identity.agent_url
-    format_id = identity.id
+    # The retained assertion names a format a creative agent must actually serve. Canonical
+    # agent_url, because that is what the identity carries and what a comparison requires.
+    agent_url = identity.legacy.agent_url
+    format_id = identity.legacy.id
 
     # Skip external validation for adapter-provided formats (non-HTTP URLs)
     # These formats are served by the adapter itself (e.g., broadstreet://default)

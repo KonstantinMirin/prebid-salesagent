@@ -591,7 +591,7 @@ class TestListQuerySummary:
 
 
 class TestListResponseShape:
-    """Creative response object construction — format_parameters, snippet, etc."""
+    """Creative response object construction — format_id parameters, snippet, etc."""
 
     def test_format_parameters_extracted(self, integration_db):
         """Spec: list_creatives format_id includes width/height/duration_ms."""
@@ -603,7 +603,7 @@ class TestListResponseShape:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_fmt_params",
-                format_parameters={"width": 300, "height": 250, "duration_ms": 15000},
+                format_params={"width": 300, "height": 250, "duration_ms": 15000},
             )
 
             response = env.call_impl()
@@ -837,7 +837,7 @@ class TestListCreativeObjectConstruction:
         assert response.creatives[0].creative_id == "c_normal"
 
     def test_format_parameters_width_height(self, integration_db):
-        """Spec: format_parameters populates FormatId width/height/duration_ms."""
+        """Spec: the retained reference's parameters populate FormatId width/height/duration_ms."""
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -845,7 +845,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_format_params",
-                format_parameters={"width": 728, "height": 90, "duration_ms": 15000},
+                format_params={"width": 728, "height": 90, "duration_ms": 15000},
             )
             response = env.call_impl()
 
@@ -856,7 +856,7 @@ class TestListCreativeObjectConstruction:
         assert creative.format_id.duration_ms == 15000
 
     def test_format_parameters_partial(self, integration_db):
-        """Spec: format_parameters with only width still populates correctly."""
+        """Spec: a reference pinning only width still populates correctly."""
         with CreativeListEnv() as env:
             tenant = TenantFactory(tenant_id="test_tenant")
             principal = PrincipalFactory(tenant=tenant, principal_id="test_principal")
@@ -864,7 +864,7 @@ class TestListCreativeObjectConstruction:
                 tenant=tenant,
                 principal=principal,
                 creative_id="c_partial_params",
-                format_parameters={"width": 300},
+                format_params={"width": 300},
             )
             response = env.call_impl()
 

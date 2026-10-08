@@ -102,6 +102,7 @@ from src.core.schemas import (
     CreateMediaBuySubmitted,
     CreateMediaBuySuccess,
     CreativeApprovalStatus,
+    CreativeFormatIdentity,
     FormatId,
     FormatIdentity,
     MediaPackage,
@@ -389,11 +390,16 @@ def _validate_creatives_before_adapter_call(
         # field: create-media-buy-request.json defines no creative:{id} path, so
         # there is no canonical request-document locator to name (a fabricated
         # one is not honest — CounterpartyUrl(field=None) states that plainly).
+        # The stored identity, through the ONE row reader. The retained legacy assertion is
+        # what names a format an AGENT serves; a creative identified by its canonical kind
+        # asserts no reference, so there is no agent to dial and nothing here to check.
+        identity = CreativeFormatIdentity.from_row(creative)
+        assertion = identity.assertion
         format_spec = None
-        if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+        if assertion is not None and is_dialled_agent_url(assertion.agent_url):
             format_spec = _get_format_spec_sync(
-                creative.agent_url,
-                str(creative.format),
+                assertion.agent_url,
+                assertion.id,
                 provenance=CounterpartyUrl(field=None),
             )
 
@@ -401,8 +407,8 @@ def _validate_creatives_before_adapter_call(
             # meaningful once we know the agent SHOULD have it (a dialled url).
             if not format_spec:
                 validation_errors.append(
-                    f"Creative {creative.creative_id} has unknown format '{creative.format}' "
-                    f"from agent {creative.agent_url}. Format must be registered with the creative agent."
+                    f"Creative {creative.creative_id} has unknown format '{assertion.id}' "
+                    f"from agent {assertion.agent_url}. Format must be registered with the creative agent."
                 )
                 continue
 
@@ -412,7 +418,7 @@ def _validate_creatives_before_adapter_call(
             logger.info(
                 log_safe(
                     f"Skipping validation for generative creative {creative.creative_id} "
-                    f"(format={creative.format}) - will be converted to reference format"
+                    f"(format={identity.label}) - will be converted to reference format"
                 )
             )
             continue
@@ -423,7 +429,7 @@ def _validate_creatives_before_adapter_call(
 
         if not url:
             validation_errors.append(
-                f"Reference creative {creative.creative_id} (format={creative.format}) "
+                f"Reference creative {creative.creative_id} (format={identity.label}) "
                 f"missing required URL field in assets"
             )
         if not width or not height:
@@ -446,11 +452,15 @@ def _validate_creatives_before_adapter_call(
         )
 
     # --- Format compatibility check: creative format vs product accepted formats ---
-    # Build creative_id -> format mapping from fetched creatives
+    # Build creative_id -> format mapping from fetched creatives. The product declares
+    # ``format_ids``, so only a creative that retains a legacy assertion has anything to
+    # match against it; one identified by its canonical kind is unconstrained here until
+    # products carry ``format_options[]``.
     creative_format_map: dict[str, str] = {}
     for creative in creatives_list:
-        if creative.format:
-            creative_format_map[creative.creative_id] = str(creative.format)
+        legacy = CreativeFormatIdentity.from_row(creative).legacy
+        if legacy is not None:
+            creative_format_map[creative.creative_id] = legacy.id
 
     # Collect all product_ids from packages that have creatives
     product_ids_needed: set[str] = set()
@@ -671,20 +681,32 @@ def _build_adapter_asset_from_creative(
     # back to the creative's raw data fields when format_spec stays None.
     from src.core.format_resolver import is_dialled_agent_url
 
-    if creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+    # The stored identity through the ONE row reader. Only a retained legacy assertion names
+    # a format an agent hosts, so its presence plus a dialled URL is the whole precondition
+    # for both fetches.
+    #
+    # The predicate is called INLINE in both conditionals rather than hoisted into a local.
+    # test_architecture_format_spec_dial_guard.py reads the enclosing `if` test for a call to
+    # `is_dialled_agent_url`, so a hoisted boolean reads to it as an unguarded dial —
+    # the guard grades this spelling, and conforming to it is cheaper than teaching it to
+    # resolve local bindings, which is machinery with its own holes.
+    identity = CreativeFormatIdentity.from_row(creative)
+    assertion = identity.assertion
+
+    if assertion is not None and is_dialled_agent_url(assertion.agent_url):
         format_spec = _get_format_spec_sync(
-            creative.agent_url,
-            str(creative.format),
+            assertion.agent_url,
+            assertion.id,
             provenance=CounterpartyUrl(field=None),
         )
-    if format_spec is None and creative.format and creative.agent_url and is_dialled_agent_url(creative.agent_url):
+    if format_spec is None and assertion is not None and is_dialled_agent_url(assertion.agent_url):
         from src.core.exceptions import AdCPFormatNotFoundError
         from src.core.format_resolver import get_format
 
         try:
             format_spec = get_format(
-                str(creative.format),
-                agent_url=creative.agent_url,
+                assertion.id,
+                agent_url=assertion.agent_url,
                 tenant_id=tenant_id,
                 product_id=None,
                 # Same buyer-supplied URL as the first fetch above — omitting
@@ -713,7 +735,7 @@ def _build_adapter_asset_from_creative(
     if not url or not width or not height:
         return None, (
             f"Creative {creative.creative_id} missing url/width/height "
-            f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={creative.format})"
+            f"(width={width}, height={height}, url={'set' if url else 'missing'}, format={identity.label})"
         )
 
     asset: dict[str, Any] = {
@@ -3346,10 +3368,7 @@ async def _create_media_buy_impl(
                     cpm=cpm,
                     impressions=int(float(total_budget) / cpm * 1000),
                     format_ids=cast(list[Any], format_ids_to_use),
-                    targeting_overlay=cast(
-                        "Targeting | None",
-                        matching_package.targeting_overlay if matching_package else None,
-                    ),
+                    targeting_overlay=(matching_package.targeting_overlay if matching_package else None),
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
                     creative_ids=(
@@ -3660,11 +3679,17 @@ async def _create_media_buy_impl(
                                     creative = creatives_by_id.get(creative_id)
                                     if creative:
                                         # Simple binary check: does creative's format_id match product?
-                                        # Construct FormatId from database creative's agent_url and format columns
-                                        # (DBCreative stores these as separate string columns, not a FormatId object)
-                                        creative_format_id = FormatId(agent_url=creative.agent_url, id=creative.format)
+                                        # The retained assertion IS the reference, stored whole —
+                                        # this used to rebuild one from two columns. A creative
+                                        # identified by its canonical kind asserts no reference, and
+                                        # a product declares only ``format_ids`` today, so there is
+                                        # nothing to compare it against until products carry
+                                        # ``format_options[]``.
+                                        stored_identity = CreativeFormatIdentity.from_row(creative)
+                                        if stored_identity.assertion is None:
+                                            continue
                                         format_is_valid, format_error = validate_creative_format_against_product(
-                                            creative_format_id=creative_format_id,
+                                            creative_format_id=stored_identity.assertion,
                                             product=product_format_check,
                                         )
 
@@ -3675,7 +3700,7 @@ async def _create_media_buy_impl(
                                                 extra={
                                                     "creative_id": creative_id,
                                                     "product_id": package.product_id,
-                                                    "creative_format": creative.format,
+                                                    "creative_format": stored_identity.label,
                                                     "validation_error": format_error,
                                                 },
                                             )

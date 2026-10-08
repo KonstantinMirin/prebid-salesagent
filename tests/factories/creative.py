@@ -2,15 +2,108 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
 
 from src.core.database.models import Creative, CreativeAssignment
+from src.core.database.repositories.creative import _identity_columns
+from src.core.format_resolver import creative_identity_of
+from src.core.schemas import CreativeFormatIdentity, FormatId
+from src.core.schemas.creative import CreativeAssetRequest
 
 from .core import TenantFactory
 from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
+
+#: The creative agent a factory-built creative asserts a format from, unless a test names
+#: another one.
+DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+
+
+def _identity_for(
+    *,
+    agent_url: str,
+    format_id: str,
+    format_params: dict[str, Any] | None = None,
+    canonical_kind: str | None = None,
+) -> CreativeFormatIdentity:
+    """The format identity a seeded creative carries, through the PRODUCTION accessor.
+
+    A test says which arm the creative carries -- a legacy reference via ``agent_url`` +
+    ``format_id`` (optionally parameterized by ``format_params``), or a canonical kind via
+    ``canonical_kind`` -- and the stored columns are derived from that by the same code the
+    sync path runs, including the v1 -> v2 projection. So a seeded row and a synced row
+    cannot differ in shape, which is what seeding the columns by hand could not promise:
+    the identity used to be three partial columns and the factory set two of them.
+
+    ``format_params`` is spread onto the reference rather than kept beside it, because that
+    is what a parameterized ``format_id`` IS -- ``core/format-id.json`` declares width,
+    height, duration_ms and pixel_ratio on the reference object itself. A scenario that needs
+    a parameterized format therefore seeds one reference, not a reference plus a blob.
+
+    The DTO is built FOR REAL, and BOTH arms go through the accessor. A ``SimpleNamespace``
+    stood here -- a duck that happened to answer three attribute reads -- and it was the only
+    caller keeping those reads defensive in production. The canonical branch also used to
+    return a hand-built identity, skipping the accessor and with it the seller's vocabulary
+    check, so a scenario could seed a kind production would refuse.
+    """
+    identity_arm: dict[str, Any] = (
+        {"format_kind": canonical_kind}
+        if canonical_kind is not None
+        else {"format_id": FormatId(agent_url=agent_url, id=format_id, **(format_params or {}))}
+    )
+    return creative_identity_of(
+        CreativeAssetRequest(
+            creative_id="seeded-identity",
+            name="seeded identity",
+            assets={},
+            **identity_arm,
+        )
+    )
+
+
+def _seeded_identity(obj) -> CreativeFormatIdentity:
+    """``factory_boy`` adapter: the factory stub's knobs, named for :func:`_identity_for`."""
+    return _identity_for(
+        agent_url=obj.agent_url,
+        format_id=obj.format,
+        format_params=obj.format_params,
+        canonical_kind=obj.canonical_kind,
+    )
+
+
+def stamp_format_identity(
+    row,
+    *,
+    format_id: str = "display_300x250",
+    agent_url: str = DEFAULT_CREATIVE_AGENT_URL,
+    canonical_kind: str | None = None,
+    format_params: dict[str, Any] | None = None,
+) -> CreativeFormatIdentity:
+    """Stamp the four stored identity columns onto a MOCK creative row, and return them.
+
+    A ``MagicMock`` answers a fresh ``Mock`` for any attribute nobody stubbed, and a ``Mock``
+    is not a state any of these columns can hold: ``CreativeFormatIdentity.from_row``
+    validates ``legacy_format_id`` as the JSON document the column holds, so an unstubbed row
+    fails inside the reader rather than in the code under test. The columns are derived here
+    through the same production mapping ``CreativeRepository.create`` uses, so a mock row and
+    a real row agree -- and a column added to the identity is stamped in ONE place instead of
+    at every mock.
+
+    For a row that goes through the real session, use ``CreativeFactory`` instead.
+    """
+    identity = _identity_for(
+        agent_url=agent_url,
+        format_id=format_id,
+        format_params=format_params,
+        canonical_kind=canonical_kind,
+    )
+    for column, value in _identity_columns(identity).items():
+        setattr(row, column, value)
+    return identity
 
 
 class CreativeFactory(SQLAlchemyModelFactory):
@@ -18,7 +111,9 @@ class CreativeFactory(SQLAlchemyModelFactory):
         model = Creative
         sqlalchemy_session = None
         sqlalchemy_session_persistence = "commit"
-        exclude = ("principal",)
+        # The identity knobs are inputs, not columns: `_seeded_identity` turns them into the
+        # four columns that exist.
+        exclude = ("principal", "agent_url", "format", "format_params", "canonical_kind", "identity")
 
     # Composite PK fields
     creative_id = factory.Sequence(lambda n: f"creative_{n:04d}")
@@ -29,8 +124,24 @@ class CreativeFactory(SQLAlchemyModelFactory):
 
     # Required fields
     name = factory.LazyAttribute(lambda o: f"Test Creative {o.creative_id}")
-    agent_url = "https://creative.adcontextprotocol.org"
+
+    # --- Format identity: knobs in, four columns out ---
+    # `agent_url` + `format` name the legacy reference a creative asserts (the default, and
+    # what most scenarios exercise), `format_params` parameterizes it (width, height,
+    # duration_ms, pixel_ratio -- the reference's own members); `canonical_kind` instead
+    # builds a creative identified by its canonical kind, which asserts no reference at all.
+    agent_url = DEFAULT_CREATIVE_AGENT_URL
     format = "display_300x250"
+    format_params = None
+    canonical_kind = None
+    identity = factory.LazyAttribute(_seeded_identity)
+    # Each column read off the ONE production mapping by its own name, so a column added to
+    # the identity is a line here and nothing else -- never a second copy of the mapping.
+    format_kind = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["format_kind"])
+    format_option_ref = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["format_option_ref"])
+    legacy_format_id = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["legacy_format_id"])
+    legacy_format_key = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["legacy_format_key"])
+
     # Mirrors the production default. Must stay an AdCP CreativeStatus member: a non-spec
     # value (this was "pending") made every factory-built creative reach list_creatives
     # through the reader's unparseable-status branch rather than through real status

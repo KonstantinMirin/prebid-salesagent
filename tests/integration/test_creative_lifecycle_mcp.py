@@ -4,10 +4,9 @@ Tests sync_creatives and list_creatives MCP tools with real database operations.
 These tests verify the integration between FastMCP tool definitions and database persistence,
 without mocking the core business logic or database operations.
 
-NOTE: All Creative instances require agent_url field (added in schema migration).
-This field is required by the database schema (NOT NULL constraint) and AdCP v2.4 spec
-for creative format namespacing - each creative format is associated with an agent URL.
-Test creatives use "https://test.com" as a default value.
+NOTE: a seeded Creative row carries its format identity in the four stored columns, which
+``_db_creative`` below derives from one ``format_id`` through the production mapping. A test
+never assigns those columns itself.
 """
 
 import uuid
@@ -31,9 +30,15 @@ from src.core.database.models import (
     Principal,
 )
 from src.core.exceptions import AdCPAuthenticationError, AdCPAuthRequiredError
-from src.core.schemas import CreateMediaBuyRequest, ListCreativesResponse, SyncCreativesRequest, SyncCreativesResponse
+from src.core.schemas import (
+    CreateMediaBuyRequest,
+    CreativeFormatIdentity,
+    ListCreativesResponse,
+    SyncCreativesRequest,
+    SyncCreativesResponse,
+)
 from src.core.schemas.creative import ListCreativesRequest
-from tests.factories import PricingOptionFactory
+from tests.factories import PricingOptionFactory, stamp_format_identity
 from tests.factories.creative_asset import build_assets, image_spec
 from tests.factories.principal import plaintext_token_for
 from tests.helpers.credentials import credential_headers
@@ -44,6 +49,24 @@ pytestmark = [pytest.mark.integration, pytest.mark.requires_db]
 
 
 ACCOUNT_ID = "acct_lifecycle"
+
+
+def _db_creative(*, format_id: str = "display_300x250_image", **columns) -> DBCreative:
+    """A seeded creative row whose format identity is stamped by the shared helper.
+
+    One ``format_id`` in, the four stored identity columns out, derived through the same
+    mapping ``CreativeRepository.create`` uses — so a row seeded here and a row synced by
+    production cannot differ in shape.
+    """
+    creative = DBCreative(**columns)
+    stamp_format_identity(creative, format_id=format_id)
+    return creative
+
+
+def _asserted_format_id(row: DBCreative) -> str | None:
+    """The legacy ``format_id.id`` a stored creative asserts, read off its identity."""
+    legacy = CreativeFormatIdentity.from_row(row).legacy
+    return legacy.id if legacy is not None else None
 
 
 def _seed_account(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
@@ -350,7 +373,9 @@ class TestCreativeLifecycleMCP:
             assert len(db_creatives) == 3
 
             # Verify display creative
-            display_creative = next((c for c in db_creatives if c.format == "display_300x250_image"), None)
+            display_creative = next(
+                (c for c in db_creatives if _asserted_format_id(c) == "display_300x250_image"), None
+            )
             assert display_creative is not None
             assert display_creative.name == "Banner Ad 300x250"
             # url/width/height were PRE-3.x top-level fields. 3.1.1 carries the media
@@ -359,11 +384,13 @@ class TestCreativeLifecycleMCP:
             assert display_creative.status == "approved"  # Auto-approved due to approval_mode setting
 
             # Verify video creative
-            video_creative = next((c for c in db_creatives if c.format == "video_instream_15s"), None)
+            video_creative = next((c for c in db_creatives if _asserted_format_id(c) == "video_instream_15s"), None)
             assert video_creative is not None
 
             # Verify leaderboard creative
-            leaderboard_creative = next((c for c in db_creatives if c.format == "display_728x90_image"), None)
+            leaderboard_creative = next(
+                (c for c in db_creatives if _asserted_format_id(c) == "display_728x90_image"), None
+            )
             assert leaderboard_creative is not None
 
     def test_sync_creatives_upsert_existing_creative(self):
@@ -371,13 +398,11 @@ class TestCreativeLifecycleMCP:
         core_sync_creatives_tool, _ = self._import_mcp_tools()
         # First, create an existing creative
         with get_db_session() as session:
-            existing_creative = DBCreative(
+            existing_creative = _db_creative(
                 tenant_id=self.test_tenant_id,
                 creative_id="creative_update_test",
                 principal_id=self.test_principal_id,
                 name="Old Creative Name",
-                agent_url="https://creative.adcontextprotocol.org",
-                format="display_300x250_image",
                 status="pending",
                 data={
                     "assets": build_assets(image_spec("banner")),
@@ -558,13 +583,11 @@ class TestCreativeLifecycleMCP:
         # Create test creatives in database
         with get_db_session() as session:
             creatives = [
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id=f"list_test_{i}",
                     principal_id=self.test_principal_id,
                     name=f"Test Creative {i}",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_300x250_image",
                     status="approved" if i % 2 == 0 else "pending_review",
                     data={
                         "url": f"https://example.com/creative_{i}.jpg",
@@ -598,25 +621,22 @@ class TestCreativeLifecycleMCP:
         # Create creatives with different statuses
         with get_db_session() as session:
             creatives = [
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id=f"status_test_approved_{i}",
                     principal_id=self.test_principal_id,
                     name=f"Approved Creative {i}",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_300x250_image",
                     status="approved",
                     data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(3)
             ] + [
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id=f"status_test_pending_{i}",
                     principal_id=self.test_principal_id,
                     name=f"Pending Creative {i}",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_728x90_image",
+                    format_id="display_728x90_image",
                     status="pending_review",
                     data={"assets": build_assets(image_spec("banner"))},
                 )
@@ -661,26 +681,22 @@ class TestCreativeLifecycleMCP:
         # Create creatives with different creation dates
         with get_db_session() as session:
             creatives = [
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id=f"date_test_old_{i}",
                     principal_id=self.test_principal_id,
                     name=f"Old Creative {i}",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_300x250_image",
                     status="approved",
                     created_at=now - timedelta(days=10 + i),  # 10+ days ago
                     data={"assets": build_assets(image_spec("banner"))},
                 )
                 for i in range(2)
             ] + [
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id=f"date_test_recent_{i}",
                     principal_id=self.test_principal_id,
                     name=f"Recent Creative {i}",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_300x250_image",
                     status="approved",
                     created_at=now - timedelta(days=2 + i),  # 2-3 days ago
                     data={"assets": build_assets(image_spec("banner"))},
@@ -709,33 +725,29 @@ class TestCreativeLifecycleMCP:
         # Create creatives with searchable names
         with get_db_session() as session:
             creatives = [
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id="search_test_banner_1",
                     principal_id=self.test_principal_id,
                     name="Holiday Banner Ad",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_300x250_image",
                     status="approved",
                     data={"assets": build_assets(image_spec("banner"))},
                 ),
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id="search_test_video_1",
                     principal_id=self.test_principal_id,
                     name="Holiday Video Ad",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="video_instream_15s",
+                    format_id="video_instream_15s",
                     status="approved",
                     data={"assets": build_assets(image_spec("banner"))},
                 ),
-                DBCreative(
+                _db_creative(
                     tenant_id=self.test_tenant_id,
                     creative_id="search_test_summer_1",
                     principal_id=self.test_principal_id,
                     name="Summer Sale Banner",
-                    agent_url="https://creative.adcontextprotocol.org",
-                    format="display_728x90_image",
+                    format_id="display_728x90_image",
                     status="approved",
                     data={"assets": build_assets(image_spec("banner"))},
                 ),
@@ -767,23 +779,19 @@ class TestCreativeLifecycleMCP:
         # Create creatives and assignments
         with get_db_session() as session:
             # Create creatives
-            creative_1 = DBCreative(
+            creative_1 = _db_creative(
                 tenant_id=self.test_tenant_id,
                 creative_id="assignment_test_1",
                 principal_id=self.test_principal_id,
                 name="Assigned Creative 1",
-                agent_url="https://creative.adcontextprotocol.org",
-                format="display_300x250_image",
                 status="approved",
                 data={"assets": build_assets(image_spec("banner"))},
             )
-            creative_2 = DBCreative(
+            creative_2 = _db_creative(
                 tenant_id=self.test_tenant_id,
                 creative_id="assignment_test_2",
                 principal_id=self.test_principal_id,
                 name="Unassigned Creative",
-                agent_url="https://creative.adcontextprotocol.org",
-                format="display_300x250_image",
                 status="approved",
                 data={"assets": build_assets(image_spec("banner"))},
             )

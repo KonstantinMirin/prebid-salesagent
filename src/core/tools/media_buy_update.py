@@ -38,7 +38,7 @@ from src.core.exceptions import (
     AdCPNotCancellableError,
     AdCPValidationError,
 )
-from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
+from src.core.format_resolver import format_display, product_format_identities
 from src.core.webhook_validator import reject_unsafe_webhook_registration_url, webhook_url_for_log
 from src.core.webhooks.registration import accept_push_notification_config
 
@@ -70,6 +70,7 @@ from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
     AffectedPackage,
+    CreativeFormatIdentity,
     SyncCreativesRequest,
     UpdateMediaBuyRequest,
     UpdateMediaBuyResult,
@@ -288,9 +289,13 @@ def _validate_creatives_for_assignment(
 
     incompatible: list[str] = []
     for creative in creatives_list:
-        creative_identity = format_identity_or_none({"agent_url": creative.agent_url, "id": creative.format})
+        # The stored identity, through the ONE row reader. ``legacy`` already carries the
+        # canonical (agent_url, id) pair ``product_format_identities`` matches on, so this no
+        # longer rebuilds a reference out of two columns to hand to the identity helper.
+        stored = CreativeFormatIdentity.from_row(creative)
+        creative_identity = stored.legacy
         if creative_identity is None or creative_identity not in supported_formats:
-            display = format_display(creative_identity) if creative_identity else str(creative.format)
+            display = format_display(creative_identity) if creative_identity else stored.label
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:

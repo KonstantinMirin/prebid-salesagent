@@ -50,6 +50,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from src.core.schemas import CreativeFormatIdentity
 from src.core.security.outbound_http import OutboundRequestBlocked
 from tests.factories.creative_asset import CreativeAssetFactory
 from tests.factories.format import AGENT_URL
@@ -151,11 +152,12 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
                 status="approved",
                 data={"assets": {}, "url": "https://example.com/original.png"},
             )
-            original_name, original_status, original_agent_url, original_format = (
+            # The identity is read into a frozen value BEFORE the dial: ``stored`` below can be
+            # the same ORM instance, so a snapshot is what makes the comparison mean anything.
+            original_name, original_status, original_identity = (
                 original.name,
                 original.status,
-                original.agent_url,
-                original.format,
+                CreativeFormatIdentity.from_row(original),
             )
 
             registry = env.mock["registry"].return_value
@@ -202,5 +204,14 @@ class TestOperatorDialRefusalIsTerminalNotTransient:
                     f"a refused update must not persist a status change: "
                     f"stored={stored.status!r}, original={original_status!r}"
                 )
-                assert stored.agent_url == original_agent_url, "a refused update must not persist an agent_url change"
-                assert stored.format == original_format, "a refused update must not persist a format change"
+                stored_identity = CreativeFormatIdentity.from_row(stored)
+                assert stored_identity == original_identity, (
+                    f"a refused update must not persist a format-identity change: "
+                    f"stored={stored_identity!r}, original={original_identity!r}"
+                )
+                # ``assertion`` is ``compare=False``, so the equality above does not see the
+                # verbatim reference -- the half the buyer is echoed back gets its own check.
+                assert stored_identity.assertion == original_identity.assertion, (
+                    f"a refused update must not persist a change to the asserted format_id: "
+                    f"stored={stored_identity.assertion!r}, original={original_identity.assertion!r}"
+                )

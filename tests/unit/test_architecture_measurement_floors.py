@@ -94,6 +94,13 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "egress-sync-creds",
         "egress-update",
         "get-products-pricing-options",
+        # The pricing row's sibling: BR-UC-GET-PRODUCTS-format-options stores real
+        # products.format_options documents and reads them off get_products. Pinned on the
+        # same reasoning as every other wired row, and with a concrete history behind it --
+        # the scenarios were dormant on their first run ("No harness wired for None", twelve
+        # auto-xfails in under a second) because a scenario carrying its own identity tag is
+        # claimed by no coarse uc bucket. Deleting this row returns them to exactly that.
+        "get-products-format-options",
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",

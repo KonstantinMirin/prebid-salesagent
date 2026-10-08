@@ -20,6 +20,7 @@ from src.core.database.models import MediaBuy, Principal
 from src.core.exceptions import AdCPAuthorizationError
 from src.core.schemas import ListCreativesResponse, UpdateMediaBuyRequest
 from src.core.schemas.creative import ListCreativesRequest
+from tests.factories import stamp_format_identity
 from tests.factories.principal import PrincipalFactory, plaintext_token_for
 from tests.utils.database_helpers import create_tenant_with_timestamps
 
@@ -74,14 +75,15 @@ class TestCrossPrincipalSecurity:
                 creative_id="creative_owned_by_a",
                 principal_id="advertiser_a",
                 name="Advertiser A Creative",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org/",
                 status="approved",
                 data={
                     "url": "https://example.com/creative_a.jpg",
                     "width": 300,
                     "height": 250,
                 },
+            )
+            stamp_format_identity(
+                creative_a, format_id="display_300x250", agent_url="https://creative.adcontextprotocol.org/"
             )
             session.add(creative_a)
 
@@ -231,10 +233,11 @@ class TestCrossPrincipalSecurity:
                 creative_id="creative_owned_by_c",
                 principal_id="advertiser_c",
                 name="Advertiser C Creative",
-                format="display_300x250",
-                agent_url="https://creative.adcontextprotocol.org/",
                 status="approved",
                 data={"url": "https://example.com/creative_c.jpg", "width": 300, "height": 250},
+            )
+            stamp_format_identity(
+                creative_c, format_id="display_300x250", agent_url="https://creative.adcontextprotocol.org/"
             )
             session.add(creative_c)
             session.commit()

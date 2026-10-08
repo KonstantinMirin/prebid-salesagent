@@ -55,6 +55,7 @@ from src.core.schemas import (
     UpdateMediaBuySuccess,
 )
 from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+from tests.factories.creative import stamp_format_identity
 from tests.factories.media_buy import (
     default_request_packages,
     package_pricing_fields,
@@ -743,9 +744,11 @@ class TestBuildAdapterAssetFormatFallback:
     def _creative(self):
         creative = MagicMock()
         creative.creative_id = "c_fb"
-        creative.format = "display_300x250"
-        creative.agent_url = "https://creative.adcontextprotocol.org"
         creative.name = "FB"
+        # The four stored identity columns, stamped through the production mapping. A
+        # MagicMock answers a Mock for anything unstubbed, and a Mock is not a state any of
+        # them can hold.
+        stamp_format_identity(creative, format_id="display_300x250")
         creative.data = {"url": "https://example.com/a.jpg", "width": 300, "height": 250}
         return creative
 
@@ -871,8 +874,7 @@ class TestCreateMediaBuyCreativeValidation:
         # Build a creative in DB that has no URL in its data
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_1"
-        mock_creative.format = "display_300x250"
-        mock_creative.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
         mock_creative.data = {}  # no media_url
 
         # Build a mock format spec (reference format, no output_format_ids)
@@ -911,8 +913,7 @@ class TestCreateMediaBuyCreativeValidation:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
-        mock_creative.format = "display_300x250"
-        mock_creative.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
         mock_creative.data = {}
         mock_creative.status = "error"
 
@@ -948,8 +949,7 @@ class TestCreateMediaBuyCreativeValidation:
 
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_rej"
-        mock_creative.format = "display_300x250"
-        mock_creative.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
         mock_creative.data = {}
         mock_creative.status = "rejected"
 
@@ -986,8 +986,7 @@ class TestCreateMediaBuyCreativeValidation:
         # Creative has format "video_640x480" but product only accepts "display_300x250"
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_mismatch"
-        mock_creative.format = "video_640x480"
-        mock_creative.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative, format_id="video_640x480", agent_url="http://agent.test")
         mock_creative.data = {"media_url": "http://example.com/video.mp4", "width": 640, "height": 480}
         mock_creative.status = "approved"
 
@@ -1044,8 +1043,7 @@ class TestCreateMediaBuyCreativeValidation:
         # Generative creative: has output_format_ids on its format spec
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_gen"
-        mock_creative.format = "generative_video"
-        mock_creative.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative, format_id="generative_video", agent_url="http://agent.test")
         mock_creative.data = {}  # No media_url -- but generative should skip validation
 
         mock_format_spec = MagicMock()
@@ -1076,14 +1074,12 @@ class TestCreateMediaBuyCreativeValidation:
         # Two reference creatives, both missing URL
         mock_creative_1 = MagicMock()
         mock_creative_1.creative_id = "c_1"
-        mock_creative_1.format = "display_300x250"
-        mock_creative_1.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative_1, format_id="display_300x250", agent_url="http://agent.test")
         mock_creative_1.data = {}
 
         mock_creative_2 = MagicMock()
         mock_creative_2.creative_id = "c_2"
-        mock_creative_2.format = "display_728x90"
-        mock_creative_2.agent_url = "http://agent.test"
+        stamp_format_identity(mock_creative_2, format_id="display_728x90", agent_url="http://agent.test")
         mock_creative_2.data = {}
 
         mock_format_spec = MagicMock()
@@ -2158,8 +2154,7 @@ class TestUpdateMediaBuyCreativeIds:
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_err"
         mock_creative.status = "error"
-        mock_creative.agent_url = "http://agent.test"
-        mock_creative.format = "display_300x250"
+        stamp_format_identity(mock_creative, format_id="display_300x250", agent_url="http://agent.test")
 
         mock_buy = MagicMock()
         mock_buy.media_buy_id = "mb_1"
@@ -2244,8 +2239,8 @@ class TestUpdateMediaBuyCreativeIds:
         mock_creative = MagicMock()
         mock_creative.creative_id = "c_wrong_fmt"
         mock_creative.status = "approved"
-        mock_creative.agent_url = "http://agent.test"
-        mock_creative.format = "video_640x480"  # mismatch with product
+        # mismatch with product
+        stamp_format_identity(mock_creative, format_id="video_640x480", agent_url="http://agent.test")
 
         mock_buy = MagicMock()
         mock_buy.media_buy_id = "mb_1"

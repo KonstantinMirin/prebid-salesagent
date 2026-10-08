@@ -13,9 +13,9 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_resolver import format_display, format_identity_or_none, product_format_identities
+from src.core.format_resolver import format_display, product_format_identities
 from src.core.logging_config import log_safe
-from src.core.schemas import SyncCreativeResult
+from src.core.schemas import CreativeFormatIdentity, SyncCreativeResult
 from src.core.tenant_context import TenantContext
 from src.core.tools.creatives._processing import _failed_sync_result
 
@@ -257,9 +257,11 @@ def _process_assignments(
                             # the media_buy_update assignment path cannot disagree about
                             # whether a creative's format is one the product declares.
                             supported_formats = product_format_identities(product.format_ids)
-                            creative_identity = format_identity_or_none(
-                                {"agent_url": db_creative_result.agent_url, "id": db_creative_result.format}
-                            )
+                            # The stored identity through the ONE row reader; ``legacy`` is
+                            # already the canonical pair this matches on, so the reference is
+                            # no longer rebuilt out of two columns here.
+                            stored_identity = CreativeFormatIdentity.from_row(db_creative_result)
+                            creative_identity = stored_identity.legacy
 
                             # A product with no usable format entries imposes no restriction.
                             is_supported = not supported_formats or creative_identity in supported_formats
@@ -267,9 +269,7 @@ def _process_assignments(
                             if not is_supported:
                                 # Creative format not supported by product
                                 creative_format_display = (
-                                    format_display(creative_identity)
-                                    if creative_identity
-                                    else str(db_creative_result.format)
+                                    format_display(creative_identity) if creative_identity else stored_identity.label
                                 )
                                 supported_formats_display = ", ".join(
                                     format_display(identity) for identity in sorted(supported_formats)

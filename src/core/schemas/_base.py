@@ -8,7 +8,7 @@ import copy
 import re
 import warnings
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -89,6 +89,7 @@ from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
 from adcp.types.canonical_creative import CanonicalFormatKind as _LibraryCanonicalFormatKind
+from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
 
 # The GENERATED format reference, reached at its generated path because adcp 9 gives it no
 # public name. ``adcp.types.FormatId`` is gone and both candidate public names --
@@ -517,55 +518,166 @@ class FormatOptionIdentity:
     publisher_domain: str | None
     format_option_id: str
 
+    @property
+    def document(self) -> dict[str, str | None]:
+        """This option ref as the ``core/format-option-ref.json`` document a column stores."""
+        return {"publisher_domain": self.publisher_domain, "format_option_id": self.format_option_id}
 
-@dataclass(frozen=True, slots=True, order=True)
-class CanonicalFormatIdentity:
-    """The canonical arm: a ``format_kind`` from the pinned vocabulary, plus optional option ref.
 
-    The sibling of :class:`FormatIdentity`, which is the deprecated arm. A creative carries
-    exactly one of the two -- ``core/creative-asset.json`` and the listed-creative item schema
-    both declare the pair as a oneOf whose arms forbid each other -- so the two types are kept
-    DISTINCT rather than merged into one shape with nullable halves. A function taking
-    :data:`CreativeFormatIdentity` must then handle both arms to type-check, which is what
-    stops the legacy arm being assumed.
+#: Every parameter ``core/format-id.json`` declares beyond the identity pair, read OFF the
+#: model. A hand-written list here is the defect that dropped ``pixel_ratio``: three of the
+#: four parameters were copied by name, so a creative synced with a pixel ratio came back as
+#: a different format than the buyer sent.
+_FORMAT_ID_PARAMETERS: frozenset[str] = frozenset(LibraryFormatId.model_fields) - {"agent_url", "id"}
+
+
+@dataclass(frozen=True, slots=True)
+class CreativeFormatIdentity:
+    """A creative's format identity: the canonical kind, plus the legacy assertion it retains.
+
+    ONE type, not a two-arm union, because the projection between the two identities runs one
+    way only. ``registries/v1-canonical-mapping.json`` is "authoritative for v1 -> v2
+    projection only" and a seller MUST NOT synthesize a v1 ``format_id`` by inverting a
+    structural match -- so the canonical kind is the only representation every layer can
+    share, and a union of co-equal arms made every consumer branch on which one arrived.
+
+    The members have different jobs and are not interchangeable:
+
+    * ``kind`` is THE identity -- what logic keys on and what is compared. ``None`` when the
+      creative carries a legacy reference that nothing projects: the sixth normative step is
+      to fail closed, and a kind guessed from an unmatched id would be a fabricated identity.
+    * ``option`` narrows the kind to one of the enclosing product's concrete options.
+    * ``legacy`` and ``legacy_parameters`` are the assertion's COMPARISON form, canonical per
+      ``core/format-id.json``'s MUST. A parameter is part of which format a reference names --
+      a parameterized template pinned to 300x250 is not the one pinned to 728x90 -- so the
+      parameters are compared alongside the pair.
+    * ``assertion`` is the reference VERBATIM, as the buyer sent it. ``compare=False``: it is
+      echoed to a legacy peer and never compared, because the same agent respelled (host
+      case, a default port, a trailing slash) is the same agent, and comparing raw spellings
+      reported a format change on every such respelling.
     """
 
-    kind: str
+    kind: str | None = None
     option: FormatOptionIdentity | None = None
+    legacy: FormatIdentity | None = None
+    legacy_parameters: tuple[tuple[str, Any], ...] = ()
+    assertion: LibraryFormatId | None = field(default=None, compare=False)
 
+    @classmethod
+    def of_legacy(cls, format_id: LibraryFormatId, *, kind: str | None = None) -> "CreativeFormatIdentity":
+        """The identity of a retained legacy assertion, with the kind it projects to if any.
 
-#: A creative's format identity: the deprecated named-format arm or the canonical arm.
-#:
-#: Exactly one, never both and never neither. ``format_id`` is "DEPRECATED in 3.2. Legacy
-#: named-format path retained for older 3.x peers"; ``format_kind`` is the "Canonical 3.2
-#: path". The state mirrors the input -- a creative synced by one arm is listed by that same
-#: arm -- so this is a carried identity rather than something resolved on the way through.
-CreativeFormatIdentity = FormatIdentity | CanonicalFormatIdentity
+        THE ONE place the three derived members are built from the one reference, so the
+        comparison form and the verbatim form cannot drift apart. The parameters come off
+        ``model_fields`` rather than a list of names.
 
+        ``getattr`` with NO default, deliberately: the names are read off this very model's
+        field set, so every one of them resolves, and a default would be guarding against a
+        name the derivation cannot produce. The dynamic read is irreducible -- the name is in
+        a variable -- but its fallback is not.
+        """
+        return cls(
+            kind=kind,
+            legacy=format_id_identity(format_id),
+            legacy_parameters=tuple(
+                sorted(
+                    (name, value) for name in _FORMAT_ID_PARAMETERS if (value := getattr(format_id, name)) is not None
+                )
+            ),
+            assertion=format_id,
+        )
 
-def _option_identity(option_ref: object) -> FormatOptionIdentity | None:
-    """The identity of a ``format_option_ref``, or ``None`` when the creative carries none."""
-    if option_ref is None:
-        return None
-    option_id = getattr(option_ref, "format_option_id", None)
-    if option_id is None:
-        return None
-    domain = getattr(option_ref, "publisher_domain", None)
-    return FormatOptionIdentity(str(domain) if domain is not None else None, str(option_id))
+    @classmethod
+    def from_row(cls, row: Any) -> "CreativeFormatIdentity":
+        """Build from the ``Creative`` ORM row, the one shape a stored identity is loaded from.
+
+        Every site that needs to know what format a stored creative conforms to comes through
+        here. Each used to reassemble a ``FormatId`` out of the partial columns itself, which
+        is how three of the four declared parameters came to be copied by name.
+
+        This IS the boundary, and it is the only one: a stored document is VALIDATED into its
+        model here, and past this point the declared types are the fact. So no consumer
+        re-checks what the columns already guarantee, and nothing downstream reaches for a
+        key with a default -- both documents are written by ``_identity_columns`` and read
+        back whole, exactly as they were written.
+        """
+        legacy_document = row.legacy_format_id
+        identity = cls.of_legacy(FormatId.model_validate(legacy_document)) if legacy_document is not None else cls()
+        option_document = row.format_option_ref
+        return replace(
+            identity,
+            kind=row.format_kind,
+            option=(
+                FormatOptionIdentity(option_document["publisher_domain"], option_document["format_option_id"])
+                if option_document is not None
+                else None
+            ),
+        )
+
+    @property
+    def legacy_key(self) -> str | None:
+        """The retained assertion's indexable comparison key, or ``None`` when there is none."""
+        return self.legacy.storage_key if self.legacy is not None else None
+
+    @property
+    def wire_format_kind(self) -> str | None:
+        """The ``format_kind`` a RESPONSE carries -- ``None`` whenever a retained assertion is.
+
+        THE ONE place the wire's single arm is chosen, because the wire and the internal model
+        disagree on purpose. Internally a legacy creative carries BOTH: the retained assertion
+        is what the buyer asserted, and ``kind`` is what it projects to, which is the identity
+        logic keys on. On the wire they are a oneOf whose arms forbid each other --
+        ``creative/list-creatives-response.json``'s item schema declares
+        ``required: [format_id], not: {required: [format_kind]}`` and the mirror of it -- and
+        the state mirrors the INPUT: a creative synced by ``format_id`` is listed by
+        ``format_id``.
+
+        Emitting the projected kind beside the assertion is the bug this property exists to
+        make unavailable. It is not a theoretical one: the response model refuses both-arms on
+        construction, so every listing of a legacy creative raised rather than answering, and
+        the BDD readback scenarios are what caught it.
+        """
+        return None if self.assertion is not None else self.kind
+
+    @property
+    def label(self) -> str:
+        """How this identity is spelled to a human -- an operator's UI, a log, a Slack message.
+
+        The kind when there is one, because that is the identity; otherwise the legacy id the
+        buyer asserted. Never a comparison: nothing parses this back.
+        """
+        if self.kind is not None:
+            return self.kind
+        return self.legacy.id if self.legacy is not None else ""
 
 
 def creative_format_identity(
-    creative: object,
+    creative: LibraryCreativeAsset,
     *,
+    kind: str | None = None,
     supported_kinds: Iterable[str] = _LibraryCanonicalFormatKind,
 ) -> CreativeFormatIdentity:
-    """Which format this creative names, by whichever arm it carries.
+    """Which format this creative names, read off whichever arm it carries.
 
     THE ONE reader of a creative's format identity. Every caller that needs to know what
     format a creative conforms to comes through here rather than reaching for ``format_id``,
     because reaching for ``format_id`` is what silently assumes the deprecated arm: a
     canonical creative has no ``format_id`` at all, and a seller that reads the attribute
     directly sees ``None`` and reports a missing field the buyer was never required to send.
+
+    Typed with the PINNED sync input, which declares all three members this reads, so they
+    are plain attribute access and mypy holds the callers to it. The parameter was ``object``
+    and the reads were ``getattr(..., None)``, which looked like three types needing a duck
+    and was not: the local DTO is a SUBCLASS of this one, and the listing response model --
+    the apparent third -- never reaches here at all, because the sync gate calls this on the
+    REQUEST while building the response separately and the listing path goes through
+    ``CreativeFormatIdentity.from_row``. The only caller the ducks were serving was a test
+    shim, which now builds a real DTO.
+
+    This reads the arms; it does not PROJECT. ``kind`` is supplied by the caller that holds
+    the projection -- ``src.core.format_resolver.creative_identity_of``, the one edge that
+    runs the normative v1 -> v2 order -- because the registry and the fetched format
+    declaration are protocol inputs a schema module has no business reaching for.
 
     ``supported_kinds`` is a PARAMETER for the reason the SDK's own
     ``is_canonical_format_kind`` makes it one: the set that matters is this seller's, not the
@@ -588,16 +700,33 @@ def creative_format_identity(
             DTO. The third is the seller's own check: ``format_kind`` is an open ``str`` on
             every SDK model, in both directions, and the SDK never validates it for you.
     """
-    format_id = getattr(creative, "format_id", None)
-    kind = getattr(creative, "format_kind", None)
-    if (format_id is None) == (kind is None):
+    format_id = creative.format_id
+    declared_kind = creative.format_kind
+    if (format_id is None) == (declared_kind is None):
         raise ValueError("a creative carries exactly one of format_id and format_kind")
     if format_id is not None:
-        return format_id_identity(format_id)
-    kind_value = str(kind)
+        # The legacy arm. Its projected kind, when the caller resolved one, is checked against
+        # the seller's vocabulary on the same terms a buyer-declared kind is: a projection
+        # landing outside what this seller supports is not an identity it can key on.
+        if kind is not None and not is_canonical_format_kind(kind, supported_kinds):
+            raise ValueError(f"format_kind {kind!r} is not one this seller supports")
+        return CreativeFormatIdentity.of_legacy(format_id, kind=kind)
+    kind_value = str(declared_kind)
     if not is_canonical_format_kind(kind_value, supported_kinds):
         raise ValueError(f"format_kind {kind_value!r} is not one this seller supports")
-    return CanonicalFormatIdentity(kind_value, _option_identity(getattr(creative, "format_option_ref", None)))
+    # Both arms of core/format-option-ref.json's oneOf declare format_option_id AND
+    # publisher_domain (measured: identical three-field sets, differing only in the `scope`
+    # discriminator), so the only variance is whether the creative carries a reference at
+    # all. The absent case is a branch; the members are plain reads.
+    option_ref = creative.format_option_ref
+    return CreativeFormatIdentity(
+        kind=kind_value,
+        option=(
+            FormatOptionIdentity(option_ref.publisher_domain, option_ref.format_option_id)
+            if option_ref is not None
+            else None
+        ),
+    )
 
 
 class WireSerializerMixin:
@@ -702,13 +831,13 @@ class WireSerializerMixin:
         """
         excluded = info.exclude or ()
         included = info.include
-        for field in self._always_include_null_fields():
-            if field in data or field in excluded:
+        for name in self._always_include_null_fields():
+            if name in data or name in excluded:
                 continue
-            if included is not None and field not in included:
+            if included is not None and name not in included:
                 continue
-            if getattr(self, field, None) is None:
-                data[field] = None
+            if getattr(self, name, None) is None:
+                data[name] = None
         return data
 
 
@@ -2056,6 +2185,27 @@ class TargetingInput(TargetingOverlayInput, _InternalTargetingDimensions):
 AnyTargeting = Targeting | TargetingInput
 
 
+def _adopt_sibling(value: Any, annotation: Any) -> Any:
+    """Re-validate *value* into the model its target field declares.
+
+    AdCP 3.2 splits several shapes into an input schema and a readback schema, and the
+    two are SIBLINGS -- identical field sets, neither a subclass of the other. So a
+    name-keyed echo hands the input arm to a field typed as the readback arm and pydantic
+    refuses it. Adopt by reading attributes, never by dumping in the caller.
+
+    Known limitation: only a directly-annotated model is adopted, not one inside a
+    ``list[...]``.
+    """
+    if not isinstance(value, BaseModel):
+        return value
+    for candidate in (annotation, *getattr(annotation, "__args__", ())):
+        if isinstance(candidate, type) and issubclass(candidate, BaseModel):
+            if isinstance(value, candidate):
+                return value
+            return candidate.model_validate(value, from_attributes=True)
+    return value
+
+
 class Budget(SalesAgentBaseModel):
     """Budget object with multi-currency support (AdCP spec compliant)."""
 
@@ -2460,8 +2610,24 @@ class Package(LibraryPackage):
         nothing, and a *decided* key that IS a shared buyer field raises rather than
         silently winning.
         """
+        # ORDERING CONSTRAINT for whoever builds effective-targeting resolution (GH #2345):
+        # the resolver MUST run BEFORE this adoption, not after.
+        #
+        # ``_adopt_sibling`` re-validates through ``from_attributes=True``, and the adopted
+        # model reports ALL of its fields as ``model_fields_set`` -- so once a value has been
+        # adopted, "the buyer omitted this dimension" and "the buyer explicitly nulled it"
+        # are indistinguishable. The WIRE is unaffected either way (both serialize absent
+        # under exclude_none, which is what core/targeting-input.json's "Null is a command
+        # and MUST NOT appear in ... package readback" and core/targeting.json's "MUST NOT
+        # contain null" both require), so nothing is wrong today.
+        #
+        # But the distinction is exactly what a resolver needs: core/package.json calls this
+        # field "Complete effective targeting accepted for this package, including targeting
+        # bound through configured product selection", so an OMITTED dimension should inherit
+        # the product's bound value while a NULLED one should stay cleared. A resolver placed
+        # after this line would have nothing left to read.
         echoed = {
-            name: getattr(request_package, name)
+            name: _adopt_sibling(getattr(request_package, name), cls.model_fields[name].annotation)
             for name in cls.model_fields.keys() & type(request_package).model_fields.keys()
             if name not in cls.SELLER_DECIDED
         }
@@ -2705,7 +2871,9 @@ class MediaPackage(SalesAgentBaseModel):
     # Accept library FormatId (not our extended FormatId) to avoid validation errors
     # when Product from library returns LibraryFormatId instances
     format_ids: list[LibraryFormatId]  # FormatId objects per AdCP spec
-    targeting_overlay: Targeting | None = None
+    # Either arm: this carrier is built from a REQUEST package, whose overlay is the
+    # input subclass, and read by adapters that only touch dimensions both declare.
+    targeting_overlay: AnyTargeting | None = None
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
@@ -2984,7 +3152,19 @@ class UpdateMediaBuyRequest(BuyerRequest, LibraryUpdateMediaBuyRequest):
         This validator ensures all datetime fields have timezone info.
         The literal string 'asap' is also valid per AdCP v1.7.0.
         """
-        if self.start_time and self.start_time != "asap" and self.start_time.tzinfo is None:
+        # ``isinstance`` rather than ``!= "asap"``, which is how the sibling validator on
+        # CreateMediaBuyRequest already spells it. Behaviour-neutral -- a ``datetime`` is
+        # never equal to the string, so the literal test is subsumed -- and it narrows the
+        # union for the type checker, which could not rule the ``Literal`` out of
+        # ``datetime | Literal['asap'] | None`` on a ``!=`` comparison.
+        #
+        # The check STAYS. On this class ``start_time`` and ``end_time`` are plain
+        # ``datetime``, not ``AwareDatetime`` as they are on CreateMediaBuyRequest, so
+        # pydantic accepts a naive value at the field level and this validator is the only
+        # thing that refuses one (measured: the refusal a naive datetime gets is this
+        # function's own message). Deleting it as "duplicating the declared type" would make
+        # update_media_buy accept naive flight times.
+        if isinstance(self.start_time, datetime) and self.start_time.tzinfo is None:
             raise ValueError("start_time must be timezone-aware (ISO 8601 with timezone) or 'asap'")
         if self.end_time and self.end_time.tzinfo is None:
             raise ValueError("end_time must be timezone-aware (ISO 8601 with timezone)")

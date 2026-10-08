@@ -16,6 +16,7 @@ from adcp.webhooks import GeneratedTaskStatus
 
 from src.core.database.repositories.creative import CreativeRepository
 from src.core.exceptions import AdCPValidationError
+from src.core.schemas import CreativeFormatIdentity
 from src.core.schemas.creative import SyncCreativeResult, SyncCreativesResponse
 from src.core.validation_helpers import run_async_in_sync_context
 from src.core.webhooks.delivery import WebhookTaskContext
@@ -358,7 +359,11 @@ def review_creatives(tenant_id, **kwargs):
                 {
                     "creative_id": creative.creative_id,
                     "name": creative.name,
-                    "format": creative.format,
+                    # The identity as an operator reads it: the canonical kind when the row
+                    # has one, else the legacy id the buyer asserted. Through the ONE row
+                    # reader, so this page cannot disagree with the buyer-facing one about
+                    # what format a creative is.
+                    "format": CreativeFormatIdentity.from_row(creative).label,
                     "status": creative.status,
                     "principal_name": principal_name,
                     "principal_id": creative.principal_id,
@@ -569,20 +574,21 @@ def approve_creative(tenant_id, creative_id, **kwargs):
             webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
             # Collect Slack data for post-commit
+            format_label = CreativeFormatIdentity.from_row(creative).label
             tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.slack_webhook_url:
                 principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
-                    "message": f"\u2705 Creative approved: {creative.name} ({creative.format}) from {principal_name}",
+                    "message": f"\u2705 Creative approved: {creative.name} ({format_label}) from {principal_name}",
                 }
 
             # Collect audit data for post-commit
             audit_data = {
                 "creative_id": creative_id,
                 "creative_name": creative.name,
-                "format": creative.format,
+                "format": format_label,
                 "principal_id": creative.principal_id,
                 "human_override": is_override,
             }
@@ -756,20 +762,21 @@ def reject_creative(tenant_id, creative_id, **kwargs):
             webhook_data = {"creative_id": creative_id, "tenant_id": tenant_id}
 
             # Collect Slack data for post-commit
+            format_label = CreativeFormatIdentity.from_row(creative).label
             tenant = uow.tenant_config.get_tenant()
             if tenant and tenant.slack_webhook_url:
                 principal_name = uow.creatives.get_principal_name(creative.principal_id)
 
                 slack_data = {
                     "slack_webhook_url": tenant.slack_webhook_url,
-                    "message": f"\u274c Creative rejected: {creative.name} ({creative.format}) from {principal_name}\nReason: {rejection_reason}",
+                    "message": f"\u274c Creative rejected: {creative.name} ({format_label}) from {principal_name}\nReason: {rejection_reason}",
                 }
 
             # Collect audit data for post-commit
             audit_data = {
                 "creative_id": creative_id,
                 "creative_name": creative.name,
-                "format": creative.format,
+                "format": format_label,
                 "principal_id": creative.principal_id,
                 "rejection_reason": rejection_reason,
                 "human_override": is_override,
@@ -854,7 +861,7 @@ def _ai_review_creative(
                 }
 
                 uow.creatives.update_data(creative, creative.data)
-                creative_format_str = str(creative.format)
+                creative_format_str = CreativeFormatIdentity.from_row(creative).label
 
                 # Collect Slack notification data for post-commit
                 if slack_webhook_url and principal_name:
@@ -1167,7 +1174,7 @@ def _ai_review_creative_impl_inner(
                         agent=agent,
                         review_criteria=tenant.creative_review_criteria,
                         creative_name=creative.name,
-                        creative_format=creative.format,
+                        creative_format=CreativeFormatIdentity.from_row(creative).label,
                         promoted_offering=promoted_offering,
                         creative_data=creative.data,
                     )

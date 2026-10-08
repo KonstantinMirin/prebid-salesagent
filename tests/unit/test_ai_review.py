@@ -41,7 +41,16 @@ class TestAIReviewCreative:
         creative.creative_id = "test_creative_123"
         creative.tenant_id = "test_tenant"
         creative.name = "Test Banner Ad"
-        creative.format = "display_300x250"
+        # The four identity columns as the ORM hands them back: a stored assertion is a JSON
+        # document, the kind is a string, and both may be NULL. A Mock attribute left
+        # unstubbed answers a Mock, which is not a state any of these columns can hold.
+        creative.format_kind = "image"
+        creative.format_option_ref = None
+        creative.legacy_format_id = {
+            "agent_url": "https://creative.adcontextprotocol.org",
+            "id": "display_300x250",
+        }
+        creative.legacy_format_key = "https://creative.adcontextprotocol.org/\x1fdisplay_300x250"
         creative.data = {"url": "https://example.com/banner.jpg", "tags": ["retail", "fashion"]}
         creative.status = "pending"
         return creative
