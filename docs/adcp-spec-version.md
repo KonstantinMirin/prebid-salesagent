@@ -1,9 +1,17 @@
 # AdCP Spec Version
 
-Prebid Sales Agent targets **AdCP spec version 3.2.1** via the `adcp==9.0.0b1`
-Python SDK (pinned exactly in `pyproject.toml`). That is upstream's
-`v9.0.0-beta.1` release from PyPI; the fork revision previously consumed through
-`[tool.uv.sources]` is gone, and the override with it.
+Prebid Sales Agent targets **AdCP spec version 3.2.1** through the `adcp` Python
+SDK, pinned exactly in `pyproject.toml`.
+
+**That sentence is the only place in this repository where the spec version is
+spelled, and the `adcp==` line in `pyproject.toml` is the only place the SDK
+version is spelled.** Nothing else restates either — not CLAUDE.md, not
+README.md, not this document's later sections. Both halves of that are enforced:
+`pinned_version()` (below) raises if the sentence above disagrees with the
+installed wheel, and `tests/unit/test_no_stale_adcp_citations.py` fails on any
+other document that states a version where a pointer belongs. The reason is
+measured, not stylistic — four copies of these two numbers produced a day of
+guard failures in which the prose was right and the guard was comparing wrongly.
 
 > **The rest of this document still describes the 3.1.1 target.** The SDK bump
 > moved the pin; re-vendoring the pinned schema tree and the trust-root fixtures
@@ -15,8 +23,12 @@ Python SDK (pinned exactly in `pyproject.toml`). That is upstream's
 
 ```bash
 uv run python -c "import adcp; print(adcp.get_adcp_spec_version(), adcp.get_adcp_sdk_version())"
-# 3.2.1 9.0.0
+# <spec version> <sdk version>
 ```
+
+No expected output is written above, deliberately: a pasted sample is a fourth
+copy of the pin, and the one that was here printed an SDK version the current
+pin does not report.
 
 The same command tells you what spec version any other SDK release targets —
 use it instead of looking for a version table.
@@ -24,10 +36,13 @@ use it instead of looking for a version table.
 ## CI guard
 
 `tests/unit/test_adcp_spec_version.py` asserts the installed SDK targets
-`3.1.1`. A pin shift fails that test, forcing a deliberate update across
-`pyproject.toml`, the test's `EXPECTED_SPEC_VERSION` constant, and this
-document. That guard also reads this document and CLAUDE.md, so prose here
-that presents a version other than the pin as **the** pin fails it too.
+`EXPECTED_SPEC_VERSION` (`tests/helpers/adcp_pin.py`) — no version is spelled in
+the guard itself. A pin shift fails that test, forcing a deliberate update across
+`pyproject.toml`, that constant, and this document. The guard also reads this
+document, so prose here that presents a version other than the pin as **the**
+pin fails it too. It no longer reads CLAUDE.md: CLAUDE.md states no version to
+check, and `tests/unit/test_no_stale_adcp_citations.py` is what keeps it that
+way.
 
 ## Where the spec lives
 
@@ -60,7 +75,7 @@ job downloads), and only falls back to a personal `~/projects/adcp` clone.
 
 ## `status` vs `media_buy_status` on media-buy responses
 
-The SDK **pin** (`adcp==9.0.0b1`, spec **3.2.1**) fixes the request/response
+The SDK pin in `pyproject.toml` fixes the request/response
 *type shapes* we build against. It does **not** always fix the graded
 *behavior*. One field is worth spelling out: the `media_buy_status` dual-emit
 on create-/update-media-buy responses.

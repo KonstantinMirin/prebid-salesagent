@@ -371,9 +371,15 @@ def test_guard_catches_a_local_spec_version_regex():
 
 
 def test_guard_ignores_prose_mentioning_the_spec_version():
-    """Negative meta-test: plain markdown prose (no regex escaping) is fine."""
+    """Negative meta-test: plain markdown prose (no regex escaping) is fine.
+
+    The version is a placeholder rather than the pin: the anchor this exercises is
+    the escaped ``\\*\\*`` spelling, which the digits play no part in, and spelling
+    the real pin here made this fixture a copy of it —
+    ``tests/unit/test_no_stale_adcp_citations.py`` refuses those.
+    """
     benign = """
-DOC = "Prebid Sales Agent targets **AdCP spec version 3.2.1** via the adcp SDK."
+DOC = "Prebid Sales Agent targets **AdCP spec version <X>** via the adcp SDK."
 """
     assert find_spec_version_regex_literals(ast.parse(benign)) == []
 

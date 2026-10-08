@@ -55,35 +55,48 @@ slash separates them with no allowlist at all, which matters because an
 allowlist may only shrink and this one would need entries for prose that is
 doing the right thing.
 
-The wrong pin claim (#1567)
----------------------------
+The restated pin (#1567)
+------------------------
 Third marker, same disease one level up: a file that states IN THE PRESENT
-TENSE which AdCP spec version / ``adcp`` SDK release this project targets,
-where that statement does not match the actual pin. The pin has exactly two
-sources — ``docs/adcp-spec-version.md`` (spec version, read through
-``scripts.audit.storyboard_spec.pinned_version``) and the ``adcp==`` entry in
-``pyproject.toml`` (SDK). Every other file merely repeats them, and repetition
-rots: after the #1567 bump to ``adcp==6.6.0`` / spec 3.1.1, CLAUDE.md and
-README.md still told every reader the project targets 3.1.0-beta.3 via
-``adcp==5.7.0`` — i.e. the document that defines the spec-grounding gate named
-the wrong authority.
+TENSE which AdCP spec version / ``adcp`` SDK release this project targets. This
+marker used to grade such a statement against the real pin, and passed as long
+as the copies agreed. **It now refuses the copy itself.**
+
+The pin has exactly two homes. The ``adcp==`` entry in ``pyproject.toml`` is the
+SDK version; ``adcp.get_adcp_spec_version()`` — reached through
+``scripts.audit.storyboard_spec.pinned_version`` — is the spec version, read off
+the wheel the code actually runs against. Exactly ONE document is allowed to
+spell the spec version in prose, :data:`_SPEC_CLAIM_OWNER`, because documenting
+the pin is that document's job; its sentence is graded by ``pinned_version()``,
+which RAISES when it disagrees with the installed wheel. No document at all
+restates the SDK version, because nothing can grade such a copy cheaply: the pin
+can carry a PEP 440 local segment (a fork wheel pins ``adcp==9.0.0b1+prs1435.1415``),
+a local segment is by definition not part of the public version, and so
+``adcp==9.0.0b1`` in prose is a TRUE statement that a raw comparison calls stale.
+
+Keeping the copies and grading them was tried and measured. It cost four unit
+failures in one night in which the prose was right and the guard was comparing
+wrongly; a normalization layer on one side of the comparison (and a paragraph
+explaining why only one side); two agents misreading the pin out of a CLAUDE.md
+quoted from a different worktree; and a guard whose own regex has a one-word
+hole (``via the adcp==`` requires the article, so ``via adcp==X`` is exempt in
+both directions — #2349). Refusing the copy removes the comparison, and with it
+every way the comparison can be wrong. The hole survives the inversion, because
+it is in the pattern rather than in the verdict, and #2349 still owns it.
 
 The marker is deliberately the PIN CLAIM, not the digits. A bare version
 matcher would fail on dated review records (docs/releases/2.0.0.md's "Spec
 target — adcp==5.7.0" release note), on past-tense history (adr-001's "The
 original setup used adcp==3.2.0"), and on era references ("the 3.1.0-beta.3
 era"), all of which are legitimately historical and must stay green. Only a
-sentence that asserts what this project targets *now* is graded, and it is
-graded against the resolved pin — never against a literal in this file.
+sentence that asserts what this project targets *now* is refused, and no version
+is ever spelled in this file.
 """
 
 import re
-import tomllib
 from collections.abc import Iterator
 from pathlib import Path
 from typing import NamedTuple
-
-from packaging.version import Version
 
 from scripts.audit.storyboard_spec import pinned_version
 from tests.unit._architecture_helpers import REPO_ROOT, iter_git_tracked_files
@@ -186,7 +199,7 @@ def test_the_dangling_root_marker_still_matches_a_citation():
 
 
 # ---------------------------------------------------------------------------
-# Current-tense pin claims must equal the actual pin
+# Current-tense pin claims must not exist — the pin is pointed at, not restated
 # ---------------------------------------------------------------------------
 
 # A version token: 3.1.1, 6.6.0, 3.1.0-beta.3, …
@@ -257,46 +270,37 @@ def iter_pin_claims(text: str) -> Iterator[PinClaim]:
             yield PinClaim(lineno, name, kind, match.group(1), source_line)
 
 
+#: The ONE document allowed to spell the spec version in prose, because
+#: documenting the pin is its job and every other document links to it.
+#:
+#: Not a violation allowlist — a single named owner, and the claim it carries is
+#: graded rather than exempted: :func:`pinned_version` parses this same sentence
+#: and raises when it disagrees with ``adcp.get_adcp_spec_version()``. The SDK
+#: version has no prose owner at all; ``pyproject.toml`` is its only home.
+_SPEC_CLAIM_OWNER = Path("docs/adcp-spec-version.md")
+
+
 def pinned_spec_version() -> str:
-    """The AdCP spec version this repo pins, read from docs/adcp-spec-version.md."""
+    """The AdCP spec version this repo pins, off the installed SDK.
+
+    Raises if :data:`_SPEC_CLAIM_OWNER` documents a different one — that check
+    lives in ``pinned_version()`` and is the owner document's grader.
+    """
     return pinned_version(REPO_ROOT)
 
 
-def pinned_sdk_version() -> str:
-    """The PUBLIC ``adcp==`` SDK version this repo pins, read from pyproject.toml.
-
-    Normalized through PEP 440 rather than compared raw, because the pin can carry a
-    LOCAL version identifier: a fork wheel pins ``adcp==9.0.0b1+prs1435.1415``, and a
-    local segment is by definition not part of the public version. ``adcp==9.0.0b1``
-    in CLAUDE.md, README.md and docs/adcp-spec-version.md is therefore a TRUE statement
-    about the release this repo targets, and the raw comparison called all three stale.
-    Fixing it the other way — writing the local segment into those three files — churns
-    them on every rebuild of the fork wheel to say nothing new.
-
-    ``Version(...).public`` parses; it is not ``split("+")[0]``, which works until a
-    version carries something the hand-rolled split does not expect.
-
-    NORMALIZING ONLY THIS SIDE IS LOAD-BEARING. The claim side stays raw, because a
-    local segment absorbs almost anything appended to it:
-    ``Version("9.0.0b1+prs1435.1415-notthepin.1").public`` is ``"9.0.0b1"``, so
-    normalizing both sides would make
-    :func:`test_detector_flags_a_current_tense_claim_with_the_wrong_version` stop
-    detecting its own deliberately-wrong version and the guard would refuse nothing.
-    Probed in both directions at the commit that introduced this.
-    """
-    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    pins = [dep for dep in pyproject["project"]["dependencies"] if dep.replace(" ", "").startswith("adcp==")]
-    assert len(pins) == 1, f"expected exactly one adcp== pin in pyproject.toml, got {pins}"
-    return Version(pins[0].replace(" ", "").split("==", 1)[1]).public
-
-
-def _expected_for(kind: str) -> str:
-    return pinned_spec_version() if kind == _SPEC else pinned_sdk_version()
-
-
-def _wrong_pin_claims(text: str) -> list[PinClaim]:
-    """Claims in *text* whose version does not equal the pin they assert."""
-    return [claim for claim in iter_pin_claims(text) if claim.version != _expected_for(claim.kind)]
+def _offending_pin_claims(rel: Path, text: str) -> list[str]:
+    """Pin claims in *text* that restate a version where a pointer belongs."""
+    offenders = []
+    for claim in iter_pin_claims(text):
+        if claim.kind == _SDK:
+            reason = "restates the SDK version; pyproject.toml's `adcp==` line is its only home"
+        elif rel != _SPEC_CLAIM_OWNER:
+            reason = f"restates the spec version; only {_SPEC_CLAIM_OWNER} states it, everything else links to it"
+        else:
+            continue  # the owner's own claim, graded by pinned_version() raising
+        offenders.append(f"{rel}:{claim.lineno}: {reason} [{claim.pattern}] {claim.line}")
+    return offenders
 
 
 def _pin_claim_files():
@@ -314,65 +318,46 @@ def _pin_claim_files():
         yield path, rel
 
 
-def test_current_tense_pin_claims_match_the_actual_pin():
-    """No file may assert a spec/SDK target that differs from the resolved pin."""
-    expected_spec = pinned_spec_version()
-    expected_sdk = pinned_sdk_version()
-
-    claims_seen = 0
+def test_no_document_restates_the_pin():
+    """The pin is pointed at, never copied — one owner for the spec version, none for the SDK."""
     offenders: list[str] = []
+    owner_claims: list[PinClaim] = []
     for path, rel in _pin_claim_files():
         try:
             text = path.read_text(encoding="utf-8")
         except (UnicodeDecodeError, OSError):
             continue
-        for claim in iter_pin_claims(text):
-            claims_seen += 1
-            expected = _expected_for(claim.kind)
-            if claim.version != expected:
-                offenders.append(
-                    f"{rel}:{claim.lineno}: claims {claim.kind} {claim.version}, pin is {expected} "
-                    f"[{claim.pattern}] {claim.line}"
-                )
+        offenders.extend(_offending_pin_claims(rel, text))
+        if rel == _SPEC_CLAIM_OWNER:
+            owner_claims = [claim for claim in iter_pin_claims(text) if claim.kind == _SPEC]
 
-    assert claims_seen, "non-vacuity: no pin claims matched at all — the claim patterns have rotted"
+    # Non-vacuity, and it is the real obligation rather than a count: the owner
+    # document must still CARRY the sentence, both because it is the one
+    # documented spelling of the spec version and because pinned_version() and
+    # .claude/skills/prime/SKILL.md both read it. A total-claim counter would be
+    # satisfied by any claim anywhere, including one this test wants refused.
+    assert owner_claims, (
+        f"non-vacuity: {_SPEC_CLAIM_OWNER} no longer states the spec version, so either the claim "
+        "patterns have rotted or the one documented spelling of the pin was deleted. Restore the "
+        "'targets **AdCP spec version <X>**' sentence — pinned_version() parses it and "
+        ".claude/skills/prime/SKILL.md greps for it."
+    )
+    # Calling this grades the owner's claim: it raises when the sentence
+    # disagrees with the installed wheel.
+    expected_spec = pinned_spec_version()
+
     assert not offenders, (
-        f"Files assert an AdCP target that is not the pin (spec {expected_spec}, adcp=={expected_sdk}).\n"
-        "The pin has two sources — docs/adcp-spec-version.md and pyproject.toml; every other\n"
-        "file repeats them and must be corrected, not re-pinned:\n" + "\n".join(offenders)
+        f"A document restates the pin instead of pointing at it (spec {expected_spec}).\n"
+        "The pin has two homes and prose is not one of them: pyproject.toml's `adcp==` line for\n"
+        f"the SDK, and adcp.get_adcp_spec_version() for the spec — spelled once, in\n"
+        f"{_SPEC_CLAIM_OWNER}. Replace the version with a link to that document, or with the\n"
+        "command that resolves it; do not re-pin the copy:\n" + "\n".join(offenders)
     )
 
 
-def _not_the_pin(version: str) -> str:
-    """A version that is definitely not *version* — derived, never a literal pin."""
-    return f"{version}-notthepin.1"
-
-
-def test_detector_flags_a_current_tense_claim_with_the_wrong_version():
-    """Positive meta-case: each claim form is caught when it names a non-pin version."""
-    wrong_spec = _not_the_pin(pinned_spec_version())
-    wrong_sdk = _not_the_pin(pinned_sdk_version())
-    text = "\n".join(
-        [
-            f"This project targets AdCP spec **{wrong_spec}** via the `adcp=={wrong_sdk}` Python SDK.",
-            "> A pre-1.0 implementation of a pre-release protocol",
-            f"> (AdCP {wrong_spec}), under active development.",
-        ]
-    )
-
-    offenders = _wrong_pin_claims(text)
-
-    assert [(c.lineno, c.pattern, c.version) for c in offenders] == [
-        (1, "targets-adcp-spec", wrong_spec),
-        (3, "implementation-of-adcp", wrong_spec),
-        (1, "via-the-adcp-sdk", wrong_sdk),
-    ]
-
-
-def test_detector_ignores_historical_references_and_correct_claims():
-    """Negative meta-case: past-tense history stays green; a correct claim is seen but not flagged."""
+def test_detector_sees_every_claim_form_and_ignores_history():
+    """Meta-case for the detector: the three claim forms match, historical prose does not."""
     spec = pinned_spec_version()
-    sdk = pinned_sdk_version()
     text = "\n".join(
         [
             # Historical / dated records — no present-tense claim connective.
@@ -380,15 +365,42 @@ def test_detector_ignores_historical_references_and_correct_claims():
             "- **Spec target** — `adcp==5.7.0`, AdCP spec `3.1.0-beta.3`, pinned in `pyproject.toml`.",
             "adcontextprotocol/adcp@04f59d2d5 / tag v3.1-04f59d2d5, the 3.1.0-beta.3 era",
             "Pins `adcp==5.7.0` (was 4.3.0); `EXPECTED_SPEC_VERSION` -> `3.1.0-beta.3`.",
-            # Correct present-tense claims — detected, and correct.
+            # Present-tense claims, naming the ACTUAL pin — detected all the same.
             f"Prebid Sales Agent targets **AdCP spec version {spec}**.",
-            f"This project targets AdCP spec **{spec}** via the `adcp=={sdk}` Python SDK.",
+            f"This project targets AdCP spec **{spec}** via the `adcp==9.9.9b9` Python SDK.",
+            "> A pre-1.0 implementation of a pre-release protocol",
+            f"> (AdCP {spec}), under active development.",
         ]
     )
 
     claims = list(iter_pin_claims(text))
 
-    assert [c.lineno for c in claims] == [5, 6, 6], (
-        f"detector must see the two present-tense claims (and only those): {[(c.lineno, c.pattern) for c in claims]}"
+    # The SDK token is deliberately not the pin: under this guard ANY version in
+    # that position is refused, so which one it names is immaterial — and writing
+    # the real one here would reintroduce the local-segment comparison the
+    # inversion deleted.
+    assert [(c.lineno, c.pattern) for c in claims] == [
+        (5, "targets-adcp-spec"),
+        (6, "targets-adcp-spec"),
+        (8, "implementation-of-adcp"),
+        (6, "via-the-adcp-sdk"),
+    ], f"detector must see the four present-tense claims and only those: {[(c.lineno, c.pattern) for c in claims]}"
+
+
+def test_a_restated_pin_is_an_offense_even_when_it_names_the_right_version():
+    """The inversion itself: a CORRECT copy is refused, and only the owner may spell the spec version."""
+    spec = pinned_spec_version()
+    correct_sentence = f"This project targets AdCP spec **{spec}** via the `adcp==9.9.9b9` Python SDK."
+
+    elsewhere = _offending_pin_claims(Path("CLAUDE.md"), correct_sentence)
+    assert [o.split(": ", 1)[1].split(";")[0] for o in elsewhere] == [
+        "restates the spec version",
+        "restates the SDK version",
+    ], f"a correct copy outside the owner must be refused on both counts: {elsewhere}"
+
+    # In the owner document the spec claim is the documented one and passes; the
+    # SDK half is still refused there, because no document states it.
+    in_owner = _offending_pin_claims(_SPEC_CLAIM_OWNER, correct_sentence)
+    assert [o.split(": ", 1)[1].split(";")[0] for o in in_owner] == ["restates the SDK version"], (
+        f"the owner may state the spec version and no document may state the SDK version: {in_owner}"
     )
-    assert _wrong_pin_claims(text) == []

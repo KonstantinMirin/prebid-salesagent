@@ -11,7 +11,9 @@ the tool once, for every transport. A response becomes a body in one function. A
 code and supplies facts. Because there is one of each, a rule holds everywhere by
 construction, and needs no check policing agreement between copies.
 
-The codebase targets AdCP 3.2.1 through the `adcp` SDK. The companion pages are
+The codebase targets a pinned AdCP spec version through the `adcp` SDK; the pin
+lives in `pyproject.toml` and [docs/adcp-spec-version.md](../adcp-spec-version.md)
+names the spec version it targets. The companion pages are
 [Architecture guide](architecture.md), [Request lifecycle](request-lifecycle.md),
 [Patterns reference](patterns-reference.md), [Structural guards](structural-guards.md), and
 [Error architecture](../design/error-architecture.md).

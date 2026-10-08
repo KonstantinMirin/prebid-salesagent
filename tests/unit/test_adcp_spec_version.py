@@ -1,11 +1,9 @@
 """CI guard: assert the adcp SDK pin targets the expected AdCP spec version."""
 
 import re
-import tomllib
 from pathlib import Path
 
 import adcp
-from packaging.version import Version
 
 from scripts.audit.storyboard_spec import pinned_version
 
@@ -20,12 +18,14 @@ from tests.helpers.adcp_pin import EXPECTED_SPEC_VERSION
 
 _REPO = Path(__file__).resolve().parents[2]
 
-# CLAUDE.md's "AdCP Spec Version" section states both the spec version and the SDK
-# pin in one sentence. Capture both so a bump that misses this file is caught.
-_CLAUDE_MD_TARGETS = re.compile(
-    r"This project targets AdCP spec \*\*(?P<spec>[^*]+)\*\* "
-    r"via the `adcp==(?P<sdk>[^`]+)` Python SDK\."
-)
+# CLAUDE.md used to state the spec version and the SDK pin in one sentence, and a
+# guard here held that sentence to both authorities. The sentence is gone: CLAUDE.md
+# now points at pyproject.toml and adcp.get_adcp_spec_version() instead of copying
+# them, so there is no claim left to hold. The obligation did not move here, it
+# INVERTED and moved up a level — tests/unit/test_no_stale_adcp_citations.py now
+# refuses such a sentence in CLAUDE.md and in every other tracked document, which is
+# strictly stronger than requiring it to agree. Nothing grades CLAUDE.md's version
+# prose from this module any more because CLAUDE.md has none.
 
 
 def test_adcp_spec_version_matches_pin() -> None:
@@ -263,29 +263,12 @@ def test_published_timestamps_render_one_spelling() -> None:
     assert rfc3339(moment) == expected
 
 
-# --- Upstream (PR #1802) prose guards: the pin as it is DOCUMENTED. ---------
-# The guards above pin the SDK and the artefacts vendored beside it; the ones
-# below pin the two documents that paraphrase the same pin for humans and for
-# tests/unit/test_no_stale_adcp_citations.py, which machine-reads
-# docs/adcp-spec-version.md. Same subject, different authority.
-
-
-def _pyproject_adcp_pin() -> str:
-    """Return the PUBLIC `adcp==` version pinned in pyproject.toml.
-
-    Normalized through PEP 440 for the reason
-    ``tests/unit/test_no_stale_adcp_citations.py::pinned_sdk_version`` gives at
-    length: a fork wheel pins ``adcp==9.0.0b1+prs1435.1415``, a local version
-    identifier is not part of the public version, and so CLAUDE.md's
-    ``adcp==9.0.0b1`` is a true statement about the release this repo targets.
-    Comparing raw made this guard demand the local segment in prose that is
-    rebuilt-and-rewritten every time the wheel is.
-    """
-    with (_REPO / "pyproject.toml").open("rb") as fh:
-        deps = tomllib.load(fh)["project"]["dependencies"]
-    pins = [d.split("==", 1)[1].strip() for d in deps if d.replace(" ", "").startswith("adcp==")]
-    assert len(pins) == 1, f"expected exactly one exact adcp pin in pyproject.toml, found {pins}"
-    return Version(pins[0]).public
+# --- Upstream (PR #1802) prose guard: the pin as it is DOCUMENTED. ----------
+# The guards above pin the SDK and the artefacts vendored beside it; the one
+# below pins docs/adcp-spec-version.md, the single document that states the pin
+# for humans and the one tests/unit/test_no_stale_adcp_citations.py machine-reads.
+# Same subject, different authority. It was two documents until CLAUDE.md stopped
+# restating the pin.
 
 
 # Prose calling a version the CURRENT/pinned one, in the shapes no primitive
@@ -296,35 +279,6 @@ def _pyproject_adcp_pin() -> str:
 # past-tense prose about an older version ("Then (3.1.0-beta.3): ...") stay
 # legal, because naming history IS that prose's job.
 _PIN_CLAIM = re.compile(r"(\*\*pin\*\*\s*\([^)]+\))|(\*\*Now \(pinned [^)]+\):?\*\*)")
-
-
-def test_claude_md_states_the_pinned_versions() -> None:
-    """Verify CLAUDE.md's stated spec version and SDK pin match reality.
-
-    CLAUDE.md is what every session reads first, so a stale version line there
-    silently misdirects work for the whole epic that follows it. This pins the
-    prose to the two authorities it paraphrases: EXPECTED_SPEC_VERSION above
-    (itself tied to the installed SDK by the test above) and the `adcp==` pin
-    in pyproject.toml. Bumping the SDK means updating CLAUDE.md in the same
-    change -- see docs/adcp-spec-version.md.
-    """
-    claude_md = (_REPO / "CLAUDE.md").read_text(encoding="utf-8")
-    match = _CLAUDE_MD_TARGETS.search(claude_md)
-    assert match is not None, (
-        "CLAUDE.md no longer contains the 'This project targets AdCP spec "
-        "**<spec>** via the `adcp==<sdk>` Python SDK.' sentence this guard "
-        "pins. Restore the sentence or update _CLAUDE_MD_TARGETS."
-    )
-
-    assert match.group("spec") == EXPECTED_SPEC_VERSION, (
-        f"CLAUDE.md states AdCP spec {match.group('spec')}, but this codebase "
-        f"targets {EXPECTED_SPEC_VERSION}. Update CLAUDE.md."
-    )
-
-    expected_sdk = _pyproject_adcp_pin()
-    assert match.group("sdk") == expected_sdk, (
-        f"CLAUDE.md states adcp=={match.group('sdk')}, but pyproject.toml pins adcp=={expected_sdk}. Update CLAUDE.md."
-    )
 
 
 def test_spec_version_doc_presents_only_the_pinned_version_as_current() -> None:

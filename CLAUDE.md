@@ -94,13 +94,27 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP spec version
 
-This project targets AdCP spec **3.2.1** via the `adcp==9.0.0b1` Python SDK.
-That is upstream's `v9.0.0-beta.1` release from PyPI, not a local build: the fork
-revision this previously consumed through `[tool.uv.sources]` is gone, and the
-override with it. See
-[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
-and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
-fails on pin drift.
+This project targets a pinned AdCP spec version through the `adcp` Python SDK.
+**Both numbers are deliberately absent from this file**, and from every other
+document outside the one named below — a version restated in prose rots, and
+restating it has cost this repo a day of false guard failures more than once.
+Resolve the pin instead of reading it:
+
+```bash
+grep -n 'adcp==' pyproject.toml   # the SDK pin, the only place it is written
+uv run python -c "import adcp; print(adcp.get_adcp_spec_version(), adcp.get_adcp_sdk_version())"
+```
+
+The second command is the spec version's authority: it is what the wheel this
+repo actually runs against reports for itself, so it cannot disagree with the
+code under audit. In Python, read it through
+`scripts.audit.storyboard_spec.pinned_version(repo)` rather than calling the SDK
+directly. See
+[docs/adcp-spec-version.md](docs/adcp-spec-version.md) — the one document that
+spells the spec version, and the bump procedure for everything that moves with
+it. The CI guard at `tests/unit/test_adcp_spec_version.py` fails on pin drift,
+and `tests/unit/test_no_stale_adcp_citations.py` fails on a document that
+restates the pin instead of pointing at it.
 
 ### Spec-grounding gate (MANDATORY before implementing protocol behavior)
 
