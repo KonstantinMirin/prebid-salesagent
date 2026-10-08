@@ -813,10 +813,16 @@ def given_reporting_webhook_without_operation_id(ctx: dict, mb_id: str) -> None:
     This is the state :666 governs — a registration the published 3.2.1 schema accepts,
     carrying no stream id, which this seller must neither fabricate an id for nor read
     one off the URL. The scheduler suppresses its scheduled sends; the read flags it.
+
+    NO ``hasattr(env, "_session")`` PROBE, unlike the older seeding helpers in this
+    module. This is a step function, and ``test_architecture_bdd_no_silent_env``
+    forbids one here with an EMPTY allowlist — that debt was paid, and the reason is
+    this step: a probe that returns early when the env has no session turns a scenario
+    whose whole subject is a STORED registration into a green no-op. The scenario needs
+    a database, its route gives it one, and an env without one must fail loudly rather
+    than pass vacuously.
     """
     env = ctx["env"]
-    if env is None or not hasattr(env, "_session"):
-        return
 
     from sqlalchemy import select
     from sqlalchemy.orm import attributes
