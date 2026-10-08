@@ -97,7 +97,21 @@ REGISTRY_AGENT_URL = "https://test-kit.example.com/a2a"
 #: walk — not a patched resolver — which is what a test grading "the walk failed" needs
 #: if it is not to be a mock asserting on itself. A public-looking hostname would
 #: instead put a DNS lookup in the test's critical path.
-UNRESOLVABLE_AGENT_URL = "http://127.0.0.1:1/a2a"
+#:
+#: THE SCHEME IS LOAD-BEARING and must stay ``https``. ``security.mdx`` :1358 makes the
+#: capabilities fetch of agent URL ``A`` HTTPS-only, and the pinned SDK enforces that
+#: BEFORE the reserved-range check, so an ``http://`` spelling short-circuits to
+#: ``AgentResolverError("invalid_agent_url")`` ("brand.json URL must use https://") and
+#: never reaches the SSRF refusal this constant exists to provoke. This value was
+#: ``http://`` and therefore stopped producing the mechanism the paragraph above
+#: describes: ``_map_agent_resolver_error`` sends ``invalid_agent_url`` to
+#: ``request_signature_jwks_untrusted``, so both callers graded a trust-boundary
+#: rejection while claiming to grade an unreachable capabilities hop. Measured against
+#: adcp 9.0.0b1+prs1435.1415:
+#:
+#:   https://127.0.0.1:1/a2a       -> capabilities_unreachable (reserved range)
+#:   http://127.0.0.1:1/a2a        -> invalid_agent_url        (scheme)
+UNRESOLVABLE_AGENT_URL = "https://127.0.0.1:1/a2a"
 
 #: The origin the in-process ASGI client dials. ``httpx``'s ASGI transport defaults to
 #: ``http://testserver``, and the signature covers ``@target-uri``, so a request signed
