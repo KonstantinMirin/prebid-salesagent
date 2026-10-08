@@ -591,8 +591,11 @@ class CreativeFormatIdentity:
         here. Each used to reassemble a ``FormatId`` out of the partial columns itself, which
         is how three of the four declared parameters came to be copied by name.
 
-        The ORM read IS the boundary: ``legacy_format_id`` is a JSON column, so what comes
-        back is a document or NULL, and the declared type is the fact past that point.
+        This IS the boundary, and it is the only one: a stored document is VALIDATED into its
+        model here, and past this point the declared types are the fact. So no consumer
+        re-checks what the columns already guarantee, and nothing downstream reaches for a
+        key with a default -- both documents are written by ``_identity_columns`` and read
+        back whole, exactly as they were written.
         """
         legacy_document = row.legacy_format_id
         identity = cls.of_legacy(FormatId.model_validate(legacy_document)) if legacy_document is not None else cls()
@@ -601,8 +604,8 @@ class CreativeFormatIdentity:
             identity,
             kind=row.format_kind,
             option=(
-                FormatOptionIdentity(option_document.get("publisher_domain"), str(option_document["format_option_id"]))
-                if option_document
+                FormatOptionIdentity(option_document["publisher_domain"], option_document["format_option_id"])
+                if option_document is not None
                 else None
             ),
         )

@@ -682,20 +682,24 @@ def _build_adapter_asset_from_creative(
     from src.core.format_resolver import is_dialled_agent_url
 
     # The stored identity through the ONE row reader. Only a retained legacy assertion names
-    # a format an agent hosts, so ``dialled`` is the whole precondition for both fetches —
-    # which replaces the three-way `format and agent_url and is_dialled` test that had to be
-    # written identically twice.
+    # a format an agent hosts, so its presence plus a dialled URL is the whole precondition
+    # for both fetches.
+    #
+    # The predicate is called INLINE in both conditionals rather than hoisted into a local.
+    # test_architecture_format_spec_dial_guard.py reads the enclosing `if` test for a call to
+    # `is_dialled_agent_url`, so a hoisted boolean reads to it as an unguarded dial —
+    # the guard grades this spelling, and conforming to it is cheaper than teaching it to
+    # resolve local bindings, which is machinery with its own holes.
     identity = CreativeFormatIdentity.from_row(creative)
     assertion = identity.assertion
-    dialled = assertion is not None and is_dialled_agent_url(assertion.agent_url)
 
-    if assertion is not None and dialled:
+    if assertion is not None and is_dialled_agent_url(assertion.agent_url):
         format_spec = _get_format_spec_sync(
             assertion.agent_url,
             assertion.id,
             provenance=CounterpartyUrl(field=None),
         )
-    if format_spec is None and assertion is not None and dialled:
+    if format_spec is None and assertion is not None and is_dialled_agent_url(assertion.agent_url):
         from src.core.exceptions import AdCPFormatNotFoundError
         from src.core.format_resolver import get_format
 

@@ -17,6 +17,10 @@ from .creative_asset import build_assets, image_spec
 from .media_buy import MediaBuyFactory
 from .principal import PrincipalFactory
 
+#: The creative agent a factory-built creative asserts a format from, unless a test names
+#: another one.
+DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
+
 
 def _seeded_identity(obj) -> CreativeFormatIdentity:
     """The format identity a factory-built row carries, through the PRODUCTION builder.
@@ -32,6 +36,31 @@ def _seeded_identity(obj) -> CreativeFormatIdentity:
         return CreativeFormatIdentity(kind=obj.canonical_kind)
     reference = FormatId(agent_url=obj.agent_url, id=obj.format)
     return creative_identity_of(SimpleNamespace(format_id=reference, format_kind=None))
+
+
+def stamp_format_identity(
+    row,
+    *,
+    format_id: str = "display_300x250",
+    agent_url: str = DEFAULT_CREATIVE_AGENT_URL,
+    canonical_kind: str | None = None,
+) -> CreativeFormatIdentity:
+    """Stamp the four stored identity columns onto a MOCK creative row, and return them.
+
+    A ``MagicMock`` answers a fresh ``Mock`` for any attribute nobody stubbed, and a ``Mock``
+    is not a state any of these columns can hold: ``CreativeFormatIdentity.from_row``
+    validates ``legacy_format_id`` as the JSON document the column holds, so an unstubbed row
+    fails inside the reader rather than in the code under test. The columns are derived here
+    through the same production mapping ``CreativeRepository.create`` uses, so a mock row and
+    a real row agree -- and a column added to the identity is stamped in ONE place instead of
+    at every mock.
+
+    For a row that goes through the real session, use ``CreativeFactory`` instead.
+    """
+    identity = _seeded_identity(SimpleNamespace(canonical_kind=canonical_kind, agent_url=agent_url, format=format_id))
+    for column, value in _identity_columns(identity).items():
+        setattr(row, column, value)
+    return identity
 
 
 class CreativeFactory(SQLAlchemyModelFactory):
@@ -57,10 +86,12 @@ class CreativeFactory(SQLAlchemyModelFactory):
     # `agent_url` + `format` name the legacy reference a creative asserts (the default, and
     # what most scenarios exercise); `canonical_kind` instead builds a creative identified
     # by its canonical kind, which asserts no reference at all.
-    agent_url = "https://creative.adcontextprotocol.org"
+    agent_url = DEFAULT_CREATIVE_AGENT_URL
     format = "display_300x250"
     canonical_kind = None
     identity = factory.LazyAttribute(_seeded_identity)
+    # Each column read off the ONE production mapping by its own name, so a column added to
+    # the identity is a line here and nothing else -- never a second copy of the mapping.
     format_kind = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["format_kind"])
     format_option_ref = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["format_option_ref"])
     legacy_format_id = factory.LazyAttribute(lambda o: _identity_columns(o.identity)["legacy_format_id"])
