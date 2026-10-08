@@ -220,6 +220,41 @@ class DeliveryWebhookScheduler:
         # would silently re-open a transaction just to format a log line.
         media_buy_id = media_buy.media_buy_id
         try:
+            # SUPPRESS THE STREAM, which is this route's sanctioned shape. AdCP 3.2.1
+            # L3/webhooks.mdx :666 — "A registration without a buyer-supplied ID cannot
+            # enable this interim delivery path. Flag the missing value for the buyer
+            # and suppress scheduled sends; do not fabricate an ID or extract one from
+            # the URL."
+            #
+            # FIRST, before the frequency check and before any delivery is gathered.
+            # The one envelope builder refuses this registration either way
+            # (``operation_id`` is REQUIRED on ``core/mcp-webhook-payload.json`` and :143
+            # forbids reading one off the URL), but that refusal arrived here as an
+            # exception AFTER the adapter had been queried and the whole report
+            # assembled, and the batch loop's ``except Exception`` then logged it as a
+            # send error and moved on — so a buyer whose registration predates the
+            # correlation agreement got silence, counted as a failure to deliver rather
+            # than named as a suppressed stream. Asking at the top turns that into a
+            # stated verdict and spends no adapter call on a stream that cannot send.
+            #
+            # The buyer's half of :666 — the flag — is not this log line and cannot be:
+            # this runs in a background batch with no request to answer. It is carried
+            # by ``get_media_buy_delivery``, which reads the same registration and
+            # reports the same code as an advisory, on the read :667 points the buyer at
+            # while they arrange support.
+            if reporting_stream_id_missing(reporting_webhook):
+                logger.error(
+                    "Suppressing scheduled delivery report for media buy %s: its %s is absent, "
+                    "so there is no correlation id to echo and AdCP 3.2.1 L3/webhooks.mdx :666 "
+                    "forbids fabricating one or reading it off the URL. The buyer must re-register "
+                    "with an id before reports resume (tenant=%s, principal=%s)",
+                    media_buy_id,
+                    REPORTING_STREAM_ID_FIELD,
+                    media_buy.tenant_id,
+                    media_buy.principal_id,
+                )
+                return False
+
             # Determine reporting frequency from AdCP config (hourly, daily, monthly)
             raw_freq = str(reporting_webhook.get("frequency") or "daily").lower()
 
@@ -303,39 +338,6 @@ class DeliveryWebhookScheduler:
             webhook_url = reporting_webhook.get("url")
             if not webhook_url:
                 logger.warning(f"No webhook URL configured for media buy {media_buy.media_buy_id}")
-                return False
-
-            # SUPPRESS THE STREAM, which is this route's sanctioned shape. AdCP 3.2.1
-            # L3/webhooks.mdx :666 — "A registration without a buyer-supplied ID cannot
-            # enable this interim delivery path. Flag the missing value for the buyer
-            # and suppress scheduled sends; do not fabricate an ID or extract one from
-            # the URL."
-            #
-            # Decided HERE, before the delivery is assembled, rather than discovered
-            # downstream. The one envelope builder refuses this registration either way
-            # (operation_id is REQUIRED on core/mcp-webhook-payload.json), but the
-            # refusal reached this function as an exception, and the batch loop's
-            # ``except Exception`` logged it as an error and moved on — so a buyer whose
-            # registration predates the correlation agreement got silence, counted as a
-            # send error rather than named as a suppressed stream. Asking the question
-            # where the answer is actionable turns that into a stated verdict.
-            #
-            # The buyer's half of :666 — the flag — is not a log line and cannot be:
-            # this runs in a background batch with no request to answer. It is carried
-            # by ``get_media_buy_delivery``, which reads the same registration and
-            # raises the same code as an advisory, on the read path :667 points the
-            # buyer at while they arrange support.
-            if reporting_stream_id_missing(reporting_webhook):
-                logger.error(
-                    "Suppressing scheduled delivery report for media buy %s: its %s is absent, "
-                    "so there is no correlation id to echo and AdCP 3.2.1 L3/webhooks.mdx :666 "
-                    "forbids fabricating one or reading it off the URL. The buyer must re-register "
-                    "with an id before reports resume (tenant=%s, principal=%s)",
-                    media_buy_id,
-                    REPORTING_STREAM_ID_FIELD,
-                    media_buy.tenant_id,
-                    media_buy.principal_id,
-                )
                 return False
 
             # A stored row still wins: a real registration outranks whatever the

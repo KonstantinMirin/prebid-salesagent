@@ -792,6 +792,51 @@ def given_no_webhook(ctx: dict, mb_id: str) -> None:
     ctx.setdefault("webhook_config", {})[mb_id] = {"active": False}
 
 
+@given(parsers.parse('the reporting_webhook on "{mb_id}" carries no operation_id'))
+def given_reporting_webhook_without_operation_id(ctx: dict, mb_id: str) -> None:
+    """The buy's STORED reporting registration has no correlation id.
+
+    Written into ``media_buys.raw_request["reporting_webhook"]``, which is where the
+    scheduler and the delivery read both look — not into a ``PushNotificationConfig``
+    row. AdCP 3.2.1 ``L3/webhooks.mdx`` :669 is explicit that a reporting stream's id
+    "is independent of any task-status ``push_notification_config.operation_id``", so
+    seeding the row instead would seed a DIFFERENT value and grade nothing.
+
+    The document comes from ``ReportingWebhookRequestFactory`` with ``operation_id``
+    OMITTED, so everything else about it is a registration the pinned schema accepts
+    (``url``, ``authentication`` and ``reporting_frequency`` are all required on
+    ``core/reporting-webhook.json``). A hand-written dict here is how two sites came to
+    spell the cadence ``frequency`` and configure nothing; and ``OMIT`` rather than
+    ``None`` because the key must be ABSENT, which is what a buyer who never supplied
+    one sends.
+
+    This is the state :666 governs — a registration the published 3.2.1 schema accepts,
+    carrying no stream id, which this seller must neither fabricate an id for nor read
+    one off the URL. The scheduler suppresses its scheduled sends; the read flags it.
+    """
+    env = ctx["env"]
+    if env is None or not hasattr(env, "_session"):
+        return
+
+    from sqlalchemy import select
+    from sqlalchemy.orm import attributes
+
+    from src.core.database.models import MediaBuy
+    from tests.factories.request import OMIT
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
+    session = env._session
+    buy = session.scalars(select(MediaBuy).filter_by(media_buy_id=mb_id)).first()
+    assert buy is not None, f"media buy {mb_id!r} was not seeded into the database"
+
+    buy.raw_request = {
+        **(buy.raw_request or {}),
+        "reporting_webhook": ReportingWebhookRequestFactory.payload(operation_id=OMIT),
+    }
+    attributes.flag_modified(buy, "raw_request")
+    session.commit()
+
+
 @given(parsers.parse('the reporting_frequency is "{frequency}"'))
 def given_reporting_frequency(ctx: dict, frequency: str) -> None:
     """The scenario's reporting webhook fires at this frequency.
