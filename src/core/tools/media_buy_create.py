@@ -996,22 +996,23 @@ def execute_approved_media_buy(
                         total_budget = 0.0
                         budget = None
 
-                    # Get pricing option from product
-                    # adcp 2.14.0+ uses RootModel wrapper - access via .root
+                    # Get pricing option from product. ``product`` here is the ProductModel
+                    # ORM row loaded above, so these are PricingOption ROWS -- which is why
+                    # ``.rate`` below resolves (it is a column). A row has no ``root``
+                    # attribute, so the ``getattr(po, "root", po)`` hop this replaced always
+                    # fell through to its own default.
                     pricing_option_inner = None
                     if product.pricing_options:
                         # Try to match pricing_model from package_config if present
                         pkg_pricing_model = package_config.get("pricing_model")
                         if pkg_pricing_model:
                             for po in product.pricing_options:
-                                po_inner = getattr(po, "root", po)
-                                if po_inner.pricing_model == pkg_pricing_model:
-                                    pricing_option_inner = po_inner
+                                if po.pricing_model == pkg_pricing_model:
+                                    pricing_option_inner = po
                                     break
                         if not pricing_option_inner:
                             # Fall back to first pricing option
-                            first_po = product.pricing_options[0]
-                            pricing_option_inner = getattr(first_po, "root", first_po)
+                            pricing_option_inner = product.pricing_options[0]
 
                     if not pricing_option_inner:
                         error_msg = f"Product {product_id} has no pricing options"
@@ -1598,13 +1599,15 @@ def _validate_pricing_model_selection(
     # alias that used to be consulted as a fallback is gone with the field.
     pricing_option_id = package.pricing_option_id
 
-    # Helper to unwrap RootModel - adcp 2.14.0+ uses RootModel wrapper
-    def unwrap_option(opt: Any) -> Any:
-        return getattr(opt, "root", opt)
+    # NO UNWRAP HELPER. ``product`` is the ProductModel ORM row (see the signature), so
+    # these are PricingOption ROWS -- which is what makes ``pricing_info_for`` below work
+    # at all, since ``rate`` and ``is_fixed`` are columns and not fields of any union
+    # member. A row has no ``root`` attribute, so the ``getattr(opt, "root", opt)`` helper
+    # this replaced returned its own argument at every one of its five call sites.
 
     # Not specified: use the product's first pricing option
     if not pricing_option_id:
-        first_option = unwrap_option(product.pricing_options[0])
+        first_option = product.pricing_options[0]
         # The option's own terms, plus the one field it cannot supply: a currency-less
         # option falls back to the campaign's, which is a property of this request.
         return pricing_info_for(first_option, bid_price=float(package.bid_price) if package.bid_price else None) | {
@@ -1614,21 +1617,18 @@ def _validate_pricing_model_selection(
     # Find matching pricing option
     selected_option = None
     for option in product.pricing_options:
-        opt_inner = unwrap_option(option)
         # The stored id -- the same one get_products announced and the buyer sent back.
-        option_id = opt_inner.pricing_option_id
+        option_id = option.pricing_option_id
 
         # Match by pricing_option_id, the id get_products announced
         if pricing_option_id.lower() == option_id.lower():
-            selected_option = opt_inner
+            selected_option = option
             break
 
     if not selected_option:
         # Show available options in same format as matching logic expects
         available_options = [
-            f"{unwrap_option(opt).pricing_option_id} "
-            f"({unwrap_option(opt).pricing_model} - {unwrap_option(opt).currency})"
-            for opt in product.pricing_options
+            f"{opt.pricing_option_id} ({opt.pricing_model} - {opt.currency})" for opt in product.pricing_options
         ]
         # The four accumulated branches used to build a sentence; each branch's VALUE is
         # what the buyer needs, so they travel as structured detail instead. The sibling
@@ -2340,9 +2340,9 @@ async def _create_media_buy_impl(
                         product = product_map[package.product_id]
                         # Use the first pricing option from the product
                         if product.pricing_options and len(product.pricing_options) > 0:
-                            # Unwrap RootModel wrapper if present (adcp 2.14.0+ uses RootModel)
+                            # No unwrap: ``product_map`` holds ProductModel ORM rows, whose
+                            # pricing_options are rows, and a row has no ``root``.
                             first_option = product.pricing_options[0]
-                            first_option = getattr(first_option, "root", first_option)
                             package.pricing_option_id = first_option.pricing_option_id
                             logger.info(
                                 f"Resolved legacy pricing_option_id for product {package.product_id}: {package.pricing_option_id}"
@@ -2360,16 +2360,14 @@ async def _create_media_buy_impl(
                     product = product_map[package_product_ids[0]]
                     pricing_options = product.pricing_options or []
 
-                    # Helper to unwrap RootModel wrapper (adcp 2.14.0+ uses RootModel)
-                    def unwrap_po(po: Any) -> Any:
-                        return getattr(po, "root", po)
-
                     # The product's first pricing option supplies the currency. The branch
                     # that used to precede this one looked the option up by the package's
                     # legacy pricing_model, a field the pin does not declare and nothing
                     # produced; it went with the field.
                     if pricing_options:
-                        request_currency = unwrap_po(pricing_options[0]).currency
+                        # A PricingOption ORM row; ``currency`` is a column, and a row has
+                        # no ``root`` for the deleted unwrap helper to have found.
+                        request_currency = pricing_options[0].currency
 
             # Fallback to deprecated/legacy sources
             # Note: currency and budget fields no longer exist on CreateMediaBuyRequest per AdCP spec
@@ -3304,9 +3302,19 @@ async def _create_media_buy_impl(
             cpm = 10.0  # Default
             if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
                 first_option = pkg_product.pricing_options[0]
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
-                inner_option = getattr(first_option, "root", first_option)
-                rate = getattr(inner_option, "rate", None)
+                # UNLIKE the ORM-row sites elsewhere in this module, ``pkg_product`` comes
+                # from ``get_product_catalog`` and so is the SCHEMA Product: these elements
+                # are union MEMBERS. Neither kind has a ``root``, so the
+                # ``getattr(first_option, "root", first_option)`` hop this replaced always
+                # fell through to its own default.
+                #
+                # Which is also why ``rate`` is dead HERE specifically: it is a column on the
+                # PricingOption row and a pre-V3 keyword no member of the V3 union declares,
+                # so against a schema Product this read can only yield None and the default
+                # above always wins. Left as-is on purpose: choosing which of fixed_price /
+                # floor_price a package's CPM should come from is a pricing-semantics change,
+                # not part of removing the RootModel hop that hid the deadness.
+                rate = getattr(first_option, "rate", None)
                 if rate:
                     cpm = float(rate)
 

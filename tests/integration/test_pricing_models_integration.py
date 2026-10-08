@@ -299,11 +299,11 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     assert cpm_product is not None
     assert cpm_product.pricing_options is not None
     assert len(cpm_product.pricing_options) == 1
-    # adcp 2.14.0+ uses RootModel wrapper - access via .root
-    pricing_inner = getattr(cpm_product.pricing_options[0], "root", cpm_product.pricing_options[0])
-    assert pricing_inner.pricing_model == PricingModel.cpm.value
+    # The element IS the union member; Product.pricing_options is typed with the arms.
+    cpm_option = cpm_product.pricing_options[0]
+    assert cpm_option.pricing_model == PricingModel.cpm.value
     # V3: is_fixed removed - fixed pricing has fixed_price field
-    assert pricing_inner.fixed_price == 12.50
+    assert cpm_option.fixed_price == 12.50
 
     # Find the multi-pricing product
     multi_product = next((p for p in response.products if p.product_id == "prod_multi"), None)
@@ -312,8 +312,7 @@ async def test_get_products_returns_pricing_options(setup_tenant_with_pricing_pr
     assert len(multi_product.pricing_options) == 3
 
     # Verify all three pricing models exist
-    # adcp 2.14.0+ uses RootModel wrapper - access via .root
-    pricing_models = {getattr(opt, "root", opt).pricing_model for opt in multi_product.pricing_options}
+    pricing_models = {opt.pricing_model for opt in multi_product.pricing_options}
     assert pricing_models == {PricingModel.cpm.value, PricingModel.cpcv.value, PricingModel.cpp.value}
 
 

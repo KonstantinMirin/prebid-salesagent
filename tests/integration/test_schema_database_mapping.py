@@ -438,11 +438,12 @@ class TestSchemaFieldMapping:
             try:
                 validated_product = Product(**conversion_data)
                 assert validated_product.product_id == "validation_test_001"
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
+                # The element IS the union member: Product.pricing_options is typed with
+                # the arms, so its fields are read directly. This went through ``.root``
+                # for a local RootModel wrapper that was never what this list held.
                 pricing = validated_product.pricing_options[0]
-                pricing_inner = pricing.root
-                assert pricing_inner.fixed_price == 7.25
-                assert pricing_inner.pricing_model == "cpm"
+                assert pricing.fixed_price == 7.25
+                assert pricing.pricing_model == "cpm"
             except Exception as e:
                 pytest.fail(f"Schema validation failed with database data: {e}")
 

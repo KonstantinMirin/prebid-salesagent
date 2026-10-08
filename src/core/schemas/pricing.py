@@ -9,9 +9,7 @@ subclasses cleanly.
 
 At adcp 6.6.0 the union also had a ``RootModel`` WRAPPER class, which this
 module's ``PricingOption`` subclassed. adcp 9 deletes that wrapper and ships
-only the union — the fix for adcontextprotocol/adcp-client-python#1077 — so
-there is nothing left to subclass and the local wrapper is a plain
-``RootModel`` over the local union.
+only the union — the fix for adcontextprotocol/adcp-client-python#1077.
 
 This module therefore defines:
 
@@ -19,20 +17,32 @@ This module therefore defines:
   set from the library type (Pattern #1 — never copy fields) and mixes in a
   derived ``is_fixed`` property. The mixin also applies this project's ``extra``
   policy (``forbid`` outside production), replacing the SDK's ``allow``.
-- A ``PricingOption`` RootModel over OUR union, so ``option.root`` and proxied
-  attribute access keep working at call sites.
+- ``AdCPPricingOption``, the union of those nine, which is what
+  ``Product.pricing_options`` holds.
+- ``PricingOptionAdapter``, a ``TypeAdapter`` for a caller that must validate an
+  arbitrary document against the discriminated union.
 
-Naming note: this wrapper is intentionally NOT star-exported from
-``src.core.schemas`` — the package-level ``PricingOption`` name still refers to
-the legacy flat model in ``_base.py``, which remains only because ledgered
-schema-validation tests (T-UC-001-boundary-pricing-xor) still grade it. Import
-the wrapper explicitly via ``from src.core.schemas.pricing import
-PricingOption``. The nine member subclasses ARE star-exported and shadow the
-SDK names at package level, so ``from src.core.schemas import
-CpmPricingOption`` resolves to the local subclass (Pattern #7 applies).
+NO LOCAL ``RootModel`` WRAPPER, and the deletion is the point. One was kept here
+after the SDK dropped its own, on the stated grounds that ``option.root`` and
+proxied attribute access had to keep working at call sites. They did not:
+``Product.pricing_options`` is typed with the union MEMBERS, so every element of
+the only list the wrapper was written for is a member, ``.root`` raises
+``AttributeError`` on it, and the wrapper itself never landed there. What the
+``__getattr__`` proxy bought was that a member and a wrapper read alike, which
+is exactly what let the mistyping go unnoticed. A union member is reached by
+reading its field; where a branch is genuinely needed, discriminate on
+``pricing_model``.
+
+Naming note: the nine member subclasses are star-exported and shadow the SDK
+names at package level, so ``from src.core.schemas import CpmPricingOption``
+resolves to the local subclass (Pattern #7 applies). The package-level
+``PricingOption`` name refers to the legacy flat model in ``_base.py``, which
+remains only because ledgered schema-validation tests
+(T-UC-001-boundary-pricing-xor) still grade it; it never named the deleted
+wrapper and is unaffected by its removal.
 """
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from adcp.types import CpaPricingOption as LibraryCpaPricingOption
 from adcp.types import CpcPricingOption as LibraryCpcPricingOption
@@ -43,7 +53,7 @@ from adcp.types import CpvPricingOption as LibraryCpvPricingOption
 from adcp.types import FlatRatePricingOption as LibraryFlatRatePricingOption
 from adcp.types import TimeBasedPricingOption as LibraryTimeBasedPricingOption
 from adcp.types import VcpmPricingOption as LibraryVcpmPricingOption
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from src.core.config import get_pydantic_extra_mode
 
@@ -134,8 +144,8 @@ _MEMBER_TYPES: tuple[type[BaseModel], ...] = (
 )
 
 # Union of all nine AdCP pricing option types (the pinned spec's
-# pricing-option.json oneOf), in local-subclass form. Also the root type of the
-# PricingOption wrapper below.
+# pricing-option.json oneOf), in local-subclass form. This is what
+# Product.pricing_options holds, element for element.
 AdCPPricingOption = (
     CpmPricingOption
     | VcpmPricingOption
@@ -149,76 +159,17 @@ AdCPPricingOption = (
 )
 
 
-class PricingOption(RootModel[AdCPPricingOption]):
-    """A RootModel over OUR union members, with the SDK wrapper's call contract.
-
-    ``Product.pricing_options`` is typed with this wrapper so every element
-    carries the local members' extra policy and internal annotations while the
-    call-site contract (``option.root``, proxied attribute access) stays what it
-    has always been.
-
-    IT NO LONGER INHERITS AN SDK WRAPPER, because adcp 9 has none to inherit.
-    At 6.6.0 ``adcp.types.domains.core.pricing_option.PricingOption`` was a
-    ``RootModel`` subclass that added exactly two things -- a ``root`` annotation
-    over the nine arms and an ``__getattr__`` proxy -- and the public
-    ``adcp.types.PricingOption`` name was a plain union alias. adcp 9 deletes the
-    wrapper and keeps only the union (the fix for
-    adcp-client-python#1077, which is why the RootModel-cannot-be-subclassed note
-    elsewhere in this file is obsolete), so there is no class left to extend: the
-    inheritance that matters moved down to the MEMBERS, each of which still
-    subclasses its SDK counterpart, which is what makes this root type a strict
-    narrowing. ``__getattr__`` is restated below because it came from the wrapper.
-    """
-
-    # A RootModel has no named fields, so there is no ``extra`` policy to set -- pydantic
-    # forbids ``extra`` on RootModel outright (adcontextprotocol/adcp-client-python#1077).
-    # The policy that matters lives on the nine MEMBERS, via _AdapterSupportAnnotations.
-    # Declared empty rather than omitted because the no-bare-BaseModel guard reads the
-    # presence of ``model_config`` as the signal that the extra policy was CONSIDERED, and
-    # the adcp 6.6.0 wrapper this class used to inherit carried exactly this: ``{}``.
-    model_config = ConfigDict()
-
-    root: Annotated[
-        AdCPPricingOption,
-        Field(
-            description=(
-                "A pricing model option offered by a publisher for a product. Discriminated by pricing_model field."
-            ),
-            discriminator="pricing_model",
-            title="Pricing Option",
-        ),
-    ]
-
-    def __getattr__(self, name: str) -> Any:
-        """Proxy attribute access to the wrapped member.
-
-        Verbatim from the adcp 6.6.0 wrapper this class used to inherit. Call sites
-        read ``option.pricing_model`` / ``option.fixed_price`` directly, so deleting
-        the wrapper upstream would have silently turned every one of those into an
-        AttributeError.
-        """
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return getattr(self.root, name)
-
-    # NO SDK-COERCING VALIDATOR. A ``mode="before"`` validator used to accept an SDK-typed
-    # member (or the SDK's own wrapper) by serializing it to a plain dict and revalidating
-    # that dict against the local members. That is the one spelling critical pattern 4 names
-    # twice: a pydantic
-    # validator on a wire model may not serialize, and a receiving model adopts a sibling
-    # generated class by reading its attributes, never by a dump. It survived only because
-    # this file carried a per-file exemption in ruff-serialization.toml and in the ast-grep
-    # rule; both entries are gone with it, so the ban now covers this file.
-    #
-    # It was deleted rather than rewritten to the attribute-reading form because nothing
-    # needs it. No production path produces an SDK-typed pricing option: every construction
-    # site under src/ imports the local subclass (product_conversion.py, whose comment says
-    # exactly that; dynamic_pricing_service.py; the Xandr adapter), and the single direct SDK
-    # pricing import in src/ is TimeParameters, a nested sub-object rather than a union
-    # member. Only tests ever built an SDK member.
-    #
-    # Its docstring claimed the dump was what kept an undeclared field from leaking off an
-    # ``extra="allow"`` SDK instance. That was backwards: the dump is what ACCEPTED the SDK
-    # instance in the first place, and re-applying the extra policy was a side effect of
-    # that acceptance. With no coercion an SDK instance is refused outright, under either
-    # extra mode, so there is nothing left for a field to leak through.
+#: The discriminated union as a VALIDATOR, for a caller that holds an arbitrary document
+#: and needs the pin's verdict on it. One such caller exists: the runtime malformation gate
+#: (``GATED_ITEMS``, ``tests/factories/malformed.py``), which validates every dispatched
+#: item against the pinned item model for its key.
+#:
+#: A ``TypeAdapter`` RATHER THAN THE ROOTMODEL THIS REPLACES. The gate needs one thing a
+#: bare ``UnionType`` cannot do -- validate a dict and raise ``ValidationError`` -- and
+#: that was the only capability the deleted wrapper supplied that nothing else did. A
+#: ``TypeAdapter`` supplies exactly it and nothing more: it is not a model, so it cannot
+#: be mistyped onto a field, it adds no ``.root`` for a call site to read, and
+#: ``validate_python`` returns the MEMBER rather than a wrapper around it.
+PricingOptionAdapter: TypeAdapter[AdCPPricingOption] = TypeAdapter(
+    Annotated[AdCPPricingOption, Field(discriminator="pricing_model")]
+)

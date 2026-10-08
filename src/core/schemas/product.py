@@ -94,13 +94,13 @@ class Product(LibraryProduct):
     # derived is_fixed property. Same wire shape, same discriminator and same constraints
     # as the SDK field it overrides.
     #
-    # The ELEMENTS, not the ``PricingOption`` RootModel wrapper this used to hold. At adcp
-    # 6.6.0 the SDK's own field held that wrapper and the local one subclassed it; adcp 9
-    # deletes the wrapper (the fix for adcp-client-python#1077) and types the field as the
-    # arms, so holding a wrapper here would be a RESHAPE of the parent rather than a
-    # narrowing of it -- the thing the schema-inheritance guard exists to catch. The
-    # wrapper still exists for callers that want ``.root``; it is simply not what a
-    # Product's field is.
+    # The ELEMENTS, not a ``PricingOption`` RootModel wrapper. At adcp 6.6.0 the SDK's own
+    # field held such a wrapper and the local one subclassed it; adcp 9 deletes the wrapper
+    # (the fix for adcp-client-python#1077) and types the field as the arms, so holding a
+    # wrapper here would be a RESHAPE of the parent rather than a narrowing of it -- the
+    # thing the schema-inheritance guard exists to catch. A local wrapper outlived the SDK's
+    # for one release on the stated grounds that call sites needed ``.root``; this field is
+    # why that was false, and it is deleted.
     # The ``[assignment]`` ignore is invariance, not suppression: every local member
     # subclasses its SDK counterpart so every ELEMENT is assignable, but ``list`` is
     # invariant so the list types are not -- the same cost delivery.py's six breakdown
