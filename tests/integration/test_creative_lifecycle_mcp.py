@@ -64,9 +64,14 @@ def _db_creative(*, format_id: str = "display_300x250_image", **columns) -> DBCr
 
 
 def _asserted_format_id(row: DBCreative) -> str | None:
-    """The legacy ``format_id.id`` a stored creative asserts, read off its identity."""
-    legacy = CreativeFormatIdentity.from_row(row).legacy
-    return legacy.id if legacy is not None else None
+    """The legacy ``format_id.id`` a stored creative asserts, read off its identity.
+
+    ``assertion`` and not ``legacy``: the identity collapse made ``legacy`` the indexable
+    comparison KEY (``FormatKey``, a ``NewType`` over ``str``), while ``assertion`` stayed
+    the ``FormatId`` the buyer sent. Only the latter has an ``id``.
+    """
+    assertion = CreativeFormatIdentity.from_row(row).assertion
+    return assertion.id if assertion is not None else None
 
 
 def _seed_account(tenant_id: str, principal_ids: tuple[str, ...]) -> None:
