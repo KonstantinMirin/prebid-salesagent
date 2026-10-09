@@ -502,6 +502,14 @@ def _apply_package_table(kwargs: dict, datatable: list[list[str]], ctx: dict | N
             pkg["impressions"] = int(value)
         elif field == "catalogs":
             pkg["catalogs"] = json.loads(value)
+            if ctx is not None:
+                # Recorded as a ctx contract, and the PRECONDITION is asserted here rather
+                # than in the Then that grades the echo. A Then asserting that the request
+                # carried catalogs is testing this setup, not the seller --
+                # tests/unit/test_architecture_bdd_no_request_in_then.py refuses it, and its
+                # allowlist is empty.
+                ctx["expected_catalogs"] = pkg["catalogs"]
+                assert ctx["expected_catalogs"], "the scenario declared a catalogs row carrying no catalogs"
         elif field == "optimization_goals":
             pkg["optimization_goals"] = json.loads(value)
         elif field == "creative_assignments":
@@ -2702,14 +2710,16 @@ def then_created_with_catalogs(ctx: dict) -> None:
             out.add((_scalar(getter("type")), _scalar(getter("catalog_id"))))
         return out
 
-    requested = (ctx.get("request_kwargs") or {}).get("packages") or []
-    assert requested, "no packages on the request — this step compares the echo against what was sent"
-    expected = _pairs(requested[0].get("catalogs") or [])
-    assert len(expected) == 2, (
-        f"the scenario must send two catalogs for this step to grade both, got {sorted(expected)}"
-    )
+    # Read from the ctx contract the Given records, not out of request_kwargs: a Then that
+    # asserts the REQUEST carried catalogs grades the setup rather than the seller, and the
+    # precondition now lives with the Given that creates it.
+    expected = _pairs(ctx.get("expected_catalogs") or [])
     actual = _pairs(catalogs)
     assert actual == expected, f"Expected catalogs {sorted(expected)} echoed, got {sorted(actual)}"
+    # The distinct-type rule (BR-RULE-089 INV-2, and the schema's "Each catalog MUST have a
+    # distinct type") asserted on the RESPONSE. It was previously asserted on the request,
+    # where it could only restate what the Given had just built.
+    assert len(actual) == 2, f"the response must carry two distinct catalogs, got {sorted(actual)}"
 
 
 @then("the package should be created without catalogs")
