@@ -156,6 +156,62 @@ def _applied_instant() -> datetime:
     return datetime.now(UTC)
 
 
+def _affected_package(
+    uow: MediaBuyUoW,
+    media_buy_id: str,
+    package_id: str,
+    *,
+    changes_applied: dict[str, Any],
+    paused: bool | None = None,
+    budget: float | None = None,
+) -> AffectedPackage:
+    """One package's POST-UPDATE state, for ``affected_packages``.
+
+    The pinned ``media-buy/update-media-buy-response.json``
+    (``/oneOf/0/properties/affected_packages`` @ 3.2.1) defines the field as "full Package
+    objects showing complete post-update state for each modified package ... a state
+    snapshot, not a sparse delta: sellers MUST NOT return ``{ package_id }``-only stubs",
+    and allows the empty array only for "campaign-level updates that do not modify
+    packages". Four branches of this tool were hand-building the entry with
+    ``paused=False`` written in as a literal — so a budget change to an already-paused
+    package reported it as active — and a fifth (``paused``) reported nothing at all.
+
+    ``paused``, ``budget`` and ``product_id`` come from the STORED package, except where
+    the calling branch has just written one and passes it in. That split is not a
+    convenience: the adapter commits its package writes in its OWN session, so a field
+    this branch changed is supplied rather than re-read, while the fields it did not touch
+    are whatever the record holds — the same source ``get_media_buys`` serves them from,
+    which is what keeps the two surfaces from describing one package differently.
+
+    ``targeting_overlay`` is NOT carried yet, and the reason is a type boundary rather than
+    an oversight: a package update's overlay is the INPUT sibling (``TargetingInput``) while
+    the readback field takes ``Targeting``, and the two are siblings with neither a subclass
+    of the other — crossing that gap is ``_adopt_sibling``'s job, by attribute, never by a
+    dump in a caller. Rehydrating a STORED overlay is separately ``get_media_buys``' job,
+    which owns the corrupt-row advisory that goes with it (``media_buy_list.py:274``).
+    """
+    assert uow.media_buys is not None
+    # The tolerant accessor, deliberately: a media buy whose packages live only in
+    # ``raw_request`` has no ``media_packages`` row, and the creative branches above
+    # accept that today (they read the row for a product_id and carry on without one).
+    # Reporting what IS known about such a package is right; refusing an update that
+    # succeeded, because the projection could not find a row, would not be. The branches
+    # that DO require a row keep their own ``get_package_or_raise`` pre-check.
+    stored = uow.media_buys.get_package(media_buy_id, package_id)
+    config = (stored.package_config or {}) if stored is not None else {}
+    stored_budget = float(stored.budget) if stored is not None and stored.budget is not None else None
+    return AffectedPackage(
+        package_id=package_id,
+        paused=bool(config.get("paused", False)) if paused is None else paused,
+        budget=stored_budget if budget is None else budget,
+        product_id=config.get("product_id"),
+        # Internal, exclude=True on both: off the wire, off persistence, off the
+        # idempotency hash.
+        buyer_package_ref=package_id,
+        changes_applied=changes_applied,
+    )
+
+
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
     """Derive the AdCP buyer-action names implied by an update request.
 
@@ -770,6 +826,22 @@ def _update_media_buy_impl(
                             today=utc_flight_start(today),
                         )
 
+                        # This branch modified a package, so the response says which one
+                        # and in what state. It used to apply the pause through the adapter
+                        # and append NOTHING, which is the one shape the pin's
+                        # affected_packages description does not allow outside a
+                        # campaign-level update (see _affected_package). ``paused`` is
+                        # passed, not re-read: it is the value this branch just caused.
+                        affected_packages_list.append(
+                            _affected_package(
+                                uow,
+                                req.media_buy_id,
+                                pkg_update.package_id,
+                                paused=pkg_update.paused,
+                                changes_applied={"paused": pkg_update.paused},
+                            )
+                        )
+
                     # Handle budget updates
                     if pkg_update.budget is not None:
                         # Validate package_id is provided (required for budget updates)
@@ -836,16 +908,18 @@ def _update_media_buy_impl(
                             today=utc_flight_start(today),
                         )
 
-                        # Track budget update in affected_packages
-                        # At this point, pkg_update.package_id is guaranteed to be str (checked above)
+                        # Track budget update in affected_packages. ``budget`` is passed
+                        # (the value just applied); ``paused`` is read off the record,
+                        # because a budget change does not alter it and the literal
+                        # ``False`` that stood here reported an already-paused package as
+                        # active.
                         affected_packages_list.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id,  # Required by AdCP (guaranteed str)
-                                paused=False,  # Package not paused (active)
-                                buyer_package_ref=pkg_update.package_id,  # Internal field (for backward compat)
-                                changes_applied={
-                                    "budget": {"updated": budget_amount, "currency": currency}
-                                },  # Internal field
+                            _affected_package(
+                                uow,
+                                req.media_buy_id,
+                                pkg_update.package_id,
+                                budget=budget_amount,
+                                changes_applied={"budget": {"updated": budget_amount, "currency": currency}},
                             )
                         )
 
@@ -924,11 +998,11 @@ def _update_media_buy_impl(
 
                         # Store results for affected_packages response
                         affected_packages_list.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id,  # Required by AdCP
-                                paused=False,  # Package not paused (active)
-                                buyer_package_ref=pkg_update.package_id,  # Internal field (for backward compat)
-                                changes_applied={  # Internal field
+                            _affected_package(
+                                uow,
+                                req.media_buy_id,
+                                pkg_update.package_id,
+                                changes_applied={
                                     "creative_ids": {
                                         "added": list(added_ids),
                                         "removed": list(removed_ids),
@@ -1006,10 +1080,10 @@ def _update_media_buy_impl(
                             r.creative_id for r in sync_response.creatives if r.action in ["created", "updated"]
                         ]
                         affected_packages_list.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id,
-                                paused=False,
-                                buyer_package_ref=pkg_update.package_id,
+                            _affected_package(
+                                uow,
+                                req.media_buy_id,
+                                pkg_update.package_id,
                                 changes_applied={"creatives_uploaded": synced_ids},
                             )
                         )
@@ -1156,10 +1230,10 @@ def _update_media_buy_impl(
 
                         # Track in affected_packages
                         affected_packages_list.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id,
-                                paused=False,
-                                buyer_package_ref=pkg_update.package_id,
+                            _affected_package(
+                                uow,
+                                req.media_buy_id,
+                                pkg_update.package_id,
                                 changes_applied={"creative_assignments_updated": updated_assignments},
                             )
                         )
@@ -1189,11 +1263,11 @@ def _update_media_buy_impl(
 
                         # Track targeting update in affected_packages
                         affected_packages_list.append(
-                            AffectedPackage(
-                                package_id=pkg_update.package_id,
-                                paused=False,  # Package not paused (active)
+                            _affected_package(
+                                uow,
+                                req.media_buy_id,
+                                pkg_update.package_id,
                                 changes_applied={"targeting": pkg_update.targeting_overlay},
-                                buyer_package_ref=pkg_update.package_id,  # Legacy compatibility
                             )
                         )
 
