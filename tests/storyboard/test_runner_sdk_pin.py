@@ -4,12 +4,11 @@ The storyboard job grades us with `@adcp/sdk`'s runner. That SDK declares which
 AdCP release its CLIENT is built for in its own ``package.json`` (``adcp_version``),
 independently of the ``--compliance-version`` / ``--compliance-dir`` we hand it.
 
-Those two can disagree silently, and did: `@adcp/sdk@9.3.0` declares **3.1.0**
-while this repo pins **3.1.1**, so for its whole life the baseline was measured by
-a client one release behind the storyboards it was grading against. Nothing failed
-— the storyboards and schemas were the right version, only the code driving them
-was not. `@adcp/sdk@11.0.0` is the newest release still on 3.1.1 (11.1.0 moves to
-3.1.2).
+Those two can disagree silently, and did: `@adcp/sdk@9.3.0` declared **3.1.0**
+while this repo then pinned **3.1.1**, so for its whole life the baseline was
+measured by a client one release behind the storyboards it was grading against.
+Nothing failed — the storyboards and schemas were the right version, only the code
+driving them was not. That incident is why this guard exists.
 
 Pointing a mismatched client at the right storyboards is exactly the kind of
 "looks measured, isn't" result this whole module exists to prevent, so it gets a
@@ -40,7 +39,7 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #: repo pin)`` so a move on ANY of the three fails and asks for a decision, rather than the
 #: divergence widening quietly.
 #:
-#: THE REPO'S PIN IS NOT WHAT IS WRONG. 3.1.1 is the contract this seller implements. The
+#: THE REPO'S PIN IS NOT WHAT IS WRONG. 3.2.1 is the contract this seller implements. The
 #: runner's ``adcp_version`` is fixed by its npm release, so the client's contract and the
 #: vectors it grades against are one choice upstream rather than two. This repo already passes
 #: ``--compliance-version`` with the pinned version, and it does not move the client -- the
@@ -49,34 +48,16 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #: 14.0.0-rc.42 is not a free choice. Grading both protocol surfaces requires the 14 line:
 #: it is the only line carrying the A2A request-signing dispatch (adcp-client#2967, merged
 #: 2026-09-20), without which every ``signed_requests`` vector on the A2A card is ungradable.
-#: The 14 line declares 3.2.0-rc.4.
+#: The 14 line declares 3.2.0-rc.4, which is one patch release from this repo's pin.
 #:
-#: THE DIVERGENCE WIDENED AT THIS BUMP, from 3.2.0-rc.1 to 3.2.0-rc.4, and that is recorded
-#: rather than smoothed over: the runner line we need moved further from our pin, we did not
-#: choose to move away from it. The measured conformance score did not change across the bump
-#: (see below), which is what makes the wider divergence acceptable rather than merely tolerated.
+#: The nearest alternative is not nearer. adcontextprotocol/adcp-client#2950 shipped
+#: ``@adcp/sdk@13.1.0`` on the ``adcp-3.1`` tag, declaring ``adcp_version: 3.1.20`` -- further
+#: from 3.2.1 than the 14 line is, and it predates the A2A dispatch above, so taking it would
+#: trade a one-patch gap for a one-minor gap AND give up the A2A surface entirely.
 #:
-#: adcontextprotocol/adcp-client#2950 -- "``--compliance-version`` does not move the client
-#: contract, and no maintained line declares 3.1.1" -- is now CLOSED, and it is worth being
-#: precise about what that did and did not give us. It shipped ``@adcp/sdk@13.1.0`` on the
-#: ``adcp-3.1`` tag, which declares ``adcp_version: 3.1.20``. Closer than 3.2.0-rc.4, still not
-#: 3.1.1, and it predates the A2A dispatch above -- so it is not a retirement path for this
-#: divergence today. Retire the pin when a line both declares this repo's pin and carries the
-#: A2A signing dispatch, or when the runner separates the client contract from the vectors it
-#: grades against.
-#: THE DIVERGENCE NARROWED AT THE SDK-9 ADOPTION, and that is why the third element moved.
-#: This repo's pin went 3.1.1 -> 3.2.1 (``adcp==9.0.0b1+prs1435.1415.1456``), so the runner's
-#: 3.2.0-rc.4 is now one patch release from our contract rather than a minor behind it. The
-#: guard fired on that move, which is what it is for: the triple is a decision record, and the
-#: decision here is that a narrower divergence on the same runner line is accepted for the same
-#: reason the wider one was -- the 14 line is still the only one carrying the A2A
-#: request-signing dispatch, and the alternative is leaving every ``signed_requests`` vector on
-#: the A2A card ungradable.
-#:
-#: The paragraph above this one still reads "3.1.1 is the contract this seller implements".
-#: That was true when it was written and is not now; the contract is 3.2.1. Retirement is
-#: unchanged: a runner line that both declares this repo's pin and carries the A2A dispatch, or
-#: a runner that separates its client contract from the vectors it grades against.
+#: Retire the pin when a runner line both declares this repo's pin and carries the A2A signing
+#: dispatch, or when the runner separates its client contract from the vectors it grades
+#: against.
 _ACCEPTED_DIVERGENCE = ("14.0.0-rc.42", "3.2.0-rc.4", "3.2.1")
 
 
