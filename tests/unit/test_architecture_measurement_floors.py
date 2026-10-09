@@ -101,6 +101,13 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # auto-xfails in under a second) because a scenario carrying its own identity tag is
         # claimed by no coarse uc bucket. Deleting this row returns them to exactly that.
         "get-products-format-options",
+        # The third sibling: BR-UC-GET-PRODUCTS-format-id-filter stores two products whose
+        # formats share one id under two declaring agents and reads which ones get_products
+        # announces. Pinned on the same reasoning and with the same dormancy risk -- its
+        # scenario carries its own identity tag, so no coarse uc bucket claims it and
+        # deleting the row makes it auto-xfail at fixture setup instead of grading the
+        # (agent_url, id) comparison core/format-id.json makes a MUST.
+        "get-products-format-id-filter",
         "security-wire-error-safety",
         "security-tenant-isolation",
         "database-fail-fast",

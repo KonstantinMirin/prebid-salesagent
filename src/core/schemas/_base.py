@@ -101,6 +101,7 @@ from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreat
 # (``adcp.types.generated_poc.core.format_id.FormatReferenceStructuredObject``, same
 # qualname, now under ``domains``) plus the ``pixel_ratio`` the spec added.
 from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as LibraryFormatId
+from adcp.types.domains.core.format_option_ref import FormatOptionReference as LibraryFormatOptionReference
 from adcp.types.domains.core.version_envelope import AdcpVersionEnvelope
 from adcp.types.domains.enums.creative_approval_status import (
     # Aliased to OUR name for this concept, not to the library's. Two reasons, both
@@ -507,6 +508,13 @@ def format_key_parts(key: FormatKey) -> tuple[str, str]:
     return agent_url, format_id
 
 
+#: ``core/format-option-ref.json``'s oneOf, as the pinned SDK renders it: a union
+#: discriminated on ``scope``. An adapter rather than a model because the pinned type IS the
+#: union and there is nothing local to add -- validating through it is how the stored
+#: document's arm gets decided by the pin instead of by a reader's guess.
+_FORMAT_OPTION_REF_ADAPTER: TypeAdapter[LibraryFormatOptionReference] = TypeAdapter(LibraryFormatOptionReference)
+
+
 @dataclass(frozen=True, slots=True, order=True)
 class FormatOptionIdentity:
     """A ``format_option_ref``'s identity. ``publisher_domain`` is ``None`` for product scope.
@@ -516,15 +524,73 @@ class FormatOptionIdentity:
     Flattening the two arms to one optional domain keeps the identity comparable while
     preserving the distinction, because a publisher-catalog option and a product-local option
     that happen to share an id are different options.
+
+    THE SCOPE IS DERIVED, not stored. The pin makes the two members interdependent -- the
+    publisher arm lists ``publisher_domain`` in ``required``, and the product arm declares
+    ``"publisher_domain": false``, forbidding the member outright -- so the domain's presence
+    IS the discriminator and a stored ``scope`` beside it could only ever contradict it.
     """
 
     publisher_domain: str | None
     format_option_id: str
 
     @property
-    def document(self) -> dict[str, str | None]:
-        """This option ref as the ``core/format-option-ref.json`` document a column stores."""
-        return {"publisher_domain": self.publisher_domain, "format_option_id": self.format_option_id}
+    def scope(self) -> Literal["publisher", "product"]:
+        """Which arm of the pinned oneOf this reference names."""
+        return "product" if self.publisher_domain is None else "publisher"
+
+    @property
+    def document(self) -> dict[str, str]:
+        """This option ref as the ``core/format-option-ref.json`` document a column stores.
+
+        ``scope`` is REQUIRED in both arms, and the file declares
+        ``discriminator: {propertyName: "scope"}`` -- so a document without it names no arm
+        of the union. Omitting it is what made a canonical creative unreadable: the stored
+        document went back onto the response model, and pydantic refused the whole listing
+        with ``union_tag_not_found`` rather than answering the buyer.
+
+        ``publisher_domain`` is OMITTED rather than written as ``None`` on the product arm,
+        because that arm declares ``"publisher_domain": false``: the member may not be
+        present at all, and ``null`` is present. Writing it also made the document fail the
+        pinned schema in the arm that permits it least.
+        """
+        return {
+            "scope": self.scope,
+            **({} if self.publisher_domain is None else {"publisher_domain": self.publisher_domain}),
+            "format_option_id": self.format_option_id,
+        }
+
+    @classmethod
+    def of_document(cls, document: Mapping[str, Any]) -> "FormatOptionIdentity":
+        """The identity a stored ``core/format-option-ref.json`` document names.
+
+        The inverse of :attr:`document`, and the ONE reader of one -- so the two members and
+        the discriminator between them have a single owner on each side.
+
+        The document is VALIDATED through the pinned union rather than indexed, and the arm
+        pydantic picks is what decides which members are read. The reader this replaces took
+        both members POSITIONALLY out of the raw dict, which is how the missing discriminator
+        stayed invisible here: a document with no ``scope`` produced a perfectly ordinary
+        identity, and the loss surfaced three layers later as a refused response.
+        """
+        return cls.of_reference(_FORMAT_OPTION_REF_ADAPTER.validate_python(document))
+
+    @classmethod
+    def of_reference(cls, reference: LibraryFormatOptionReference) -> "FormatOptionIdentity":
+        """The identity a pinned ``format_option_ref`` names -- THE ONE reader of the scope.
+
+        The arm the discriminator names decides which members are read, which is not the same
+        as reading both members and seeing what is there. The SDK's two generated arms carry
+        IDENTICAL field sets -- codegen renders ``"publisher_domain": false`` as
+        ``publisher_domain: Any | None = None`` rather than as a prohibition -- so a
+        product-scope reference that carries a domain anyway parses, and reading the member
+        without the scope would silently reclassify it as publisher scope. That is a
+        different option: the two namespaces are distinct even for one ``format_option_id``.
+        """
+        return cls(
+            publisher_domain=reference.publisher_domain if reference.scope == "publisher" else None,
+            format_option_id=reference.format_option_id,
+        )
 
 
 #: Every parameter ``core/format-id.json`` declares beyond the identity pair, read OFF the
@@ -603,6 +669,13 @@ class CreativeFormatIdentity:
         re-checks what the columns already guarantee, and nothing downstream reaches for a
         key with a default -- both documents are written by ``_identity_columns`` and read
         back whole, exactly as they were written.
+
+        BOTH documents, which was once true of only one of them. The option ref was read
+        POSITIONALLY out of the raw dict, so it alone skipped the validation this docstring
+        promises -- and a stored document missing the ``scope`` discriminator read back as an
+        ordinary identity here and failed three layers later, on the response model, as
+        ``union_tag_not_found``. ``of_document`` validates it against the pinned union, so
+        the arm is decided by the pin and a malformed document fails HERE.
         """
         legacy_document = row.legacy_format_id
         identity = cls.of_legacy(FormatId.model_validate(legacy_document)) if legacy_document is not None else cls()
@@ -610,11 +683,7 @@ class CreativeFormatIdentity:
         return replace(
             identity,
             kind=row.format_kind,
-            option=(
-                FormatOptionIdentity(option_document["publisher_domain"], option_document["format_option_id"])
-                if option_document is not None
-                else None
-            ),
+            option=(FormatOptionIdentity.of_document(option_document) if option_document is not None else None),
         )
 
     @property
@@ -745,18 +814,15 @@ def creative_format_identity(
     kind_value = str(declared_kind)
     if not is_canonical_format_kind(kind_value, supported_kinds):
         raise ValueError(f"format_kind {kind_value!r} is not one this seller supports")
-    # Both arms of core/format-option-ref.json's oneOf declare format_option_id AND
-    # publisher_domain (measured: identical three-field sets, differing only in the `scope`
-    # discriminator), so the only variance is whether the creative carries a reference at
-    # all. The absent case is a branch; the members are plain reads.
+    # The reference arrives already validated into one arm of core/format-option-ref.json's
+    # oneOf, so the only variance here is whether the creative carries one at all. WHICH arm
+    # it is still has to be read, and ``of_reference`` is the one place that reads it: the
+    # two generated arms carry identical field sets, so taking the members positionally --
+    # which this did -- loses the product/publisher distinction the discriminator exists for.
     option_ref = creative.format_option_ref
     return CreativeFormatIdentity(
         kind=kind_value,
-        option=(
-            FormatOptionIdentity(option_ref.publisher_domain, option_ref.format_option_id)
-            if option_ref is not None
-            else None
-        ),
+        option=(FormatOptionIdentity.of_reference(option_ref) if option_ref is not None else None),
     )
 
 

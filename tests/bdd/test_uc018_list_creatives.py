@@ -130,6 +130,8 @@ def _seed_creative(
     tags: Sequence[str] | None = None,
     agent_url: str | None = None,
     format_params: dict[str, Any] | None = None,
+    canonical_kind: str | None = None,
+    format_option_ref: dict[str, Any] | None = None,
     **overrides: Any,
 ) -> Any:
     """Seed one approved creative owned by *principal*, optionally concept- or tag-bearing.
@@ -162,6 +164,12 @@ def _seed_creative(
         # Parameters of the REFERENCE, not a sidecar: core/format-id.json declares width,
         # height, duration_ms and pixel_ratio on the format_id object itself.
         kwargs["format_params"] = format_params
+    if canonical_kind is not None:
+        # The CANONICAL arm: core/creative-asset.json is a oneOf on the identifier, so a
+        # creative carrying a format_kind asserts no legacy reference at all.
+        kwargs["canonical_kind"] = canonical_kind
+    if format_option_ref is not None:
+        kwargs["format_option_ref_document"] = format_option_ref
     # An explicit name (the ``name_contains`` filter is a name substring match), a
     # non-approved status, and explicit created_at / updated_at so the ordering
     # assertions have distinct, deterministic sort keys instead of every row sharing one
@@ -1735,6 +1743,101 @@ def then_parameterized_format_id_roundtrips(ctx: dict) -> None:
         "the listed format_id does not name the format the buyer synced; these parameters "
         f"came back changed or absent (expected, got): {dropped}"
     )
+
+
+#: One reference per arm of ``core/format-option-ref.json``'s oneOf, written as the buyer
+#: sends them. Keyed by the ``scope`` each arm's discriminator takes, which is also the
+#: outline's parameter, so the scenario cannot name a scope this mapping has no arm for.
+#: The publisher arm's domain satisfies that arm's ``pattern`` (lower-case labels only).
+_FORMAT_OPTION_REFS: dict[str, dict[str, Any]] = {
+    "product": {"scope": "product", "format_option_id": "opt_hero_image"},
+    "publisher": {
+        "scope": "publisher",
+        "publisher_domain": "example.com",
+        "format_option_id": "opt_hero_image",
+    },
+}
+
+#: The pinned reference document, validated through the same file the response schema
+#: $refs. Built once: the resolver walks the pinned tree per call.
+_FORMAT_OPTION_REF_VALIDATOR = validator_for("core/format-option-ref.json")
+
+_CANONICAL_OPTION_LABEL = "creative on a canonical format option"
+
+
+@given(
+    parsers.parse('the buyer synced a creative on format_kind "{format_kind}" with a {scope}-scope format_option_ref')
+)
+def given_creative_on_canonical_format_option(ctx: dict, format_kind: str, scope: str) -> None:
+    """Seed one creative identified by its canonical kind and narrowed to one option.
+
+    The reference the buyer sent is recorded in ``ctx`` rather than recomputed in the Then,
+    so the two sides cannot drift into agreeing about a value neither of them sent.
+
+    Both guards below are what keep the row non-vacuous. The first refuses a scope the
+    oneOf has no arm for, which would otherwise seed ``None`` and grade the absent case
+    under a sentence promising a reference. The second asserts the fixture itself is valid
+    against the pinned file BEFORE anything is stored: if the seeded document were already
+    malformed, the readback assertion would be comparing one invalid document to another
+    and could not distinguish a seller that lost the reference from one that kept it.
+    """
+    assert scope in _FORMAT_OPTION_REFS, (
+        f"the scenario names scope {scope!r}, which core/format-option-ref.json has no arm "
+        f"for; the pinned arms are {sorted(_FORMAT_OPTION_REFS)}"
+    )
+    reference = _FORMAT_OPTION_REFS[scope]
+    _FORMAT_OPTION_REF_VALIDATOR.validate(reference)
+
+    env = ctx["env"]
+    tenant, principal = _get_or_create_tenant_and_principal(env)
+    creative = _seed_creative(
+        tenant,
+        principal,
+        name=_CANONICAL_OPTION_LABEL,
+        canonical_kind=format_kind,
+        format_option_ref=reference,
+    )
+    ctx["tenant"] = tenant
+    ctx["principal"] = principal
+    ctx["library"] = [_Seeded(creative.creative_id, _CANONICAL_OPTION_LABEL, "approved", (), None)]
+    ctx["sent_format_option_ref"] = reference
+
+
+def _listed_format_option_ref(ctx: dict) -> dict[str, Any]:
+    """The one seeded creative's ``format_option_ref`` exactly as the buyer received it."""
+    entries = _wire_creatives(ctx)
+    assert len(entries) == 1, f"expected the one seeded creative on the wire, got {len(entries)}"
+    listed = entries[0].get("format_option_ref")
+    assert listed is not None, (
+        "the listed creative carries no format_option_ref, so the buyer cannot tell which "
+        f"concrete format option it targets: {sorted(entries[0])}"
+    )
+    return listed
+
+
+@then("the listed creative's format_option_ref should equal the reference the buyer sent, scope included")
+def then_format_option_ref_roundtrips(ctx: dict) -> None:
+    """The whole reference comes back, compared as a document rather than member by member.
+
+    Whole-document equality, not a subset: ``scope`` is the member the loss dropped, and a
+    subset check over the members the seller DID emit passes while the discriminator is
+    gone. The product arm's ``publisher_domain: false`` makes the other direction matter
+    too -- an extra member is as wrong as a missing one -- which only an equality holds.
+    """
+    sent = ctx["sent_format_option_ref"]
+    listed = _listed_format_option_ref(ctx)
+    assert listed == sent, f"the listed format_option_ref is not the reference the buyer sent: {listed!r} != {sent!r}"
+
+
+@then("the listed creative's format_option_ref should be valid against core/format-option-ref.json")
+def then_format_option_ref_is_pin_valid(ctx: dict) -> None:
+    """And it names an arm of the pinned oneOf, which an echo of a malformed document cannot.
+
+    Independent of the equality above on purpose: the two fail for different reasons. This
+    one fires when the seller's stored shape is wrong in a way the buyer's own schema check
+    would refuse, whatever the seller echoed.
+    """
+    _FORMAT_OPTION_REF_VALIDATOR.validate(_listed_format_option_ref(ctx))
 
 
 def _dispatch_format_ids_filter(ctx: dict) -> None:

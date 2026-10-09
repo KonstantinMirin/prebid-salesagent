@@ -24,6 +24,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
+from src.core.format_resolver import product_format_identities
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
@@ -31,6 +32,7 @@ from src.core.schemas import (
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
     GetProductsResponse,
     Product,  # Extends library Product
+    format_id_identity,
 )
 from src.core.validation_helpers import safe_parse_json_field
 from src.services.policy_check_service import PolicyCheckService, PolicyStatus
@@ -531,32 +533,20 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
 
             # Filter by format_ids (format_types removed in adcp 3.12)
             if req.filters.format_ids:
-                # Product.format_ids is list[str] or list[dict] (format IDs)
-                product_format_ids: set[str] = set()
-                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-                    if isinstance(format_id, str):
-                        product_format_ids.add(format_id)
-                    elif isinstance(format_id, dict):
-                        # Dict with 'id' key (from database)
-                        dict_id = format_id.get("id")
-                        if dict_id is not None:
-                            product_format_ids.add(dict_id)
-                    elif isinstance(format_id, FormatId):
-                        product_format_ids.add(format_id.id)
-
-                # req.filters.format_ids contains FormatId objects, extract .id from them
-                request_format_ids: set[str] = set()
-                for fmt_id in req.filters.format_ids:
-                    if isinstance(fmt_id, str):
-                        request_format_ids.add(fmt_id)
-                    elif isinstance(fmt_id, FormatId):
-                        request_format_ids.add(fmt_id.id)
-                    elif isinstance(fmt_id, dict):
-                        dict_id = fmt_id.get("id")
-                        if dict_id is not None:
-                            request_format_ids.add(dict_id)
-
-                if not any(fmt_id in product_format_ids for fmt_id in request_format_ids):
+                # The federation identity is the (agent_url, id) PAIR, canonicalized.
+                # core/format-id.json makes that a MUST of anyone comparing two format-id
+                # values, and core/product-filters.json binds the MUST to this filter: its
+                # `format_ids.items` is a $ref to that file, so each item is a reference
+                # object and not a bare slug. This compared BARE IDS, which matches a
+                # reference to ANOTHER agent's format against a local product that merely
+                # shares the slug -- a false positive, and the worse direction, because the
+                # buyer proceeds to buy inventory for a format this seller does not host.
+                # `format_id_identity` is the single canonical form, and
+                # `product_format_identities` is its reader for the stored column (which
+                # holds documents, and drops an unusable one with a warning).
+                # The sibling filter in creative_formats.py compares the same two sets.
+                requested_identities = {format_id_identity(fmt_id) for fmt_id in req.filters.format_ids}
+                if not (product_format_identities(product.format_ids) & requested_identities):
                     continue
 
             # Filter by standard_formats_only
