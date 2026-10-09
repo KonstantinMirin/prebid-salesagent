@@ -283,10 +283,12 @@ class TestChallengeBodyIsConformant:
         # Read off the RAW payload, never off the re-validated model: what a receiver matches
         # is the bytes sent, and asserting against the re-parsed model checks pydantic
         # against itself.
-        assert payload["seller_agent_url"] == f"https://{_AGENT_HOST}/mcp/", (
-            "seller_agent_url must be the PUBLISHED agents[] entry for the registering transport, "
-            "BYTE-FOR-BYTE — a receiver matches it against our brand.json with no canonicalization "
-            f"(security.mdx :1104 step 5); got {payload['seller_agent_url']!r}"
+        assert payload["seller_agent_url"] == f"https://{_AGENT_HOST}/mcp", (
+            "seller_agent_url must be the PUBLISHED agents[] entry for the registering transport. "
+            "A receiver canonicalizes this value and every candidate agents[].url and then requires "
+            "one equal pair (security.mdx key discovery, step 5) — and there 'a trailing slash "
+            "remains significant', so /mcp/ would name a different agent from the /mcp we publish; "
+            f"got {payload['seller_agent_url']!r}"
         )
         assert challenge.account_id == response.accounts[0].account_id, (
             "the challenge must name the account id the account is actually created with, or the "
@@ -359,7 +361,7 @@ class TestFailClosed:
     ``agents[]`` entry shares that origin and that JWKS. It is also not expressible: the
     identity a tool ``_impl`` receives carries no protocol, the transport being a label
     ``invoke_tool`` keeps for its observability record. That the emitted value really is
-    the published ``/mcp/`` entry, byte-for-byte, is graded in
+    the published ``/mcp`` entry, in that one spelling, is graded in
     :meth:`TestChallengeBodyIsConformant.test_body_carries_the_seven_required_fields`.
     """
 
