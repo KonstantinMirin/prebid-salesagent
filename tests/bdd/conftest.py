@@ -3943,7 +3943,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # keyword targeting ops not implemented, error codes/suggestions missing.
         # FIXME: UC-026 production gaps in update response and validation.
         _UC026_XFAIL_TAGS: set[str] = {
-            # Graduated: T-UC-026-main-explicit-formats (qq6f: format_ids now echoed)
+            # (The qq6f "Graduated: T-UC-026-main-explicit-formats" note that stood here
+            # was stale: the tag was re-added in the 2026-09-15 block below, which now
+            # carries the graduation record.)
             # Full-config: optimization_goals missing `kind`, targeting_overlay.audiences extra_forbidden
             "T-UC-026-main-full-config",
             # Update alt-flows: AffectedPackage lacks budget/targeting_overlay/format_ids;
@@ -3961,29 +3963,85 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated: T-UC-026-alt-dedup-crossbuy (all 4 transports pass)
             # Extension error scenarios — error codes/suggestions not implemented
             # Graduated: T-UC-026-ext-a (all 4 transports pass)
-            "T-UC-026-ext-b",
+            # Graduated to _UC026_PARTITION_SELECTIVE: T-UC-026-ext-b. Two of its three
+            # rows (product_id, pricing_option_id) pass on all four transports; the
+            # budget row is a 3.2.1 regrounding failure, not a production gap, and is
+            # row-keyed below.
             "T-UC-026-ext-c",
             "T-UC-026-ext-d",
             "T-UC-026-ext-e",
             "T-UC-026-ext-f",
-            "T-UC-026-ext-g-product",
-            "T-UC-026-ext-g-format",
-            "T-UC-026-ext-g-pricing",
+            # Graduated: T-UC-026-ext-g-product, T-UC-026-ext-g-format,
+            # T-UC-026-ext-g-pricing (innet_091026_1343, all four transports xpass).
+            # Production refuses each immutable field on update from
+            # AdCPPackageUpdate._validate_package_update_shape, which raises one pydantic
+            # `readOnly` error per offending field; adcp_error_for maps a pydantic
+            # ValidationError to AdCPInvalidRequestError, so the buyer gets
+            # INVALID_REQUEST + recovery=correctable + the CODE_TABLE suggestion with
+            # field='packages[0].<name>'. Measured on this tree at the DTO boundary:
+            # product_id, format_ids and pricing_option_id each resolve to
+            # INVALID_REQUEST with that field; the wire-level evidence is the xpass on
+            # all four transports. 3.2.1 media-buy/package-update.json grounds it -- it
+            # declares none of the three and its root description names them
+            # "Fully-immutable fields ... cannot appear in update payloads".
+            # Each scenario's POST-F2 said "Error identifies immutable <name> field" and
+            # no Then graded it, so the graduation added `the error field should contain
+            # "<name>"` to all three; they still xpass under it.
             "T-UC-026-ext-h-keyword",
             "T-UC-026-ext-h-negative",
             "T-UC-026-ext-h-cross-ok",
             "T-UC-026-ext-h-cross-reverse",
+            # NOT graduated, and the reason is a HARNESS gap this xpass was hiding.
+            #
+            # T-UC-026-ext-i xpassed on all four transports, and the xpass was grading the
+            # WRONG TOOL. Its Givens are "a valid update_media_buy request with package
+            # update: | budget | 7000 |" and "the package update contains no package_id"
+            # -- and nothing before them creates a media buy. So ``_ensure_update_kwargs``
+            # has no ``existing_media_buy_id`` to copy, ``update_kwargs`` carries no
+            # ``media_buy_id``, and ``_is_update_request`` (tests/harness/media_buy_dual.py:37)
+            # discriminates on exactly that key: with no ``req`` and no ``media_buy_id`` it
+            # returns False and the flat body is dispatched to CREATE_media_buy. Production
+            # then refuses a create package of ``{budget: 7000}`` -- no product_id -- and the
+            # scenario's INVALID_REQUEST / suggestion / correctable assertions all held,
+            # because create and update share one error-envelope schema.
+            #
+            # Measured: the graduation added `the error field should contain "package_id"`
+            # (the scenario's own ungraded POST-F2, "Error explains that a package
+            # identifier is required"), and all three in-process transports went from
+            # xpass to FAIL with "Expected error field to contain 'package_id', got
+            # 'packages[0].product_id'". The field pointer is the one part of the envelope
+            # that says which request was validated, which is why adding it is what made
+            # the misdispatch visible.
+            #
+            # The assertion STAYS -- it is the correct obligation (3.2.1
+            # media-buy/package-update.json has required: ["package_id"]) and deleting it
+            # would restore the vacuum. Graduating this needs the Given to establish a
+            # media buy so the dispatch reaches update_media_buy at all; same family as
+            # T-UC-026-ext-j below, a harness gap stated as such rather than blamed on the
+            # seller.
             "T-UC-026-ext-i",
             # Invariant scenarios — production validation gaps
             # Graduated: T-UC-026-inv-194-1 (all 4 transports pass)
             "T-UC-026-inv-194-2",
-            "T-UC-026-inv-195-1",
+            # Graduated: T-UC-026-inv-195-1 (innet_091026_1343, all four transports
+            # xpass). 3.2.1 core/package.json declares pricing_option_id on the returned
+            # package, and the Then compares it for equality against the id the scenario
+            # named (resolved through the seeded pricing option), so an unechoed or
+            # substituted value fails.
             "T-UC-026-inv-195-2",
             # Graduated: T-UC-026-inv-195-3 (rczc: bid_price ceiling semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-195-4 (rczc: bid_price exact semantics pass all 4 transports)
             # Graduated: T-UC-026-inv-196-3 (all 4 transports pass)
             "T-UC-026-inv-197-3",
-            "T-UC-026-inv-197-4",
+            # Graduated: T-UC-026-inv-197-4 (innet_091026_1343, all four transports
+            # xpass). 3.2.1 media-buy/package-request.json keeps minItems: 1 on
+            # format_ids, so an empty array is a schema-constraint violation, which
+            # 3.2.1 enums/error-code.json puts under INVALID_REQUEST ("violates schema
+            # constraints", recovery correctable). Measured on this tree: the refusal
+            # comes back INVALID_REQUEST with field='packages[0].format_ids' and one
+            # issue carrying keyword 'minItems' -- measured at the DTO boundary, with the
+            # xpass as the wire-level evidence. The scenario was strengthened with the
+            # graduation to assert that field pointer and recovery=correctable.
             "T-UC-026-inv-198-4",
             "T-UC-026-inv-199-3",
             "T-UC-026-inv-199-4",
@@ -4017,12 +4075,23 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # _UC026_PARTITION_SELECTIVE below, keyed by the row.
             #
             # format_ids: not defaulted to the product's formats when the package omits
-            # them, and absent from the response when the package supplies them. The
-            # pinned 3.1 core/package.json declares the field on the returned package.
+            # them. The pinned core/package.json declares the field on the returned
+            # package; 3.2.1 marks it deprecated-until-4.0 and still says "Sellers SHOULD
+            # echo this field whenever the request included it", so the obligation holds
+            # under the current pin. Only the DEFAULTING half is still missing.
             "T-UC-026-main-required-fields",
-            "T-UC-026-main-explicit-formats",
-            # catalogs accepted but not echoed on the created package.
-            "T-UC-026-inv-089-2",
+            # Graduated: T-UC-026-main-explicit-formats (innet_091026_1343, all four
+            # transports xpass) -- the other half of that note is fixed: a package that
+            # SUPPLIES format_ids now gets them echoed, and the Then compares the echoed
+            # set for equality, so a dropped or widened set fails. format_ids_to_provide
+            # is graded in both directions (assigned formats excluded, unassigned ones
+            # present) by then_package_formats_to_provide_based_on_creatives.
+            # Graduated: T-UC-026-inv-089-2 (innet_091026_1343, all four transports
+            # xpass) -- catalogs are echoed on the created package now. 3.2.1
+            # core/package.json: "Echoed from the create_media_buy request". The Then was
+            # strengthened with the graduation from a count-plus-distinct-types tally to
+            # set equality of (type, catalog_id) against the request, which is what an
+            # echo obligation actually says; it still xpasses under the stronger rule.
             # price_breakdown absent from the create response, so the default
             # list_price == option rate claim has nothing to read.
             "T-UC-026-inv-196-3",
@@ -4069,7 +4138,88 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #   2. Cross-transport production gaps: conflict_with_overlay validation,
         #      creative_assignments/optimization_goals replacement, empty keyword
         #      validation not implemented
+        #
+        # ── § REST update rows ─────────────────────────────────────────────────
+        # Cause (1) above is NO LONGER TRUE and the 87 ``[rest-...-success`` rows it
+        # parks all XPASS (innet_091026_1343). MediaBuyDualEnv has carried
+        # _run_update_rest_request / _build_update_rest_body / _parse_update_rest_response
+        # since the a3xo wiring; the captured request artifact shows the REST row sending
+        # the same create-then-PUT pair as a2a and mcp, identical in shape down to the
+        # keyword payload (only the generated ids differ).
+        #
+        # They are NOT graduated, because the xpass is VACUOUS and graduating a vacuous
+        # pass is the one thing the xpass-graduation protocol names as an anti-pattern.
+        # Every one of those rows ends in ``the outcome should be <outcome>``, whose
+        # success branch asserts that the seller answered and reported success -- and
+        # nothing about the EFFECT the Examples column names.
+        #
+        # The protocol says STRENGTHEN before leaving something routed, so that was done
+        # and RUN rather than reasoned about. The effect assertion was written into
+        # ``then_outcome`` -- every (keyword, match_type) in the request's
+        # keyword_targets_add must appear in the updated package's targeting_overlay --
+        # and T-UC-026-partition-keyword-add's new_keyword and existing_keyword_update_bid
+        # rows went from xpass to FAIL on all three in-process transports, 6 of 6, each on
+        # "update response carries no package". A strengthened Then that fails for a
+        # PRODUCTION reason is the legitimate reason to leave routing in place, and that
+        # is what happened here. The assertion was reverted rather than landed: it cannot
+        # pass until production changes, and this lane does not change production.
+        #
+        # The production reason, named: src/core/tools/media_buy_update.py appends an
+        # AffectedPackage at five sites only -- 841 (budget), 926 (creative_ids), 1008
+        # (creatives), 1158 (creative_assignments), 1191 (targeting_overlay) -- and the
+        # keyword-op field names appear NOWHERE under src/, so keyword_targets_add /
+        # _remove and negative_keywords_add / _remove are accepted by the DTO (inherited
+        # from LibraryPackageUpdate) and then silently discarded. `paused` (761) applies
+        # through the adapter and appends nothing either. All three in-process transports
+        # return affected_packages=[], which makes this ONE seller gap rather than a
+        # transport divergence -- there is one _impl behind one boundary.
+        #
+        # 3.2.1 media-buy/update-media-buy-response.json is explicit about the obligation:
+        # affected_packages is "Array of full Package objects showing complete post-update
+        # state for each modified package ... a state snapshot, not a sparse delta: sellers
+        # MUST NOT return package_id-only stubs. Campaign-level updates that do not modify
+        # packages may return an empty array." A package-level update that modified a
+        # package may not.
+        #
+        # What graduates these rows is production returning the affected package, after
+        # which the effect assertion comes back to ``then_outcome`` and the rows grade for
+        # real. Until then the reason below says so rather than naming a dispatch gap that
+        # is closed.
+        _UC026_REST_VACUOUS = (
+            "rows XPASS but vacuously: the harness REST update dispatch is wired, and "
+            "`the outcome should be success...` grades no effect because update_media_buy "
+            "returns affected_packages=[] — see § REST update rows above"
+        )
         _UC026_PARTITION_SELECTIVE: list[tuple[str, set[str], str]] = [
+            # Moved here from _UC026_XFAIL_TAGS, narrowed from the whole tag to one row.
+            # T-UC-026-ext-b has three rows and two of them -- product_id and
+            # pricing_option_id -- xpass on all four transports (innet_091026_1343):
+            # measured on this tree, each comes back INVALID_REQUEST with
+            # field='packages[0].<name>' and one issue whose keyword is 'required', which
+            # is exactly what the scenario grades.
+            #
+            # The budget row is a REGROUNDING failure, not a production gap, and it is the
+            # reason the tag could not simply be deleted. 3.2.1
+            # media-buy/package-request.json has required: ["product_id",
+            # "pricing_option_id"] -- budget is NOT required ("Required in fixed
+            # allocation mode. Optional in seller-optimized mode"). The scenario was
+            # written against 3.1.1 and lists budget as a third required field. This
+            # seller does refuse a budget-less package, but through the request-level
+            # accepted-shape oneOf ("matches no accepted shape. One of: packages, each
+            # with budget and without min_spend_target ..."), whose pydantic error has
+            # loc () -- so `field` comes out EMPTY and `issues` empty, and the scenario's
+            # `the error field should contain "budget"` has nothing to read. Two separate
+            # things to fix upstream, neither of them here: reconcile the row against the
+            # 3.2.1 required list, and give the accepted-shape refusal a field pointer
+            # (the spec's own answer for the seller-optimized case is UNSUPPORTED_FEATURE,
+            # not an unattributed INVALID_REQUEST).
+            (
+                "T-UC-026-ext-b",
+                {"-budget]"},
+                "3.2.1 package-request.json does not require budget, and the accepted-shape "
+                "refusal that does reject it carries loc () so the envelope names no field — "
+                "scenario needs upstream reconciliation, not graduation",
+            ),
             # ── Added 2026-09-15 with the UC-026 wiring. Row-keyed, not tag-keyed,
             # because each of these outlines fails a MINORITY of its rows and the rest
             # genuinely pass; xfailing the whole tag would have turned those passes into
@@ -4092,52 +4242,60 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-boundary-keyword-add",
                 {"empty keyword string"},
-                "empty keyword value not rejected on the REST update path",
+                f"empty keyword value not rejected on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-keyword-remove",
                 {"empty keyword string"},
-                "empty keyword value not rejected on the REST update path",
+                f"empty keyword value not rejected on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-kw-add-shared",
                 {"keyword_targets_add WITH targeting_overlay.keyword_targets"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-kw-remove-shared",
                 {"keyword_targets_remove WITH targeting_overlay.keyword_targets"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-neg-kw-add",
                 {"negative_keywords_add WITH targeting_overlay.negative_keywords"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-neg-kw-remove",
                 {"negative_keywords_remove WITH targeting_overlay.negative_keywords"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-partition-kw-add-shared",
                 {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-partition-kw-remove-shared",
                 {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-partition-neg-kw-add",
                 {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-partition-neg-kw-remove",
                 {"conflict_with_overlay"},
-                "conflict between a keyword op and targeting_overlay not rejected on the REST update path",
+                "a keyword op combined with targeting_overlay is not rejected on any transport; "
+                f"the REST {_UC026_REST_VACUOUS}",
             ),
             # Replacement semantics: only the targeting_overlay rows fail. The catalogs
             # and scalar-patch rows of the same outlines pass.
@@ -4181,12 +4339,12 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             (
                 "T-UC-026-partition-immutable",
                 {"[rest-update_mutable_only", "[rest-no_immutable_fields_present"},
-                "REST update dispatch not wired for partition immutable success tests",
+                f"partition immutable success {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-immutable",
                 {"[rest-update with only mutable"},
-                "REST update dispatch not wired for boundary immutable success tests",
+                f"boundary immutable success {_UC026_REST_VACUOUS}",
             ),
             # Keyword add partition: only REST success-path tests fail
             (
@@ -4197,7 +4355,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-mixed_new_and_update",
                     "[rest-same_keyword_different_match",
                 },
-                "REST update dispatch not wired for partition keyword-add success tests",
+                f"partition keyword-add success {_UC026_REST_VACUOUS}",
             ),
             # Keyword remove partition: only REST success-path tests fail
             (
@@ -4208,7 +4366,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-remove_all_keywords",
                     "[rest-mixed_existing_and_nonexistent",
                 },
-                "REST update dispatch not wired for partition keyword-remove success tests",
+                f"partition keyword-remove success {_UC026_REST_VACUOUS}",
             ),
             # Keyword boundary add: empty keyword string on impl/a2a/mcp +
             # REST success-path tests fail
@@ -4223,7 +4381,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-same keyword with broad and exact",
                     "[rest-bid_price = 0",
                 },
-                "empty keyword validation not implemented / REST update not wired",
+                f"empty keyword validation not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             # Keyword boundary remove: empty keyword string on impl/a2a/mcp +
             # REST success-path tests fail
@@ -4238,7 +4396,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-remove all keyword targets",
                     "[rest-mix of existing and non-existent",
                 },
-                "empty keyword validation not implemented / REST update not wired",
+                f"empty keyword validation not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             # Keyword shared partition: conflict_with_overlay on impl/a2a/mcp +
             # REST success-path tests fail
@@ -4258,7 +4416,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-upsert_existing",
                     "[rest-zero_bid_price",
                 },
-                "conflict_with_overlay not implemented / REST update not wired",
+                f"conflict_with_overlay not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-partition-kw-remove-shared",
@@ -4273,7 +4431,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-cross_dimension_valid",
                     "[rest-remove_nonexistent",
                 },
-                "conflict_with_overlay not implemented / REST update not wired",
+                f"conflict_with_overlay not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             # Keyword shared boundary: overlay conflict on impl/a2a/mcp +
             # REST success-path tests fail
@@ -4291,7 +4449,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-match_type = 'exact'",
                     "[rest-match_type = 'phrase'",
                 },
-                "overlay conflict validation not implemented / REST update not wired",
+                f"overlay conflict validation not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-kw-remove-shared",
@@ -4308,7 +4466,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-remove pair that does NOT exist",
                     "[rest-remove pair that exists",
                 },
-                "overlay conflict validation not implemented / REST update not wired",
+                f"overlay conflict validation not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             # Negative keyword partition: conflict_with_overlay on impl/a2a/mcp +
             # REST success-path tests fail
@@ -4325,7 +4483,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-boundary_min_keyword",
                     "[rest-cross_dimension_valid",
                 },
-                "conflict_with_overlay not implemented / REST update not wired",
+                f"conflict_with_overlay not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-partition-neg-kw-remove",
@@ -4340,7 +4498,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-cross_dimension_valid",
                     "[rest-remove_nonexistent",
                 },
-                "conflict_with_overlay not implemented / REST update not wired",
+                f"conflict_with_overlay not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             # Negative keyword boundary: overlay conflict on impl/a2a/mcp +
             # REST success-path tests fail
@@ -4359,7 +4517,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-match_type = 'exact'",
                     "[rest-match_type = 'phrase'",
                 },
-                "overlay conflict validation not implemented / REST update not wired",
+                f"overlay conflict validation not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-neg-kw-remove",
@@ -4376,13 +4534,13 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-remove pair that does NOT exist",
                     "[rest-remove pair that exists",
                 },
-                "overlay conflict validation not implemented / REST update not wired",
+                f"overlay conflict validation not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             # Paused: only REST update-path tests fail (create-path passes)
             (
                 "T-UC-026-partition-paused",
                 {"[rest-pause_on_update", "[rest-resume_on_update"},
-                "REST update dispatch not wired for partition paused update tests",
+                f"partition paused update {_UC026_REST_VACUOUS}",
             ),
             # d09y: boundary scenarios exposing real production gaps after step-parser fix.
             (
@@ -4399,7 +4557,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-paused=true on update",
                     "[rest-paused=true on already-paused",
                 },
-                "REST update dispatch not wired for boundary paused update tests",
+                f"boundary paused update {_UC026_REST_VACUOUS}",
             ),
             # Replacement: REST all tests fail (update dispatch) +
             # creative_assignments/optimization_goals on impl/a2a/mcp
@@ -4412,7 +4570,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-replace_catalogs",
                     "[rest-replace_targeting_overlay",
                 },
-                "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
+                f"creative_assignments/optimization_goals replacement not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
             (
                 "T-UC-026-boundary-replacement",
@@ -4424,7 +4582,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "[rest-only scalar fields updated",
                     "[rest-targeting_overlay replacement",
                 },
-                "creative_assignments/optimization_goals replacement not implemented / REST update not wired",
+                f"creative_assignments/optimization_goals replacement not implemented on any transport; the REST {_UC026_REST_VACUOUS}",
             ),
         ]
         for tag, substrings, reason in _UC026_PARTITION_SELECTIVE:
