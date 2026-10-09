@@ -83,6 +83,7 @@ from src.core.signing.posture import (
     webhook_signing_posture,
 )
 from src.core.tenant_context import TenantContext
+from src.core.tools.accounts import resolve_account_currency_modes
 from src.services.targeting_capabilities import supports_property_list_filtering
 
 logger = logging.getLogger(__name__)
@@ -312,10 +313,15 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
     -- the two can never diverge. require_operator_auth is a true architectural constant
     (no per-tenant operator-auth config or enforcement exists yet). sandbox reflects the
     tenant's account_sandbox column via resolve_account_sandbox (default FALSE --
-    support is opted into, never assumed from an unset column). authorization_endpoint/
-    required_for_products/account_financials stay omitted -- declaring them would be an
-    aspirational capability the platform doesn't back yet, not an honest one
-    (#1592 Core Invariant).
+    support is opted into, never assumed from an unset column).
+    supported_account_currency_modes is the same claim-and-enforcement pairing one level
+    deeper: resolve_account_currency_modes (src/core/tools/accounts.py) reads the
+    disposition the sync_accounts entry policy gives ``currency``, so this seller cannot
+    advertise a mode its provisioning walk does not implement. It takes no tenant because
+    the binding is architectural, not configuration -- the accounts table has no currency
+    column. authorization_endpoint/required_for_products/account_financials stay omitted --
+    declaring them would be an aspirational capability the platform doesn't back yet, not
+    an honest one (#1592 Core Invariant).
     """
     supported_billing = resolve_supported_billing(tenant)
     if not supported_billing:
@@ -323,6 +329,7 @@ def _build_account_block(tenant: TenantContext) -> AccountCapabilities | None:
 
     return AccountCapabilities(
         supported_billing=[BillingParty(v) for v in supported_billing],
+        supported_account_currency_modes=resolve_account_currency_modes(),
         require_operator_auth=False,
         sandbox=resolve_account_sandbox(tenant),
         # SDK field defaults are False, not None -- pass None explicitly or these
