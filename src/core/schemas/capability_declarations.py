@@ -60,6 +60,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.details import ConfigurationDetails
+from src.core.schemas._base import canonical_agent_url
 from src.core.signing.posture import (
     IdentityDeclaration,
     RequestSigningPosture,
@@ -912,8 +913,18 @@ class CapabilityDeclarations(BaseModel):
         # the one we published, so a declared pointer that differs from the derived one is
         # a request_signature_key_origin_mismatch by construction -- and the emitted value
         # is always the derived one, which would make the declaration silently inert.
+        #
+        # "Differs" is decided by ``canonical_agent_url``, the one implementation of the
+        # spec's canonicalization, and by nothing else. The ``rstrip("/")`` this replaced
+        # was the "additional transformation before comparison" the algorithm's closing
+        # sentence forbids: it equated ``.../brand.json`` with ``.../brand.json/``, two
+        # distinct URLs, while still calling ``https://h:443/...`` a mismatch for
+        # ``https://h/...`` when step 4 makes them the same. Canonicalizing is strictly
+        # more correct on both axes, and it is the same answer the verifier reaches.
         declared_url = str(self.identity.brand_json_url) if self.identity and self.identity.brand_json_url else None
-        if declared_url is not None and declared_url.rstrip("/") != platform.brand_json_url.rstrip("/"):
+        if declared_url is not None and canonical_agent_url(declared_url) != canonical_agent_url(
+            platform.brand_json_url
+        ):
             self._reject(
                 "identity.brand_json_url",
                 "Must equal the URL this agent actually serves its brand.json at, which is the one "
