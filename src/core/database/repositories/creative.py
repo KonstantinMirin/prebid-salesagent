@@ -28,7 +28,7 @@ from src.core.database.repositories.effects import SessionEffectsMixin
 from src.core.schemas import (
     CreativeFormatIdentity,
     CreativeStatus,
-    FormatIdentity,
+    FormatKey,
 )
 
 logger = logging.getLogger(__name__)
@@ -155,7 +155,7 @@ class CreativeRepository(SessionEffectsMixin):
         tags_any: list[str] | None = None,
         has_variables: bool | None = None,
         creative_ids: list[str] | None = None,
-        format_ids: list[FormatIdentity] | None = None,
+        format_ids: list[FormatKey] | None = None,
         created_after: datetime | None = None,
         created_before: datetime | None = None,
         search: str | None = None,
@@ -175,9 +175,9 @@ class CreativeRepository(SessionEffectsMixin):
         singular sibling. It used to be a single ``status`` string, which silently
         answered a two-status request with a one-status query.
 
-        ``format_ids`` carries ``FormatIdentity`` values — the pin's format_id is an object,
-        so matching one member alone would return another agent's like-named format, and the
-        identity type is what carries the canonicalization the comparison requires.
+        ``format_ids`` carries ``FormatKey`` values — the pin's format_id is an object, so
+        matching one member alone would return another agent's like-named format, and the key
+        is what carries the canonicalization the comparison requires.
         """
         # Build base query - filter by tenant AND principal for security
         stmt = select(Creative).filter_by(
@@ -213,11 +213,12 @@ class CreativeRepository(SessionEffectsMixin):
             # One indexed IN over the stored comparison key. A ``format_id`` is an OBJECT
             # (core/format-id.json: agent_url + id) and comparing two of them canonicalizes
             # agent_url first, which the schema makes a MUST -- so the column holds
-            # ``FormatIdentity.storage_key`` of what was stored and the filter builds the same
-            # key from what the buyer asked for. Both sides go through the ONE key builder, so
-            # the comparison is exact: an agent differing only in host case, a default port,
-            # an IDN form or a trailing slash is the same agent on both sides.
-            stmt = stmt.where(Creative.legacy_format_key.in_([identity.storage_key for identity in format_ids]))
+            # the ``FormatKey`` of what was stored and the filter is handed the same key built
+            # from what the buyer asked for. Both sides go through the ONE key builder
+            # (``format_id_identity``), so the comparison is exact: an agent differing only in
+            # host case, a default port, an IDN form or a trailing slash is the same agent on
+            # both sides.
+            stmt = stmt.where(Creative.legacy_format_key.in_(format_ids))
 
         # v3.1 concept_ids filter: concepts group related creatives across sizes
         # and formats (e.g. Flashtalking concepts, Celtra campaign folders). The

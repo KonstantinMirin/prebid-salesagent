@@ -25,10 +25,11 @@ from src.core.exceptions import AdCPFormatNotFoundError, AdCPSalesAgentError
 from src.core.schemas import (
     CreativeFormatIdentity,
     Format,
-    FormatIdentity,
+    FormatKey,
     LibraryCreativeAsset,
     creative_format_identity,
     format_id_identity,
+    format_key_parts,
 )
 from src.core.security.outbound_http import UrlProvenance
 from src.core.validation_helpers import run_async_in_sync_context
@@ -85,7 +86,7 @@ def format_ref_id(ref: FormatRef) -> str | None:
     return str(value) if value is not None else None
 
 
-def format_identity(ref: FormatRef) -> FormatIdentity:
+def format_identity(ref: FormatRef) -> FormatKey:
     """The federation identity of a format reference, in any shape it arrives in.
 
     Delegates the rule itself to ``src.core.schemas.format_id_identity`` — the
@@ -213,7 +214,7 @@ def same_format(left: FormatRef, right: FormatRef) -> bool:
     return format_identity(left) == format_identity(right)
 
 
-def format_identity_or_none(entry: Any) -> FormatIdentity | None:
+def format_identity_or_none(entry: Any) -> FormatKey | None:
     """The federation identity of a format reference, or None if it is not one.
 
     Two things separate this from :func:`format_identity`. It absorbs the ONE
@@ -259,7 +260,7 @@ def format_identity_or_none(entry: Any) -> FormatIdentity | None:
         return None
 
 
-def product_format_identities(format_ids: Iterable[Any] | None) -> set[FormatIdentity]:
+def product_format_identities(format_ids: Iterable[Any] | None) -> set[FormatKey]:
     """The federation identities a product's declared ``format_ids`` accept.
 
     Empty means the product imposes no format restriction — the same reading
@@ -269,7 +270,7 @@ def product_format_identities(format_ids: Iterable[Any] | None) -> set[FormatIde
     return {identity for identity in identities if identity is not None}
 
 
-def format_display(identity: FormatIdentity) -> str:
+def format_display(identity: FormatKey) -> str:
     """``<canonical agent_url>/<id>`` — how a format identity is spelled to a buyer.
 
     The identity, not the raw reference: an error that lists "supported
@@ -284,9 +285,13 @@ def format_display(identity: FormatIdentity) -> str:
     which the spec keeps distinct) render alike; that is accepted here because
     this string is read by a human deciding what to resubmit, and nothing
     parses it back.
+
+    THE ONE reader of a key's halves (via ``format_key_parts``), and it is a renderer:
+    splitting a key anywhere else is how ``id``-alone matching gets reintroduced.
     """
-    separator = "" if identity.agent_url.endswith("/") else "/"
-    return f"{identity.agent_url}{separator}{identity.id}"
+    agent_url, format_id = format_key_parts(identity)
+    separator = "" if agent_url.endswith("/") else "/"
+    return f"{agent_url}{separator}{format_id}"
 
 
 def format_accepted_by(requested: FormatRef, supported: FormatRef) -> bool:

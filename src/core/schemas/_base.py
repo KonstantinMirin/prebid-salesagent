@@ -16,7 +16,7 @@ from decimal import Decimal
 # --- MCP Status System (AdCP PR #77) ---
 from enum import StrEnum
 from functools import cache
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, Self, TypeAlias, cast, get_args
+from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Literal, NewType, Self, TypeAlias, cast, get_args
 
 from src.core.enum_helpers import enum_value
 
@@ -422,61 +422,33 @@ def canonical_agent_url(agent_url: object) -> str:
     return canonical
 
 
-@dataclass(frozen=True, slots=True, order=True)
-class FormatIdentity:
-    """The federation identity of a ``format_id``: its canonical ``agent_url`` and its ``id``.
+#: Separates the two halves of a :data:`FormatKey`. The ASCII unit separator cannot occur
+#: in a URL or in an ``id``, so no pair can collide with another by spelling.
+_FORMAT_KEY_SEPARATOR = "\x1f"
 
-    A DISTINCT TYPE rather than a ``tuple[str, str]``, and that is the whole point of
-    the class. The canonicalization in ``canonical_agent_url`` is a spec MUST, so a
-    comparison key built any other way is wrong -- but when the key was a bare tuple
-    nothing could say so, because a hand-built tuple has the identical static type and
-    differs only in VALUE. ``mypy.ini`` already sets ``strict_equality = True`` and it
-    does not help there: comparing a raw ``tuple[str, str]`` against a
-    ``set[tuple[str, str]]`` type-checks clean.
-
-    It does help here. Against a ``set[FormatIdentity]`` the same mistake is
-    ``Non-overlapping container check ... [comparison-overlap]`` at type-check time,
-    so the rule is REFUSED rather than merely documented.
-
-    This is not hypothetical. A UC-005 BDD scenario compared
-    ``(SELLER_AGENT_URL, fid.id)`` -- the raw constant, un-canonicalized -- against a
-    set of identities, and that assertion was the only one separating ``(agent_url,
-    id)`` matching from ``id``-alone matching. Canonicalization appends the spec's
-    step-5 trailing slash, so the two could never be equal and the assertion held
-    whatever the seller returned. An id-only filter regression would have passed on
-    every transport.
-
-    Frozen and slotted so it hashes, lives in a set, and cannot be mutated after the
-    canonical form is computed.
-    """
-
-    agent_url: str
-    id: str
-
-    @property
-    def storage_key(self) -> str:
-        """This identity as one indexable string, for comparing a stored reference.
-
-        A persisted ``format_id`` has to serve two obligations that a single value cannot:
-        the bytes the buyer sent are echoed back verbatim (the sync storyboard grades
-        "seller must accept its own format_id", and canonicalizing on the write path broke
-        that round-trip -- measured), while a COMPARISON must canonicalize first, because
-        ``core/format-id.json`` makes that a MUST. So a row keeps the assertion verbatim and
-        this key beside it.
-
-        That is why a column comparison on the stored spelling could not be correct: the
-        filter received canonical pairs and the column held whatever arrived, so the same
-        agent differing in host case, a default port or an IDN form read as two agents. The
-        key is built from the canonical form, so the comparison is exact rather than
-        tolerant, and it is a single column so it can be indexed.
-
-        ``\\x1f`` separates the halves: the unit separator cannot occur in a URL or an id,
-        so no pair can collide with another by spelling.
-        """
-        return f"{self.agent_url}\x1f{self.id}"
+#: The federation identity of a ``format_id``, as one indexable string: its canonical
+#: ``agent_url`` and its ``id``, joined by :data:`_FORMAT_KEY_SEPARATOR`. Built ONLY by
+#: :func:`format_id_identity` / :attr:`FormatId.storage_key`, which is where the spec's
+#: canonicalization is applied.
+#:
+#: A persisted ``format_id`` has to serve two obligations that a single value cannot: the
+#: bytes the buyer sent are echoed back verbatim (the sync storyboard grades "seller must
+#: accept its own format_id", and canonicalizing on the write path broke that round-trip --
+#: measured), while a COMPARISON must canonicalize first, because ``core/format-id.json``
+#: makes that a MUST. So a row keeps the assertion verbatim and this key beside it. That is
+#: also why a column comparison on the stored spelling could not be correct: the filter held
+#: canonical values and the column held whatever arrived, so the same agent differing in host
+#: case, a default port or an IDN form read as two agents. One string, so it indexes.
+#:
+#: ``NewType`` and not a bare ``str`` so the intent is at least declared at every boundary --
+#: but MEASURED, it buys no enforcement: a ``NewType`` is a SUBTYPE of ``str``, so the types
+#: overlap and ``--strict-equality`` stays silent on a hand-built key compared against a
+#: ``set[FormatKey]``. The frozen dataclass this replaced did refuse that at type-check time.
+#: See :func:`format_id_identity` for what is therefore no longer caught by the type system.
+FormatKey = NewType("FormatKey", str)
 
 
-def format_id_identity(format_id: LibraryFormatId) -> FormatIdentity:
+def format_id_identity(format_id: LibraryFormatId) -> FormatKey:
     """Return the federation identity of a FormatId: its canonical ``agent_url`` and ``id``.
 
     AdCP v3.1 makes ``format_id`` an object whose identity is BOTH ``agent_url`` and
@@ -486,21 +458,57 @@ def format_id_identity(format_id: LibraryFormatId) -> FormatIdentity:
     ``id`` alone would mis-resolve a
     third-party reference (foreign ``agent_url``) to a local format that merely
     shares an ``id`` — fabricating a local entry for a format the seller does not
-    host. Works on both the library ``FormatId`` and our subclass (duck-typed on
-    ``agent_url``/``id``).
+    host.
 
-    THE ONLY way to build a comparison key. ``FormatIdentity`` is constructible
-    directly, but every caller should come through here: this is where the spec's
-    canonicalization is applied, and a key that skipped it is the bug the type exists
-    to refuse.
+    Identity is the PAIR and nothing else. ``core/format-id.json`` declares four more
+    parameters on the reference object (width, height, pixel_ratio, duration_ms) and none
+    of them is part of which format a reference names, so the key cannot be the model
+    itself: pydantic equality would fold them in, and two references differing only in
+    ``pixel_ratio`` would stop matching.
+
+    THE ONE place the spec's canonicalization is applied, and the ONE builder of a
+    :data:`FormatKey`. It takes the LIBRARY type rather than our :class:`FormatId` because
+    most callers never hold the subclass -- a reference arrives as a bare id, as a JSON
+    document off a column, or as a library model on a pinned request field -- so coercing
+    each of those into the subclass just to read an attribute would be a validation pass
+    bought for nothing. A caller that DOES hold a :class:`FormatId` reads
+    :attr:`FormatId.storage_key`, which is this function.
+
+    WHAT THE TYPE NO LONGER REFUSES. This returned a frozen dataclass, and the point of
+    that class was that ``--strict-equality`` rejected a hand-built ``tuple[str, str]``
+    compared against a ``set`` of them ("Non-overlapping container check
+    ... [comparison-overlap]"). That was not hypothetical: a UC-005 BDD scenario compared
+    ``(SELLER_AGENT_URL, fid.id)`` -- the raw constant, un-canonicalized -- against a set of
+    identities, and that assertion was the only one separating ``(agent_url, id)`` matching
+    from ``id``-alone matching. Canonicalization appends the spec's step-5 trailing slash, so
+    the two could never be equal and the assertion held whatever the seller returned; an
+    id-only filter regression would have passed on every transport.
+
+    A ``str`` key cannot carry that refusal in ANY spelling -- ``NewType`` was tried and
+    measured silent, because it is a ``str`` subtype and so overlaps. What stands in its
+    place is weaker and worth naming: the separator. A key is only forgeable by writing
+    ``\\x1f`` deliberately, so the specific mistake that happened -- assembling the parts by
+    hand and comparing -- no longer type-checks as a tuple would, it simply cannot be written
+    by accident. Grading that rule is now the BDD scenario's job, not mypy's.
 
     Args:
         format_id: Any FormatId-like object exposing ``agent_url`` and ``id``.
 
     Returns:
-        The ``FormatIdentity`` comparison key for federation identity.
+        The :data:`FormatKey` comparison key for federation identity.
     """
-    return FormatIdentity(canonical_agent_url(format_id.agent_url), format_id.id)
+    return FormatKey(f"{canonical_agent_url(format_id.agent_url)}{_FORMAT_KEY_SEPARATOR}{format_id.id}")
+
+
+def format_key_parts(key: FormatKey) -> tuple[str, str]:
+    """The canonical ``agent_url`` and the ``id`` a :data:`FormatKey` was built from.
+
+    The inverse of :func:`format_id_identity`, here rather than at its one caller so the
+    separator has a single owner. FOR DISPLAY ONLY -- a key is compared whole, and splitting
+    one to compare the halves is how ``id``-alone matching gets reintroduced.
+    """
+    agent_url, _, format_id = key.partition(_FORMAT_KEY_SEPARATOR)
+    return agent_url, format_id
 
 
 @dataclass(frozen=True, slots=True, order=True)
@@ -558,7 +566,7 @@ class CreativeFormatIdentity:
 
     kind: str | None = None
     option: FormatOptionIdentity | None = None
-    legacy: FormatIdentity | None = None
+    legacy: FormatKey | None = None
     legacy_parameters: tuple[tuple[str, Any], ...] = ()
     assertion: LibraryFormatId | None = field(default=None, compare=False)
 
@@ -614,9 +622,14 @@ class CreativeFormatIdentity:
         )
 
     @property
-    def legacy_key(self) -> str | None:
-        """The retained assertion's indexable comparison key, or ``None`` when there is none."""
-        return self.legacy.storage_key if self.legacy is not None else None
+    def legacy_key(self) -> FormatKey | None:
+        """The retained assertion's indexable comparison key, or ``None`` when there is none.
+
+        ``legacy`` IS that key now, so this is the member under the name the persistence edge
+        knows it by. Kept because ``_identity_columns`` reads it: the column and the member
+        are named differently on purpose, and a repository should not have to know which.
+        """
+        return self.legacy
 
     @property
     def wire_format_kind(self) -> str | None:
@@ -644,10 +657,14 @@ class CreativeFormatIdentity:
 
         The kind when there is one, because that is the identity; otherwise the legacy id the
         buyer asserted. Never a comparison: nothing parses this back.
+
+        Read off ``assertion`` rather than split back out of ``legacy``: the two are written
+        together by :meth:`of_legacy` and canonicalization touches ``agent_url`` only, so the
+        id is the same value in both, and the verbatim one is the better thing to show a human.
         """
         if self.kind is not None:
             return self.kind
-        return self.legacy.id if self.legacy is not None else ""
+        return self.assertion.id if self.assertion is not None else ""
 
 
 def creative_format_identity(
@@ -2388,6 +2405,24 @@ class FormatId(LibraryFormatId):
     def __repr__(self) -> str:
         """Return representation for debugging."""
         return f"FormatId(id='{self.id}', agent_url='{self.agent_url}')"
+
+    @property
+    def storage_key(self) -> FormatKey:
+        """This reference's federation identity: :func:`format_id_identity` of itself.
+
+        The identity of a ``format_id`` is the ``(canonical agent_url, id)`` pair and NOT
+        this model, which is why the key is derived rather than the instance being used
+        directly as a dict key or set member. ``core/format-id.json`` puts four more
+        parameters on the reference object -- width, height, pixel_ratio, duration_ms -- and
+        pydantic equality would fold every one of them into matching, so two references
+        differing only in ``pixel_ratio`` would stop being the same format.
+
+        A thin read, deliberately: :func:`format_id_identity` is the ONE implementation
+        because it also has to serve a reference that arrives as a bare id, as a JSON
+        document off a column, or as the library model on a pinned request field -- none of
+        which is an instance of this class.
+        """
+        return format_id_identity(self)
 
     def get_dimensions(self) -> tuple[int, int] | None:
         """Get dimensions from parameterized FormatId (AdCP 2.5).

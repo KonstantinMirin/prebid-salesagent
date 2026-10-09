@@ -973,7 +973,7 @@ class Creative(Base):
     # COMPARISON must canonicalize ``agent_url`` first, which ``core/format-id.json`` makes
     # a MUST. So ``legacy_format_id`` keeps the document as sent -- agent_url, id and every
     # parameter ``FormatId`` declares -- and ``legacy_format_key`` carries
-    # ``FormatIdentity.storage_key`` of it, indexed, so the comparison is exact rather than
+    # the ``FormatKey`` of it, indexed, so the comparison is exact rather than
     # tolerant and a filter can use the index.
     #
     # ``CreativeFormatIdentity.from_row`` is the ONE reader of these four. The two-arm

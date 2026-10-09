@@ -23,14 +23,21 @@ from .principal import PrincipalFactory
 DEFAULT_CREATIVE_AGENT_URL = "https://creative.adcontextprotocol.org"
 
 
-def _identity_for(
+def seeded_format_identity(
     *,
-    agent_url: str,
-    format_id: str,
+    agent_url: str = DEFAULT_CREATIVE_AGENT_URL,
+    format_id: str = "display_300x250",
     format_params: dict[str, Any] | None = None,
     canonical_kind: str | None = None,
 ) -> CreativeFormatIdentity:
     """The format identity a seeded creative carries, through the PRODUCTION accessor.
+
+    PUBLIC because a test that seeds through ``CreativeRepository.create`` directly -- rather
+    than through ``CreativeFactory`` -- still has to supply its ``identity=`` argument, and
+    the one thing it must not do is hand-build one. ``_identity_columns`` reads four members
+    off a ``CreativeFormatIdentity``; the parallel ``FormatIdentity`` comparison key carries
+    none of them and is ``slots=True``, so passing one raised ``AttributeError`` inside the
+    repository on every seed (#2351).
 
     A test says which arm the creative carries -- a legacy reference via ``agent_url`` +
     ``format_id`` (optionally parameterized by ``format_params``), or a canonical kind via
@@ -66,8 +73,8 @@ def _identity_for(
 
 
 def _seeded_identity(obj) -> CreativeFormatIdentity:
-    """``factory_boy`` adapter: the factory stub's knobs, named for :func:`_identity_for`."""
-    return _identity_for(
+    """``factory_boy`` adapter: the factory stub's knobs, named for :func:`seeded_format_identity`."""
+    return seeded_format_identity(
         agent_url=obj.agent_url,
         format_id=obj.format,
         format_params=obj.format_params,
@@ -95,7 +102,7 @@ def stamp_format_identity(
 
     For a row that goes through the real session, use ``CreativeFactory`` instead.
     """
-    identity = _identity_for(
+    identity = seeded_format_identity(
         agent_url=agent_url,
         format_id=format_id,
         format_params=format_params,

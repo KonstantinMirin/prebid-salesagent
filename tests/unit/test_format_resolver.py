@@ -615,7 +615,7 @@ class TestFindFormat:
         assert find_format([first, second], reference) is first
 
 
-class TestFormatIdentityCanonicalization:
+class TestFormatKeyCanonicalization:
     """agent_url is compared in the spec's canonical form, not a trimmed string.
 
         adcp/_schemas/3.1/core/format-id.json, agent_url: "Callers comparing two

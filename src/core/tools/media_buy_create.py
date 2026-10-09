@@ -104,7 +104,7 @@ from src.core.schemas import (
     CreativeApprovalStatus,
     CreativeFormatIdentity,
     FormatId,
-    FormatIdentity,
+    FormatKey,
     MediaPackage,
     Package,
     PackageRequest,
@@ -452,15 +452,17 @@ def _validate_creatives_before_adapter_call(
         )
 
     # --- Format compatibility check: creative format vs product accepted formats ---
+    from src.core.format_resolver import format_display, product_format_identities
+
     # Build creative_id -> format mapping from fetched creatives. The product declares
     # ``format_ids``, so only a creative that retains a legacy assertion has anything to
     # match against it; one identified by its canonical kind is unconstrained here until
     # products carry ``format_options[]``.
-    creative_format_map: dict[str, str] = {}
+    creative_format_map: dict[str, FormatKey] = {}
     for creative in creatives_list:
         legacy = CreativeFormatIdentity.from_row(creative).legacy
         if legacy is not None:
-            creative_format_map[creative.creative_id] = legacy.id
+            creative_format_map[creative.creative_id] = legacy
 
     # Collect all product_ids from packages that have creatives
     product_ids_needed: set[str] = set()
@@ -474,16 +476,16 @@ def _validate_creatives_before_adapter_call(
 
         products_list = ProductRepository(session, tenant_id).list_by_ids(list(product_ids_needed))
 
-        # Build product_id -> set of accepted format id strings
-        product_format_map: dict[str, set[str]] = {}
-        for product in products_list:
-            accepted_formats: set[str] = set()
-            if product.format_ids:
-                for fmt in product.format_ids:
-                    fmt_id = fmt.get("id")
-                    if fmt_id:
-                        accepted_formats.add(str(fmt_id))
-            product_format_map[product.product_id] = accepted_formats
+        # Build product_id -> the federation identities it accepts, through the ONE helper.
+        # This read ``fmt.get("id")`` and compared BARE IDS on both sides, so a creative
+        # asserting another agent's like-named format passed a product that does not host it
+        # -- the id-alone matching ``core/format-id.json`` makes canonicalizing the pair a
+        # MUST to prevent. ``product_format_identities`` already absorbs the stored dict
+        # shape (including the pre-v3.1 ``format_id`` key) and is what the sibling check in
+        # ``media_buy_update`` uses, so this is one helper rather than a second spelling.
+        product_format_map: dict[str, set[FormatKey]] = {
+            product.product_id: product_format_identities(product.format_ids) for product in products_list
+        }
 
         # Check each package's creatives against its product's accepted formats
         for package in packages:
@@ -499,8 +501,9 @@ def _validate_creatives_before_adapter_call(
                 creative_fmt = creative_format_map.get(cid)
                 if creative_fmt and creative_fmt not in accepted:
                     validation_errors.append(
-                        f"Creative {cid} has format '{creative_fmt}' which is not accepted by "
-                        f"product {package.product_id} (accepted formats: {sorted(accepted)})"
+                        f"Creative {cid} has format '{format_display(creative_fmt)}' which is not "
+                        f"accepted by product {package.product_id} "
+                        f"(accepted formats: {sorted(format_display(key) for key in accepted)})"
                     )
 
     if validation_errors:
@@ -3245,7 +3248,7 @@ async def _create_media_buy_impl(
                 # This handles the case where buyer specifies a format but not dimensions.
                 # Keyed on the same federation identity the support check above compares on,
                 # so a format that PASSED that check cannot then miss its own dimensions.
-                product_format_dimensions: dict[FormatIdentity, tuple[int | None, int | None, float | None]]
+                product_format_dimensions: dict[FormatKey, tuple[int | None, int | None, float | None]]
                 product_format_dimensions = {}
                 for fmt in pkg_product.format_ids or []:
                     fmt_identity = format_identity_or_none(fmt)
