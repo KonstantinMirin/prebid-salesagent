@@ -25,6 +25,7 @@ from adcp.types import PaginationRequest, PaginationResponse
 from adcp.types.domains.core.account_ref import AccountReference1, AccountReference2
 from adcp.types.domains.core.business_entity import BusinessEntity
 from adcp.types.domains.core.notification_config import EventType as LibraryAccountEventType
+from adcp.types.domains.enums.account_currency_mode import AccountCurrencyMode
 from adcp.types.domains.enums.notification_type import NotificationType as LibraryNotificationType
 from pydantic import BaseModel
 
@@ -628,6 +629,47 @@ _FIELD_POLICY: dict[str, _FieldPolicy] = {
 def _disposition(field: str, mode: EntryMode) -> _Disposition:
     """The disposition ``field`` carries in ``mode`` (``provisioning``/``settings_update``)."""
     return _FIELD_POLICY[field].for_mode(mode)
+
+
+def resolve_account_currency_modes() -> list[AccountCurrencyMode]:
+    """Which account currency modes this seller supports — read off the entry policy.
+
+    3.2.1 ``get-adcp-capabilities-response.json``
+    #/properties/account/properties/supported_account_currency_modes is "required for
+    sellers implementing AdCP 3.2 advertiser-account provisioning", and tells buyers to
+    "treat absence as an older seller whose currency mode is not discoverable, not as
+    support for either mode". This seller DOES provision advertiser accounts, so silence
+    makes it read as pre-3.2 — which is why :data:`_ADCP_32_UNIMPLEMENTED_CITATION` can
+    promise that non-support "stays discoverable through get_adcp_capabilities". This
+    function is that promise kept.
+
+    DERIVED, never declared, and derived from the one row that decides the behaviour the
+    capability describes. The enum's own definitions are the two predicates:
+
+    * ``fixed`` — "bound to one immutable ISO 4217 currency supplied during provisioning".
+      Supplied during provisioning means the provisioning disposition is ``applied``;
+      immutable means the settings-update disposition is not.
+    * ``per_media_buy`` — "the advertiser account is not currency-bound; omit account
+      currency". Not currency-bound means the provisioning disposition is not ``applied``.
+
+    So a seller that starts honouring ``currency`` re-declares itself by flipping that
+    row, and cannot keep advertising ``per_media_buy`` while storing a bound currency.
+    ``minItems: 1`` holds by construction rather than by hope: the two predicates split on
+    ``provisioning.kind == "applied"``, so exactly one of them is always true.
+
+    Today the row is ``ignored_by_design`` in both modes — the ``accounts`` table has no
+    currency column and ``NaturalKey`` is ``(brand_domain, brand_id, operator, sandbox)``,
+    with no currency component for a ``fixed`` account to key on — so this returns
+    ``[per_media_buy]``.
+    """
+    currency = _FIELD_POLICY["currency"]
+    bound = currency.provisioning.kind == "applied"
+    modes: list[AccountCurrencyMode] = []
+    if bound and currency.settings_update.kind != "applied":
+        modes.append(AccountCurrencyMode.fixed)
+    if not bound:
+        modes.append(AccountCurrencyMode.per_media_buy)
+    return modes
 
 
 def _resolve_entry_changes(entry: SyncEntry, existing: DBAccount | None, *, mode: EntryMode) -> ResolvedFields:
