@@ -97,9 +97,9 @@ COUNTERPARTY_HOSTNAME = "counterparty.adcp-e2e.dev"
 COUNTERPARTY_SERVICE = "counterparty-origin"
 
 #: The module that service must run. The seller's own trust root cannot stand in
-#: for it: ``agent_resolver._fetch_capabilities`` does a raw GET with
-#: ``follow_redirects=False`` and demands a 200 JSON object, and our ``/mcp``
-#: answers GET with an SSE redirect.
+#: for it: ``/mcp`` is the seller's own tool surface and ``/a2a`` is JSON-RPC with
+#: an agent card, and the listed/unlisted pair the origin publishes needs an origin
+#: of its own to mean anything.
 COUNTERPARTY_MODULE = "tests.e2e.counterparty_origin_service"
 
 #: The service whose outbound TLS must trust the stack CA — the one that walks.
@@ -227,9 +227,10 @@ def test_the_counterparty_origin_module_exists_and_is_stdlib_only() -> None:
         violations=[f"tests/e2e/{_ORIGIN_MODULE_PATH.name}: missing"],
         fix_hint=(
             "Write the static counterparty origin: the capabilities document at the agent path, "
-            "/.well-known/brand.json (lists the agent url), /.well-known/brand-unlisted.json (does "
-            "NOT), and /.well-known/jwks.json. All plain GETs answering 200 with a JSON object — "
-            "that is what agent_resolver._fetch_capabilities requires."
+            "served over an MCP tools/call of get_adcp_capabilities (hop 1 of the walk, per AdCP "
+            "3.1.1 L1/security.mdx:1142), plus /.well-known/brand.json (lists the agent url), "
+            "/.well-known/brand-unlisted.json (does NOT), and /.well-known/jwks.json as plain GETs "
+            "answering 200 with a JSON object."
         ),
     )
 

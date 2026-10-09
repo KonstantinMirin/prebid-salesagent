@@ -3,19 +3,24 @@
 The live server's INBOUND verifier resolves an unknown counterparty by WALKING
 its published trust root — ``adcp.signing.agent_resolver.async_resolve_agent``:
 
-    GET <agent_url>                     -> capabilities, whose
+    MCP tools/call get_adcp_capabilities
+        at <agent_url>                  -> capabilities, whose
                                            ``identity.brand_json_url`` names ...
     GET <brand_json_url>                -> brand.json, whose ``agents[]`` entry
                                            for that url carries ``jwks_uri`` ...
     GET <jwks_uri>                      -> the JWKS the signature is verified against
 
 This service is the other end of that walk. It exists because the SELLER'S OWN
-published trust root cannot be reused as the counterparty: ``_fetch_capabilities``
-does a raw ``GET`` with ``follow_redirects=False`` and demands a 200 carrying a
-JSON object, while our ``/mcp`` answers ``GET`` with an SSE redirect (an SDK
-divergence from ``security.mdx``:1142, which says to invoke
-``get_adcp_capabilities`` over the declared transport). Hop 1 would die on our
-own route.
+published trust root cannot be reused as the counterparty: both routes the seller
+publishes are already something else — ``/mcp`` is the seller's own tool surface
+and ``/a2a`` is JSON-RPC with an agent card — and a counterparty has to be a
+separate origin anyway for the listed/unlisted pair below to mean anything.
+
+Hop 1 was a raw ``GET`` of a JSON object in earlier SDKs, which is what this
+service was originally built around. It is now an MCP ``tools/call``, which is
+what AdCP 3.1.1 ``L1/security.mdx``:1142 mandates — so ``do_POST`` answers the
+handshake and the tool call, and the ``GET`` is kept as the simple way to read a
+published document. See ``_stdlib_json_http.mcp_capabilities_post``.
 
 It is a SIBLING of ``tests/e2e/webhook_capture_service.py``, not a mode inside it.
 What would be shared is ~30 lines of ``BaseHTTPRequestHandler`` — not the
@@ -53,7 +58,12 @@ import os
 import threading
 from collections.abc import Iterator
 
-from tests.e2e._stdlib_json_http import JsonRequestHandler, compose_project_name, serve_forever_in_thread
+from tests.e2e._stdlib_json_http import (
+    JsonRequestHandler,
+    compose_project_name,
+    mcp_capabilities_post,
+    serve_forever_in_thread,
+)
 
 #: The public origin the SERVER walks. Read from the environment so the compose
 #: service, the nginx SNI map and this module cannot drift apart silently: every
@@ -179,35 +189,88 @@ def _brand_json(listed_agent_url: str | None) -> dict:
 
 
 class _CounterpartyHandler(JsonRequestHandler):
-    """Answer the three walk hops as plain GETs, plus the JWKS control plane."""
+    """Answer hop 1 over MCP and hops 2-3 as plain GETs, plus the JWKS control plane."""
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler name
         store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        capabilities = self._agent_capabilities(store, path)
 
         if path == HEALTH_PATH:
             self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
-        elif path == LISTED_AGENT_PATH:
-            self._write_json(200, _capabilities(f"{PUBLIC_ORIGIN}{BRAND_JSON_PATH}"))
-        elif path == UNLISTED_AGENT_PATH:
-            self._write_json(200, _capabilities(f"{PUBLIC_ORIGIN}{BRAND_UNLISTED_PATH}"))
+        elif capabilities is not None:
+            self._write_json(200, capabilities)
         elif path == BRAND_JSON_PATH:
             self._write_json(200, _brand_json(f"{PUBLIC_ORIGIN}{LISTED_AGENT_PATH}"))
         elif path == BRAND_UNLISTED_PATH:
             self._write_json(200, _brand_json(None))
         elif path == JWKS_PATH:
             self._write_json(200, store.published())
-        elif path.startswith(SLOT_AGENT_PREFIX):
-            slot = path[len(SLOT_AGENT_PREFIX) :]
-            self._slot_document(store, slot, _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json"))
         elif path.startswith(SLOT_BRAND_PREFIX) and path.endswith(".json"):
             slot = path[len(SLOT_BRAND_PREFIX) : -len(".json")]
             self._slot_document(store, slot, _brand_json(slot_agent_url(slot)))
+        elif path.startswith(SLOT_AGENT_PREFIX):
+            self._write_json(404, {"error": f"no keyset installed for slot {path[len(SLOT_AGENT_PREFIX) :]!r}"})
         else:
             self._write_json(404, {"error": f"no counterparty document at {self.path!r}"})
 
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler name
+        """Hop 1, over the transport the SDK actually invokes it on.
+
+        ``async_resolve_agent`` opens an MCP ``ClientSession`` against the agent url
+        and calls ``get_adcp_capabilities`` — AdCP 3.1.1 ``L1/security.mdx``:1142
+        mandates the declared transport and forbids a raw ``GET`` — so an origin
+        answering ``GET`` alone returns ``BaseHTTPRequestHandler``'s 501 to the
+        handshake and the whole walk is refused as
+        ``request_signature_capabilities_unreachable``. The ``GET`` above stays: it
+        costs nothing and the earlier shape of this hop is still the simplest way
+        for a test to read an agent's published document.
+
+        The POST is routed by agent path exactly as the ``GET`` is, so the
+        listed/unlisted pair and every slot keep publishing the document that
+        belongs to them. Only hop 1 is a tool call; brand.json and the JWKS are
+        plain documents at well-known paths and stay ``GET``-only.
+        """
+        store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
+        path = self.path.split("?", 1)[0].rstrip("/") or "/"
+        capabilities = self._agent_capabilities(store, path)
+        if capabilities is None:
+            self._write_json(404, {"error": f"no agent publishes capabilities at {self.path!r}"})
+            return
+        status, body = mcp_capabilities_post(self._read_raw_body(), {"get_adcp_capabilities": capabilities})
+        if body is None:
+            self._write_empty(status)
+        else:
+            self._write_json(status, body)
+
+    def _agent_capabilities(self, store: _JwksStore, path: str) -> dict | None:
+        """The capabilities document published at an agent *path*, or ``None``.
+
+        One router for both methods — ``GET`` reads the document and the MCP
+        ``tools/call`` serves the same one — so the listed/unlisted/slot routing
+        cannot drift between them.
+
+        ``None`` covers both ways no agent is published at a path: it names no
+        agent at all, and it is a slot nobody installed a keyset for. See
+        :meth:`_slot_document` for why an uninstalled slot must not answer a
+        well-formed document.
+        """
+        if path == LISTED_AGENT_PATH:
+            return _capabilities(f"{PUBLIC_ORIGIN}{BRAND_JSON_PATH}")
+        if path == UNLISTED_AGENT_PATH:
+            return _capabilities(f"{PUBLIC_ORIGIN}{BRAND_UNLISTED_PATH}")
+        if path.startswith(SLOT_AGENT_PREFIX):
+            slot = path[len(SLOT_AGENT_PREFIX) :]
+            if store.has(slot):
+                return _capabilities(f"{PUBLIC_ORIGIN}{SLOT_BRAND_PREFIX}{slot}.json")
+        return None
+
     def _slot_document(self, store: _JwksStore, slot: str, document: dict) -> None:
-        """Answer one of a slot's two documents, or 404 if nothing is installed for it.
+        """Answer a slot's brand.json, or 404 if nothing is installed for it.
+
+        The slot's OTHER document — its capabilities — is routed by
+        :meth:`_agent_capabilities` instead, because hop 1 has two methods to serve
+        and this helper writes a response.
 
         The 404 is where the per-slot JWKS used to answer it, and it is why the check is
         worth keeping: an unknown slot answering a well-formed document would let the walk

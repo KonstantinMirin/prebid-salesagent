@@ -421,8 +421,9 @@ async def test_a_signed_request_from_a_walked_counterparty_is_accepted_and_count
                 brand = await _counterparty_get(counterparty, "GET", _BRAND_JSON_PATH)
                 assert brand.status_code == 200, (
                     f"the counterparty must publish {_BRAND_JSON_PATH!r} as a plain 200 with a JSON "
-                    f"object — agent_resolver._fetch_capabilities demands exactly that and follows no "
-                    f"redirects; got HTTP {brand.status_code}. Body: {brand.text[:300]!r}"
+                    f"object — hop 2 of the walk is BrandJsonJwksResolver, which demands exactly "
+                    f"that and follows no redirects; got HTTP {brand.status_code}. Body: "
+                    f"{brand.text[:300]!r}"
                 )
                 listed_urls = [agent.get("url") for agent in brand.json().get("agents", [])]
                 assert listed_urls == [_LISTED_AGENT_URL], (

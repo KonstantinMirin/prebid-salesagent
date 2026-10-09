@@ -8,19 +8,23 @@ the documents as a real counterparty consumes them rather than as we build them.
 
 Two deliberate seams, each with its reason:
 
-1. **Hop 1 is seeded** (``_capabilities_client_factory``). Two independent reasons,
-   and either alone would be sufficient:
+1. **Hop 1 is seeded** (``_capabilities_client_factory``), because this module
+   grades A3, whose scope stops at the published documents. Seeding hop 1 from A3's
+   own helpers is what keeps a failure here attributable to brand.json or the JWKS
+   rather than to the capabilities builder.
 
-   * *SDK divergence #4.* ``_fetch_capabilities`` does a raw ``GET <agent_url>``
-     and requires a JSON object body, while security.mdx:1142 says the opposite
-     verbatim — "invoke ``get_adcp_capabilities`` via the agent's declared
-     transport (MCP ``tools/call`` or A2A skill invocation), **not** a raw HTTP
-     ``GET``". Our ``/mcp`` answers GET with a redirect to an SSE stream and
-     ``/a2a`` is JSON-RPC POST, so an unseeded hop 1 fails no matter what A3
-     publishes.
-   * *This module grades A3, whose scope stops at the published documents.* Seeding
-     hop 1 from A3's own helpers is what keeps a failure here attributable to
-     brand.json or the JWKS rather than to the capabilities builder.
+   What is NO LONGER a reason: SDK divergence #4. ``_fetch_capabilities`` used to
+   do a raw ``GET <agent_url>`` and require a JSON object body, while
+   security.mdx:1142 said the opposite verbatim — "invoke
+   ``get_adcp_capabilities`` via the agent's declared transport (MCP
+   ``tools/call`` or A2A skill invocation), **not** a raw HTTP ``GET``". The SDK
+   now does what the spec says, so the seed is a SCOPE decision alone and the
+   transport under it speaks MCP (``json_seeded_client_factory``). Un-seeding hop 1
+   here would still need a second decision this module has no business making: the
+   url walked is the card's A2A interface url (``/a2a``) while the resolver's
+   default protocol is MCP. ``AGENT_ENDPOINT_PATHS`` publishes a ``/mcp`` entry
+   too, so what a buyer resolves against is reachable; which of our two published
+   entries a walk should pick is a question for whoever un-seeds this.
 
    ``identity`` is no longer gated: publishing the trust root is what took it out
    of ``_UNBACKED_BLOCKS`` (``src/core/schemas/capability_declarations.py``), and
