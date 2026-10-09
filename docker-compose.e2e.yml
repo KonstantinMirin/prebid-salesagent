@@ -392,10 +392,12 @@ services:
   # alias per origin, chosen by the nginx `map $ssl_server_name` in the shared
   # template — across BOTH namespaces the generated leaf covers:
   #   *.adcp.test     proxy, creative-agent, webhooks (the seller-side fronts)
-  #   *.adcp-e2e.dev  webhooks, counterparty (origins the SERVER dials outbound,
-  #                   where a REGISTRABLE domain is required: the outbound
-  #                   webhook path's reserved-TLD gate refuses .test, and the
-  #                   counterparty walk's eTLD+1 match needs a real one).
+  #   *.adcp-e2e.dev  webhooks, counterparty, seller (every name whose eTLD+1 has
+  #                   to resolve in the Public Suffix List: the outbound webhook
+  #                   path's reserved-TLD gate refuses .test, the counterparty
+  #                   walk's eTLD+1 match needs a real one, and so does the
+  #                   runner's walk of the SELLER's own trust root — which is why
+  #                   this namespace is no longer only "dialed outbound").
   # Adding an origin is one alias here plus one map line there — NOT a new
   # service: a compose service's `aliases` list can carry any number of names,
   # so fronting a second upstream never required a second container. Exactly one
@@ -462,6 +464,16 @@ services:
           # which needs a registrable domain; the generated leaf carries
           # *.adcp-e2e.dev as a SAN for exactly this.
           - counterparty.adcp-e2e.dev
+          # The SELLER, under the same wildcard and for the same reason, routed to
+          # the SAME upstream as proxy.adcp.test — a second name, not a move. The
+          # runner walks our own published trust root through the SDK resolver
+          # (tests/e2e/test_trust_root_e2e.py), and security.mdx step 3 binds the
+          # agent url to brand_json_url by eTLD+1 off a pinned Public Suffix List
+          # snapshot. `.test` is not in that list, so the walk refuses
+          # proxy.adcp.test with request_signature_brand_origin_mismatch however
+          # correct our documents are. Every other seller-side front keeps its
+          # *.adcp.test name; only the one a buyer RESOLVES us by needs this.
+          - seller.adcp-e2e.dev
           # The storyboard agent, fronted here for A2A's sake. A2A is card-first:
           # the runner reads the RPC endpoint off /.well-known/agent-card.json, and
           # the card renders https for any non-loopback host (src/app.py
@@ -494,12 +506,17 @@ services:
     # reading `<!doctype html>` off the MCP endpoint, which is what nginx serves when it
     # cannot reach the upstream. A front that is not probed is a front whose failure
     # arrives as someone else's mystery. The boot-delay cost is real and is the price.
+    #
+    # seller.adcp-e2e.dev reaches the SAME upstream as proxy.adcp.test, so its row adds
+    # nothing about the upstream and everything about the NAME: that the leaf's
+    # *.adcp-e2e.dev SAN covers it and the SNI map routes it. Without the row, a missing
+    # alias or map line surfaces as one e2e test failing to connect.
 
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://counterparty.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health",
+          "curl -fsS --cacert /app/.test-tls/ca.pem https://proxy.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://creative-agent.adcp.test:8443/api/creative-agent/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://webhooks.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://counterparty.adcp-e2e.dev:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://storyboard.adcp.test:8443/health && curl -fsS --cacert /app/.test-tls/ca.pem https://seller.adcp-e2e.dev:8443/health",
         ]
       interval: 10s
       timeout: 5s
