@@ -651,16 +651,35 @@ class CreativeFormatIdentity:
     def label(self) -> str:
         """How this identity is spelled to a human -- an operator's UI, a log, a Slack message.
 
-        The kind when there is one, because that is the identity; otherwise the legacy id the
-        buyer asserted. Never a comparison: nothing parses this back.
+        ONE standard, and it is readability: the MOST INFORMATIVE spelling, which is the id
+        the buyer asserted when there is one and the canonical kind otherwise.
+        ``display_300x250`` tells an operator deciding whether to approve a creative what its
+        dimensions are; ``image``, which is what that same row projects to, tells them
+        almost nothing.
+
+        Identity comparisons use ``kind`` and ``legacy``/``legacy_key``, which exist for
+        exactly that. Nothing parses this string back, and no caller may start: a consumer
+        that branches on its spelling has reached for a display accessor to do an identity's
+        job.
+
+        This used to prefer ``kind`` "because that is the identity" -- a true statement about
+        ``kind`` and the wrong standard for a display accessor. That clause settled
+        kind-versus-id on IDENTITY grounds while the paragraph below settles the ``agent_url``
+        spelling on READABILITY grounds, which is two standards inside one property; for a
+        string whose only job is to be read, the second is the one that applies. The
+        preference is inverted rather than argued with because the first standard produced a
+        real defect: a Slack review notification, and the prompt the AI reviewer is given,
+        both named the canonical kind where the asserted id was what a reader needed. The
+        display sites inherited that preference from the creative-identity collapse; they
+        never wanted it.
 
         Read off ``assertion`` rather than split back out of ``legacy``: the two are written
         together by :meth:`of_legacy` and canonicalization touches ``agent_url`` only, so the
         id is the same value in both, and the verbatim one is the better thing to show a human.
         """
-        if self.kind is not None:
-            return self.kind
-        return self.assertion.id if self.assertion is not None else ""
+        if self.assertion is not None:
+            return self.assertion.id
+        return self.kind if self.kind is not None else ""
 
 
 def creative_format_identity(
