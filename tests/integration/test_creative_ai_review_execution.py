@@ -27,6 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from tests.factories import CreativeAssetFactory, FormatIdFactory
+from tests.factories.webhook import PushNotificationConfigRequestFactory
 from tests.harness import CreativeSyncEnv
 
 TENANT_ID = "test_tenant"
@@ -153,7 +154,13 @@ class TestAIReviewSurvivesTheWebhookBranch:
             with mocked_ai_backend():
                 response = env.call_impl(
                     creatives=[creative],
-                    push_notification_config={"url": "https://buyer.example/hook"},
+                    # Through the factory, so the registration carries an
+                    # ``operation_id`` and is accepted: this scenario's subject is
+                    # the WEBHOOK BRANCH of the reviewer, which it can only reach
+                    # once the registration gate has passed the config through.
+                    push_notification_config=PushNotificationConfigRequestFactory.payload(
+                        url="https://buyer.example/hook"
+                    ),
                 )
                 assert response.creatives[0].action == "created"
 
