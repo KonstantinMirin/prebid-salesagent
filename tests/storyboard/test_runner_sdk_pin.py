@@ -64,7 +64,20 @@ from scripts.audit import storyboard_spec  # noqa: E402
 #: divergence today. Retire the pin when a line both declares this repo's pin and carries the
 #: A2A signing dispatch, or when the runner separates the client contract from the vectors it
 #: grades against.
-_ACCEPTED_DIVERGENCE = ("14.0.0-rc.42", "3.2.0-rc.4", "3.1.1")
+#: THE DIVERGENCE NARROWED AT THE SDK-9 ADOPTION, and that is why the third element moved.
+#: This repo's pin went 3.1.1 -> 3.2.1 (``adcp==9.0.0b1+prs1435.1415.1456``), so the runner's
+#: 3.2.0-rc.4 is now one patch release from our contract rather than a minor behind it. The
+#: guard fired on that move, which is what it is for: the triple is a decision record, and the
+#: decision here is that a narrower divergence on the same runner line is accepted for the same
+#: reason the wider one was -- the 14 line is still the only one carrying the A2A
+#: request-signing dispatch, and the alternative is leaving every ``signed_requests`` vector on
+#: the A2A card ungradable.
+#:
+#: The paragraph above this one still reads "3.1.1 is the contract this seller implements".
+#: That was true when it was written and is not now; the contract is 3.2.1. Retirement is
+#: unchanged: a runner line that both declares this repo's pin and carries the A2A dispatch, or
+#: a runner that separates its client contract from the vectors it grades against.
+_ACCEPTED_DIVERGENCE = ("14.0.0-rc.42", "3.2.0-rc.4", "3.2.1")
 
 
 def test_runner_sdk_targets_the_pinned_adcp_version() -> None:
