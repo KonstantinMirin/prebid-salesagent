@@ -3940,13 +3940,13 @@ def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, su
     with INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
     event_types entry rather than silently dropping them".
 
-    SENDS A LITERAL PAYLOAD, through :func:`_sync_raw`. Both halves of that sentence are
-    load-bearing. The field's own enum excludes every type this scenario sends, so
-    ``SyncAccountsRequest`` refuses the document in the TEST process — the request is
-    schema-invalid on purpose, which is why the graded storyboard marks its vector
-    ``sample_request_skip_schema: true`` and still expects the per-account failure
-    unchanged. Constructing the model first therefore grades pydantic and never reaches
-    the seller's ``_check_notification_configs``, which is the obligation.
+    SENDS A LITERAL PAYLOAD, through :func:`_sync_raw`, and that stays true now that the
+    DTO carries the value inward (#2353). The request is schema-invalid on purpose --
+    which is why the graded storyboard marks its vector ``sample_request_skip_schema:
+    true`` -- so building a ``SyncAccountsRequest`` here would assert something about the
+    TEST process rather than about the seller. The obligation is what
+    ``_check_notification_configs`` does with the document, so the document is what gets
+    sent.
     """
     ctx["notif_domain"] = domain
     cfg = _notif_config(sub, url, ets, active=False)

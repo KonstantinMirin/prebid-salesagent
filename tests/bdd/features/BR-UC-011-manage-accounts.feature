@@ -883,10 +883,12 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the accounts entry carries error code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
-    # LEDGERED (#2353), not graduated: the seller refuses the whole request with
-    # INVALID_REQUEST at the boundary's DTO validation, so the per-account rejection this
-    # scenario grades is unreachable and _check_notification_configs never runs. The
-    # scenario is right and production is not; see the _XFAIL_TAGS entry for the measurement.
+    # Graduated (#2353): the DTO used to type event_types with the account-surface enum, so
+    # the seller refused the whole request at the boundary and _check_notification_configs
+    # never ran. src/core/schemas/notification.py now declares the field over the wide
+    # enums/notification-type.json — the pinned field asks for exactly that in the sentence
+    # that states its enum ("rather than silently dropping them") — and the gate owns the
+    # refusal, naming notification_configs[i].event_types[j].
     # Media-buy-anchored event types (scheduled, final, delayed, adjusted, window_update,
     # impairment) and agent-anchored capabilities.changed do not belong on the account
     # surface. Account-lifecycle types DO exist here — account.status_changed and
