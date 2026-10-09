@@ -43,6 +43,7 @@ from src.core.exceptions import AdCPConfigurationError, AdCPValidationError
 from src.core.helpers import enum_value
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.resolved_identity import ResolvedIdentity, TransportProtocol
+from src.core.schemas._base import canonical_agent_url
 from src.core.schemas.account import (
     Account,
     ListAccountsRequest,
@@ -1218,14 +1219,22 @@ _PROOF_BUDGET_SECONDS = 6.0
 def _proof_tuple(config: NotificationConfig) -> tuple[str, str, str | None, tuple[str, ...]]:
     """The identity of a proof, per the spec's proof-reuse allowance.
 
-    A re-sent config whose (subscriber_id, normalized url, auth binding, normalized
+    A re-sent config whose (subscriber_id, canonical url, auth binding, normalized
     event_types) matches an already-proven persisted entry MAY skip re-proof.
+
+    The url is canonicalized by ``canonical_agent_url`` and by nothing else. A bare
+    ``rstrip("/")`` stood here and was a leniency on a security decision: it made
+    ``https://h/hook/`` reuse the proof taken for ``https://h/hook``, so an endpoint
+    whose control was never proven inherited the proof of a DIFFERENT endpoint. The
+    canonical form keeps those two apart (the spec keeps ``/a`` and ``/a/`` distinct)
+    while correctly equating the spellings the algorithm does define as the same
+    endpoint -- a dropped default port, a differently-cased host.
     """
     auth = config.authentication
     auth_scheme = getattr(auth, "scheme", None) if auth is not None else None
     return (
         config.subscriber_id,
-        str(config.url or "").rstrip("/"),
+        canonical_agent_url(config.url),
         enum_value(auth_scheme) if auth_scheme is not None else None,
         tuple(sorted(enum_value(e) for e in (config.event_types or []))),
     )

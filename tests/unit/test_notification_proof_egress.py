@@ -44,7 +44,7 @@ from tests.helpers.signing import keypair_for
 #: The PUBLISHED ``agents[].url`` a real caller derives from the tenant. Only that it
 #: reaches the wire matters here; what a receiver does with it is the integration
 #: grader's business.
-_SELLER_AGENT_URL = "https://seller.adcp-partner.com/mcp/"
+_SELLER_AGENT_URL = "https://seller.adcp-partner.com/mcp"
 
 #: An IP LITERAL, for two reasons that both have to hold at once. It is not under a
 #: reserved TLD, which the service refuses deterministically BEFORE it dials, so a
