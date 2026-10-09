@@ -94,13 +94,16 @@ AST-scanning tests enforce architecture invariants on every `make quality` run. 
 
 ## AdCP spec version
 
-This project targets AdCP spec **3.2.1** via the `adcp==9.0.0b1` Python SDK.
-That is upstream's `v9.0.0-beta.1` release from PyPI, not a local build: the fork
-revision this previously consumed through `[tool.uv.sources]` is gone, and the
-override with it. See
-[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the version mapping
-and bump procedure. The CI guard at `tests/unit/test_adcp_spec_version.py`
-fails on pin drift.
+This project targets AdCP through the `adcp` Python SDK, pinned exactly in
+`pyproject.toml`. The SDK reports the spec version it targets —
+`adcp.get_adcp_spec_version()`, reached in Python through
+`scripts.audit.storyboard_spec.pinned_version(repo)` — and that is the only
+authority. **No number is written here**: a version restated in prose rots, and
+no document in this repository states one.
+
+See [docs/adcp-spec-version.md](docs/adcp-spec-version.md) for how to resolve the
+pin and for the bump procedure. The CI guard at
+`tests/unit/test_adcp_spec_version.py` fails on pin drift.
 
 ### Spec-grounding gate (MANDATORY before implementing protocol behavior)
 
