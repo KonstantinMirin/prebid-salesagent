@@ -71,8 +71,15 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
     (:func:`_format_identity_key`), never on the bare id: two agents may publish
     the same ``id``, and only the pair says whether the LIVE catalog actually
     serves the format this scenario asked for.
+
+    The missing ones are spelled by ``format_display``, the one renderer of a
+    :data:`FormatKey`'s halves. A key is a ``str`` now, not the frozen dataclass it was
+    before the creative-identity collapse, so reading ``.id`` / ``.agent_url`` off one here
+    raised ``AttributeError`` instead of naming them -- turning every unrealizable e2e setup
+    into a failure rather than the skip the scenario asked for.
     """
     from src.core.format_cache import load_reference_formats
+    from src.core.format_resolver import format_display
 
     if not formats:
         raise E2EUnsupportedSetup(
@@ -83,7 +90,7 @@ def _validate_registry_formats(env: Any, formats: list[Any]) -> None:
     requested_ids = {_format_identity_key(f) for f in formats}
     missing = requested_ids - reference_ids
     if missing:
-        named = sorted(f"{identity.id} @ {identity.agent_url}" for identity in missing)
+        named = sorted(format_display(identity) for identity in missing)
         raise E2EUnsupportedSetup(
             f"requested formats not in the reference catalog: {named}. "
             "Register them in the creative agent registry and refresh the fixture "
