@@ -1,0 +1,567 @@
+<title>Creative RFC Status</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #16181d; --muted: #5d6470; --rule: #e2e5ea;
+    --head: #f4f6f8; --code-bg: #f4f6f8; --accent: #1f5fbf;
+    --ok: #0f7a3d; --okbg: #e8f6ed; --part: #8a5a00; --partbg: #fdf3e0;
+    --no: #a4262c; --nobg: #fbecec; --ungr: #4a4f8c; --ungrbg: #eceefb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161a; --fg: #e6e8ec; --muted: #9aa2b1; --rule: #2b2f37;
+      --head: #1d2127; --code-bg: #1d2127; --accent: #7eb0ff;
+      --ok: #6fd79b; --okbg: #15301f; --part: #e3b35c; --partbg: #322611;
+      --no: #ff9b9b; --nobg: #341a1c; --ungr: #aab2f0; --ungrbg: #1e2142;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #14161a; --fg: #e6e8ec; --muted: #9aa2b1; --rule: #2b2f37;
+    --head: #1d2127; --code-bg: #1d2127; --accent: #7eb0ff;
+    --ok: #6fd79b; --okbg: #15301f; --part: #e3b35c; --partbg: #322611;
+    --no: #ff9b9b; --nobg: #341a1c; --ungr: #aab2f0; --ungrbg: #1e2142;
+  }
+  body {
+    background: var(--bg); color: var(--fg);
+    font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 62rem; margin: 0 auto; padding: 2.5rem 1.5rem 6rem;
+  }
+  h1 { font-size: 1.7rem; line-height: 1.25; margin: 0 0 .3rem; }
+  h2 { font-size: 1.22rem; margin: 2.8rem 0 .7rem; padding-bottom: .35rem; border-bottom: 2px solid var(--rule); }
+  h3 { font-size: 1.02rem; margin: 1.9rem 0 .5rem; }
+  h4 { font-size: .95rem; margin: 1.3rem 0 .4rem; color: var(--muted); font-weight: 600; }
+  p, li { margin: .55rem 0; }
+  .sub { color: var(--muted); margin: 0 0 1.6rem; font-size: .92rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .855em; }
+  code { background: var(--code-bg); padding: .1em .35em; border-radius: 3px; }
+  pre { background: var(--code-bg); padding: .8rem 1rem; border-radius: 6px; overflow-x: auto; border: 1px solid var(--rule); }
+  pre code { background: none; padding: 0; }
+  .scroll { overflow-x: auto; margin: 1rem 0; border: 1px solid var(--rule); border-radius: 6px; }
+  table { border-collapse: collapse; width: 100%; font-size: .88rem; }
+  th, td { text-align: left; vertical-align: top; padding: .5rem .65rem; border-bottom: 1px solid var(--rule); }
+  th { background: var(--head); font-weight: 600; white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  .tag { display: inline-block; padding: .1em .45em; border-radius: 3px; font-size: .78rem; font-weight: 600; white-space: nowrap; }
+  .t-ok { background: var(--okbg); color: var(--ok); }
+  .t-part { background: var(--partbg); color: var(--part); }
+  .t-no { background: var(--nobg); color: var(--no); }
+  .t-ungr { background: var(--ungrbg); color: var(--ungr); }
+  .ev { font-size: .76rem; font-weight: 700; letter-spacing: .03em; color: var(--muted); }
+  blockquote { margin: 1rem 0; padding: .1rem 0 .1rem 1rem; border-left: 3px solid var(--accent); color: var(--fg); }
+  .box { border: 1px solid var(--rule); border-left: 3px solid var(--accent); border-radius: 5px; padding: .9rem 1.1rem; margin: 1.2rem 0; background: var(--head); }
+  .box h4 { margin-top: 0; color: var(--fg); }
+  dl { margin: .8rem 0; }
+  dt { font-weight: 600; margin-top: .9rem; }
+  dd { margin: .2rem 0 0 1.2rem; color: var(--fg); }
+  ol.gaps > li { margin: 1.1rem 0; }
+  .gaps b { font-size: 1rem; }
+  footer { margin-top: 3.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .85rem; }
+</style>
+
+<h1>Creative RFC status in this seller, and whether the <code>format_id</code>&nbsp;/&nbsp;<code>format_kind</code> duality is fully supported</h1>
+<p class="sub">
+  Read-mostly audit. Worktree <code>sa-crfc</code>, branch <code>audit/creative-rfc</code>, HEAD <code>390fa2519</code>.
+  Pin: AdCP spec <strong>3.2.1</strong> via <code>adcp==9.0.0b1+prs1435.1415.1456</code> (<code>pyproject.toml:10</code>).
+  No code was changed. No guard weakened, no allowlist grown, no xfail or skip added.
+</p>
+
+<div class="box">
+  <h4>Evidence marking</h4>
+  <p>Every claim below carries <span class="ev">EXEC</span> (I ran it in this worktree and the output is reproduced or summarized) or <span class="ev">READ</span> (I read the source or the schema). Code claims cite <code>file:line</code>; obligations cite the spec document and version.</p>
+</div>
+
+<h2>Summary</h2>
+
+<p><strong>Q1 — how much of the Creative RFC is complete.</strong> The <em>legacy</em> half is substantially complete and well factored: one canonicalization implementation, one identity type, one persistence mapping, and the comparison-heavy paths all route through them. The <em>canonical</em> half — which is what AdCP 3.2 actually asks a seller for — is a thin shell. Of the 24 obligations graded below: <strong>4 implemented, 7 partial, 13 absent</strong>. Nine of the implemented-or-partial ones have <strong>no grading test of any kind</strong>. The 3.2 authoring direction is <strong>inverted</strong> relative to the spec: <code>format_ids</code> is this seller's authored catalog and <code>format_options</code> is an opaque pass-through document, where the spec requires canonical authored and legacy <em>derived</em>.</p>
+
+<p><strong>Q2 — is the duality fully supported? No.</strong> Both directions exist and the canonicalization helper is correct, but the canonical direction loses data at the persistence edge in a way that makes the round trip <em>fail</em>. Verified by execution: a creative synced with <code>format_kind</code> + <code>format_option_ref</code> cannot be read back — the stored document drops the <code>scope</code> discriminator the pinned schema requires in both arms, and reconstructing the listing response raises <code>union_tag_not_found</code>. Nothing in the tree grades it, because no BDD scenario sends a canonical creative at all.</p>
+
+<p>One thing the duality gets <em>right</em>, stated positively because it was measured rather than assumed: the library's canonical boundary models silently delete <code>format_id</code> / <code>format_ids</code> / <code>v1_format_ref</code> from anything they serialize, including from a plain dict handed to them unvalidated — and this seller cannot reach that path. Zero canonical classes appear in the transitive closure of all 14 tool DTOs and return types (1093 models walked), every base is pinned to a <code>Legacy*</code> spelling on purpose, and <code>format_ids</code> demonstrably survives the real <code>get_products</code> wire. That immunity is unpinned by any guard, and the creative migration is the change that ends it — Q2.5 and gap&nbsp;9.</p>
+
+<h2>What "the Creative RFC" is taken to mean here</h2>
+
+<p>Two documents carry that name and both are graded, separately, because they are not the same thing:</p>
+
+<dl>
+  <dt>The authority — AdCP 3.2.1 creative specification</dt>
+  <dd>The canonical-format model across <code>docs/creative/formats.mdx</code>, <code>canonical-formats-migration.mdx</code>, <code>creative-manifests.mdx</code>, <code>sales-agent-creative-capabilities.mdx</code> and <code>template-format-ids.mdx</code> in <code>adcontextprotocol/adcp</code>. <span class="ev">READ</span> — fetched verbatim with <code>gh api .../contents/docs/creative/&lt;doc&gt;.mdx --jq '.content' | base64 -d</code>. Not vendored; the venv carries <code>_schemas/</code> and <code>_compliance/3.2.1/</code> only.</dd>
+  <dt>This repo's own RFC — <code>prebid/salesagent#2236</code></dt>
+  <dd>“RFC: Re-engineer the creative format model on canonical format kinds”, open since 2026-09-10, enumerating gaps G1–G13 and clustering 82 open format issues into root causes. <span class="ev">READ</span>. It is prior art for everything below and its central finding is reproduced independently here, so the gap list cross-references it rather than restating it.</dd>
+</dl>
+
+<p>One grounding note that bears on every row: <strong>the pin's vendored conformance bundle grades none of this.</strong> <span class="ev">EXEC</span> — <code>.venv/.../adcp/_compliance/3.2.1/</code> contains exactly one storyboard (<code>universal/reporting-core.yaml</code>) plus test vectors; the only creative-adjacent files are <code>test-vectors/creative-representation-resolution.json</code> and <code>test-vectors/tracker-execution-contracts.json</code>. The graded canonical-format storyboard lives upstream, not in the wheel: <code>dist/compliance/3.2.1/protocols/media-buy/scenarios/canonical_formats.yaml</code> (<code>id: media_buy_seller/canonical_formats</code>, version 1.1.1, <code>introduced_in: "3.1"</code>). <span class="ev">EXEC</span> — fetched and parsed; it carries 2 phases and 17 graded steps, 9 of which use a <code>canonical_format_satisfaction</code> check and 5 an <code>error_code</code> check. That storyboard is the authority for "graded" in the table below.</p>
+
+<h2>Q1 — RFC obligations, graded</h2>
+
+<p>Status vocabulary: <span class="tag t-ok">IMPLEMENTED</span> the behavior exists and is correct as far as I could verify; <span class="tag t-part">PARTIAL</span> some of it exists, with a named shortfall; <span class="tag t-no">ABSENT</span> nothing in <code>src/</code> does it. The separate <span class="tag t-ungr">UNGRADED</span> marker means <em>no test or scenario in this repo fails if the behavior breaks</em> — orthogonal to status, and per the instruction treated as equally important.</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Obligation (AdCP 3.2.1)</th><th>Status</th><th>Graded?</th><th>Evidence</th></tr></thead>
+  <tbody>
+
+  <tr><td>S1</td>
+    <td><strong>Move each product's creative contract into <code>format_options[]</code>.</strong><br><span class="sub">canonical-formats-migration.mdx § Seller migration, step 1</span></td>
+    <td><span class="tag t-part">PARTIAL</span></td>
+    <td><span class="tag t-ok">yes</span></td>
+    <td><span class="ev">READ</span> Column exists (<code>src/core/database/models.py:395</code>) and is projected to the wire (<code>src/core/product_conversion.py:426-427</code>), but <strong>nothing authors or derives it</strong>: it is explicitly not derived from <code>format_ids</code> (<code>product_conversion.py:417-424</code>), and <code>git grep format_options src/admin/</code> is empty. Opaque at storage and at <code>:427</code>, but <em>not</em> at the model layer — <span class="ev">EXEC</span> the inherited annotation validates it into <code>ProductFormatDeclaration1..16</code> and the wire carries that branch's dump; see the note at the end of Q2.5. Graded by 3 BDD scenarios (row S4).</td></tr>
+
+  <tr><td>S2</td>
+    <td><strong>A canonical-only product is servable</strong> (<code>core/product.json</code> root <code>anyOf</code> admits <code>format_options</code> without <code>format_ids</code>).<br><span class="sub">canonical-formats-migration.mdx § Seller migration; <code>core/product.json</code></span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> <code>src/core/product_conversion.py:408-414</code> raises <code>ValueError</code> when <code>effective_format_ids</code> is empty. <code>format_ids</code> is therefore mandatory in practice, so this seller cannot serve the 3.2 primary authoring shape. The storyboard seeds exactly this fixture (<code>get_seeded_v2_only_product</code>, “Read v2-only format declarations”).</td></tr>
+
+  <tr><td>S3</td>
+    <td><strong>Publish reusable publisher options in <code>/.well-known/adagents.json</code> and reference them by <code>{publisher_domain, format_option_id}</code>.</strong><br><span class="sub">canonical-formats-migration.mdx § Seller migration, step 3; formats.mdx § The three authorities</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>git grep -ln adagents src/</code> returns 10 modules, all authorization/trust (<code>src/core/signing/trust_root.py</code>, <code>src/core/database/repositories/authorized_property.py</code>, <code>src/admin/blueprints/authorized_properties.py</code>); none reads a <code>formats[]</code> array. The publisher-acceptance authority is not consumed or published.</td></tr>
+
+  <tr><td>S4</td>
+    <td><strong>Return the applicable options from <code>get_products</code>.</strong><br><span class="sub">canonical-formats-migration.mdx § Seller migration, step 4; sales-agent-creative-capabilities.mdx § Format deliverability is product-scoped</span></td>
+    <td><span class="tag t-ok">IMPLEMENTED</span></td>
+    <td><span class="tag t-ok">yes</span></td>
+    <td><span class="ev">READ</span> <code>src/core/product_conversion.py:426-427</code>. The one genuinely graded canonical obligation: 3 live cross-transport scenarios in <code>tests/bdd/features/BR-UC-GET-PRODUCTS-format-options.feature</code> (<code>v1_format_ref</code> intact at <code>:29-39</code>; absent key omitted not nulled at <code>:41-52</code>; unannounceable declaration → <code>INTERNAL_ERROR</code> at <code>:54-71</code>), asserting on the real wire via <code>tests/bdd/steps/domain/uc_get_products_format_options.py:111-141</code>, route pinned shrink-only at <code>tests/unit/test_architecture_measurement_floors.py:97-103</code>.</td></tr>
+
+  <tr><td>S5</td>
+    <td><strong>Stop advertising <code>list_creative_formats</code> as a required sales task</strong> — it is deprecated for sales agents in 3.2.<br><span class="sub">sales-agent-creative-capabilities.mdx § Format deliverability is product-scoped; formats.mdx preamble</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-ok">yes (the opposite)</span></td>
+    <td><span class="ev">READ</span> The tool is a live registry row (<code>src/core/tools/registry.py:216-218</code>) with no deprecation marker, and 87 BDD scenarios in <code>tests/bdd/features/BR-UC-005-discover-creative-formats.feature</code> grade it as a first-class task. The pin agrees it is deprecated: <code>core/format-id.json</code> carries <code>"deprecated": true</code> at 3.2 and not at 3.0/3.1 <span class="ev">EXEC</span>.</td></tr>
+
+  <tr><td>F1</td>
+    <td><strong>Canonical compatibility is directional and exact</strong> — exact dimensions/durations match; a requested range must be <em>contained</em>, overlap insufficient; required slots present with compatible asset types; an exact publisher claim matches both halves.<br><span class="sub">formats.mdx § Matching and satisfaction</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> Nothing in <code>src/</code> compares <code>params</code>. Satisfaction exists only on the legacy key (<code>src/core/tools/media_buy_create.py:3219-3245</code>, set membership over <code>FormatKey</code>). The storyboard grades this with 9 <code>canonical_format_satisfaction</code> checks across <code>create_media_buy_with_canonical_format_option</code>, <code>…with_direct_canonical_selector</code>, <code>…with_legacy_mrec_format</code> and 6 rejection steps.</td></tr>
+
+  <tr><td>F2</td>
+    <td><strong>Equal <code>format_kind</code> alone does not prove compatibility.</strong><br><span class="sub">formats.mdx § Matching and satisfaction, final bullet</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td>Follows from F1: with no <code>params</code> comparison anywhere, kind equality is the only test available, which is precisely the inference the spec forbids. Storyboard steps <code>reject_bare_image_selector_for_fixed_mrec</code> (<code>UNSUPPORTED_FEATURE</code>) and <code>reject_image_width_without_height</code> (<code>INVALID_REQUEST</code>) grade it.</td></tr>
+
+  <tr><td>F3</td>
+    <td><strong>For a multi-placement product the selected format set must cover every placement; reject or refine, never silently remove inventory.</strong><br><span class="sub">formats.mdx § Matching and satisfaction</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> No coverage check exists: searching <code>src/core/</code> for <code>uncovered</code>, placement↔format joins, and “covers every” returns only unrelated comments. Placements carry <code>format_ids</code> (required and narrowed locally, <code>src/core/schemas/product.py:55,65</code>) and inherit <code>format_options</code>, but nothing asserts coverage.</td></tr>
+
+  <tr><td>F4</td>
+    <td><strong>The compatibility projection must be DERIVED from canonical data and must not become a second authored catalog.</strong><br><span class="sub">sales-agent-creative-capabilities.mdx § Compatibility; canonical-formats-migration.mdx § Compatibility projection</span></td>
+    <td><span class="tag t-no">ABSENT (inverted)</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> The arrow runs the wrong way. <code>format_ids</code> is authored (admin UI, DB, required by <code>product_conversion.py:408-414</code>); <code>format_options</code> is a stored document nothing derives (<code>product_conversion.py:417-427</code>). That is two independently authored catalogs — the state the spec names as making compatibility decisions ambiguous, and RFC #2236's root cause 1.</td></tr>
+
+  <tr><td>P1</td>
+    <td><strong>Honour the canonical product filters</strong> <code>filters.format_kinds</code> and <code>filters.format_option_refs</code>.<br><span class="sub"><code>core/product-filters.json</code> @ 3.2.1</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> The pin declares both (<code>product-filters.json</code> properties include <code>format_kinds</code> and <code>format_option_refs</code>), and our DTO inherits both — <code>ProductFilters.model_fields</code> shows <code>['format_ids','format_kinds','format_option_refs','standard_formats_only']</code>. <code>git grep format_kinds src/</code> finds one docstring and <strong>zero readers</strong>. <code>src/core/tools/products.py:533-580</code> reads only <code>format_ids</code> and <code>standard_formats_only</code>. A buyer filtering by canonical kind is served unfiltered products.</td></tr>
+
+  <tr><td>P2</td>
+    <td><strong>Honour package-level canonical selectors</strong> <code>format_kind</code> / <code>format_option_refs</code> on <code>create_media_buy</code> and <code>update_media_buy</code>.<br><span class="sub">canonical_formats storyboard steps <code>create_media_buy_with_canonical_format_option</code>, <code>…direct_canonical_selector</code></span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>git grep -n format_option_refs src/</code> returns exactly one hit and it is a comment: <code>src/core/schemas/_base.py:2633</code>. The fields are inherited onto <code>Package</code> and <code>PackageRequest</code> from the SDK parents, accepted on the wire, and dropped. Already filed as <code>#1789</code>.</td></tr>
+
+  <tr><td>M1</td>
+    <td><strong>Manifest identity is <code>format_kind</code> plus optional <code>format_option_ref</code>; new manifests use the canonical branch.</strong><br><span class="sub">creative-manifests.mdx § Basic structure, § Exact option routing</span></td>
+    <td><span class="tag t-part">PARTIAL</span></td>
+    <td><span class="tag t-ungr">UNGRADED</span></td>
+    <td><span class="ev">EXEC</span> Inbound works and is deliberate: <code>CreativeAssetRequest</code> validates a <code>format_kind</code>-only creative and both fields survive a wire dump (keys <code>['assets','creative_id','format_kind','format_option_ref','name']</code>). The sync gate carries whichever arm the buyer used unchanged (<code>src/core/tools/creatives/_validation.py:74-81</code>). <strong>Readback is broken when <code>format_option_ref</code> is present</strong> — see Q2.2 and gap&nbsp;1.</td></tr>
+
+  <tr><td>M2</td>
+    <td><strong><code>format_option_ref</code> is required when the target product carries multiple <code>format_options</code> sharing a <code>format_kind</code>.</strong><br><span class="sub"><code>core/creative-manifest.json</code> <code>format_option_ref</code> description; creative-manifests.mdx § Exact option routing</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> No such conditional exists. The pin states it normatively: “<em>Required when the target product carries multiple <code>format_options</code> entries sharing the same <code>format_kind</code>; optional when <code>format_kind</code> alone routes the manifest to a single declaration.</em>” Nothing in <code>src/</code> counts same-kind options or demands the ref.</td></tr>
+
+  <tr><td>M3</td>
+    <td><strong>Validate the manifest against the selected declaration</strong>: resolve the ref, confirm required slots, validate each asset's type and technical constraints, check fixed dimensions/durations/codecs/file sizes, reject uncovered selections without relaxing the target.<br><span class="sub">creative-manifests.mdx § Validation, steps 1–5</span></td>
+    <td><span class="tag t-no">ABSENT on the canonical path</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> <code>src/core/tools/creatives/_validation.py:136-147</code> is explicit: with no retained assertion “the vocabulary check above is the whole of its validation” and the function returns. So a canonical creative gets a <code>format_kind</code>-is-in-the-enum check and nothing else — no slot check, no dimension check, no ref resolution. The legacy arm instead goes on to a registry/agent walk (<code>:149-</code>).</td></tr>
+
+  <tr><td>M4</td>
+    <td><strong>A manifest must not mix <code>format_id</code> and <code>format_kind</code></strong> (root <code>oneOf</code>, each arm with a <code>not</code>).<br><span class="sub">creative-manifests.mdx § Deprecated compatibility branch; <code>core/creative-asset.json</code>, <code>core/creative-manifest.json</code></span></td>
+    <td><span class="tag t-ok">IMPLEMENTED</span></td>
+    <td><span class="tag t-part">half-graded</span></td>
+    <td><span class="ev">EXEC</span> Both branches refuse, with the spec's keyword: supplying both and supplying neither each raise <code>ValidationError … provide exactly one of format_id or format_kind [type=oneOf]</code> from <code>src/core/schemas/creative.py:197-238</code>. Grading is asymmetric — <em>neither</em> is graded by two BDD scenarios (<code>@T-UC-006-ext-e</code> at <code>BR-UC-006-sync-creatives.feature:270</code>; <code>@T-UC-006-partition-format-id</code> row <code>missing_format_id</code> at <code>:929</code>), <em>both</em> is graded nowhere at any layer.</td></tr>
+
+  <tr><td>M5</td>
+    <td><strong>Preserve <code>format_kind</code> and <code>format_option_ref</code> through preview, sync, library and delivery paths.</strong><br><span class="sub">canonical-formats-migration.mdx § Completion checklist, bullet 5</span></td>
+    <td><span class="tag t-no">BROKEN</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>format_kind</code> survives; <code>format_option_ref</code> does not. See Q2.2 and gap&nbsp;1 for the executed round trip.</td></tr>
+
+  <tr><td>M6</td>
+    <td><strong>Carry <code>representation_selection</code> when the manifest was resolved from equivalent trafficking representations.</strong><br><span class="sub">creative-manifests.mdx § Libraries and trafficking</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>git grep -n representation_selection src/</code> returns zero. The pin ships a test vector for it (<code>_compliance/3.2.1/test-vectors/creative-representation-resolution.json</code>) that nothing consumes.</td></tr>
+
+  <tr><td>C1</td>
+    <td><strong>Declare <code>creative.has_creative_library: true</strong> when the agent exposes reusable library operations such as <code>sync_creatives</code> and <code>list_creatives</code>.<br><span class="sub">sales-agent-creative-capabilities.mdx § Creative management modes</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> We have the library (<code>registry.py:251-258</code>) and declare nothing: <code>git grep "creative" src/core/tools/capabilities.py</code> is empty, <code>git grep has_creative_library src/</code> is empty, <code>DEFAULT_SUPPORTED_PROTOCOLS = [SupportedProtocol.media_buy]</code> (<code>src/core/schemas/capability_declarations.py:252</code>). Note <code>#1724</code>'s strict policy only forbids declaring <em>unbacked</em> capabilities; this one is backed.</td></tr>
+
+  <tr><td>C2</td>
+    <td><strong>Declare <code>media_buy.inline_creative_management</code></strong> when package-scoped creative bodies are accepted on create/update.<br><span class="sub">sales-agent-creative-capabilities.mdx § Creative management modes</span></td>
+    <td><span class="tag t-ok">IMPLEMENTED</span></td>
+    <td><span class="tag t-ungr">UNGRADED</span></td>
+    <td><span class="ev">READ</span> <code>src/services/seller_capabilities.py:628</code>. The declaration is correct (<code>src/core/tools/media_buy_update.py:945</code> does upload a package's inline creatives), but the justification comment one line above cites <code>sync_creatives</code>/<code>list_creatives</code> — which is the spec's definition of <code>has_creative_library</code>, not of this flag. Right answer, wrong reason, and the reason is what C1 then fails to act on.</td></tr>
+
+  <tr><td>C3</td>
+    <td><strong>Declare <code>creative.supports_revisions</code></strong> and preserve immutable buyer <code>revision_id</code> values through sync, review, readback and delivery.<br><span class="sub">sales-agent-creative-capabilities.mdx § Creative management modes</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>git grep -n revision_id src/</code> returns zero. Correctly undeclared under <code>#1724</code>'s policy, since the behavior does not exist.</td></tr>
+
+  <tr><td>C4</td>
+    <td><strong>Declare <code>creative</code> in <code>supported_protocols</code> and advertise <code>creative.supported_formats[]</code></strong> if the endpoint can build, validate or preview.<br><span class="sub">sales-agent-creative-capabilities.mdx § Creative operations are capability-scoped</span></td>
+    <td><span class="tag t-ok">N/A, correctly omitted</span></td>
+    <td><span class="tag t-ok">yes (as exclusion)</span></td>
+    <td><span class="ev">READ</span> We build/validate/preview nothing, so the obligation does not bind. Recorded deliberately at <code>src/core/schemas/capability_declarations.py:229</code> (“<code>creative</code> → generative creative unimplemented → #1724”). Note the consequence: the 3.2 replacement for <code>list_creative_formats</code> is a surface this seller has no claim to, so S5's deprecation cannot be discharged by migrating to it — the replacement for a <em>sales</em> agent is <code>Product.format_options[]</code>, i.e. S1/S4.</td></tr>
+
+  <tr><td>E1</td>
+    <td><strong>Flag divergent dual emission with a non-fatal <code>FORMAT_DECLARATION_DIVERGENT</code> advisory in <code>errors[]</code></strong>, <code>source: "producer"</code>, keeping the <code>get_products</code> response a populated success.<br><span class="sub">canonical_formats storyboard step <code>get_seeded_divergent_product</code>; <code>enums/error-code.json</code> @ 3.2.1</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> The code is in our table — it is <em>loaded</em> from the pin (<code>src/core/errors/codes.py:464</code>, table size 158), so presence proves nothing. <code>git grep FORMAT_DECLARATION_DIVERGENT src/</code> returns <strong>zero raise sites</strong>. Same for <code>FORMAT_PROJECTION_FAILED</code> and <code>FORMAT_DECLARATION_V1_AMBIGUOUS</code>.</td></tr>
+
+  <tr><td>E2</td>
+    <td><strong>Reject disagreeing canonical and legacy selectors, and conflicting canonical routes, with <code>CONFLICTING_SELECTORS</code></strong>; report an unprojectable legacy route as <code>UNSUPPORTED_FEATURE</code> before attempting equivalence.<br><span class="sub">canonical_formats storyboard steps <code>reject_conflicting_dual_emission</code>, <code>reject_conflicting_canonical_routes</code>, <code>reject_unprojectable_legacy_dual_emission</code></span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>git grep CONFLICTING_SELECTORS src/</code> returns zero. Unreachable in any case while P2 holds: with <code>format_option_refs</code> never read, there is no second selector to conflict with.</td></tr>
+
+  <tr><td>G1</td>
+    <td><strong><code>build_creative</code> accepts <code>target_capability_id</code> and returns a canonical manifest.</strong><br><span class="sub">formats.mdx § Creative-agent capability; template-format-ids.mdx § Replacement model</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> No registry row. 86 authored scenarios in <code>tests/bdd/features/BR-UC-020-build-creative.feature</code> collect <strong>nothing</strong>: the file has no <code>scenarios()</code> binder and is allowlisted at <code>tests/unit/test_architecture_feature_file_bound.py:49</code> under <code># FIXME(#1947)</code>. Not binding on a pure sales agent (see C4), but the scenarios assert otherwise and grade neither way.</td></tr>
+
+  <tr><td>G2</td>
+    <td><strong><code>preview_creative</code> / creative delivery features.</strong></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> Same shape: <code>BR-UC-021-preview-creative.feature</code> (73 scenarios) and <code>BR-UC-022-creative-delivery-features.feature</code> (80 scenarios), both unbound and allowlisted at <code>test_architecture_feature_file_bound.py:50-51</code>. 239 authored creative scenarios collect nothing in total.</td></tr>
+
+  <tr><td>L1</td>
+    <td><strong>Canonicalize <code>agent_url</code> before treating two format references as the same</strong> (MUST).<br><span class="sub"><code>core/format-id.json</code> @ 3.2.1, <code>properties.agent_url.description</code></span></td>
+    <td><span class="tag t-part">PARTIAL</span></td>
+    <td><span class="tag t-part">partly</span></td>
+    <td><span class="ev">EXEC</span> The helper is correct — four respellings of the standard agent URL (bare, trailing slash, uppercase host, explicit <code>:443</code>) all produce the identical key <code>'https://creative.adcontextprotocol.org/\x1fdisplay_300x250'</code>. One live violation remains at <code>src/core/tools/products.py:533-559</code>; see Q2.3.</td></tr>
+
+  <tr><td>L2</td>
+    <td><strong>Legacy → canonical projection follows the registry's normative order and fails closed; canonical → legacy must not be synthesized.</strong><br><span class="sub"><code>registries/v1-canonical-mapping.json</code>; RFC #2236 § technical core</span></td>
+    <td><span class="tag t-ok">IMPLEMENTED</span></td>
+    <td><span class="tag t-ungr">UNGRADED</span></td>
+    <td><span class="ev">READ</span> <code>src/core/format_resolver.py:110-172</code> (<code>canonical_kind_for</code>) runs step 1 (the agent's own <code>canonical.kind</code>) then step 3 (the registry <code>format_id_glob</code>) and raises otherwise; <code>:189-200</code> treats an unresolved projection as “no canonical kind”, not as a refusal, which is right because <code>core/creative-asset.json</code> keeps the <code>format_id</code> branch legal through 4.x. No synthesis in the reverse direction exists. Nothing grades either property.</td></tr>
+
+  <tr><td>L3</td>
+    <td><strong>Retain and echo the buyer's own <code>format_id</code> verbatim</strong> on the legacy arm.<br><span class="sub"><code>core/format-id.json</code>; <code>#2350</code></span></td>
+    <td><span class="tag t-ok">IMPLEMENTED</span></td>
+    <td><span class="tag t-part">partly</span></td>
+    <td><span class="ev">EXEC</span> Two columns, one verbatim and one canonical, written by one mapping (<code>src/core/database/repositories/creative.py:58-69</code>: <code>legacy_format_id</code> verbatim, <code>legacy_format_key</code> canonical and indexed). <code>CreativeFormatIdentity.label</code> now returns the asserted id (<code>src/core/schemas/_base.py:650-684</code>, inverted by <code>520661c9a</code>) and <code>wire_format_kind</code> returns <code>None</code> whenever an assertion is retained, which is where the response <code>oneOf</code> exclusivity is decided. Confirmed by execution: an identity with <code>kind='image'</code> and assertion <code>display_300x250</code> yields <code>wire_format_kind = None</code>, <code>label = 'display_300x250'</code>.</td></tr>
+
+  <tr><td>L4</td>
+    <td><strong>Do not author new template/parameterized <code>format_id</code> values; normalize legacy ones immediately and match on the canonical shape.</strong><br><span class="sub">template-format-ids.mdx § Compatibility</span></td>
+    <td><span class="tag t-part">PARTIAL</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">READ</span> Parameters are carried on the identity rather than baked into a compound id (<code>_base.py:531</code> derives <code>_FORMAT_ID_PARAMETERS</code> from <code>LibraryFormatId.model_fields</code>), but matching is still done on the legacy key throughout, not on the canonical shape — which is F1 again.</td></tr>
+
+  <tr><td>V1</td>
+    <td><strong>The seller's accepted <code>format_kind</code> vocabulary is the seller's, not the library's.</strong><br><span class="sub">adcp-client-python PR #1415 (open, docs); <code>is_canonical_format_kind</code> signature</span></td>
+    <td><span class="tag t-part">PARTIAL, pin-as-ceiling</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> The seam exists and is correct — <code>supported_kinds</code> is a parameter of <code>creative_format_identity</code> (<code>_base.py:689</code>) — but defaults to the pin's 16 kinds and <code>git grep supported_format_kinds src/</code> is empty, so the pin is this seller's ceiling. Documented deliberately at <code>_base.py:714-726</code>. A kind promoted after the pin is refused.</td></tr>
+
+  <tr><td>V2</td>
+    <td><strong>Refuse a <code>format_kind</code> absent from the target product's <code>format_options[]</code></strong> (the per-product closed set — a rule PR #1415 is at pains to say did <em>not</em> move to the seller, and is still enforced by <code>validate_format_kind_in_options</code> / <code>FormatKindNotInClosedSetError</code>).<br><span class="sub"><code>core/product-format-declaration.json</code>; PR #1415</span></td>
+    <td><span class="tag t-no">ABSENT</span></td>
+    <td><span class="tag t-no">no</span></td>
+    <td><span class="ev">EXEC</span> <code>git grep -n "validate_format_kind_in_options\|FormatKindNotInClosedSetError" src/</code> returns zero. The vocabulary check at <code>_base.py:742-751</code> is the global 16-kind set, which is the <em>other</em> rule. These are the two rules PR #1415 exists to stop people conflating, and this seller implements the one that the SDK also still does and omits the one that is its own.</td></tr>
+
+  </tbody>
+</table>
+</div>
+
+<h4>Tally</h4>
+<p><span class="tag t-ok">IMPLEMENTED</span> 4 (S4, M4, L2, L3) plus C4 as a correct non-applicability &nbsp;·&nbsp; <span class="tag t-part">PARTIAL</span> 7 (S1, M1, L1, L4, V1, C2, and M5 as broken-in-part) &nbsp;·&nbsp; <span class="tag t-no">ABSENT</span> 13 (S2, S3, S5, F1–F4, M2, M3, M6, C1, C3, E1, E2, G1, G2, V2 — counting the two capability-task rows as one) &nbsp;·&nbsp; <span class="tag t-ungr">UNGRADED</span> 9 rows have no test that fails if the behavior breaks.</p>
+
+<h2>Q2 — is the <code>format_id</code> ↔ <code>format_kind</code> duality fully supported?</h2>
+
+<p><strong>No.</strong> Taking "fully" as the stated bar — both directions work and neither can be silently lost — the duality fails on the second clause in two distinct ways, one of which is a hard failure rather than a silent loss.</p>
+
+<h3>2.1 — Where does <code>format_kind</code> come from, and what happens when declared and derived disagree?</h3>
+
+<p><strong>Both, and the design keeps them apart correctly.</strong> <span class="ev">READ</span> + <span class="ev">EXEC</span></p>
+
+<ul>
+  <li><strong>Declared</strong> by the buyer, read straight off the request DTO: <code>src/core/schemas/_base.py:735</code> (<code>declared_kind = creative.format_kind</code>), carried through the sync gate unchanged at <code>src/core/tools/creatives/_validation.py:81</code>.</li>
+  <li><strong>Derived</strong> from a <code>format_id</code> by <code>canonical_kind_for</code> (<code>src/core/format_resolver.py:110-172</code>), which runs only the two normative steps it can: step 1, the agent's own <code>canonical.kind</code> on a fetched spec; step 3, the registry glob <code>fnmatch(legacy_id, pattern.format_id_glob)</code>. Otherwise <code>ValueError</code>, caught at <code>:189-200</code> and left as <code>kind = None</code>.</li>
+  <li><strong>Read off the SDK</strong> only as the <em>vocabulary</em>: <code>is_canonical_format_kind</code> and <code>CanonicalFormatKind</code> (<code>_base.py:47,91</code>), passed as a parameter rather than used as an annotation — which is exactly what PR #1415 asks for.</li>
+</ul>
+
+<p><strong>They cannot disagree, by construction, and that is the right answer.</strong> This is the key difference from <code>#2355</code>. There, a declared <code>brand_json_url</code> was compared against a derived one using <code>rstrip("/")</code>, so the rule was simultaneously too lenient and too strict. Here the two values are never compared at all, because the <em>two arms are mutually exclusive on the wire</em>: a creative carries <code>format_id</code> or <code>format_kind</code>, never both (<span class="ev">EXEC</span>, verified both branches refuse — Q1 row M4), so a derived kind only ever exists alongside a <code>format_id</code>, and a declared kind only ever exists alone. <code>CreativeFormatIdentity</code> is one type with an <code>assertion</code> field marked <code>compare=False</code> (<code>_base.py:577-581</code>) rather than a two-arm union, "because the projection between the two identities runs one way only" (<code>:540-544</code>).</p>
+
+<p>The exclusivity is then re-asserted exactly once on the way out, by <code>wire_format_kind</code> (<code>_base.py:630-649</code>): <code>return None if self.assertion is not None else self.kind</code>. <span class="ev">EXEC</span> — an identity holding both (<code>kind='image'</code>, assertion <code>display_300x250</code>) emits <code>wire_format_kind = None</code>. So a legacy creative never emits a derived kind beside its retained assertion, which is what the response model's <code>oneOf</code> requires.</p>
+
+<p class="sub">One residual asymmetry worth naming, not a defect: on the product side the two <em>can</em> disagree, because <code>format_ids</code> and <code>format_options</code> are independently authored (Q1 row F4). That is the state <code>FORMAT_DECLARATION_DIVERGENT</code> exists for, and we neither detect nor report it (row E1). The declared-vs-derived hazard therefore does exist in this subsystem — on products, not on creatives.</p>
+
+<h3>2.2 — Does <code>format_kind</code> survive the wire in both directions?</h3>
+
+<p><strong><code>format_kind</code>: yes. <code>format_option_ref</code>: no — and the failure is loud, not silent.</strong></p>
+
+<h4>No <code>exclude=True</code> hides it</h4>
+<p><span class="ev">EXEC</span> + <span class="ev">READ</span> — <code>git grep "exclude=True" src/core/schemas/</code> returns 20 field-level exclusions and not one is on <code>format_kind</code>, <code>kind</code>, <code>format_option_ref</code>, <code>format_option_id</code> or <code>format_options</code>. Executed probe:</p>
+<pre><code>CreativeAssetRequest wire keys: ['assets','creative_id','format_kind','format_option_ref','name']
+  format_kind: image | format_option_ref: {'scope': 'product', 'format_option_id': 'opt1'}</code></pre>
+<p>Inbound and outbound on the request model are clean. The only suppression is the deliberate <code>oneOf</code> one in <code>wire_format_kind</code>.</p>
+
+<h4>The persistence edge drops the <code>scope</code> discriminator</h4>
+<p><span class="ev">EXEC</span> — the full round trip, run in this worktree:</p>
+<pre><code>c = CreativeAssetRequest.model_validate({... "format_kind":"image",
+      "format_option_ref":{"scope":"product","format_option_id":"opt1"}})
+ident = creative_format_identity(c)
+  -> CreativeFormatIdentity(kind='image',
+       option=FormatOptionIdentity(publisher_domain=None, format_option_id='opt1'),
+       legacy=None, legacy_parameters=(), assertion=None)
+cols  = _identity_columns(ident)
+  -> {'format_kind': 'image',
+      'format_option_ref': {'publisher_domain': None, 'format_option_id': 'opt1'},   # no 'scope'
+      'legacy_format_id': None, 'legacy_format_key': None}
+CreativeFormatIdentity.from_row(row)   # identical to ident -- the loss is invisible here
+jsonschema validate(cols['format_option_ref'], core/format-option-ref.json)
+  -> INVALID: is not valid under any of the given schemas</code></pre>
+
+<p>Two faults in one document, both from <code>FormatOptionIdentity.document</code> (<code>src/core/schemas/_base.py:524-527</code>), which emits only <code>publisher_domain</code> and <code>format_option_id</code>:</p>
+<ol>
+  <li><strong><code>scope</code> is absent.</strong> The pinned <code>core/format-option-ref.json</code> is a <code>discriminator: {propertyName: "scope"}</code> union and <code>scope</code> is in <code>required</code> on <strong>both</strong> arms. A comment at <code>_base.py:748-751</code> asserts the arms have "identical three-field sets, differing only in the <code>scope</code> discriminator" — true of the declared fields, but the discriminator is the one field that is not optional.</li>
+  <li><strong><code>publisher_domain: null</code> is present on the product arm, which forbids it.</strong> The product-local arm carries <code>"publisher_domain": false</code> — a schema-level forbid, not an absence.</li>
+</ol>
+
+<p><code>src/core/tools/creatives/listing.py:622</code> then emits that document raw onto the response (<code>format_option_ref=db_creative.format_option_ref</code>). <span class="ev">EXEC</span> — the response model refuses it:</p>
+<pre><code>Creative(format_option_ref={'publisher_domain': None, 'format_option_id': 'opt1'}, ...)
+  -> ValidationError: format_option_ref
+     Unable to extract tag using discriminator 'scope' [type=union_tag_not_found]
+
+Creative(format_option_ref={'scope':'product','format_option_id':'opt1'}, ...)
+  -> ACCEPTED, wire = {'scope': 'product', 'format_option_id': 'opt1'}
+Creative(format_option_ref={'scope':'publisher','publisher_domain':'p.example','format_option_id':'opt1'}, ...)
+  -> ACCEPTED, wire = {'scope': 'publisher', 'publisher_domain': 'p.example', 'format_option_id': 'opt1'}</code></pre>
+
+<p><strong>So: a creative that syncs successfully with <code>format_kind</code> + <code>format_option_ref</code> cannot be listed.</strong> The path is reachable end to end and deliberately so — <code>_validation.py:74-81</code> and <code>:136-147</code> were written to accept the canonical arm, with the comment "Carrying only format_id made a canonical creative unrepresentable". A canonical creative <em>without</em> a <code>format_option_ref</code> lists fine, because the column is then <code>NULL</code>. The break is specific to the exact-routing case the spec calls for whenever a product has multiple same-kind options.</p>
+
+<p><strong>Nothing grades it.</strong> <code>git grep format_kind tests/bdd/features/</code> returns 9 lines in 3 files and <strong>none</strong> sends a creative identified by <code>format_kind</code>: <code>BR-UC-018-list-creatives.feature:749</code> names <code>format_kind</code> and <code>format_option_ref</code> only as members of a <code>fields</code> selector array, and the Then step's assertion list (<code>tests/bdd/test_uc018_list_creatives.py:2271-2287</code>) is 10 hardcoded fields that include neither; the <code>&lt;format_kind&gt;</code> column in <code>local-uc006-dry-run-out-of-transaction-effects.feature</code> takes the values <code>generative</code>/<code>static</code> and is not the AdCP enum (<code>tests/bdd/steps/domain/uc006_sync_creatives.py:3435</code>). The factories only ever <em>derive</em> the column from a legacy <code>format_id</code> (<code>tests/factories/creative.py:61,147</code>).</p>
+
+<h3>2.3 — Is a format reference ever compared by raw string equality?</h3>
+
+<p><strong>Mostly no — the canonical path is genuinely single-sourced — with one live spec violation and two lower-severity ones.</strong></p>
+
+<p>The helper is correct and is the only builder of a key. <span class="ev">EXEC</span>:</p>
+<pre><code>https://creative.adcontextprotocol.org        -> 'https://creative.adcontextprotocol.org/\x1fdisplay_300x250'
+https://creative.adcontextprotocol.org/       -> 'https://creative.adcontextprotocol.org/\x1fdisplay_300x250'
+https://CREATIVE.adcontextprotocol.org        -> 'https://creative.adcontextprotocol.org/\x1fdisplay_300x250'
+https://creative.adcontextprotocol.org:443    -> 'https://creative.adcontextprotocol.org/\x1fdisplay_300x250'</code></pre>
+<p><code>format_id_identity</code> (<code>_base.py:447-497</code>) delegates to <code>canonical_agent_url</code> (<code>:364-421</code>) → <code>src.core.signing.canonical.producer_target_uri</code>, and deliberately does <em>not</em> <code>rstrip("/")</code> (reasoned at <code>:397-407</code>: the algorithm's closing sentence forbids additional transformations before comparison). The comparison-heavy paths all route through it — <code>sync_creatives</code> (<code>_processing.py:103,288-289</code>), <code>list_creatives</code> (<code>listing.py:412,515</code>), <code>list_creative_formats</code> (<code>creative_formats.py:271-272,421-425</code>), create/update media buy (<code>media_buy_create.py:463,486-502,3219-3275</code>; <code>media_buy_update.py:286,297</code>), the repository column filter (<code>repositories/creative.py:67,221</code>), the creative-agent cache key (<code>creative_agent_registry.py:212-236,333</code>). No private normalizer survives: <code>git grep "def normalize" src/</code> returns only historical comments.</p>
+
+<h4>Violation 1 — <code>get_products</code>'s format filter drops <code>agent_url</code> on both sides</h4>
+<p><span class="ev">READ</span> <code>src/core/tools/products.py:533-559</code>. The product side builds a <code>set[str]</code> of bare <code>.id</code> values, the request side does the same, and the test is <code>if not any(fmt_id in product_format_ids for fmt_id in request_format_ids)</code>. <code>format_id_identity</code> never runs.</p>
+<p>The failure direction matters and is the inverse of the usual one. Because the agent half is discarded on <em>both</em> sides, respelling cannot cause a false negative — it causes a <strong>false positive</strong>: two references the spec says are <em>different</em> (same <code>id</code>, different <code>agent_url</code>) compare <em>equal</em>. A buyer filtering on <code>{agent_url: "https://other-agent.example", id: "display_300x250"}</code> is served products that accept the canonical agent's <code>display_300x250</code> — a match this seller cannot honour. That is the mis-resolution the MUST exists to prevent, and it is grounded rather than inferred: <code>core/product-filters.json</code>'s <code>format_ids.items</code> <code>$ref</code>s the same <code>3.2.1/core/format-id.json</code> whose rule the sibling <code>list_creative_formats</code> filter honours correctly at <code>creative_formats.py:271</code>. No FIXME, no issue reference at the site. <span class="ev">EXEC</span> — the <code>$ref</code> was read from the pinned bundle.</p>
+
+<h4>Violation 2 — admin product-format validation drops <code>agent_url</code></h4>
+<p><span class="ev">READ</span> <code>src/admin/blueprints/products.py:779-783</code> (add) and <code>:1385-1389</code> (edit): <code>valid_format_ids = {fmt.format_id.id for fmt in result.formats}</code>, then membership on bare ids. The entries built by <code>_parse_format_entries</code> (<code>:89</code>) do carry <code>agent_url</code> and it is discarded. Same over-match direction. Consequence: an operator can save a product declaring agent A's <code>X</code> validated against agent B's <code>X</code>, persisting a <code>format_ids</code> entry no agent serves — which then flows into <code>product_format_identities()</code>, where the comparison <em>is</em> canonical and will never match.</p>
+
+<h4>Violation 3 — a hand-built raw <code>(agent_url, id)</code> tuple set, dead</h4>
+<p><span class="ev">READ</span> <code>src/admin/blueprints/products.py:2006-2032</code> builds <code>selected_format_ids.add((agent_url, format_id))</code> from the raw column value. This one <em>would</em> produce a false negative on a trailing slash or default port. It is dead: passed to <code>render_template(..., selected_format_ids=...)</code> at <code>:2073</code> and no template reads the name. Its comment cites "same as main.py", and <code>src/core/main.py</code> is 438 lines with no such code. Deletion candidate.</p>
+
+<h4>Neutral, named so they are not re-flagged</h4>
+<p><code>format_resolver.py:474</code> is a <em>deliberate</em> id-only match, documented at <code>:456-472</code>: the no-<code>agent_url</code> "search every agent" branch, where using the pair would silently narrow to the canonical agent. <code>creative_agent_registry.py:931</code> is id-only over an already agent-scoped collection. <code>mock_creative_engine.py:28-29</code>, <code>gam_product_config_service.py:95-99</code> and <code>format_resolver.py:537</code> key on operator-authored tables that have no agent half at all. Adapter-side type/size inference from an id (<code>gam/managers/orders.py:497-604</code>, <code>xandr.py:744-754</code>) is not identity work.</p>
+
+<h4>One DRY finding</h4>
+<p><code>src/adapters/gam/managers/orders.py:475</code> defines a local <code>format_display = f"{agent_url}/{format_id_str}" if agent_url else format_id_str</code> from the <strong>raw</strong> URL, shadowing the concept name of <code>src/core/format_resolver.py:273</code>, whose docstring (<code>:276-278</code>) exists to make one format spell the same way everywhere. An operator reading a GAM refusal at <code>orders.py:507-530</code> sees a different spelling from the same format in every buyer-facing refusal.</p>
+
+<h4>Tests that grade an algorithm production deleted</h4>
+<p><span class="ev">READ</span> Four unit files define a local <code>rstrip("/")</code> normalizer and assert against their own copy, so they exercise no production code and pin a rule <code>canonical_agent_url</code> explicitly refuses: <code>tests/unit/test_format_display_trailing_slash.py:12-50</code>, <code>test_format_trailing_slash.py:14-55</code>, <code>test_format_id_dimension_merging.py:155-233</code>, <code>test_format_id_subscript_regression.py:57-73</code>. Two of them cite source locations that no longer exist ("main.py:4711-4717", "media_buy_create.py:2618-2624"). A fifth, <code>test_format_id_request_preservation.py</code>, has <strong>zero imports</strong> — 228 lines re-implementing <code>FormatId</code>, <code>Product</code>, the extraction triple and the comparison, asserting on itself. Because its copy compares raw strings it cannot observe the bug class the production helper exists for.</p>
+
+<h3>2.4 — What does the pinned schema require, and does our DTO declare it?</h3>
+
+<p><span class="ev">EXEC</span> — read from <code>.venv/lib/python3.12/site-packages/adcp/_schemas/3.2/</code>, which is 3.2.1 (siblings <code>$ref</code> <code>https://adcontextprotocol.org/schemas/3.2.1/...</code>; resolved via <code>src/core/schemas/_pinned_fields.py:34</code>).</p>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Pinned file</th><th><code>required</code></th><th>Notable</th><th>Our DTO</th></tr></thead>
+  <tbody>
+  <tr><td><code>core/product-format-declaration.json</code></td><td><code>["format_kind","params"]</code> — root <em>and</em> identically on all 16 <code>oneOf</code> branches</td><td><code>discriminator: format_kind</code>. <strong>No nullable field anywhere</strong> (zero <code>"null"</code> occurrences). Six root <code>allOf</code> conditionals: <code>publisher_domain</code>→requires <code>format_option_id</code>; <code>tracker_execution_contract</code>→same; <code>custom</code>→requires <code>format_shape</code>+<code>format_schema</code>; <code>canonical_formats_only</code> XOR <code>v1_format_ref</code>; <code>capability_id</code> forbidden; <code>locale_policy</code>→requires <code>canonical_formats_only: true</code></td><td>Carried as an opaque document. The local <code>ProductFormatDeclaration</code> subclass that used to add <code>format_kind</code>+<code>params</code> was <strong>deleted</strong> — tombstone at <code>src/core/schemas/_base.py:1864-1873</code>. Nothing in <code>src/</code> validates a stored declaration against this file.</td></tr>
+  <tr><td><code>core/canonical-format-kind.json</code></td><td>—</td><td>16 members: <code>image, html5, display_tag, image_carousel, video_hosted, video_vast, audio_hosted, audio_vast, audio_daast, sponsored_placement, native_in_feed, responsive_creative, agent_placement, seller_rendered_stateful_display, coordinated_placements, custom</code>. <code>"type": "string"</code>, closed for producer validation.</td><td>Matches <code>adcp.types.canonical_creative.CanonicalFormatKind</code> exactly (<span class="ev">EXEC</span>, same 16 in the same order), which is the default <code>supported_kinds</code> at <code>_base.py:689</code>.</td></tr>
+  <tr><td><code>core/creative-manifest.json</code></td><td><code>["assets"]</code></td><td><code>additionalProperties: true</code>, no nullable field. Root <code>oneOf</code>: named arm (<code>required: ["format_id"]</code>, <code>not: {required:["format_kind"]}</code>, <code>"deprecated": true</code>) XOR canonical arm (mirror). Root <code>not</code> forbids <code>capability_id</code>/<code>capability_ref</code>. <code>allOf</code>: <code>coordinated_placements</code>→requires <code>component_assets</code>; <code>audio_vast</code>→every <code>vast</code> asset requires <code>vast_version</code>.</td><td><code>oneOf</code> enforced (M4). <code>component_assets</code> and the <code>vast_version</code> conditional: <span class="ev">EXEC</span> not implemented — no reader in <code>src/</code>.</td></tr>
+  <tr><td><code>core/format-option-ref.json</code></td><td>publisher arm <code>["scope","publisher_domain","format_option_id"]</code>; product arm <code>["scope","format_option_id"]</code> with <code>"publisher_domain": false</code></td><td><code>discriminator: scope</code>. <strong><code>scope</code> required in both arms.</strong></td><td>Declared (inherited) on <code>CreativeAssetRequest</code> and <code>Creative</code>. <strong>The stored document violates it</strong> — Q2.2.</td></tr>
+  <tr><td><code>core/format-id.json</code></td><td><code>["agent_url","id"]</code></td><td><code>"deprecated": true</code> at 3.2, not at 3.0/3.1. Parameters <code>width, height, duration_ms, pixel_ratio</code>, with <code>dependencies: {pixel_ratio: [width, height]}</code>. The canonicalize-before-comparison MUST lives in <code>agent_url.description</code>.</td><td><code>_FORMAT_ID_PARAMETERS</code> (<code>_base.py:531</code>) is derived from <code>LibraryFormatId.model_fields</code> minus the pair, so it tracks the pin rather than restating it. <code>pixel_ratio</code> dependency: not enforced locally.</td></tr>
+  <tr><td><code>core/creative-asset.json</code></td><td><code>["creative_id","name","assets"]</code></td><td>Same <code>format_id</code>-XOR-<code>format_kind</code> <code>oneOf</code>, plus the <code>coordinated_placements</code> and <code>capability_id</code> rules.</td><td><code>CreativeAssetRequest</code> redeclares <code>format_id</code> as <code>LibraryFormatId | None</code> — a documented required→optional weakening (<code>src/core/schemas/creative.py:188-195</code>), which is what makes the canonical arm expressible.</td></tr>
+  <tr><td><code>core/product-filters.json</code></td><td>— (no <code>required</code>)</td><td>Declares <code>format_ids</code>, <strong><code>format_kinds</code></strong>, <strong><code>format_option_refs</code></strong>, <code>standard_formats_only</code>.</td><td>All four inherited onto <code>ProductFilters</code> (<span class="ev">EXEC</span>). Only two are read — Q1 row P1.</td></tr>
+  <tr><td><code>protocol/get-adcp-capabilities-response.json</code></td><td><code>creative.supported_formats[]</code> item <code>required: ["format"]</code></td><td>Optional <code>capability_id</code> (<code>^[a-zA-Z0-9_-]+$</code>, unique) and <code>operations</code> (<code>build</code>/<code>validate</code>/<code>preview</code>, default <code>["build"]</code>). Description: "replaces the deprecated <code>list_creative_formats</code> task."</td><td>Not emitted. <code>git grep creative src/core/tools/capabilities.py</code> empty (<span class="ev">EXEC</span>) — Q1 rows C1/C4.</td></tr>
+  <tr><td><code>creative/list-creative-formats-request.json</code></td><td>— </td><td>Properties are all <code>format_ids</code>-shaped (<code>format_ids</code>, <code>output_format_ids</code>, <code>input_format_ids</code>). <strong>No <code>format_kind</code> filter exists</strong>, consistent with the task being the deprecated surface.</td><td>Implemented and canonical (<code>creative_formats.py:271-425</code>).</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h4>Two pin defects found while reading, reported for completeness</h4>
+<ul>
+  <li><strong>14-vs-16 enum split.</strong> <code>core/canonical-format-option.json</code> inlines its own <code>format_kind</code> enum with only 14 members, omitting <code>seller_rendered_stateful_display</code> and <code>coordinated_placements</code> — the two kinds <code>canonical-format-kind.json</code>'s own description says 3.2 promoted. A <code>coordinated_placements</code> declaration validates against <code>product-format-declaration.json</code> and is rejected by <code>canonical-format-option.json</code>. Upstream, not ours.</li>
+  <li><strong><code>FORMAT_NOT_FOUND</code> is not in the 3.2.1 enum.</strong> <span class="ev">EXEC</span> — the pinned <code>enums/error-code.json</code> has 120 codes and <code>FORMAT_NOT_FOUND</code> is not among them, while <code>REFERENCE_NOT_FOUND</code> is. Already filed as <code>#1847</code>.</li>
+</ul>
+
+<h3>2.5 — Can a declaration lose its scope by passing through a position where the value is not the canonical model?</h3>
+
+<p><strong>Not in this seller, and not by luck.</strong> The hazard is real in the library, our tree cannot reach it, and the reason it cannot is written down in the code. Two separate things have to be said, because they do not agree.</p>
+
+<h4>The upstream change, and what the <code>False</code> default actually gates</h4>
+
+<p><span class="ev">READ</span> — commit <code>19e4b62ee8f52b90f3997a6132262e72f54d4302</code> on adcp-client-python PR #1447, "read the format-declaration scope defensively in the wrap serializer", in <code>src/adcp/types/canonical_creative.py</code>:</p>
+<pre><code>-   _format_scope=type(self).__adcp_format_declaration_scope__,
++   _format_scope=getattr(type(self), "__adcp_format_declaration_scope__", False),</code></pre>
+<p>Its reason: "A field annotated with a canonical model can hold a plain dict, and pydantic then hands that dict to the wrap serializer. Reading the class-level capability directly raised AttributeError on 'dict'; the class-name comparison it replaced was safe only by accident, since 'dict' != 'Format'." Its regression test reaches that state with <code>Response.model_construct(affected_packages=[{"package_id": "pkg_1"}])</code> — <code>model_construct</code>, which skips validation. <span class="ev">EXEC</span> — the commit is the fourth-to-last on the branch and the head (<code>dcec537cd</code>) is after it, so the defensive read is in the PR head.</p>
+
+<p><strong>The defensive read is correct at a library boundary and should not be scored as a data-model smell.</strong> Pydantic tolerates a mismatched value during serialization with a <code>UserWarning</code> rather than raising, and <code>model_construct</code> is a public, documented pydantic API. A serializer that converts pydantic's warning into an <code>AttributeError</code> is escalating a tolerated state into a crash, which is a library defect independent of whether any caller should be in that state. <span class="ev">EXEC</span> — confirmed on our pin: a dict at a canonical position emits one <code>UserWarning</code> and dumps, and <code>type({}).__name__ == "Format"</code> is <code>False</code>, so the class-name comparison the ClassVar replaced was indeed silent rather than safe.</p>
+
+<p><strong>But the <code>False</code> default is output-inert, at our pin and at the PR head alike — so it cannot currently produce quietly-wrong output.</strong> This is the part worth stating precisely, because it bounds the concern rather than dismissing it. <code>_format_scope</code> is a <em>seed</em> threaded through <code>strip_legacy_creative_identity</code> and <strong>never consulted in a condition</strong>:</p>
+<ul>
+  <li><span class="ev">READ</span> At our pin, <code>.venv/.../adcp/types/canonical_creative.py</code>: declared at <code>:312</code>, propagated at <code>:330, :341, :350</code>. The two decisions in that function read <code>is_legacy_creative_identity_key(key)</code> (a regex, <code>:213</code>: <code>(^|_)(?:format_ids?|v1_format_ref)($|_)</code>) and <code>_is_format_scoped_agent_tuple(value, path=path)</code> (<code>:283</code>, which takes <code>path</code>, not the seed). Neither reads <code>_format_scope</code>.</li>
+  <li><span class="ev">READ</span> At the PR head <code>dcec537cd</code>, fetched and inspected: identical — declared at <code>:358</code>, propagated at <code>:376, :387, :396</code>, consulted nowhere.</li>
+  <li><span class="ev">EXEC</span> Proof on our pin, same document both ways: <code>strip_legacy_creative_identity(doc, _format_scope=True) == strip_legacy_creative_identity(doc, _format_scope=False)</code> → <strong><code>True</code></strong>.</li>
+</ul>
+
+<p>The ClassVar's two <em>consequential</em> readers are on the validation path, not the serialization path — PR head <code>:571-573</code>, <code>allow_root_v1_ref=cls.__adcp_format_declaration_scope__</code> and <code>format_scope=…</code> feeding <code>_legacy_creative_identity_path</code> inside a <code>@model_validator(mode="before")</code>. That is what lets <code>Format</code> keep a root <code>v1_format_ref</code> where every other canonical model rejects it, and it reads <code>cls</code>, so a dict can never substitute for the class there. The other two serializer readers (<code>:585, :594</code>) are left undefended and correctly so: they are <code>model_dump</code> / <code>model_dump_json</code> instance methods, unreachable with a dict as <code>self</code>.</p>
+
+<div class="box">
+  <h4>So the loss is real, and it runs through a different mechanism than the scope</h4>
+  <p><span class="ev">EXEC</span> — a dict at a canonical position on our pin:</p>
+  <pre><code>class R(BaseModel): affected_packages: list[canonical_creative.Package] | None = None
+R.model_construct(affected_packages=[{"package_id":"pkg_1",
+                  "format_ids":[{"agent_url":"https://a.example","id":"x"}]}]).model_dump()
+  -> {'affected_packages': [{'package_id': 'pkg_1'}]}      # format_ids DELETED
+  -> warnings: ['UserWarning']</code></pre>
+  <p>The <code>format_ids</code> key is gone. That deletion is <code>is_legacy_creative_identity_key</code> doing its job on an <em>unvalidated</em> dict, not the scope seed being misread — it happens identically whichever way the seed is set. <strong>The hazard is "the strip runs at all on a value that never went through validation", and the scope default is a latent second-order risk on top of it:</strong> if a future SDK version makes <code>_format_scope</code> consequential on the serialize path — the obvious candidate being to mirror <code>allow_root_v1_ref</code> so a <code>Format</code> keeps its root <code>v1_format_ref</code> on output — then the <code>False</code> default silently flips a declaration's output from "keeps <code>v1_format_ref</code>" to "strips it". The PR's test asserts only that the call does not raise; it asserts nothing about whether the output is right for a dict that genuinely carries a declaration. That prediction is recorded here so it can be checked against the next bump rather than rediscovered.</p>
+</div>
+
+<h4>Our tree: outbound</h4>
+<p><strong>No such site exists, and it is structurally unreachable at this pin.</strong> <span class="ev">EXEC</span></p>
+<ul>
+  <li><strong>Which classes carry the wrap serializer:</strong> exactly 34, all in <code>adcp/types/canonical_creative.py</code> — <code>CanonicalBoundaryModel</code> plus 33 subclasses, including <code>Format</code>, <code>Product</code>, <code>Package</code>, <code>PackageRequest</code>, <code>CreativeAsset</code>, <code>Creative</code>, <code>CreativeManifest</code>, <code>ProductFilters</code>. All 52 <code>adcp.types.Legacy*</code> exports are non-canonical. No <code>*FormatDeclaration</code> or <code>*FormatOption*</code> generated class carries it.</li>
+  <li><strong>The transitive closure contains none of them.</strong> Walking every <code>TOOLS[*].dto</code> and every <code>get_type_hints(spec.impl)["return"]</code> recursively through <code>get_args</code>: <strong>14 tools, 1093 models, 0 canonical, 0 fields annotated with one.</strong></li>
+  <li><strong>Our <code>Product</code> is not one:</strong> <code>"_serialize_canonical" in Product.__pydantic_decorators__.model_serializers</code> → <code>False</code>; <code>issubclass(Product, canonical_creative.Product)</code> → <code>False</code>. It extends <code>LegacyProduct</code> (<code>src/core/schemas/product.py:13,72</code>).</li>
+  <li><strong><code>model_construct</code> discipline is sound:</strong> two call sites in <code>src/</code>, both non-canonical webhook types (<code>src/core/webhooks/registration.py:94-95</code>), and <code>Error.model_construct</code> is actively blocked at <code>src/core/schemas/_base.py:359</code>.</li>
+  <li><strong>The two sites that hand a raw JSONB value at a model-typed position are both saved by the annotation validating it first.</strong> <code>src/core/product_conversion.py:427</code> assigns a raw <code>list[dict]</code> into a plain dict, which then goes through <code>Product(**product_data)</code> at <code>:555</code>; <code>src/core/tools/creatives/listing.py:619</code> passes a raw dict that the discriminated union validates into <code>FormatOptionReference2</code>. Neither target is canonical.</li>
+  <li><strong><code>affected_packages</code> — the exact field the upstream reproducer uses — is built from models at all 18 sites</strong> (<code>media_buy_update.py:841, 926, 1008, 1158, 1191</code> and the five adapters), and our response field is <code>list[AffectedPackage]</code> over <code>LegacyPackage</code> (<code>src/core/schemas/_base.py:1487</code>), not <code>Sequence[canonical_creative.Package]</code>. <strong>The upstream reproducer does not transfer.</strong></li>
+</ul>
+
+<h4>Our tree: inbound</h4>
+<p><strong>A buyer's declaration arrives validated into a model — a non-canonical one — and cannot reach a serializer as a dict.</strong> <span class="ev">READ</span> <code>src/core/tools/_boundary.py:240</code> is the one validation for every transport (<code>TOOLS[tool_name].dto.model_validate(raw)</code>), so every nested field is coerced into its declared model or the request is refused; there is no second path in. <span class="ev">EXEC</span> with warnings-as-errors, after real validation: <code>ProductFilters.format_option_refs[0]</code> → <code>FormatOptionReference1</code>; <code>PackageRequest.format_option_refs[0]</code> → <code>FormatOptionReference2</code>; <code>CreativeAssetRequest.format_option_ref</code> → <code>FormatOptionReference2</code>. None is a dict, none is canonical. The one site reading a request's option ref (<code>src/core/schemas/_base.py:752</code>) reads <code>.publisher_domain</code> / <code>.format_option_id</code> as attributes, which is itself proof the value is already a model.</p>
+
+<h4>The decisive positive proof: <code>format_ids</code> survives the <code>get_products</code> wire</h4>
+<p><span class="ev">EXEC</span> — run through production code (<code>convert_product_model_to_schema</code> → <code>GetProductsResponse</code> → <code>to_wire</code>) on an ORM product carrying a stored <code>format_options</code> document:</p>
+<pre><code>pydantic class             -> src.core.schemas.product.Product
+format_options[0] runtime  -> adcp.types.domains.core.product_format_declaration.ProductFormatDeclaration1
+format_ids on wire         -> [{'agent_url': 'https://x.example', 'id': 'display_300x250'}]
+format_options[0] wire     -> {'format_option_id': 'opt_a', 'format_kind': 'image', 'params': {...}, ...}
+UserWarnings               -> none</code></pre>
+<p><code>strip_legacy_creative_identity</code>'s regex would have deleted <code>format_ids</code> recursively. It is present, so the strip never ran — which is the same fact as "no canonical class is in the chain", measured from the other end. And no <code>UserWarning</code> was emitted, so no dict sat at a model-typed position anywhere on that path.</p>
+
+<p>This is deliberate, not incidental. <span class="ev">READ</span> <code>src/core/schemas/_base.py:58-64</code>: "<code>LegacyFormat</code>, not <code>Format</code>: adcp 9 (AdCP 3.2) repoints the public name <code>Format</code> at the canonical format DECLARATION… The two are different models with one name between them, so an unprefixed import silently rebinds the base." And <code>src/core/schemas/creative.py:40-43</code>: "the public name binds to <code>adcp.types.canonical_creative.CreativeAsset</code>, which STRIPS <code>format_id</code>." <span class="ev">EXEC</span> — the only <code>canonical_creative</code> import anywhere in <code>src/</code> or <code>scripts/</code> is <code>_base.py:91</code>, and it imports <code>CanonicalFormatKind</code>, which is an <code>enum</code> and carries no serializer.</p>
+
+<h4>The latent edge, named because the creative migration will walk into it</h4>
+<p><span class="ev">EXEC</span> — <code>adcp.types.ProductFormatDeclaration <strong>is</strong> adcp.types.canonical_creative.Format</code>: a pure alias. So annotating <code>format_options</code> with that natural-looking public name adopts the <code>_format_scope=True</code> serializer under a name that does not read as <code>Format</code> — and <code>product_conversion.py:427</code> already hands that field a raw <code>list[dict]</code>. The seller's immunity rests entirely on every base class being pinned to a <code>Legacy*</code> spelling; dropping one <code>Legacy</code> prefix at <code>_base.py:65-72</code>, <code>creative.py:44-51</code>, <code>product.py:10-16</code> or <code>src/admin/blueprints/operations.py:10</code> rebinds a base to a canonical one and arms the chain in one line. The creative migration (<code>salesagent-3xcdk</code>) is by design the change that does this.</p>
+
+<p class="sub">One correction to Q1 row S1 that this probe produced: <code>format_options</code> is opaque at <em>storage</em> and at <code>product_conversion.py:427</code>, but it is <strong>not</strong> opaque at the model layer — the inherited annotation validates it into <code>ProductFormatDeclaration1..16</code> and the wire output is that branch's dump, with the generated class's defaults filled in (the probe above shows <code>canonical_formats_only</code>, <code>experimental</code>, <code>v1_translatable</code>, <code>synthesis_nondeterministic</code> and a full <code>slots</code> array that the stored document did not contain). So a buyer sees declaration fields the seller never authored. The defaults are the schema's, so this is not a conformance defect, but it does mean the wire shape is reshaped rather than passed through — worth knowing before anyone reasons about <code>format_options</code> as a pass-through document.</p>
+
+<h3>Prior art read, and what it settles</h3>
+<dl>
+  <dt>adcp-client-python <strong>#1415</strong> (open, docs-only) — "who owns the <code>format_kind</code> check"</dt>
+  <dd>Settles that 9.0 <em>opened</em> the enum, so the seller now owns the vocabulary refusal: "a seller that adds no check has silently stopped validating something the library used to validate for it, with no error and nothing in a passing suite to say so." And that there are <strong>two independent rules</strong> people conflate: the global vocabulary check (<code>is_canonical_format_kind</code>) and the <strong>per-product closed set</strong> (<code>validate_format_kind_in_options</code> / <code>FormatKindNotInClosedSetError</code>), which "did not move". We implement the first and not the second — Q1 rows V1/V2. It also warns that annotating a field with <code>CanonicalFormatKind</code> "rebuilds the closed enum one layer down"; we correctly pass it as a parameter.</dd>
+
+  <dt>adcp-client-python <strong>#1435</strong> (open, carried in our pin) — codegen keyword naming</dt>
+  <dd>Exists <em>because of</em> this exact <code>oneOf</code>: "A seller hit this on exactly this schema… a creative carrying neither <code>format_id</code> nor <code>format_kind</code> must be refused with keyword <code>oneOf</code>; what reached the buyer was an envelope with <code>value_error</code> and <code>issues[]</code> empty." That seller is us: <code>src/core/schemas/creative.py:197-238</code> carries a <code>mode="before"</code> validator re-raising the rule as <code>PydanticCustomError("oneOf", …)</code> purely to get ahead of the inherited one. <span class="ev">EXEC</span> confirms our refusal now reports <code>[type=oneOf]</code>. The PR makes the workaround unnecessary — once it lands, our validator becomes removable, which is a cleanup item rather than a gap.</dd>
+
+  <dt>adcp-client-python <strong>#1447</strong> (open, green, blocked on review) — "keep <code>ProductFormatDeclaration</code> a class"</dt>
+  <dd>Settles whether the authoring and consuming type for a product format declaration is the same type. <span class="ev">EXEC</span> — <code>gh pr checks 1447</code> shows <strong>40 checks, all pass</strong> (run <code>37778101716</code>); <code>mergeStateStatus: BLOCKED</code>, <code>reviewDecision: REVIEW_REQUIRED</code>, head <code>dcec537cd</code>. The 27 <code>CANCELLED</code> rows are a superseded run whose names still carry un-expanded <code>${{ matrix.python-version }}</code> templates, so it is blocked on a human review and not on CI; it is likely to land as-is. Bears directly on our tombstoned local subclass (<code>_base.py:1864-1873</code>): it restores typed parameter access via <code>params_as(...)</code> and makes <code>Format</code> subclassable (the <code>cls.__name__ == "Format"</code> checks at 5 sites — still what our pin runs, at <code>canonical_creative.py:447, 515-516, 528, 537</code> — replaced by an inherited ClassVar), and widens enforcement, including <code>image.json</code>'s size-mode mutex which no generated branch carries. Its commit <code>19e4b62ee</code> then reads that ClassVar defensively in the wrap serializer; Q2.5 grades that change and bounds what the <code>False</code> default can and cannot cost. <strong>If we implement declaration validation, do it after #1447 lands and use its class, not a local restatement</strong> — and note that adopting it is precisely the step that arms the dict-at-a-canonical-position hazard Q2.5 shows we are currently immune to.</dd>
+
+  <dt>salesagent <strong>#2355</strong> — the declared-vs-derived defect class</dt>
+  <dd>Not about formats; it is <code>brand_json_url</code>. The class is: <em>a declared value compared against a derived value using an ad-hoc normalization instead of the single canonicalization implementation, and therefore wrong in both directions at once</em> — too lenient on a trailing slash, too strict on an explicit <code>:443</code>. Its principle rules out <code>rstrip</code> entirely: "After all eight steps, comparison is byte-for-byte. Implementations MUST NOT apply additional transformations before comparison." The creative path does <em>not</em> have this defect (Q2.1); <code>products.py:533-559</code> has its sibling, and the product dual-emission case (row E1) has it latently. #2355's second half is the lesson that applies here directly: the fix was as ungraded as the defect, which is why every gap below names a scenario.</dd>
+
+  <dt>salesagent <strong>#2236</strong> — the repo's own Creative RFC</dt>
+  <dd>Already enumerates G1–G13 and clusters 82 open format issues into root causes, of which root cause 1 is independently reproduced here as Q1 row F4. Its technical core is the asymmetry: legacy→canonical resolves through a six-step normative order; canonical→legacy is <em>forbidden</em> ("SDKs MUST NOT synthesize a v1 <code>format_id</code>… by inverting structural matches") and for four kinds impossible (<code>v1_translatable: false</code>). Our <code>format_resolver</code> implements exactly that asymmetry (row L2). Its latest revision moves the internal identity from the bare kind to the <em>resolved declaration</em>, on bokelley's point that "<code>format_kind</code> is a discriminator/category, not a complete identity" — which is the same conclusion rows F1/F2/M2 reach from the spec text.</dd>
+</dl>
+
+<h2>Prioritized gap list</h2>
+
+<ol class="gaps">
+
+<li><b>P0 — A canonical creative with <code>format_option_ref</code> cannot be read back.</b><br>
+<code>FormatOptionIdentity.document</code> (<code>src/core/schemas/_base.py:524-527</code>) omits the required <code>scope</code> discriminator and emits <code>publisher_domain: null</code> on the product arm, which the pin forbids; <code>CreativeFormatIdentity.from_row</code> (<code>:613-617</code>) reads it back positionally so the loss is invisible inside the identity; <code>listing.py:622</code> emits it raw and the response model raises <code>union_tag_not_found</code>. Verified end to end by execution.<br>
+<em>Smallest next action:</em> add the failing BDD scenario first — one row on <code>BR-UC-006-sync-creatives.feature</code> that syncs a creative with <code>format_kind: image</code> and <code>format_option_ref: {scope: product, format_option_id: …}</code>, then reads it back through <code>list_creatives</code> and asserts the wire <code>format_option_ref</code> equals what was sent, scope included. It will fail on all four transports. Then make <code>document</code> emit <code>scope</code> (derived from whether <code>publisher_domain</code> is set) and omit <code>publisher_domain</code> when <code>None</code>, and have <code>from_row</code> read the discriminator. Stored rows written before the fix need a one-time backfill or a read-side tolerance — decide which in the same change, not after.<br>
+<span class="sub">Not fixed here: it spans two methods plus a stored-data decision, which is past the one-line bar I was given.</span></li>
+
+<li><b>P0 — <code>get_products</code>'s <code>format_ids</code> filter compares bare ids, so a foreign-agent reference matches a local product.</b><br>
+<code>src/core/tools/products.py:533-559</code>. The MUST in <code>core/format-id.json</code> binds this filter — <code>core/product-filters.json</code>'s <code>format_ids.items</code> <code>$ref</code>s that file — and the sibling <code>list_creative_formats</code> filter already honours it at <code>creative_formats.py:271</code>. False positives, not false negatives.<br>
+<em>Smallest next action:</em> the fix is three lines — build both sides with <code>format_id_identity</code> / <code>product_format_identities</code> and compare <code>FormatKey</code> sets, exactly as <code>creative_formats.py:271-272</code> does. Grade it with one row on the existing <code>get_products</code> filter scenario: a filter naming the same <code>id</code> under a different <code>agent_url</code> must return no products. <code>tests/bdd/e2e_rest_known_failures.txt:157-168</code> records that <code>uc005_format_id_third_party</code> previously xpassed <em>vacuously</em> on a hand-built raw tuple — that is the precedent for insisting on the agent-differing row rather than a same-agent one.</li>
+
+<li><b>P1 — The canonical product filters are accepted and silently ignored.</b><br>
+<code>ProductFilters.format_kinds</code> and <code>.format_option_refs</code> are declared (inherited) and read nowhere; <code>git grep format_kinds src/</code> finds one docstring. Same class as <code>#1789</code> on the read path, and I found no issue covering the <code>get_products</code> side.<br>
+<em>Smallest next action:</em> file it against <code>#2236</code> as the read-path twin of <code>#1789</code> before writing code — the choice between filtering on them and refusing them with <code>UNSUPPORTED_FEATURE</code> is a product decision, and silently dropping is the one answer that is wrong either way. A scenario sending <code>filters.format_kinds: ["video_hosted"]</code> against an image-only catalog, asserting either an empty product list or a refusal, is the grader for both options.</li>
+
+<li><b>P1 — The 3.2 authoring direction is inverted: two independently authored catalogs.</b><br>
+<code>format_ids</code> is authored and required (<code>product_conversion.py:408-414</code>); <code>format_options</code> is an opaque pass-through (<code>:417-427</code>), with nothing authoring it (<code>git grep format_options src/admin/</code> empty). The spec requires canonical authored and legacy <em>derived</em>, one way only. This is <code>#2236</code> root cause 1 and should not be attacked piecemeal.<br>
+<em>Smallest next action:</em> nothing in code. Add a comment to <code>#2236</code> with the two measurements that bound the work — <code>product_conversion.py:408-414</code> is the single line that makes a canonical-only product unservable, and <code>git grep format_options src/admin/</code> being empty is the single fact that makes <code>format_options</code> unauthorable — so the RFC's Part on products has a concrete starting edge.</li>
+
+<li><b>P1 — Canonical format satisfaction does not exist, and the storyboard grades 9 checks of it.</b><br>
+Rows F1/F2/F3/M2/M3/V2 are one missing mechanism: nothing compares <code>params</code>, resolves a <code>format_option_ref</code>, checks slot coverage, or enforces the per-product closed set. <code>Package.format_option_refs</code> is read nowhere, so there is not even an input to satisfy against. The upstream storyboard <code>media_buy_seller/canonical_formats</code> grades it with 9 <code>canonical_format_satisfaction</code> checks and 5 <code>error_code</code> checks (<code>CONFLICTING_SELECTORS</code> ×2, <code>UNSUPPORTED_FEATURE</code> ×2, <code>INVALID_REQUEST</code> ×1).<br>
+<em>Smallest next action:</em> wire the storyboard before building anything. <code>docs/test-obligations/storyboard-wireability.yaml</code> has <strong>no verdict at all</strong> for <code>canonical_formats.yaml</code> — it is not even in <code>untriaged</code> — so the one storyboard grading AdCP 3.2 canonical declarations is unjudged. Triage it, and the 17 steps become the specification for this work instead of a design argument.</li>
+
+<li><b>P2 — <code>creative.has_creative_library</code> is backed and undeclared.</b><br>
+We expose <code>sync_creatives</code> and <code>list_creatives</code> (<code>registry.py:251-258</code>) and emit no <code>creative</code> block (<code>capabilities.py</code> has no <code>creative</code> at all). <code>#1724</code>'s strict policy forbids declaring <em>unbacked</em> capabilities; this one is backed, so the policy argues <em>for</em> declaring it. There is no issue naming a missing top-level <code>creative</code> block — this is a genuine filing gap.<br>
+<em>Smallest next action:</em> file one issue for the <code>creative</code> block scoped to what is backed today — <code>has_creative_library: true</code>, and nothing else — citing <code>sales-agent-creative-capabilities.mdx § Creative management modes</code> and <code>#1724</code>'s policy. Fix the misleading justification comment at <code>src/services/seller_capabilities.py:627</code> in the same change: it attributes <code>inline_creative_management</code> to the library, which is the definition of the flag it omits. Grade with a row on <code>BR-UC-010-discover-seller-capabilities.feature</code>; note the comment at <code>:1514</code> claiming <code>supported_formats</code> coverage is unsupported — <code>supported_formats</code> appears nowhere else in that feature.</li>
+
+<li><b>P2 — The dual-emission advisories are loaded and never raised.</b><br>
+<code>FORMAT_DECLARATION_DIVERGENT</code>, <code>FORMAT_PROJECTION_FAILED</code>, <code>FORMAT_DECLARATION_V1_AMBIGUOUS</code> and <code>CONFLICTING_SELECTORS</code> have zero raise sites in <code>src/</code>. Their presence in <code>CODE_TABLE</code> is not evidence of anything — the table is loaded from the pin at <code>src/core/errors/codes.py:464</code>.<br>
+<em>Smallest next action:</em> blocked on gap 4 (there is no divergence to detect until the two catalogs have a derivation relation) and on gap 5 (no second selector to conflict with). Record it on <code>#2236</code> as a consequence rather than filing separately — and note for whoever writes the first one that <code>FORMAT_DECLARATION_DIVERGENT</code> is a non-fatal <code>errors[]</code> entry on a <em>success</em> response, which is a shape this seller does not currently emit anywhere on <code>get_products</code>.</li>
+
+<li><b>P2 — 239 authored creative scenarios collect nothing.</b><br>
+<code>BR-UC-020-build-creative.feature</code> (86), <code>BR-UC-021-preview-creative.feature</code> (73), <code>BR-UC-022-creative-delivery-features.feature</code> (80) have no <code>scenarios()</code> binder and are allowlisted at <code>tests/unit/test_architecture_feature_file_bound.py:49-51</code> under <code># FIXME(#1947)</code>. They include every <code>creative_manifest</code> validation scenario and the BR-RULE-155/156 format-identity invariants. 15 UC-005 tags are additionally dormant (<code>tests/bdd/dormant_scenarios.txt</code>), three of them the 3.1/3.2 asset-registry and payload-vs-requirements scenarios.<br>
+<em>Smallest next action:</em> decide and record whether these bind at all for a pure sales agent. Per Q1 row C4 the <code>build</code>/<code>preview</code> obligations do not bind on an endpoint that declares no <code>creative</code> protocol, so the honest resolution may be to <em>delete</em> UC-020/021 rather than wire them — which shrinks the allowlist legitimately. UC-022 (delivery features) is likelier to bind. Either way the allowlist entry should cite that decision instead of <code>#1947</code>'s generic "unbound".</li>
+
+<li><b>P2 — The seller's immunity to the canonical-serializer strip is unpinned, and the creative migration is the change that breaks it.</b><br>
+Q2.5: zero canonical classes in the 1093-model closure, so <code>strip_legacy_creative_identity</code> never runs on our data — but that rests entirely on every base class being spelled <code>Legacy*</code>. One dropped prefix at <code>src/core/schemas/_base.py:65-72</code>, <code>creative.py:44-51</code>, <code>product.py:10-16</code> or <code>src/admin/blueprints/operations.py:10</code> rebinds a base to a canonical class and arms the whole chain, and <code>adcp.types.ProductFormatDeclaration</code> <em>is</em> <code>canonical_creative.Format</code>, so the arming import does not read like one. The two sites that hand a raw JSONB value at a model-typed position (<code>product_conversion.py:427</code>, <code>listing.py:619</code>) are saved today only by the annotation validating the dict first.<br>
+<em>Smallest next action:</em> the measurement in Q2.5 is already the guard, so turn it into one — a structural test asserting the transitive closure of every <code>TOOLS[*].dto</code> and <code>impl</code> return type contains zero <code>adcp.types.canonical_creative.CanonicalBoundaryModel</code> subclasses. It is ~15 lines, it derives rather than declares (so it cannot go stale), it has a non-empty population to assert against (1093 models), and it will go red on the first line of the creative migration rather than at the first stripped <code>format_ids</code> in production. Fire-probe it by temporarily annotating one field with <code>adcp.types.ProductFormatDeclaration</code> and confirming red at the assertion.</li>
+
+<li><b>P3 — Five unit files grade a <code>rstrip("/")</code> normalization production deliberately deleted.</b><br>
+<code>test_format_display_trailing_slash.py</code>, <code>test_format_trailing_slash.py</code>, <code>test_format_id_dimension_merging.py:155-233</code>, <code>test_format_id_subscript_regression.py:57-73</code>, and <code>test_format_id_request_preservation.py</code> (zero imports, 228 lines re-implementing production). Two cite source locations that no longer exist. They cannot fail when the canonicalization breaks, and they pin a rule the spec forbids.<br>
+<em>Smallest next action:</em> delete <code>test_format_id_request_preservation.py</code> — it imports nothing, so deletion cannot reduce coverage, and <code>test_format_id_anyurl_validation.py</code> is the precedent (its header records that it was converted from exactly this shape). The other four need their assertions redirected at <code>src/core/format_resolver.format_display</code> / <code>format_identity</code> rather than deleted, since the trailing-slash behavior they aim at is real and currently ungraded.</li>
+
+<li><b>P3 — <code>list_creative_formats</code> is still advertised as a first-class sales task.</b><br>
+Live registry row with no deprecation marker (<code>registry.py:216-218</code>), 87 scenarios grading it, and the pin marks its identity type <code>"deprecated": true</code> at 3.2. Not urgent — the compatibility window is open through 4.0 and the replacement for a sales agent is <code>format_options</code>, which is gap 4.<br>
+<em>Smallest next action:</em> one comment on the registry row citing <code>sales-agent-creative-capabilities.mdx</code> ("sales-agent <code>list_creative_formats</code> is deprecated in 3.2") and <code>formats.mdx</code> ("Fields named exactly <code>format_ids</code> are removed in AdCP 4.0"), so the next person reading the row knows it is a compatibility surface and not the model to extend.</li>
+
+<li><b>P3 — <code>src/adapters/gam/managers/orders.py:475</code> duplicates <code>format_display</code> on the raw URL.</b><br>
+Shadows the concept name of <code>src/core/format_resolver.py:273</code>, whose docstring exists to make one format spell the same way in every refusal. Operator-facing only.<br>
+<em>Smallest next action:</em> import <code>format_display</code> and delete the local expression. One line, but it crosses into the adapter and changes operator-visible refusal text at <code>orders.py:507-530</code>, so it belongs in a change that can say so rather than in this audit.</li>
+
+<li><b>P4 — <code>src/admin/blueprints/products.py:2006-2032</code> builds a raw <code>(agent_url, id)</code> tuple set that no template reads.</b><br>
+Would produce false negatives on a trailing slash; dead, since <code>selected_format_ids</code> appears in no template. Its comment cites "same as main.py", which has no such code.<br>
+<em>Smallest next action:</em> delete the block. Confirmed already: <code>git grep selected_format_ids -- templates/ src/</code> returns 5 lines, all of them in <code>products.py</code> (<code>:2006, :2008, :2030, :2032, :2073</code>) and none in any template <span class="ev">EXEC</span>.</li>
+
+</ol>
+
+<h2>Deliberately not claimed</h2>
+<ul>
+  <li><strong>No BDD or integration run was performed.</strong> Every "graded / ungraded" verdict is from reading feature files, binders, the conftest xfail sets, <code>dormant_scenarios.txt</code> and <code>e2e_rest_known_failures.txt</code> — not from a measured run. Where a behavior's correctness is claimed it was probed in-process instead, and marked <span class="ev">EXEC</span>.</li>
+  <li><strong>The ~134 xpass figure could not be reconciled.</strong> <code>test-results/</code> does not exist in this worktree. The eight git-tracked xpass baselines in <code>.claude/notes/</code> top out at 38 entries and were last committed <code>2a9613498</code> (2026-09-18), measuring runs from 2026-08-28. Of their 6 creative/format nodeids, 4 have since graduated out of the ledger, and two currently-ledgered creative entries appear in no baseline. So: the only creative scenarios both still ledgered and recorded as xpassing are two UC-005 storyboard rows, on a stale measurement. <strong>No creative obligation below is graded "absent" on the strength of a ledger entry alone</strong> — each absent row cites a <code>git grep</code> or a probe.</li>
+  <li><strong>No fix was applied.</strong> Gap 2 is the only candidate at roughly the one-line bar, and it needs the agent-differing scenario row alongside it to not repeat #2355's second half; I left both for a change that can carry them together.</li>
+</ul>
+
+<footer>
+  Worktree <code>sa-crfc</code> · branch <code>audit/creative-rfc</code> · HEAD <code>390fa2519</code> · pin <code>adcp==9.0.0b1+prs1435.1415.1456</code> (AdCP 3.2.1) · audited 2026-10-09
+</footer>
