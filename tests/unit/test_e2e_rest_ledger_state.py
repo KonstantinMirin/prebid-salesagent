@@ -84,7 +84,12 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # (d4af23095, strict-xfail XPASS in-network).
         # Account valid rows graduated at the #1417 merge (jr5b seeded-account
         # Given; XPASS in-network innet_140726_1516) — see ledger note.
-        'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_include_package_daily_breakdown_boundary__boundary_point[e2e_rest-string \'true\' (non-boolean type)-"true"-error "INVALID_REQUEST" with suggestion]',
+        # The daily-breakdown row (string 'true' -> INVALID_REQUEST) graduated
+        # 2026-10-09: the 3.2 request schema types include_package_daily_breakdown
+        # `"type": "boolean"`, so the live server refuses "true" with INVALID_REQUEST +
+        # suggestion on the wire (POST /api/v1/media-buys/delivery -> 400, XPASS in
+        # innet_091026_1343); a2a/mcp/rest already passed plain. Its own ledger note had
+        # predicted this and named the missing in-network run.
         'tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_reporting_dimensions_boundary__boundary_point[e2e_rest-geo with geo_level=metro but no system (behavioral gap)-{"geo": {"geo_level": "metro"}}-invalid]',
         "tests/bdd/test_uc004_deliver_media_buy_metrics.py::test_seller_ignores_attribution_request__returns_platform_default[e2e_rest]",
         "tests/bdd/test_uc011_manage_accounts.py::test_push_notification_for_async_status_changes__with_push_notification[e2e_rest]",
@@ -101,12 +106,16 @@ EXPECTED_LEDGER: frozenset[str] = frozenset(
         # roundtrip row was never a registry-injection case at all. Evidence per row is
         # in the ledger file's block comment.
         #
-        # The third-party-agent row below stays: it xpasses VACUOUSLY (its one
-        # discriminating assertion compares a raw agent_url against canonicalized
-        # identities, so an id-only filter regression would still pass) and graduating
-        # it would delete coverage rather than record it.
-        "tests/bdd/test_uc005_discover_creative_formats.py::test_baseline_list_creative_formats_response_carries_format_id_objects_with_agent_url_and_id[e2e_rest]",
-        "tests/bdd/test_uc005_discover_creative_formats.py::test_format_id_with_agent_url_pointing_at_a_thirdparty_creative_agent_is_reported_as_observation_not_failure[e2e_rest]",
+        # The last two rows of that block graduated 2026-10-09, leaving it empty.
+        # The third-party-agent row's vacuity note below WAS the reason it stayed, and
+        # be2c9f501 fixed the defect it named: both sides of the discriminating
+        # comparison now run through format_id_identity, so an id-only filter
+        # regression fires it. Three consecutive in-network runs XPASS it
+        # (innet_061026_1351, innet_071026_0547, innet_091026_1343). The baseline
+        # format-id row's "still genuinely fails in-network" was a misattribution:
+        # innet_061026_1351 shows it failing on a SECOND, strict #7338 route, which
+        # 53bb472a4 graduated, and it has XPASSED in both runs since. Both pass plain on
+        # a2a/mcp/rest. Full per-row evidence in the ledger file's block comment.
         # Added 2026-09-13: @T-UC-005-main's Given moved from minted fmt_N ids to
         # reference-catalog formats, which retired its tag-level xfail on every
         # transport; over e2e_rest the live catalog carries pixel_tracker assets the

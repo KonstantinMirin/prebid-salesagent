@@ -720,11 +720,23 @@ Feature: BR-UC-004 Deliver Media Buy Metrics
   Scenario: sort_by metric not available - seller falls back to spend
     Given a media buy "mb-001" owned by "buyer-001" with status "active"
     And the seller supports reporting dimension "placement"
+    And the seller reports placement "pl-A" with 3000 impressions, 150 spend and 30 clicks
+    And the seller reports placement "pl-B" with 1500 impressions, 200 spend and 10 clicks
+    And the seller reports placement "pl-C" with 500 impressions, 50 spend and 50 clicks
     And the seller does NOT report metric "conversions"
     When the Buyer Agent requests delivery metrics for "mb-001" with reporting_dimensions {"placement": {"sort_by": "conversions"}}
     Then the response is compliant with the get_media_buy_delivery spec
     And the response placement breakdown should be sorted by "spend" (fallback)
+    And the response placement breakdown should be ordered "pl-B", "pl-A", "pl-C"
     # BR-RULE-091 INV-6: sort_by metric not reported -> falls back to 'spend'
+    # The three placement rows are the whole point of the scenario and not scenery.
+    # Each sortable metric ranks them differently — spend B > A > C, impressions
+    # A > B > C, clicks C > A > B — so the named ORDER separates a spend fallback from
+    # a fallback to anything else. Without them the seller synthesizes a split from one
+    # weight vector that is rank-identical across every metric, and "sorted descending"
+    # then holds whatever the seller sorted by — measured: deleting the fallback branch,
+    # and falling back to clicks instead of spend, both left this scenario green on all
+    # transports (GH #2059).
 
   @T-UC-004-dim-sortby-valid @invariant @BR-RULE-091 @reporting-dimensions
   Scenario: sort_by metric available - seller uses requested metric

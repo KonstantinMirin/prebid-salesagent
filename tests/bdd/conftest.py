@@ -1480,6 +1480,15 @@ _UC010_PARKED_ROWS: list[tuple[str, set[str], str]] = [
         "the surface that makes its trigger declarable",
     ),
 ]
+# XPASS INSPECTED AND REFUSED 2026-10-09: both rows of the entry above reported XPASS
+# over e2e_rest in innet_091026_1343, with a real call phase against the live server
+# (POST /api/v1/capabilities -> 200). They were not supposed to RUN at all. The cause
+# was not this table: the e2e_rest marker collapse (:4489) rebuilt the marker from
+# reason+strict and dropped ``run=False``, so the park degraded into a running
+# non-strict xfail on that transport alone — and the XPASS it produced is precisely the
+# vacuous green the park's own reason predicts. The collapse now carries ``run``; the
+# entry stays exactly as it is, because the surface its reason names (#1855, #1867)
+# still does not exist.
 
 
 # The wired-tag gate lives in ``_uc010_wired_tags()`` (one definition, below): the
@@ -1926,6 +1935,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # The same premise change is owed a re-grade for the four tags the merge DID
             # drop from this set — -retry-success, -sequence, -retry-5xx, -no-retry-4xx —
             # and only a bdd-in-network run can settle it.
+            #
+            # XPASS INSPECTED AND REFUSED 2026-10-09 (innet_091026_1343). One of this
+            # outline's four e2e_rest rows — [scheduled-should] — reported XPASS while
+            # [adjusted], [final] and [delayed] reported xfail, so the tag-level route is
+            # the only thing that can hold it: remove the tag and three rows go RED. And
+            # the one row that passes is the one that CANNOT fail here, for the reason the
+            # note above states: delivery_webhook_scheduler.py:332 assigns
+            # NotificationType.scheduled unconditionally, so a request for a scheduled
+            # report gets `scheduled` whether or not production selects anything. The
+            # XPASS is the hardcode, not the behavior. A row-level narrowing would turn
+            # that into a plain PASS and read as coverage, which is strictly worse.
+            # Graduates with the same production change the note already names.
             "T-UC-004-webhook-notification-type",
             # STAYS (salesagent-n78j0.13) — FAILED INSPECTION STEP 5 (Then assertions), and
             # it fails it in a shape neither graduated neighbour had, which is why "hmac and
@@ -3387,22 +3408,72 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # media-buy/task-reference/get_media_buy_delivery.mdx:869 "falls back to `spend`
         # if the seller does not report the requested metric" — it is simply ungraded.
         #
-        # NOTE the discriminating fixture already exists and is the dead one:
-        # _DEFAULT_PLACEMENT_DATA (spend 150/200/50, clicks 30/10/50) is NOT
-        # rank-correlated and WOULD separate the orderings. Fixing this row means
-        # wiring that data in (and asserting the ORDER of placement_ids, not just
-        # descending-ness), then re-checking whether it still passes. Threading it needs
-        # a by_placement parameter on set_adapter_response AND on its
-        # _persist_simulation_config realization, so the live server sees the same data.
-        # GH #2059.
-        # Do not graduate this route until a replacement assertion is mutation-proved.
+        # STRENGTHENED 2026-10-09, and the route stays only for want of a measurement.
+        # The prescription above has been carried out: the scenario now NAMES its three
+        # placements (pl-A/B/C, spend 150/200/50, clicks 30/10/50 — not rank-correlated,
+        # so spend ranks B>A>C and clicks ranks C>A>B) and pins the resulting SEQUENCE
+        # via `the response placement breakdown should be ordered "pl-B", "pl-A",
+        # "pl-C"`, alongside the descending-ness Then it already had. The data reaches
+        # production through set_adapter_response's new `by_placement` parameter, which
+        # needs no second e2e realization: _persist_simulation_config dumps the whole
+        # AdapterGetMediaBuyDeliveryResponse into the delivery_simulation_configs row
+        # and MockAdServer._load_delivery_simulation reads it back verbatim, so the live
+        # server sorts the same numbers. _build_placement_breakdown honours
+        # raw_placements when present, so the synthesized one-weight-vector split — the
+        # thing that made every metric rank-identical — is no longer what is sorted.
+        # Mutation-proved in-process, the same two shapes that were GREEN before, each
+        # applied to _apply_breakdown_limit and reverted to a byte-identical src/ tree:
+        #   M1 delete the spend-fallback branch entirely -> 3 failed / 3 passed (RED)
+        #   M2 fall back to "clicks" instead of "spend"  -> 3 failed / 3 passed (RED)
+        # The 3 that still pass under each are the -dim-sortby-valid counter-example,
+        # which asks for a metric the seller DOES report and so never enters the branch.
+        # Note which assertion fires: with non-rank-correlated data the DESCENDING-ness
+        # Then the scenario already had goes red on its own ([50, 150, 200] under M2,
+        # [150, 200, 50] under M1). The data was the defect; the pinned ORDER is the
+        # assertion that stays honest if a future fixture happens to re-correlate.
+        # The route is NOT removed, because only a bdd-in-network run grades e2e_rest and
+        # none has been made against the strengthened assertion — graduating on the
+        # in-process result would cite the wrong measurement, the same error the UC-005
+        # third-party row refused for its own repaired assertion. GH #2059.
+        #
+        # WHAT IS UNMEASURED, named rather than left as "a measurement", because a route
+        # whose reason is only "not yet checked" is indistinguishable from one hiding a
+        # failure. Two of the four links are RULED OUT by construction and must not be
+        # cited as the risk:
+        #   - the ORDER is not a transport concern. by_placement is a JSON array in the
+        #     pinned response and _apply_breakdown_limit sorts it server-side BEFORE
+        #     serialization, so no transport can reorder it.
+        #   - the seed ROW reaching the live server is already proven over e2e_rest: the
+        #     four UC-004 delivery rows graduated 2026-09-15 ride the same
+        #     _persist_simulation_config -> delivery_simulation_configs ->
+        #     MockAdServer._load_delivery_simulation path for by_geo / by_device_type,
+        #     and mock_delivery_seed_enabled is on wherever ADCP_TESTING is.
+        # What is left is the COMPOSITION, and it is specific:
+        #   (1) no e2e_rest run has ever carried `by_placement` through that row. It is a
+        #       declared field on AdapterPackageDelivery and rides the same
+        #       model_dump(mode="json") / model_validate pair, so it should survive — but
+        #       "should" is reading, not measurement.
+        #   (2) the accumulating Given calls set_adapter_response THREE times in one
+        #       scenario, so over e2e it performs three upsert+commit cycles against the
+        #       same (tenant, media_buy) row. The repository's upsert is a read-then-
+        #       replace on that key, so the third write should win carrying all three
+        #       placements; no already-graduated e2e scenario writes that row twice, so
+        #       this is the genuinely novel step.
+        # RESIDUAL RISK, stated: strict=False means an e2e_rest FAILURE here stays hidden.
+        # run stays True so the next in-network run reports an XPASS and graduates it for
+        # free; if it instead fails, that is a harness gap in (1) or (2) and belongs at the
+        # env seam as an E2EUnsupportedSetup declaration, not here.
         if "T-UC-004-dim-sortby-fallback" in marker_names and is_e2e_rest:
             item.add_marker(
                 pytest.mark.xfail(
-                    reason="sort_by spend-fallback is ungraded on EVERY transport: the synthesized "
-                    "placement split descends identically for spend, impressions and clicks, so a "
-                    "broken fallback sorts the same as a working one",
+                    reason="e2e_rest: the strengthened sort_by assertion (named placements + "
+                    "pinned order) is graded for real in-process, but no in-network run has yet "
+                    "carried by_placement through the delivery_simulation_configs row, nor "
+                    "written that row three times in one scenario as the accumulating Given "
+                    "does. Order is not at risk (server-side sort, JSON array); the seed "
+                    "round-trip for this field is",
                     strict=False,
+                    run=True,
                 )
             )
 
@@ -4645,6 +4716,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # production fix surfaces as a strict xpass instead of being silently
             # swallowed. Ledger-only items carry only non-strict markers, so they
             # stay non-strict — an environment-dependent xpass must not fail CI.
+            #
+            # ``run`` is carried over for the same reason ``strict`` is, and it was NOT
+            # until 2026-10-09. The collapse rebuilt the marker from reason+strict only,
+            # so a ``run=False`` park (the one in _UC010_PARKED_ROWS, which exists
+            # precisely because those rows would PASS while grading nothing) silently
+            # became a RUNNING non-strict xfail on this transport alone — and the two
+            # webhook-signing-bounds rows duly executed against the live server and
+            # reported XPASS in innet_091026_1343, which is the exact vacuous green the
+            # park was written to refuse. Dropping a kwarg in a collapse is not a
+            # weaker version of the same routing; it is a different routing.
             xfails = [m for m in item.own_markers if m.name == "xfail"]
             if xfails:
                 strict = next((m for m in xfails if m.kwargs.get("strict", False)), None)
@@ -4654,6 +4735,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     pytest.mark.xfail(
                         reason=chosen.kwargs.get("reason", "e2e_rest xfail"),
                         strict=strict is not None,
+                        run=all(m.kwargs.get("run", True) for m in xfails),
                     )
                 )
 
