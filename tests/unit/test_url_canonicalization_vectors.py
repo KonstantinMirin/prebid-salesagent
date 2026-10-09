@@ -167,23 +167,29 @@ def test_canonical_agent_url_keeps_these_apart(rule: str, left: str, right: str)
     assert canonical_agent_url(left) != canonical_agent_url(right), rule
 
 
-def test_the_seam_applies_step_5_which_the_vendored_copy_does_not():
-    """The one rule `canonical_agent_url` adds, and the reason it has to.
+@pytest.mark.parametrize(
+    "spelling",
+    ["https://h.example.com", "https://h.example.com/", "https://H.Example.COM:443", "https://h.example.com:443/"],
+)
+def test_every_spelling_of_one_agent_canonicalizes_to_one_string(spelling: str):
+    """An agent_url has ONE canonical spelling, and nothing downstream may compensate.
 
-    Step 5 substitutes `/` for an empty path when an authority is present. The vendored
-    implementation applies it only when a query is present, and no conformance vector
-    covers the no-query case -- so it passes every vector while still leaving
-    `https://h.com` and `https://h.com/` as two agents. That is the spelling difference
-    a human actually types, so the seam closes it.
+    This replaces a tripwire. Step 5 substitutes `/` for an empty path when an authority
+    is present; the SDK used to gate that on a query being present, so `https://h.com`
+    and `https://h.com/` canonicalized to two different strings and
+    `canonical_agent_url` patched the difference back out afterwards. The predecessor
+    test asserted that divergence precisely so it would fail the day the SDK closed it.
+    It did -- adcp-client-python#1456 -- and the patch is gone.
 
-    This test is the tripwire for the migration: when the SDK closes the gap, the first
-    assertion below starts failing, and the shim in `canonical_agent_url` can go.
+    So the property worth grading is no longer "the seam adds a rule the SDK lacks" but
+    the one call sites actually depend on: every spelling a human produces for one agent
+    arrives as a single string, from one conversion, with no site left asking which form
+    it was handed. Both ends are asserted -- the SDK's own output and the seam's -- so a
+    future pin that re-opens the gap fails here rather than silently inviting a shim
+    back.
     """
-    assert canonicalize_target_uri("https://h.example.com") == "https://h.example.com", (
-        "vendored copy no longer leaves an empty path alone -- drop the step-5 shim in "
-        "canonical_agent_url (salesagent-3xcdk)"
-    )
-    assert canonical_agent_url("https://h.example.com") == "https://h.example.com/"
+    assert canonicalize_target_uri(spelling) == "https://h.example.com/"
+    assert canonical_agent_url(spelling) == "https://h.example.com/"
 
 
 def test_a_malformed_agent_url_raises_rather_than_comparing_equal_to_something():

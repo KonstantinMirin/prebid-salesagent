@@ -385,13 +385,14 @@ def canonical_agent_url(agent_url: object) -> str:
     converted to its A-label here, where a verifier comparing a signature base must refuse
     one rather than pick a UTS-46 outcome the signer may not have picked.
 
-    **Spec step 5 is applied here, not there.** "If the path is empty AND an
-    authority is present, substitute ``/``." 7.0.2 does this only when a query is
-    present (``https://h.com?x=1`` -> ``https://h.com/?x=1``) and leaves
-    ``https://h.com`` with an empty path; no conformance vector covers the no-query
-    case, so it passes 37/37 while still diverging. Applying it makes
-    ``https://x.org`` and ``https://x.org/`` one agent, which is the spelling
-    difference a human actually produces.
+    There is ONE conversion and this function performs none of it itself. Spec step 5
+    ("if the path is empty AND an authority is present, substitute ``/``") used to be
+    applied here, on top of the delegation, because the SDK gated it on the query being
+    present and so left ``https://host`` with an empty path where RFC 3986 §6.2.3 requires
+    ``https://host/``. No published vector covered the empty-path-no-query case, which is
+    how it passed 37/37 while diverging. adcp-client-python#1456 fixed it; the pin carries
+    the fix, so ``https://host`` and ``https://host/`` are one spelling by the time the
+    string leaves the SDK, and the local patch is gone.
 
     What this deliberately does NOT do is ``.rstrip("/")``, which it used to. That
     is an "additional transformation before comparison", which the algorithm's
@@ -414,12 +415,7 @@ def canonical_agent_url(agent_url: object) -> str:
     """
     from src.core.signing.canonical import producer_target_uri
 
-    canonical = producer_target_uri(str(agent_url))
-    # Step 5, the half the vendored implementation applies only when a query is present.
-    scheme, _, rest = canonical.partition("://")
-    if rest and "/" not in rest and "?" not in rest:
-        canonical = f"{scheme}://{rest}/"
-    return canonical
+    return producer_target_uri(str(agent_url))
 
 
 #: Separates the two halves of a :data:`FormatKey`. The ASCII unit separator cannot occur
