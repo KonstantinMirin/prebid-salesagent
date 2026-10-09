@@ -359,10 +359,10 @@ def review_creatives(tenant_id, **kwargs):
                 {
                     "creative_id": creative.creative_id,
                     "name": creative.name,
-                    # The identity as an operator reads it: the canonical kind when the row
-                    # has one, else the legacy id the buyer asserted. Through the ONE row
-                    # reader, so this page cannot disagree with the buyer-facing one about
-                    # what format a creative is.
+                    # The identity as an operator reads it: the id the buyer asserted when
+                    # the row has one, else the canonical kind. Through the ONE row reader,
+                    # so this page cannot disagree with the buyer-facing one about what
+                    # format a creative is.
                     "format": CreativeFormatIdentity.from_row(creative).label,
                     "status": creative.status,
                     "principal_name": principal_name,
