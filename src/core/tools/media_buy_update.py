@@ -299,7 +299,10 @@ def _validate_creatives_for_assignment(
             incompatible.append(f"{creative.creative_id} (format '{display}')")
 
     if incompatible:
-        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats, key=lambda p: p.id))
+        # Sorted on the key itself, which orders by canonical agent_url and then id. The
+        # explicit ``key=lambda p: p.id`` this replaces ordered by id across agents; nothing
+        # grades the order of this sentence, and every sibling site already sorts plainly.
+        supported_display = ", ".join(format_display(i) for i in sorted(supported_formats))
         # A format outside the product's declared set is a BUSINESS-RULE violation, which
         # adcp 3.1.1's enums/error-code.json codes as VALIDATION_ERROR ("violates business
         # rules beyond schema validation"). It is not CREATIVE_REJECTED: that enum entry

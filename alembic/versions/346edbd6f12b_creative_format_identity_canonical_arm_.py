@@ -17,7 +17,7 @@ Four columns, each with one job:
 * ``legacy_format_id`` -- the assertion, as ONE faithful value: ``agent_url``, ``id``, and
   every parameter ``FormatId`` declares.
 * ``legacy_format_key`` -- that assertion's canonical comparison key
-  (``FormatIdentity.storage_key``), indexed. Two obligations collide on a stored reference
+  (its ``FormatKey``), indexed. Two obligations collide on a stored reference
   and one value cannot serve both: the echo must be VERBATIM (the sync storyboard grades
   "seller must accept its own format_id", and canonicalizing on the write path broke that
   round-trip -- measured), while a COMPARISON must canonicalize, which

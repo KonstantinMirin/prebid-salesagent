@@ -21,6 +21,7 @@ from src.core.schemas import (
     Creative,
     CreativePolicy,
     CreativeStatusEnum,
+    canonical_agent_url,
     creative_format_identity,
 )
 
@@ -130,18 +131,23 @@ def _validate_creative_input(
             field="format_kind",
         ) from exc
 
-    if identity.legacy is None:
+    if identity.assertion is None:
         # No retained assertion, so the creative named a KIND from a closed vocabulary rather
         # than a reference to a format some agent hosts. There is no agent to ask: the
         # registry walk below does not apply and the vocabulary check above is the whole of
         # its validation. Asked of the identity rather than by branching on its type —
         # the identity is one shape now, and what varies is whether it retains an assertion.
+        #
+        # ``assertion`` and not ``legacy``: the two are written together by ``of_legacy`` and
+        # are exactly co-null, but this branch needs the REFERENCE's two halves below, and
+        # ``legacy`` is one indexable key that is compared whole and never taken apart.
         return validated_creative
 
     # The retained assertion names a format a creative agent must actually serve. Canonical
-    # agent_url, because that is what the identity carries and what a comparison requires.
-    agent_url = identity.legacy.agent_url
-    format_id = identity.legacy.id
+    # agent_url, because a comparison requires it and because this is the value that gets
+    # dialled — the same form ``identity.legacy`` is keyed on.
+    agent_url = canonical_agent_url(identity.assertion.agent_url)
+    format_id = identity.assertion.id
 
     # Skip external validation for adapter-provided formats (non-HTTP URLs)
     # These formats are served by the adapter itself (e.g., broadstreet://default)

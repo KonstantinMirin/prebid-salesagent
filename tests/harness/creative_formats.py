@@ -24,13 +24,13 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from src.core.schemas import FormatIdentity, ListCreativeFormatsResponse
+from src.core.schemas import FormatKey, ListCreativeFormatsResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._realize import E2EUnsupportedSetup, realize_e2e
 from tests.harness.transport import DeliverResult
 
 
-def _format_identity_key(fmt: Any) -> FormatIdentity:
+def _format_identity_key(fmt: Any) -> FormatKey:
     """Federation identity ``(canonical agent_url, id)`` of a Format / FormatId / bare id.
 
     Delegates to ``src.core.format_resolver.format_identity``, which is the ONE
