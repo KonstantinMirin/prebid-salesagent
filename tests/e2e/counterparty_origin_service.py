@@ -17,10 +17,18 @@ and ``/a2a`` is JSON-RPC with an agent card — and a counterparty has to be a
 separate origin anyway for the listed/unlisted pair below to mean anything.
 
 Hop 1 was a raw ``GET`` of a JSON object in earlier SDKs, which is what this
-service was originally built around. It is now an MCP ``tools/call``, which is
-what AdCP 3.1.1 ``L1/security.mdx``:1142 mandates — so ``do_POST`` answers the
-handshake and the tool call, and the ``GET`` is kept as the simple way to read a
-published document. See ``_stdlib_json_http.mcp_capabilities_post``.
+service was originally built around. It is a PROTOCOL call now:
+``_fetch_capabilities`` (``adcp/signing/agent_resolver.py``:264) hands its
+SSRF-pinned client to ``fetch_protocol_capabilities``
+(``adcp/signing/_resolver_protocol.py``:290), which for the default
+``protocol="mcp"`` opens ``streamablehttp_client``, runs
+``ClientSession.initialize()`` and then calls the ``get_adcp_capabilities`` tool —
+AdCP 3.1.1 ``L1/security.mdx``:1142 verbatim ("invoke ``get_adcp_capabilities``
+via the agent's declared transport ... **not** a raw HTTP ``GET``"). So
+``do_POST`` answers the handshake and the tool call, and the ``GET`` is kept
+because the suite's own read-back reads the document that way
+(``tests/harness/signing_capability.py``). See
+``_stdlib_json_http.mcp_capabilities_post``.
 
 It is a SIBLING of ``tests/e2e/webhook_capture_service.py``, not a mode inside it.
 What would be shared is ~30 lines of ``BaseHTTPRequestHandler`` — not the
@@ -198,6 +206,25 @@ class _CounterpartyHandler(JsonRequestHandler):
 
         if path == HEALTH_PATH:
             self._write_json(200, {"compose_project_name": self.server.compose_project_name})  # type: ignore[attr-defined]
+        elif capabilities is not None and self._wants_event_stream():
+            # The streamable-HTTP client opens a SECOND, server->client SSE stream
+            # with a GET at this same url (``mcp/client/streamable_http.py``:639
+            # ``start_get_stream`` -> :224 ``handle_get_stream``). Nothing here
+            # pushes server-initiated messages, so that stream is declined — and 405
+            # is the one status ``DiscoveryTransport`` passes through on a GET
+            # instead of turning into ``capabilities_unreachable``
+            # (``_resolver_protocol.py``:120), which is the SDK saying this is the
+            # expected answer from a server without one.
+            #
+            # Keyed on ``Accept`` and NOT on the method, because the same GET at the
+            # same url is how ``tests/harness/signing_capability.py`` reads this
+            # document back, and that read must keep getting its 200. Today's walk
+            # does not reach this arm — ``mcp_capabilities_post`` issues no
+            # ``Mcp-Session-Id`` and ``handle_get_stream`` returns at :232 without
+            # one — but a request that asked only for an event stream must not be
+            # answered with a JSON document, and this is the answer that stays
+            # correct if a session id is ever issued.
+            self._write_json(405, {"error": "this origin pushes no server-initiated MCP messages"})
         elif capabilities is not None:
             self._write_json(200, capabilities)
         elif path == BRAND_JSON_PATH:
@@ -226,10 +253,13 @@ class _CounterpartyHandler(JsonRequestHandler):
         costs nothing and the earlier shape of this hop is still the simplest way
         for a test to read an agent's published document.
 
-        The POST is routed by agent path exactly as the ``GET`` is, so the
-        listed/unlisted pair and every slot keep publishing the document that
-        belongs to them. Only hop 1 is a tool call; brand.json and the JWKS are
-        plain documents at well-known paths and stay ``GET``-only.
+        Where there was one ``GET`` there are now three POSTs at the agent url —
+        ``initialize``, the ``notifications/initialized`` that follows it, and
+        ``tools/call`` — and only the envelope is new: the document inside it is the
+        same ``_capabilities(...)`` dict ``do_GET`` serves, selected by the same path
+        routing, so the listed/unlisted pair and every slot keep publishing the
+        document that belongs to them. Only hop 1 is a tool call; brand.json and the
+        JWKS are plain documents at well-known paths and stay ``GET``-only.
         """
         store: _JwksStore = self.server.jwks_store  # type: ignore[attr-defined]
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
@@ -242,6 +272,10 @@ class _CounterpartyHandler(JsonRequestHandler):
             self._write_empty(status)
         else:
             self._write_json(status, body)
+
+    def _wants_event_stream(self) -> bool:
+        """Whether the request is asking for an SSE stream rather than a document."""
+        return "text/event-stream" in (self.headers.get("Accept") or "")
 
     def _agent_capabilities(self, store: _JwksStore, path: str) -> dict | None:
         """The capabilities document published at an agent *path*, or ``None``.

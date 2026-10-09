@@ -107,6 +107,26 @@ class SuiteComparison(NamedTuple):
     regressed: bool
 
 
+def _without_xdist_group(nodeid: str) -> str:
+    """A nodeid with xdist's ``@<group>`` scheduling suffix removed.
+
+    Under ``--dist loadgroup`` xdist appends the ``xdist_group`` name to the
+    nodeid of every marked item (``xdist/remote.py``:244) and the scheduler
+    groups by splitting it back off. It is scheduling bookkeeping, not identity:
+    the same test marked into a group and out of one is the same test, and
+    comparing the two spellings as different nodeids reports a test that ran in
+    both runs as having disappeared from one.
+
+    The ``]`` guard is xdist's own
+    (``xdist/scheduler/loadgroup.py::_split_scope``) and is here for the same
+    reason -- a parametrized value may legitimately contain ``@`` -- so this
+    reads a nodeid exactly the way the tool that wrote it does.
+    """
+    if nodeid.rfind("@") > nodeid.rfind("]"):
+        return nodeid.rsplit("@", 1)[0]
+    return nodeid
+
+
 def outcomes(report: pathlib.Path) -> dict[str, tuple[str, str]]:
     """``nodeid -> (outcome, reason)`` for one suite's JSON report.
 
@@ -126,7 +146,7 @@ def outcomes(report: pathlib.Path) -> dict[str, tuple[str, str]]:
             if info.get("longrepr"):
                 reason = str(info["longrepr"])
                 break
-        result[test["nodeid"]] = (outcome, reason)
+        result[_without_xdist_group(test["nodeid"])] = (outcome, reason)
     return result
 
 

@@ -137,7 +137,13 @@ def mcp_capabilities_post(raw_body: bytes, documents: Mapping[str, dict]) -> tup
     except json.JSONDecodeError:
         request = None
     if not isinstance(request, dict):
-        return 400, {"error": "MCP endpoint expects a JSON-RPC object"}
+        # JSON-RPC 2.0 §5.1 names this one -32700, and the body says so rather than
+        # carrying a bare ``{"error": ...}`` that no client parses. The status stays
+        # 400: the resolver reads any status >= 400 at hop 1 as
+        # ``capabilities_unreachable``, which is the right verdict for a body that
+        # never became a request, and a 200 here would invent a protocol-level
+        # answer to a transport-level failure.
+        return 400, _jsonrpc_error(None, -32700, "parse error: body is not a JSON-RPC object")
 
     method = request.get("method")
     request_id = request.get("id")
@@ -183,16 +189,22 @@ def mcp_capabilities_post(raw_body: bytes, documents: Mapping[str, dict]) -> tup
             },
         )
 
-    return 200, {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "error": {"code": -32601, "message": f"method not found: {method!r}"},
-    }
+    return 200, _jsonrpc_error(request_id, -32601, f"method not found: {method!r}")
 
 
 def _jsonrpc_result(request_id: Any, result: dict[str, Any]) -> dict[str, Any]:
     """A JSON-RPC 2.0 success envelope around *result*."""
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    """A JSON-RPC 2.0 error envelope, the one spelling this fixture uses.
+
+    Both call sites used to write the envelope out by hand, which is how the parse
+    error came to be answered with a shape no JSON-RPC client reads while the
+    method error was answered correctly.
+    """
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
 
 
 def serve_forever_in_thread(
