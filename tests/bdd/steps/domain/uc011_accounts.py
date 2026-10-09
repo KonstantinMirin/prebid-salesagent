@@ -3630,8 +3630,32 @@ def _notif_config(
     return entry
 
 
+def _notif_entry(domain: str, notification_configs: list[dict[str, Any]]) -> dict[str, Any]:
+    """The one provisioning accounts[] entry every notification_configs scenario sends.
+
+    Shared by the typed dispatch below and by the event-scope When, which must send the
+    SAME entry as a literal payload because the value it carries is schema-invalid on
+    purpose and so cannot survive ``SyncAccountsRequest``.
+    """
+    return {
+        "brand": {"domain": domain},
+        "operator": domain,
+        "billing": "operator",
+        "notification_configs": notification_configs,
+    }
+
+
 def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: list[dict[str, Any]]) -> None:
     """Dispatch a sync_accounts request carrying a notification_configs array for one account.
+
+    THE POSITIVE-PATH DISPATCH for this surface: every caller sends a document the pinned
+    ``core/notification-config.json`` accepts, so building the request model here is
+    correct and a construction failure is an authoring bug. It is deliberately NOT wrapped
+    in ``except Exception: ctx["error"] = exc`` — that wrapper stashed a pydantic error
+    raised in the TEST process and dispatched nothing, so the scenario graded the model and
+    said nothing about the seller (the same defect :func:`_sync_raw` documents, and exactly
+    how T-UC-011-notif-event-scope-reject came to assert on an empty context). A scenario
+    whose document the model refuses belongs on :func:`_sync_raw`, not here.
 
     ``ctx["signed"]`` asks for a REAL RFC 9421 signature on this dispatch and is
     forwarded rather than branched on (salesagent-n78j0.1.3): a registration carrying
@@ -3641,17 +3665,10 @@ def _dispatch_sync_notification(ctx: dict, domain: str, notification_configs: li
     """
     from src.core.schemas.account import SyncAccountsRequest
 
-    entry = {
-        "brand": {"domain": domain},
-        "operator": domain,
-        "billing": "operator",
-        "notification_configs": notification_configs,
-    }
-    try:
-        req = SyncAccountsRequest(idempotency_key=fresh_idempotency_key(), accounts=[entry])
-        dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
-    except Exception as exc:
-        ctx["error"] = exc
+    req = SyncAccountsRequest(
+        idempotency_key=fresh_idempotency_key(), accounts=[_notif_entry(domain, notification_configs)]
+    )
+    dispatch_request(ctx, req=req, signed=ctx.get("signed", False))
 
 
 def _sub_attr(sub: Any, name: str) -> Any:
@@ -3917,14 +3934,23 @@ def when_sync_provision_paused_subscriber_event_types(ctx: dict, domain: str, su
     event-scope rejection rather than credential handling.
 
     Spec: core/notification-config.json#/properties/event_types — media-buy-anchored
-    types (scheduled, final, delayed, adjusted, impairment) "are invalid on this
-    surface; sellers MUST reject those entries as per-account validation failures with
-    INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
+    types (``scheduled``, ``final``, ``delayed``, ``adjusted``, ``window_update``,
+    ``impairment``) and agent-anchored ``capabilities.changed`` "are schema-invalid on
+    this surface and sellers MUST reject those entries as per-account validation failures
+    with INVALID_REQUEST or VALIDATION_ERROR and error.field pointing at the invalid
     event_types entry rather than silently dropping them".
+
+    SENDS A LITERAL PAYLOAD, through :func:`_sync_raw`. Both halves of that sentence are
+    load-bearing. The field's own enum excludes every type this scenario sends, so
+    ``SyncAccountsRequest`` refuses the document in the TEST process — the request is
+    schema-invalid on purpose, which is why the graded storyboard marks its vector
+    ``sample_request_skip_schema: true`` and still expects the per-account failure
+    unchanged. Constructing the model first therefore grades pydantic and never reaches
+    the seller's ``_check_notification_configs``, which is the obligation.
     """
     ctx["notif_domain"] = domain
     cfg = _notif_config(sub, url, ets, active=False)
-    _dispatch_sync_notification(ctx, domain, [cfg])
+    _sync_raw(ctx, accounts=[_notif_entry(domain, [cfg])])
 
 
 @when(

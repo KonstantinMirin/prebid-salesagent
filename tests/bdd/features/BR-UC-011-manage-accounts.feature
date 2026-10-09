@@ -883,11 +883,20 @@ Feature: BR-UC-011 Manage Accounts
     And the account has status "rejected"
     And the accounts entry carries error code "VALIDATION_ERROR"
     And the per-account error field points at "notification_configs[0].event_types[0]"
-    # Graduated (T2 increment F4b): _check_notification_configs rejects
-    # media-buy-anchored event types on the account surface pre-persist.
-    # Media-buy-anchored event types (scheduled, final, delayed, adjusted, impairment) do not
-    # belong on the account surface; also no account-lifecycle event types exist here (no
-    # account.status_changed — poll list_accounts or use push_notification_config instead)
+    # LEDGERED (#2353), not graduated: the seller refuses the whole request with
+    # INVALID_REQUEST at the boundary's DTO validation, so the per-account rejection this
+    # scenario grades is unreachable and _check_notification_configs never runs. The
+    # scenario is right and production is not; see the _XFAIL_TAGS entry for the measurement.
+    # Media-buy-anchored event types (scheduled, final, delayed, adjusted, window_update,
+    # impairment) and agent-anchored capabilities.changed do not belong on the account
+    # surface. Account-lifecycle types DO exist here — account.status_changed and
+    # account.change_recorded are both account-anchored members of the pinned enum, and the
+    # request schema states the use: "Durable account lifecycle transitions such as later
+    # payment_required, suspended, closed, or recovery to active use account.status_changed
+    # on this surface". (The note that previously stood here said no account-lifecycle type
+    # existed and named account.status_changed as the example; that was true of 3.1, whose
+    # event_types $ref'd the wide enums/notification-type.json, and false since 3.2 narrowed
+    # the field to an inline account-anchored enum that declares both.)
     # @source repo=adcp ref=v3.2.1 path=dist/schemas/3.1.1/account/sync-accounts-request.json pointer=/properties/accounts/items/properties/notification_configs/description
     # @source repo=adcp ref=v3.2.1 path=dist/compliance/3.1.1/universal/notification-config-event-scope.yaml pointer=steps/sync_accounts_rejects_scheduled_account_notification
 
