@@ -375,8 +375,8 @@ def test_guard_ignores_prose_mentioning_the_spec_version():
 
     The version is a placeholder rather than the pin: the anchor this exercises is
     the escaped ``\\*\\*`` spelling, which the digits play no part in, and spelling
-    the real pin here made this fixture a copy of it —
-    ``tests/unit/test_no_stale_adcp_citations.py`` refuses those.
+    the real pin here made this fixture one more copy of a number that has exactly
+    two sources, neither of them prose (see docs/adcp-spec-version.md).
     """
     benign = """
 DOC = "Prebid Sales Agent targets **AdCP spec version <X>** via the adcp SDK."

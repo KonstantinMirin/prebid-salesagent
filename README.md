@@ -22,18 +22,11 @@ The Prebid Sales Agent is a server that:
 
 ## AdCP Compatibility
 
-This implementation targets a pinned AdCP spec version through the `adcp` Python
-SDK. Neither number is written here, on purpose — ask the pin:
-
-```bash
-grep -n 'adcp==' pyproject.toml   # the SDK pin
-uv run python -c "import adcp; print(adcp.get_adcp_spec_version(), adcp.get_adcp_sdk_version())"
-```
-
-The protocol is pre-1.0 — request/response shapes still move between spec
-releases, and SDK bumps can change them. See
-[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for the spec version it
-currently targets and the bump procedure. The pin is enforced by a CI guard
+This implementation targets AdCP through the `adcp` Python SDK, pinned exactly in
+`pyproject.toml`. The protocol is pre-1.0 — request/response shapes still move
+between spec releases, and SDK bumps can change them. See
+[docs/adcp-spec-version.md](docs/adcp-spec-version.md) for how to resolve the pin
+and for the bump procedure. The pin is enforced by a CI guard
 (`tests/unit/test_adcp_spec_version.py`), which fails on drift.
 
 ## Choose Your Path

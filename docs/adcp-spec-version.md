@@ -1,34 +1,35 @@
 # AdCP Spec Version
 
-Prebid Sales Agent targets **AdCP spec version 3.2.1** through the `adcp` Python
-SDK, pinned exactly in `pyproject.toml`.
+Prebid Sales Agent targets AdCP through the `adcp` Python SDK, pinned exactly in
+`pyproject.toml`.
 
-**That sentence is the only place in this repository where the spec version is
-spelled, and the `adcp==` line in `pyproject.toml` is the only place the SDK
-version is spelled.** Nothing else restates either — not CLAUDE.md, not
-README.md, not this document's later sections. Both halves of that are enforced:
-`pinned_version()` (below) raises if the sentence above disagrees with the
-installed wheel, and `tests/unit/test_no_stale_adcp_citations.py` fails on any
-other document that states a version where a pointer belongs. The reason is
-measured, not stylistic — four copies of these two numbers produced a day of
-guard failures in which the prose was right and the guard was comparing wrongly.
+**The version has two sources and prose is not one of them.** The `adcp==` line
+in `pyproject.toml` is the SDK pin; the spec version is whatever that wheel
+reports for itself through `adcp.get_adcp_spec_version()`, which is already the
+authority in code. No document in this repository states either number — not
+CLAUDE.md, not README.md, not this one. A prose copy is not a second source of
+truth, it is drift waiting to happen: four copies of these two numbers cost a
+day of false guard failures in which the docs were right and the guard was
+comparing wrongly, and a guard that keeps four copies agreeing is machinery that
+exists only because the copies do. Both are gone.
 
-> **The rest of this document still describes the 3.1.1 target.** The SDK bump
-> moved the pin; re-vendoring the pinned schema tree and the trust-root fixtures
-> at `v3.2.1`, and repointing the compliance-tree citations below, is the
-> remaining half of the bump and is not done. Treat every `3.1.1` path below as
-> naming what is currently vendored, not what the pin targets.
+> **The vendored trees below still sit at `3.1.1`.** The SDK bump moved the pin;
+> re-vendoring the pinned schema tree and the trust-root fixtures, and repointing
+> the compliance-tree citations below, is the remaining half of the bump and is
+> not done. Treat every `3.1.1` path below as naming what is currently vendored,
+> not what the pin targets.
 
 ## Verifying the current target
 
 ```bash
 uv run python -c "import adcp; print(adcp.get_adcp_spec_version(), adcp.get_adcp_sdk_version())"
-# <spec version> <sdk version>
 ```
 
-No expected output is written above, deliberately: a pasted sample is a fourth
-copy of the pin, and the one that was here printed an SDK version the current
-pin does not report.
+No expected output is written above, deliberately: a pasted sample is one more
+copy of the pin, and the one that was here printed an SDK version the current pin
+does not report. In Python, read the spec version through
+`scripts.audit.storyboard_spec.pinned_version(repo)` rather than calling the SDK
+directly — it is the one primitive every consumer shares.
 
 The same command tells you what spec version any other SDK release targets —
 use it instead of looking for a version table.
@@ -37,12 +38,10 @@ use it instead of looking for a version table.
 
 `tests/unit/test_adcp_spec_version.py` asserts the installed SDK targets
 `EXPECTED_SPEC_VERSION` (`tests/helpers/adcp_pin.py`) — no version is spelled in
-the guard itself. A pin shift fails that test, forcing a deliberate update across
-`pyproject.toml`, that constant, and this document. The guard also reads this
-document, so prose here that presents a version other than the pin as **the**
-pin fails it too. It no longer reads CLAUDE.md: CLAUDE.md states no version to
-check, and `tests/unit/test_no_stale_adcp_citations.py` is what keeps it that
-way.
+the guard itself. A pin shift fails that test, forcing a deliberate update of
+`pyproject.toml` and that constant. It grades the SDK against a declared pin and
+the vendored trees against the same pin — real sources, both of them. It reads no
+prose: there is none left to read.
 
 ## Where the spec lives
 
@@ -92,8 +91,8 @@ What the storyboards grade:
 - **Then (3.1.0-beta.3):** the storyboard graded the body `status` as
   `field_value_or_absent` that MUST equal `media_buy_status` — the deprecated
   "both identical" model (#4908). Our wire deliberately diverged from it.
-- **Now (pinned 3.2.1):**
-  `dist/compliance/3.2.1/domains/media-buy/scenarios/pending_creatives_to_start.yaml`
+- **Now (at the pin):**
+  `dist/compliance/<pinned version>/domains/media-buy/scenarios/pending_creatives_to_start.yaml`
   grades `media_buy_status` as `field_value` (the DOMAIN status, L176-179) and
   separately grades `status` as `field_value` `'completed'` (the PROTOCOL
   `TaskStatus`, protocol envelope, L180-183). There are ZERO
