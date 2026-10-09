@@ -202,13 +202,23 @@ Feature: BR-UC-003 Update Media Buy
     And the package "pkg_001" exists in the media buy
     And no targeting_overlay.keyword_targets is present in the same package update
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    And the response should contain affected_packages including "pkg_001"
-    # POST-S1: Buyer knows keywords added
-    # POST-S2: Buyer sees affected packages
-    # POST-S4: Unambiguous success
-    # POST-S5: Request completed
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # REGROUNDED: this seller does not support keyword targeting and never claimed to.
+    # core/targeting-overlay-support.json makes Product.overlay_support the binding
+    # selectable-targeting contract -- "presence means the seller can apply protocol-valid
+    # values" -- and this seller declares none, so non-support is already discoverable.
+    # core/targeting.json then requires a fresh create/update to be "applied exactly or
+    # rejected", and core/targeting-input.json requires all supplied dimensions to be
+    # applied atomically, so the obligation for a seller that cannot apply is a REFUSAL.
+    # The previous Then steps asserted success and affected_packages, which is the
+    # obligation of a seller that SUPPORTS keyword targeting.
+    # POST-F1: System state unchanged -- the refusal precedes the UoW
+    # POST-F2: Error code explains failure
+    # POST-F3: Suggestion for recovery ("check get_adcp_capabilities and remove
+    #          unsupported fields"), which points the buyer at the capability surface
 
   @T-UC-003-alt-keyword-remove @alt-flow @keyword-ops @post-s1 @post-s2
   Scenario: Remove keyword targets incrementally
@@ -222,10 +232,16 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_remove:
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # POST-S1: Buyer knows keywords removed
-    # POST-S2: Buyer sees affected packages
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # REGROUNDED for the same reason as T-UC-003-alt-keyword-ops above: removal is as
+    # unsupported as addition, and core/targeting.json's apply-exactly-or-reject MUST does
+    # not distinguish them. This scenario PASSED before, asserting a success this seller
+    # answered without applying anything.
+    # POST-F1: System state unchanged
+    # POST-F2: Error code explains failure
 
   @T-UC-003-alt-negative-keywords @alt-flow @keyword-ops @post-s1
   Scenario: Add and remove negative keywords incrementally
@@ -241,9 +257,17 @@ Feature: BR-UC-003 Update Media Buy
     And no targeting_overlay.negative_keywords is present in the same package update
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # POST-S1: Buyer knows negative keywords updated
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # REGROUNDED for the same reason as the two keyword_targets scenarios above.
+    # core/targeting-overlay-support.json declares negative_keywords alongside
+    # keyword_targets, both $ref keywordSupport, and this seller declares neither.
+    # This scenario PASSED before, on a success the seller answered without applying
+    # either operation.
+    # POST-F1: System state unchanged
+    # POST-F2: Error code explains failure
 
   @T-UC-003-alt-manual @alt-flow @manual-approval @post-s7 @post-s8
   Scenario: Update requires manual approval -- pending state

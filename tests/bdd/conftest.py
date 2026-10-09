@@ -2078,16 +2078,18 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # (GA L3 error-handling). The two Scenario-Outline rows that asserted
         # VALIDATION_ERROR were corrected to INVALID_REQUEST in the same change.
 
-        # FIXME: UC-003 keyword_targets_add — production applies the
-        # keyword additions but returns empty affected_packages. All transports pass the When
-        # step (no error) but the Then step "affected_packages including pkg_001" fails.
-        if "T-UC-003-alt-keyword-ops" in marker_names:
-            item.add_marker(
-                pytest.mark.xfail(
-                    reason="keyword_targets_add: affected_packages empty after keyword add (spec-production gap)",
-                    strict=True,
-                )
-            )
+        # Graduated: T-UC-003-alt-keyword-ops. Its xfail reason was factually wrong --
+        # "production applies the keyword additions but returns empty affected_packages".
+        # MEASURED: `git grep keyword_targets -- src/` returns ZERO hits, so production
+        # never applied anything; it accepted a declared field and dropped it, answering
+        # success. The scenario was over-specified too, asserting the obligation of a seller
+        # that SUPPORTS keyword targeting.
+        #
+        # Both are fixed together: the scenario now asserts UNSUPPORTED_FEATURE (the
+        # obligation this seller actually holds, per core/targeting.json's "applied exactly
+        # or rejected") and _update_media_buy_impl refuses the op above the UoW. So the
+        # routing goes rather than being re-reasoned -- with it in place and strict=True,
+        # the now-passing scenario would fail as an unexpected pass.
 
         # FIXME: UC-003 inline creatives — _sync_creatives_impl
         # FK violation: creative_assignments references creative before commit.

@@ -69,6 +69,7 @@ from src.core.errors.details import (
 from src.core.helpers.adapter_helpers import get_adapter
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity
 from src.core.schemas import (
+    AdCPPackageUpdate,
     AffectedPackage,
     CreativeFormatIdentity,
     SyncCreativesRequest,
@@ -210,6 +211,56 @@ def _affected_package(
         buyer_package_ref=package_id,
         changes_applied=changes_applied,
     )
+
+
+#: The package-update targeting operations this seller accepts in its DTO — because the
+#: pinned schema declares them — and cannot execute. DERIVED from the DTO's own field set
+#: rather than hand-listed, so a field renamed upstream cannot leave a stale literal here
+#: silently refusing nothing. If the prefixes ever match nothing the set is empty and the
+#: refusal stops firing, which the BDD scenarios that demand UNSUPPORTED_FEATURE turn red on.
+#:
+#: WHY A REFUSAL AND NOT A SILENT NO-OP. Two sentences in the pin, independently:
+#: ``core/targeting.json`` — "A fresh create/update request MUST be applied exactly or
+#: rejected" — and ``core/targeting-input.json`` — "Sellers apply all supplied dimensions
+#: atomically and return only the resulting non-null effective targeting state." The written
+#: spec's worked example for the analogous feature is ``docs/media-buy/specification.mdx``'s
+#: frequency-cap rule: rejected "with UNSUPPORTED_FEATURE before any mutation; sellers MUST
+#: NOT silently drop, soften, or clamp it." So accepting a declared field and answering plain
+#: success is excluded by a MUST, and so is declaring non-support and ignoring the request.
+#:
+#: This is NOT the pattern-#7 strip story: these fields ARE declared in
+#: ``3.2/media-buy/package-update.json``, so dropping them is not the dev/prod tolerance for
+#: an undeclared field. It is also NOT the ``_FIELD_POLICY`` ``ignored_by_design`` shape used
+#: for the seven 3.2 account fields — that is right there because nothing in those fields'
+#: schemas carries an apply-exactly-or-reject MUST, and targeting carries one twice.
+#:
+#: The DISCOVERY half of the obligation is already met, by omission.
+#: ``core/targeting-overlay-support.json`` is binding — "Product.overlay_support is the
+#: binding selectable-targeting contract: presence means the seller can apply protocol-valid
+#: values" — and it declares ``keyword_targets`` and ``negative_keywords``. MEASURED:
+#: ``git grep overlay_support -- src/`` returns nothing, so this seller advertises no overlay
+#: support at all and never claimed keyword targeting. (It also understates the dimensions
+#: this seller DOES support, which is its own gap and not this refusal's business.)
+_UNSUPPORTED_PACKAGE_TARGETING_OPS: tuple[str, ...] = tuple(
+    name for name in AdCPPackageUpdate.model_fields if name.startswith(("keyword_targets_", "negative_keywords_"))
+)
+
+
+def _refuse_unsupported_targeting_ops(req: UpdateMediaBuyRequest) -> None:
+    """Refuse a package update carrying a targeting operation this seller cannot apply.
+
+    Raised BEFORE the UoW opens, because the spec puts the rejection "before any
+    mutation" and a partially-applied update is the state it exists to prevent.
+
+    The capability NAME travels as structured detail and the buyer-facing sentence is the
+    code's own, which is how every other ``AdCPCapabilityNotSupportedError`` site in this
+    tree reports a refusal (``src/adapters/gam/managers/targeting.py:680`` is the nearest
+    sibling).
+    """
+    for pkg_update in req.packages or ():
+        for op in _UNSUPPORTED_PACKAGE_TARGETING_OPS:
+            if getattr(pkg_update, op, None) is not None:
+                raise AdCPCapabilityNotSupportedError(details=CapabilityRefusalDetails(capability=op))
 
 
 def _requested_actions(req: UpdateMediaBuyRequest) -> list[str]:
@@ -474,6 +525,10 @@ def _update_media_buy_impl(
             str(rw_url) if rw_url is not None else None,
             field="reporting_webhook.url",
         )
+
+    # Capability refusal, above the UoW for the same reason the webhook gates are: the spec
+    # puts this rejection "before any mutation", so no transaction may be open when it fires.
+    _refuse_unsupported_targeting_ops(req)
 
     # ── Workflow-step bookkeeping fence ──────────────────────────────────
     # Hoist ``ctx_manager`` and ``step`` out of the try below so the

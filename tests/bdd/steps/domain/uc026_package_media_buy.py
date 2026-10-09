@@ -2005,6 +2005,166 @@ def then_operation_succeeds(ctx: dict) -> None:
         )
 
 
+# --- Requested-effect read, for the outcome step ---
+
+
+def _requested_packages(ctx: dict) -> list[dict[str, Any]]:
+    """Return the package documents the scenario ASKED the seller to apply.
+
+    The request is the authority on what effect to look for, not the Examples
+    outcome cell. The cell is English ("success with bid_price updated"); the
+    request carries the value, the field name and the operation. Deriving the
+    assertion from the request means a row cannot be graded against a different
+    effect than the one it asked for, and a new Examples row is graded the
+    moment it is written, with no outcome text to keep in step with.
+
+    Update dispatch builds ``ctx["update_kwargs"]``; create dispatch accumulates
+    into ``ctx["request_kwargs"]``. A scenario that set neither never reached
+    dispatch at all.
+    """
+
+    for key in ("update_kwargs", "request_kwargs"):
+        kwargs = ctx.get(key)
+        if not kwargs:
+            continue
+        packages = kwargs.get("packages")
+        if packages:
+            return [p for p in packages if isinstance(p, dict)]
+    return []
+
+
+def _numbers_equal(requested: Any, actual: Any) -> bool:
+    """Compare two numbers across the int/float/Decimal the wire and ORM mix."""
+    try:
+        return abs(float(requested) - float(actual)) < 1e-6
+    except (TypeError, ValueError):
+        return False
+
+
+def _format_id_set(raw: Any) -> set[str]:
+    """Normalize either side of a format_ids comparison to a set of id strings."""
+    if raw is None:
+        return set()
+    return {_extract_format_id(f) for f in raw}
+
+
+def _assert_keyword_op(pkg: Any, overlay_field: str, entries: list, *, present: bool) -> None:
+    """Assert an add/remove keyword operation landed in the package's overlay.
+
+    ``present`` says which way: an add must be findable afterwards, a remove must
+    not be. Both read the same overlay through the same helper, so the two
+    directions cannot drift apart.
+    """
+
+    found_in = _get_overlay_keywords(pkg, overlay_field)
+    if found_in is None:
+        if not present:
+            # A remove against an absent collection is satisfied by its absence.
+            return
+        raise AssertionError(
+            f"{overlay_field} absent from targeting_overlay, so the requested "
+            f"{len(entries)}-entry add is not readable anywhere on the response. "
+            "The pinned 3.2 media-buy/package-update.json declares the operation."
+        )
+    for entry in entries:
+        keyword = _keyword_field(entry, "keyword")
+        match_type = _keyword_field(entry, "match_type")
+        hit = _find_keyword(found_in, keyword, str(match_type) if match_type is not None else None)
+        if present:
+            assert hit is not None, (
+                f"Requested ({keyword!r}, {match_type!r}) is not in {overlay_field} after the add. "
+                f"Present: {[(_keyword_field(k, 'keyword'), _keyword_field(k, 'match_type')) for k in found_in]}"
+            )
+            bid = _keyword_field(entry, "bid_price")
+            if bid is not None:
+                actual_bid = _keyword_field(hit, "bid_price")
+                assert _numbers_equal(bid, actual_bid), (
+                    f"({keyword!r}, {match_type!r}) carries bid_price {actual_bid!r}, requested {bid!r}"
+                )
+        else:
+            assert hit is None, f"Requested removal of ({keyword!r}, {match_type!r}) left it in {overlay_field}"
+
+
+def _assert_requested_package_effects(ctx: dict) -> None:
+    """Assert the response package reflects every field the request asked for.
+
+    This is the read that the outcome step was missing. Every field spelled in
+    the requested package is looked up on the returned package and compared --
+    there is no per-field opt-in and no "unknown field is ignored" path, so a
+    field this function has no reader for FAILS by name rather than passing
+    silently. That property is the whole point: the step it serves used to pass
+    54-plus Examples rows whose outcome cell named an effect, while asserting
+    only that no error came back.
+    """
+
+    requested = _requested_packages(ctx)
+    if not requested:
+        return
+    packages = _assert_has_packages(ctx)
+
+    for index, want in enumerate(requested):
+        pkg = packages[index] if index < len(packages) else packages[0]
+        for field, value in want.items():
+            if field in ("keyword_targets_add", "negative_keywords_add"):
+                _assert_keyword_op(pkg, field.removesuffix("_add"), value, present=True)
+            elif field in ("keyword_targets_remove", "negative_keywords_remove"):
+                _assert_keyword_op(pkg, field.removesuffix("_remove"), value, present=False)
+            elif field == "format_ids":
+                actual = _format_id_set(_pkg_field(pkg, "format_ids"))
+                assert _format_id_set(value) <= actual, (
+                    f"Requested format_ids {sorted(_format_id_set(value))} are not all on the "
+                    f"package, which carries {sorted(actual)}"
+                )
+            elif field == "targeting_overlay":
+                overlay = _pkg_field(pkg, "targeting_overlay")
+                assert overlay is not None, (
+                    "targeting_overlay was requested and the package carries none; the pinned "
+                    "core/package.json declares it"
+                )
+                for overlay_field, overlay_value in value.items():
+                    if overlay_field in ("keyword_targets", "negative_keywords"):
+                        _assert_keyword_op(pkg, overlay_field, overlay_value, present=True)
+                        continue
+                    # Every OTHER overlay dimension the request set -- audiences,
+                    # geo, dayparting -- is read back too. Grading only the keyword
+                    # dimensions here would leave "success with overlay replaced"
+                    # passing on a merely non-null overlay, which is the same
+                    # vacuity this function exists to remove.
+                    actual_dim = overlay_value and (
+                        overlay.get(overlay_field)
+                        if isinstance(overlay, dict)
+                        else getattr(overlay, overlay_field, None)
+                    )
+                    assert actual_dim, (
+                        f"Requested targeting_overlay.{overlay_field} with {len(overlay_value)} "
+                        f"entries and the package's overlay carries none"
+                    )
+                    assert len(actual_dim) == len(overlay_value), (
+                        f"Requested targeting_overlay.{overlay_field} with {len(overlay_value)} "
+                        f"entries, overlay carries {len(actual_dim)} -- a replacement is a whole swap"
+                    )
+            elif isinstance(value, int | float) and not isinstance(value, bool):
+                actual = _pkg_field(pkg, field)
+                assert _numbers_equal(value, actual), f"Requested {field}={value!r}, package carries {actual!r}"
+            elif isinstance(value, str | bool):
+                actual = _pkg_field(pkg, field)
+                assert str(actual) == str(value), f"Requested {field}={value!r}, package carries {actual!r}"
+            elif isinstance(value, list):
+                actual = _pkg_field(pkg, field)
+                assert actual is not None, (
+                    f"Requested {field} with {len(value)} entries and the package carries none, so "
+                    "the replacement is not readable on the response"
+                )
+                assert len(actual) == len(value), (
+                    f"Requested {field} with {len(value)} entries, package carries {len(actual)}"
+                )
+            else:
+                raise AssertionError(
+                    f"No reader for requested package field {field!r} (value {value!r}). Add one rather "
+                    "than letting the row pass ungraded -- that is the defect this function exists for."
+                )
+
+
 # --- Outcome dispatch step (partition/boundary) ---
 
 
@@ -2024,35 +2184,30 @@ def then_outcome(ctx: dict, outcome: str) -> None:
 
     outcome = outcome.strip()
     if outcome.startswith("success"):
-        # Delegates rather than re-spelling "no error in ctx". That is all this branch
-        # used to assert, and it let a row pass with no response at all: a scenario whose
-        # dispatch never reached the seller has no error either. ``then_operation_succeeds``
-        # is the one success contract in this tree -- no error, a payload that actually
-        # arrived, and a status that is not a failure value -- so a row that graded nothing
-        # now at least grades that the seller answered and said it succeeded.
+        # Two assertions, in order: the seller answered and said it succeeded, and the
+        # effect the request asked for is READABLE on what came back.
         #
-        # WHAT THIS STILL DOES NOT GRADE, and why it is not fixable here: the Examples
-        # column names an EFFECT ("success with keyword added", "success with bid_price
-        # updated", "success with catalogs replaced"), and update_media_buy returns
-        # ``affected_packages=[]``, so there is no response state for an effect assertion
-        # to read.
+        # ``then_operation_succeeds`` is the one success contract in this tree -- no
+        # error, a payload that actually arrived, and a status that is not a failure
+        # value. On its own it let a row whose outcome cell names an EFFECT ("success
+        # with keyword added", "success with bid_price updated", "success with catalogs
+        # replaced") pass on whatever production did, because nothing read the effect.
         #
-        # That was not assumed, it was RUN. The effect assertion was written here --
-        # every (keyword, match_type) in ctx["update_kwargs"]'s keyword_targets_add must
-        # appear in the updated package's targeting_overlay -- and
-        # T-UC-026-partition-keyword-add's new_keyword and existing_keyword_update_bid
-        # rows went from xpass to FAIL on all three in-process transports, 6/6, each on
-        # "update response carries no package". The assertion was then reverted, because
-        # a Then that cannot pass until production changes belongs in the same change as
-        # the production fix; what stays is this note and the routing that says so.
+        # ``_assert_requested_package_effects`` is that read. It derives the assertion
+        # from the REQUEST rather than from the outcome text, so it grades every row --
+        # including the plain "success" ones, which also asked for something -- and a new
+        # Examples row is graded the moment it is written.
         #
-        # It is the same gap that keeps the @T-UC-026-alt-* update scenarios xfailed:
-        # src/core/tools/media_buy_update.py appends an AffectedPackage on five branches
-        # only (budget, creative_ids, creatives, creative_assignments, targeting_overlay),
-        # and the keyword ops have no handler anywhere under src/ at all. When the update
-        # response carries its packages, this assertion comes back, derived from
-        # ctx["update_kwargs"].
+        # A previous attempt at this assertion was reverted on the grounds that a Then
+        # which cannot pass until production changes belongs with the production fix.
+        # That is the opposite of what this module needs: a row that cannot pass is a row
+        # whose effect production does not produce, and the honest report of that is a
+        # failing row, not a silent one. Measured on this tree, `git grep keyword_targets
+        # -- src/` returns ZERO hits, so the seller accepts the keyword-targeting
+        # operations that our own pinned 3.2 media-buy/package-update.json declares and
+        # drops them, answering success. Those rows now fail and say so.
         then_operation_succeeds(ctx)
+        _assert_requested_package_effects(ctx)
         return
     if not outcome.startswith("error"):
         raise ValueError(f"Unknown outcome format: {outcome}")
