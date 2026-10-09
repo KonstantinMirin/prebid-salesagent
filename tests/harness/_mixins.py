@@ -458,9 +458,34 @@ def _attach_reporting_webhook(env: Any, media_buy: Any) -> None:
 
     The URL comes from :func:`_registered_webhook_url`, so what the media buy says and
     what the registration says can never diverge.
+
+    THROUGH THE FACTORY, never a literal, and that is what makes the stream deliverable
+    at all. The literal here was ``{"url": ..., "frequency": "daily"}``: it spelled the
+    cadence by a name ``core/reporting-webhook.json`` does not define (the field is
+    ``reporting_frequency``), omitted the ``authentication`` block that schema's
+    ``/required`` lists, and carried no ``operation_id`` — so
+    ``_send_report_for_media_buy`` suppressed the stream at its FIRST check
+    (``src/services/delivery_webhook_scheduler.py``, ``reporting_stream_id_missing``)
+    and returned ``False`` before querying an adapter or opening a socket. AdCP 3.2.1
+    ``L3/webhooks.mdx`` :666 is why production is right to do that — "a registration
+    without a buyer-supplied ID cannot enable this interim delivery path ... suppress
+    scheduled sends; do not fabricate an ID or extract one from the URL" — so the
+    document was the defect, not the gate. MEASURED, in process against a real origin
+    through this very function: 0 POSTs and a ``False`` verdict on the literal, 1 POST
+    and ``True`` on the factory payload. ``tests/integration/test_delivery_webhooks_integration.py``
+    seeds the same document through the same factory for the same reason.
+
+    The baseline's ``authentication`` block never overrides what a scenario registered:
+    the sender prefers a stored ``PushNotificationConfig`` row, and this document names
+    that row's own URL (:func:`_registered_webhook_url`), so the lookup on
+    (principal, tenant, url, is_active) finds it and reads the auth off the row. The
+    block here is consulted only when the scenario registered no row at all, which is
+    also the only case where no row can say otherwise.
     """
+    from tests.factories.webhook import ReportingWebhookRequestFactory
+
     raw_request = dict(media_buy.raw_request or {})
-    raw_request["reporting_webhook"] = {"url": _registered_webhook_url(env), "frequency": "daily"}
+    raw_request["reporting_webhook"] = ReportingWebhookRequestFactory.payload(url=_registered_webhook_url(env))
     media_buy.raw_request = raw_request
     env._commit_factory_data()
 
