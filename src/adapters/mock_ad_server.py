@@ -1,6 +1,7 @@
 import logging
 import random
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -34,12 +35,14 @@ from src.core.exceptions import (
     AdCPCreativeRejectedError,
     AdCPMediaBuyNotFoundError,
     AdCPMediaBuyRejectedError,
+    AdCPPackageNotFoundError,
     AdCPServiceUnavailableError,
     AdCPValidationError,
 )
 from src.core.helpers.brand_key import brand_key_parts
 from src.core.schemas import (
     AdapterGetMediaBuyDeliveryResponse,
+    AffectedPackage,
     AssetStatus,
     CheckMediaBuyStatusResponse,
     DeliveryTotals,
@@ -1392,7 +1395,37 @@ class MockAdServer(AdServerAdapter):
         budget: int | None,
         today: datetime,
     ) -> AdapterUpdateResult:
-        """Update media buy in database (Mock adapter implementation)."""
+        """Apply the update in the simulated ad server and report the package it changed.
+
+        ``affected_packages`` is a graded field, not bookkeeping: 3.2.1
+        ``media-buy/update-media-buy-response.json``
+        (``/oneOf/0/properties/affected_packages``) calls it "full Package objects
+        showing complete post-update state for each modified package ... a state
+        snapshot, not a sparse delta: sellers MUST NOT return package_id-only stubs",
+        and permits the empty array only for "campaign-level updates that do not modify
+        packages". This method used to return ``[]`` unconditionally — including out of
+        the branch that had just rewritten a package's budget.
+
+        The mock's simulated ad server IS the stored package: ``package_config`` is where
+        it records a budget change, and ``paused`` there is what ``get_media_buys`` serves
+        back (``media_buy_list.py:343``). So the two package-level actions write that
+        record and report it, and the actions that touch no package report the empty array
+        the pin permits, because for them it is true:
+
+        * ``update_package_budget`` — writes the budget, reports that package.
+        * ``pause_package`` / ``resume_package`` — write ``paused``, report that package.
+          Nothing recorded a package's pause state on update before this (no update path
+          under ``src/`` wrote ``package_config["paused"]``), so a pause neither stuck nor
+          could be reported; GAM, Kevel and Broadstreet all report the resulting state
+          here, and the mock was the one adapter that did not.
+        * ``pause_media_buy`` / ``resume_media_buy`` — the tool persists the buy's own
+          ``is_paused``; no package record changes, so ``[]``. The pin's own worked example
+          for a campaign-level ``paused: true`` returns exactly that
+          (``update_media_buy.mdx`` § Response Patterns).
+        * the order-lifecycle actions (``activate_order``, ``submit_for_approval``,
+          ``approve_order``, ``archive_order``) and ``update_package_impressions``, which
+          the mock does not model — no package record changes, so ``[]``.
+        """
         import logging
 
         from sqlalchemy.orm import attributes
@@ -1407,24 +1440,60 @@ class MockAdServer(AdServerAdapter):
         # Check DB-driven test_behavior (injected by BDD Given steps for E2E)
         self._raise_injected_failure("fail_on_update")
 
-        with get_db_session() as session:
-            if action == "update_package_budget" and package_id and budget is not None:
-                repo = MediaBuyRepository(session, self.tenant_id)
-                media_package = repo.get_package(media_buy_id, package_id)
-                if media_package:
-                    # Update budget in package_config JSON
-                    media_package.package_config["budget"] = float(budget)
-                    # Flag the JSON field as modified so SQLAlchemy persists it
-                    attributes.flag_modified(media_package, "package_config")
-                    session.commit()
-                    logger.info(f"[MockAdapter] Updated package {package_id} budget to {budget} in database")
-                else:
-                    logger.warning(f"[MockAdapter] Package {package_id} not found for media buy {media_buy_id}")
+        # One place decides what this action changes about a package record, so the write
+        # and the report below cannot disagree about whether anything happened.
+        change: tuple[str, str, Any] | None = None  # (package_id, package_config key, value)
+        if action == "update_package_budget" and package_id and budget is not None:
+            change = (package_id, "budget", float(budget))
+        elif action in ("pause_package", "resume_package") and package_id:
+            change = (package_id, "paused", action == "pause_package")
 
-        return AdapterUpdateResult(
-            media_buy_id=media_buy_id,
-            affected_packages=[],
-        )
+        if change is None:
+            return AdapterUpdateResult(media_buy_id=media_buy_id, affected_packages=[])
+
+        changed_package_id, config_key, config_value = change
+        with get_db_session() as session:
+            repo = MediaBuyRepository(session, self.tenant_id)
+            media_package = repo.get_package(media_buy_id, changed_package_id)
+            if media_package is None:
+                # A refusal, not a logged warning followed by a successful-looking result:
+                # the three real adapters all raise AdCPPackageNotFoundError for this exact
+                # condition (google_ad_manager.py:1289, kevel.py:461,
+                # broadstreet/adapter.py:620), the tool's budget path already pre-checks it
+                # with get_package_or_raise and raises the same code, and reporting success
+                # for a package that does not exist is the quiet failure CLAUDE.md bans.
+                raise AdCPPackageNotFoundError(
+                    details=EntityRefDetails(package_id=changed_package_id, media_buy_id=media_buy_id)
+                )
+
+            media_package.package_config[config_key] = config_value
+            if config_key == "budget":
+                # The dedicated column is what get_media_buys reads (media_buy_list.py:338),
+                # so writing only the JSON left the two halves of one package disagreeing
+                # about its budget. update_media_package_fields is NOT the helper for this:
+                # called with budget alone it also nulls bid_price and pacing.
+                media_package.budget = Decimal(str(config_value))
+            # Flag the JSON field as modified so SQLAlchemy persists it
+            attributes.flag_modified(media_package, "package_config")
+            session.commit()
+            logger.info(f"[MockAdapter] Set package {changed_package_id} {config_key} to {config_value}")
+
+            return AdapterUpdateResult(
+                media_buy_id=media_buy_id,
+                affected_packages=[
+                    AffectedPackage(
+                        package_id=changed_package_id,
+                        # Read back off the record just written, never a plausible default:
+                        # a budget update reports the pause state the package really has,
+                        # and a pause reports the value this call stored.
+                        paused=bool(media_package.package_config.get("paused", False)),
+                        budget=float(media_package.budget) if media_package.budget is not None else None,
+                        product_id=media_package.package_config.get("product_id"),
+                        changes_applied={config_key: config_value},
+                        buyer_package_ref=None,
+                    )
+                ],
+            )
 
     def get_config_ui_endpoint(self) -> str | None:
         """Return the URL path for the mock adapter's configuration UI."""

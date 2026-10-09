@@ -152,6 +152,21 @@ class MediaBuyUpdateEnv(BaseTestEnv):
         _mb_repo.get_by_id_or_raise.side_effect = _get_by_id_or_raise
         _mb_repo.get_package_or_raise.side_effect = _get_package_or_raise
 
+        # Default package: the ROW a package-level update reads back, carrying the fields
+        # the tool projects into ``affected_packages`` as the column and the JSON document
+        # really hold them (``paused`` defaults to false per 3.2.1 core/package.json;
+        # ``budget`` is a nullable DECIMAL column). A bare MagicMock answers
+        # ``package_config.get(...)`` with another MagicMock, which the response model
+        # rightly refuses — the mock was the defect, not the projection.
+        #
+        # ``return_value``, deliberately NOT ``side_effect``: a side_effect WINS over a
+        # later ``get_package.return_value = None``, so the not-found tests
+        # (TestUC003ExtL) would have been unable to configure their own absence.
+        _default_package = MagicMock()
+        _default_package.budget = None
+        _default_package.package_config = {"paused": False}
+        _mb_repo.get_package.return_value = _default_package
+
         # creatives repo: by default every referenced creative "exists" with an
         # approved status and no format restriction (uow.products.get_by_id
         # returns a product without format_ids). Tests that exercise the
