@@ -7,7 +7,7 @@
 import copy
 import re
 import warnings
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from decimal import Decimal
@@ -44,7 +44,6 @@ from adcp.types import (
     PriceGuidance,  # Replaces local PriceGuidance class
     PricingModel,  # Replaces local PricingModel enum (lowercase members: .cpm, .cpc, etc.)
     ProtocolEnvelope,
-    is_canonical_format_kind,
 )
 from adcp.types import GeneratedTaskStatus as LibraryTaskStatus
 from adcp.types import GetAdcpCapabilitiesRequest as LibraryGetAdcpCapabilitiesRequest
@@ -88,7 +87,7 @@ from adcp.types.aliases import (
 from adcp.types.aliases import Package as AdCPPackage
 from adcp.types.base import AdCPBaseModel as LibraryAdCPBaseModel
 from adcp.types.base import AdcpRequest as LibraryAdcpRequest
-from adcp.types.canonical_creative import CanonicalFormatKind as _LibraryCanonicalFormatKind
+from adcp.types.canonical_creative import CanonicalFormatKindStr
 from adcp.types.domains.core.creative_asset import CreativeAsset as LibraryCreativeAsset
 
 # The GENERATED format reference, reached at its generated path because adcp 9 gives it no
@@ -205,6 +204,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 from pydantic_core import InitErrorDetails, PydanticCustomError
 from pydantic_core import ValidationError as PydanticCoreValidationError
 
@@ -600,7 +600,7 @@ class FormatOptionIdentity:
 _FORMAT_ID_PARAMETERS: frozenset[str] = frozenset(LibraryFormatId.model_fields) - {"agent_url", "id"}
 
 
-@dataclass(frozen=True, slots=True)
+@pydantic_dataclass(frozen=True, slots=True)
 class CreativeFormatIdentity:
     """A creative's format identity: the canonical kind, plus the legacy assertion it retains.
 
@@ -626,7 +626,7 @@ class CreativeFormatIdentity:
       reported a format change on every such respelling.
     """
 
-    kind: str | None = None
+    kind: CanonicalFormatKindStr | None = None
     option: FormatOptionIdentity | None = None
     legacy: FormatKey | None = None
     legacy_parameters: tuple[tuple[str, Any], ...] = ()
@@ -755,7 +755,6 @@ def creative_format_identity(
     creative: LibraryCreativeAsset,
     *,
     kind: str | None = None,
-    supported_kinds: Iterable[str] = _LibraryCanonicalFormatKind,
 ) -> CreativeFormatIdentity:
     """Which format this creative names, read off whichever arm it carries.
 
@@ -779,41 +778,40 @@ def creative_format_identity(
     runs the normative v1 -> v2 order -- because the registry and the fetched format
     declaration are protocol inputs a schema module has no business reaching for.
 
-    ``supported_kinds`` is a PARAMETER for the reason the SDK's own
-    ``is_canonical_format_kind`` makes it one: the set that matters is this seller's, not the
-    pinned library's. A seller may support a kind promoted in a spec newer than the pin, or
-    only four of the sixteen, and neither is expressible by anything the library knows --
-    "I accept the request and then tell you I cannot process this creative" is a seller's
-    answer, not a type error.
+    THE VOCABULARY CHECK IS NO LONGER HERE, and a seam went with it. This function used to
+    call ``is_canonical_format_kind(kind, supported_kinds)`` on both arms and raise, with
+    ``supported_kinds`` a parameter defaulting to the pin's sixteen so a seller could later
+    thread its own narrower set (a tenant column, an adapter capability) through one call.
+    :class:`CreativeFormatIdentity` now refuses an out-of-vocabulary kind on CONSTRUCTION, so
+    the checks here were a second answer to a question the type already settles -- and the
+    type covers the one case a check in this function never could: a direct
+    ``CreativeFormatIdentity(kind=...)`` built somewhere that does not come through here.
 
-    CEILING, deliberate and temporary: the default is the pin's sixteen kinds, because this
-    seller has no configured vocabulary of its own yet (measured: ``supported_format_kinds``
-    appears nowhere in ``src/``). Until it does, a kind defined after the pin is refused --
-    exactly the pin-as-ceiling behaviour the SDK removed from its models. The upgrade path is
-    to thread a seller-owned set (a tenant column or an adapter capability) into this
-    argument; the seam is here so that change touches one call rather than every caller.
+    The parameter is therefore GONE, which is a real loss and a deliberate one. The annotation
+    fixes the vocabulary at class-definition time, so a per-tenant set cannot be honoured by
+    it. The trade was taken because the seam was UNUSED -- measured, ``supported_format_kinds``
+    appears nowhere in ``src/`` -- and unconstructability beats a hypothetical. If a
+    seller-owned vocabulary ever arrives, it needs a different mechanism than an
+    ``Annotated`` default: a validator reading the tenant, or a per-tenant model.
 
     Raises:
-        ValueError: if the creative carries neither arm, both arms, or a ``format_kind``
-            outside ``supported_kinds``. The model's own oneOf validator refuses the first two
-            on construction, so reaching them here means an object that did not come through a
-            DTO. The third is the seller's own check: ``format_kind`` is an open ``str`` on
-            every SDK model, in both directions, and the SDK never validates it for you.
+        ValueError: if the creative carries neither arm or both arms. The model's own oneOf
+            validator refuses both on construction, so reaching here means an object that did
+            not come through a DTO. An out-of-vocabulary ``format_kind`` also surfaces as a
+            ``ValueError`` -- pydantic's ``ValidationError`` is one -- raised by
+            :class:`CreativeFormatIdentity` rather than by this function, so the callers that
+            map it to ``AdCPValidationError(field="format_kind")`` keep working unchanged.
     """
     format_id = creative.format_id
     declared_kind = creative.format_kind
     if (format_id is None) == (declared_kind is None):
         raise ValueError("a creative carries exactly one of format_id and format_kind")
     if format_id is not None:
-        # The legacy arm. Its projected kind, when the caller resolved one, is checked against
-        # the seller's vocabulary on the same terms a buyer-declared kind is: a projection
-        # landing outside what this seller supports is not an identity it can key on.
-        if kind is not None and not is_canonical_format_kind(kind, supported_kinds):
-            raise ValueError(f"format_kind {kind!r} is not one this seller supports")
+        # The legacy arm. Its projected kind, when the caller resolved one, is refused by
+        # CreativeFormatIdentity itself if it lands outside the vocabulary -- a projection
+        # this seller cannot key on is not an identity, and the type says so.
         return CreativeFormatIdentity.of_legacy(format_id, kind=kind)
     kind_value = str(declared_kind)
-    if not is_canonical_format_kind(kind_value, supported_kinds):
-        raise ValueError(f"format_kind {kind_value!r} is not one this seller supports")
     # The reference arrives already validated into one arm of core/format-option-ref.json's
     # oneOf, so the only variance here is whether the creative carries one at all. WHICH arm
     # it is still has to be read, and ``of_reference`` is the one place that reads it: the
