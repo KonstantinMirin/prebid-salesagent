@@ -11,11 +11,46 @@
 # WHY IT MATTERS. `negative/007-missing-content-digest` asserts a verifier declaring
 # `covers_content_digest: 'required'` and `negative/018-digest-covered-when-forbidden`
 # asserts `'forbidden'`. An agent declares exactly ONE value, so a run that grades both has
-# at least one guaranteed failure whatever the agent implements. This seller declares
-# `'either'` -- the spec default and the widest policy ("signer chooses; verifier accepts
-# both", security.mdx) -- so it answers 200 to both, correctly, and fails both. Measured:
-# run innet_210926_0617 scored 101/17 on each protocol against 101/15 on the pinned build,
-# and the two extra failures were exactly 007 and 018 on both cards.
+# at least one guaranteed failure whatever the agent implements. When this patch was
+# written this seller declared `'either'`, so it answered 200 to both and failed both.
+# Measured then: run innet_210926_0617 scored 101/17 on each protocol against 101/15 on the
+# pinned build, and the two extra failures were exactly 007 and 018 on both cards.
+#
+# THAT PREMISE NO LONGER HOLDS, AND THE SCOPE PARAGRAPH BELOW IS MEASURED AGAINST IT.
+# At the 3.2.1 pin this seller declares `covers_content_digest: 'required'`, not `'either'`:
+# `get-adcp-capabilities-response.json`'s allOf if/then makes it `{"const": "required"}`
+# once `request_signing.supported` is true, and `_validate_digest_coverage`
+# (src/core/schemas/capability_declarations.py) refuses anything else. So `'either'` is no
+# longer available to go back to, and the two-unanswerable-vectors problem this patch was
+# built for is now ONE vector: at `'required'`, upstream's `contentDigestDeclarationMismatch`
+# skips 018 on the declaration alone and 007 becomes answerable (our verifier returns
+# `request_signature_components_incomplete`, which is what 007 expects).
+#
+# WHAT THAT COSTS NOW. `contentDigestStructuralMismatch` -- the OTHER predicate the same
+# input reaches -- skips every vector whose `Signature-Input` does not cover content-digest,
+# on the stated grounds that "the verifier rejects with
+# `request_signature_components_incomplete` before the vector's intended error path can
+# fire". That premise is false for the verifier this repo runs: `verify_request_signature`
+# calls `_check_params_present` (step 2), `_check_tag` (3), `_check_alg` (4), `_check_window`
+# (5) and only THEN `_check_components` (6, where the digest policy lives) --
+# adcp/signing/verifier.py:320-336, sequential, first failure raised. A vector whose intended
+# error is at step 1-5 therefore DOES reach its intended error path. Measured on run
+# innet_091026_1343: 19 signed_requests checks that passed at the 3.1.1 pin now skip
+# `capability_profile_mismatch`, and nine of them -- negative 002 (tag, step 3), 003 (expired,
+# 5), 004 (window, 5), 005 (alg, 4), 006 (@authority, 6 but raised by the REQUIRED_COMPONENTS
+# loop ahead of the policy check, same error code), 012 (expires param, 2), 013
+# (expires<=created, 5), 014 (nonce param, 2), 022 (multi-valued content-type, 1) -- assert
+# an error this verifier returns before the policy check runs. The other ten are correctly
+# skipped: three positives genuinely cannot verify without digest coverage under
+# `'required'`, 008/009/015/016/017/020 assert errors at steps 7-12 that the step-6 refusal
+# really does pre-empt, and 026 is independently `transport_ungradable`.
+#
+# NOT FIXED HERE, DELIBERATELY. Narrowing the structural predicate to respect the verifier
+# checklist order is a change to upstream GRADING logic, which is exactly what the SCOPE
+# paragraph promises this patch does not do, and it cannot be graded without the storyboard
+# leg. It belongs upstream alongside #2993. Dropping this patch instead is NOT the answer:
+# with no policy forwarded, `preflightSkip` reaches neither predicate (both arms are gated on
+# `agentCapability || agentContentDigestPolicy`), so 018 would come back as a graded FAILURE.
 #
 # UPSTREAM. Filed as adcontextprotocol/adcp-client#2993, with the suggested derivation.
 # This is the storyboard-side half of #2963: that PR's grader-side half merged and works --
@@ -38,9 +73,12 @@
 #
 # DELETE THIS WHEN adcontextprotocol/adcp-client#2993 lands and the runner pin moves to a
 # release containing it -- i.e. when the storyboard dispatch derives the policy itself.
-# The check that it is safe to delete: with the patch removed, `signed_requests` still
+# The check that it is safe to delete was "with the patch removed, `signed_requests` still
 # reports zero failures on both protocols, and 007/018 come back as `not_selected` /
-# `profile_excluded` rather than as graded failures.
+# `profile_excluded` rather than as graded failures". That check was written against the
+# `'either'` declaration and no longer decides anything: at `'required'` the skip arms are
+# gated on this patch's own input, so removing it regrades 018 as a failure and the check
+# can never pass. Re-derive it against whatever upstream lands, rather than running it.
 #
 diff --git a/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js b/node_modules/@adcp/sdk/dist/lib/testing/storyboard/request-signing/probe-dispatch.js
 index e7d9421..bf8a342 100644
