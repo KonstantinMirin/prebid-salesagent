@@ -12,9 +12,11 @@ exactly ONE home:
   same green.
 * **The tenant seam** — :func:`provisioned_trust_root_tenant`, which owns the
   ``virtual_host`` routing state the whole e2e session shares.
-* **The hop-1 seed** — :func:`seeded_capabilities_factory`, needed because the
-  SDK's capabilities hop raw-GETs the agent URL (SDK divergence #4, see
-  ``test_trust_root_e2e``).
+* **The hop-1 seed** — :func:`seeded_capabilities_factory`, which keeps a module
+  that grades the PUBLISHED DOCUMENTS from also grading the capabilities builder
+  (see ``test_trust_root_e2e``). It no longer exists to route around the SDK: the
+  capabilities hop used to raw-GET the agent URL and now invokes the tool over
+  MCP, so the seed speaks MCP too.
 * **Production-path key provisioning** — :func:`provision_signing_key_via_admin`,
   which drives the real admin route over real HTTP so the row is minted under
   the SERVER CONTAINER's KEK rather than the test runner's.
@@ -227,6 +229,9 @@ def seeded_capabilities_factory(body: dict):
     ``async_resolve_agent`` calls ``factory(agent_url)`` and uses the result as an
     async context manager, so an ``httpx.AsyncClient`` over a ``MockTransport`` is
     a drop-in — no monkeypatching of the SDK.
+
+    Hop 1 is an MCP ``tools/call``, and the transport underneath answers it as one;
+    *body* is what the tool returns. See ``json_seeded_client_factory``.
     """
 
     return json_seeded_client_factory(body)
