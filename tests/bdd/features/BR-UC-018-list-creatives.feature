@@ -1058,6 +1058,41 @@ Feature: BR-UC-018 List Creatives
     # "parameters are preserved" passed throughout that defect.
     # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/format-id.json
 
+  @T-UC-018-canonical-format-option-ref-roundtrip @schema-v3.2 @format-option-ref
+  Scenario Outline: A creative synced by format_kind with a <scope>-scope format_option_ref is listed with that reference intact
+    Given the buyer synced a creative on format_kind "image" with a <scope>-scope format_option_ref
+    When the Buyer Agent sends list_creatives with no filters for the same account
+    Then the response is compliant with the list_creatives spec
+    And the listed creative's format_option_ref should equal the reference the buyer sent, scope included
+    And the listed creative's format_option_ref should be valid against core/format-option-ref.json
+
+    Examples: the two scopes the reference discriminates between
+      | scope     |
+      | product   |
+      | publisher |
+
+    # creative/list-creatives-response.json declares format_option_ref on every listed
+    # creative as a $ref to core/format-option-ref.json — "the concrete canonical format
+    # option this creative targets". That file is a oneOf with
+    # `discriminator: {propertyName: "scope"}`, and BOTH arms name `scope` in `required`; the
+    # product arm additionally declares `"publisher_domain": false`, so a product-scope
+    # reference may not carry the member at all, not even as null. A reference that reaches
+    # the buyer without its discriminator names no arm of the union, which is to say it
+    # names no option.
+    #
+    # Both scopes are rows because the discriminator is the whole point: a seller that
+    # stored only `{publisher_domain, format_option_id}` loses product-vs-publisher scope,
+    # and the two are DIFFERENT options even when they share a format_option_id (a
+    # publisher-catalog option and a product-local one are namespaced differently). A
+    # single-row scenario on either scope would pass on a seller that hard-coded the other.
+    #
+    # The second outcome is what stops the first from being satisfiable by an echo: a
+    # seller that round-tripped its own malformed document byte-for-byte would satisfy
+    # "equals what the buyer sent" while serving a reference the buyer's own schema check
+    # refuses. Graded against the pinned file, so the pin is the authority and not this text.
+    # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/core/format-option-ref.json
+    # @source repo=adcp ref=v3.2.1 path=_schemas/3.2/creative/list-creatives-response.json property=format_option_ref
+
   @T-UC-018-storyboard-filter-by-concept-id @schema-v3.1 @v3-1 @list-filter @concept-id
   Scenario: List creatives filtered by concept_ids returns only creatives in that concept carrying concept_id and concept_name
     Given the authenticated principal has creatives grouped under concept "concept_summer_2026" and other creatives under different concepts

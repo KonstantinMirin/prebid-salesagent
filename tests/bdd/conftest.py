@@ -91,6 +91,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_inventory",
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_format_options",
+    "tests.bdd.steps.domain.uc_get_products_format_id_filter",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -6336,6 +6337,16 @@ ENV_ROUTES: list[EnvRoute] = [
         # is needed at all: without it the scenarios auto-xfail at fixture setup with
         # "No harness wired for None" and grade nothing while reading green.
         when=lambda m: "format_option_announcement" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-format-id-filter",
+        # BR-UC-GET-PRODUCTS format_id filtering: stores real products.format_ids documents
+        # under two declaring agents and reads which products get_products announces, so it
+        # takes the UC-GET-PRODUCTS branch like its two siblings above. Its own identity tag
+        # means detect_uc returns None, so without this row the scenario would auto-xfail at
+        # fixture setup with "No harness wired for None" and grade nothing while reading green.
+        when=lambda m: "format_id_filter" in m,
         env_builder=_build_product_env,
     ),
     EnvRoute(
