@@ -894,93 +894,30 @@ _XFAIL_TAGS: dict[str, str] = {
     # per-account failure inside a transport-level success, with the exact error.field
     # pointers the storyboards grade.
     #
-    # RE-LEDGERED (#2353): the event-scope half of that graduation was wrong, and it was
-    # wrong invisibly. Its When built a ``SyncAccountsRequest`` inside
-    # ``try: ... except Exception: ctx["error"] = exc``, so the DTO refused the document in
-    # the TEST process and NOTHING dispatched — the scenario graded pydantic and asserted
-    # against an empty context, which is how it entered the graded set green-looking and
-    # has been red since the swallow stopped hiding it. The When now sends the literal
-    # payload (``_sync_raw``), so the seller answers, and the answer is the gap:
+    # Graduated (#2353): T-UC-011-notif-event-scope-reject removed. The event-scope half of
+    # the F4b graduation above was ledgered because the gate's branch was unreachable — the
+    # DTO typed ``event_types`` with the account-surface enum, so pydantic refused every
+    # value the gate refuses, and all three transports answered INVALID_REQUEST at
+    # ``accounts.0.…notification_configs.0.event_types.0`` instead of reporting the entry.
+    # ``src/core/schemas/notification.py`` now declares the field over the wide
+    # ``enums/notification-type.json``, which is what the pinned field asks for in the same
+    # sentence that states its enum: the eight off-surface types "are schema-invalid on this
+    # surface AND sellers MUST reject those entries as PER-ACCOUNT validation failures …
+    # RATHER THAN SILENTLY DROPPING THEM" (core/notification-config.json
+    # #/properties/event_types, AdCP 3.2.1; account/sync-accounts-request.json repeats it at
+    # #/properties/accounts/items/properties/notification_configs). The enum is still
+    # enforced, by ``_check_notification_configs``, which refuses exactly
+    # ``NotificationType - EventType`` and names ``notification_configs[i].event_types[j]``
+    # — so admitted minus refused IS the account-surface enum, member for member, and a
+    # value outside the vocabulary entirely still earns a request-level INVALID_REQUEST.
+    # The weakened axis is rowed in tests/unit/test_architecture_schema_inheritance.py.
     #
-    #   measured — src/core/tools/_boundary.py:240 ``TOOLS[tool].dto.model_validate(raw)``
-    #   raises on ``accounts.0.…notification_configs.0.event_types.0``, and all three
-    #   transports return INVALID_REQUEST (REST: HTTP 400). ``_sync_accounts_impl`` never
-    #   runs, so the event-scope branch of ``_check_notification_configs``
-    #   (src/core/tools/accounts.py:991) never evaluates.
+    # tests/storyboard/known_failures.txt:124,137 still carry
+    # ``notification_config_event_scope::sync_accounts_rejects_scheduled_account_notification``
+    # for a2a and mcp. Those rows are xfail(strict=False) and are NOT graduated here: this
+    # ledger's own header says it has not been re-measured against 3.2.1, and only
+    # ``tox -e storyboard`` on the stack can say whether that check now passes.
     #
-    # The branch is unreachable BY CONSTRUCTION, not by this payload:
-    # ``_EVENT_TYPES_OFF_THE_ACCOUNT_SURFACE`` is ``NotificationType - EventType``, and the
-    # DTO types the field with ``EventType``, so the gate's set and the DTO's accepted set
-    # are disjoint — measured empty intersection. Every value the gate refuses, the DTO
-    # refuses first.
-    #
-    # THE OBLIGATION IS THE PIN'S, AND IT IS A SCHEMA-LEVEL VIOLATION REPORTED PER ENTRY.
-    # That combination is the whole question — critical pattern #7 would otherwise read a
-    # boundary refusal as correct — and the pinned field settles it in one sentence. 3.2.1
-    # narrowed ``event_types`` to an inline account-anchored enum (3.1 ``$ref``'d the wide
-    # ``enums/notification-type.json``) and kept the MUST verbatim:
-    # media-buy-anchored types "are SCHEMA-INVALID on this surface AND sellers MUST reject
-    # those entries as PER-ACCOUNT validation failures with INVALID_REQUEST or
-    # VALIDATION_ERROR and error.field pointing at the invalid event_types entry RATHER THAN
-    # SILENTLY DROPPING THEM" (core/notification-config.json#/properties/event_types). The
-    # pin names the violation schema-level and the report per-entry in the same breath, and
-    # its closing clause forbids exactly what ``extra="ignore"`` does in production.
-    #
-    # The REQUEST schema says it a second time, independently, at the field this scenario
-    # actually sends: "Sellers MUST reject ENTRIES whose event_types include any type whose
-    # contract anchors at a media buy or below (today: scheduled, final, delayed, adjusted,
-    # window_update, impairment) or at the agent (today: capabilities.changed) as PER-ACCOUNT
-    # validation failures with INVALID_REQUEST or VALIDATION_ERROR and error.field pointing
-    # at the invalid event_types entry"
-    # (account/sync-accounts-request.json#/properties/accounts/items/properties/notification_configs).
-    # Two pinned schemas, the same MUST, neither of them transport- or request-level.
-    #
-    # Pattern #7 is not in tension with that. It governs UNDECLARED FIELDS —
-    # ``deep_strip_to_schema`` strips what the DTO does not declare — and ``event_types`` IS
-    # declared; the question is its value domain. Pattern #7 states its own remedy for a
-    # field this seller should accept ("declare it on the DTO — that is the only
-    # mechanism"), so widening the declared domain so the semantic gate can refuse per entry
-    # IS the pattern's move, not an exception to it. Its rationale holds too: the point is
-    # that an unimplemented spec field be LOUD, and this rule is implemented — the gate
-    # exists and has the branch. Only the value cannot reach it.
-    #
-    # The response schema declares the channel, so there is somewhere for the refusal to go:
-    # ``accounts[].errors[]`` is "Per-account errors. Required and non-empty when action is
-    # 'failed'; absent otherwise", items ``core/error.json``, under a ``SyncAccountsSuccess``
-    # branch described as "Sync operation processed accounts (individual accounts may be
-    # pending or have action=failed)" (account/sync-accounts-response.json). Nothing in
-    # L3/error-handling.mdx requires a schema-invalid request be refused wholesale; it
-    # classifies validation errors and separately documents ``errors[]`` inside a completed
-    # response.
-    #
-    # It is GRADED, not invented by this scenario, and this repo already knew:
-    # ``universal/notification-config-event-scope.yaml::sync_accounts_rejects_scheduled_account_notification``
-    # marks its vector ``sample_request_skip_schema: true`` precisely so a deliberately
-    # schema-invalid document still reaches the seller, with ``expected`` unchanged from 3.1
-    # (accounts[0].action failed, status rejected, errors[0].code in {INVALID_REQUEST,
-    # VALIDATION_ERROR}, errors[0].field ``notification_configs[0].event_types[0]``).
-    # docs/test-obligations/storyboard-issue-map.yaml calls the storyboard "coverage: none —
-    # Event-scope filtering on notification configs is tracked nowhere", which is a missing
-    # owner, not a wrong obligation. #2353 is now that owner.
-    #
-    # tests/storyboard/known_failures.txt:124,137 also carries this step, and that is
-    # DELIBERATELY NOT cited as corroboration. That ledger's own header says it "is still
-    # seeded from the 3.1.1-era run named above and has NOT been re-measured against 3.2.1",
-    # and the row immediately below ours is
-    # ``notification_config_rejections::sync_accounts_rejects_duplicate_subscriber_id`` —
-    # whose BDD scenario demonstrably passes here. So those rows are consistent with a gap
-    # and are not evidence of one; the grounding above is the pin and the measurement.
-    #
-    # Closing it means the local ``NotificationConfig`` must carry the field inward wider
-    # than the library parent types it, so the semantic gate can own the refusal. That is a
-    # WEAKENING redeclaration — a schema-inheritance allowlist row naming the weakened axis
-    # (critical pattern #1) — so it is a deliberate schema decision, not a step fix, and it
-    # is what #2353 owns. strict=True: the day the DTO widens, this XPASSes and graduates.
-    "T-UC-011-notif-event-scope-reject": (
-        "cause=production-gap scope=transport-independent ref=#2353 — the DTO's event_types enum "
-        "refuses every media-buy-anchored type at the boundary (INVALID_REQUEST), so the per-account "
-        "rejection the pin mandates is unreachable and _check_notification_configs never runs"
-    ),
     # Graduated (T2 increment F4c): T-UC-011-notif-activation-proof-fail
     # removed. NotificationProofService performs a bounded proof-of-control challenge BEFORE the
     # write transaction opens; a failed proof
