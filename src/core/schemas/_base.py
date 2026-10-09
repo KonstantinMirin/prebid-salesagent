@@ -374,12 +374,11 @@ def canonical_agent_url(agent_url: object) -> str:
     ``format_id_identity``) and to key the creative-agent format cache
     (``CreativeAgentRegistry._cache_key``).
 
-    The algorithm is not reimplemented here. It comes from ``src.vendor.adcp_canonical``
-    — adcp 7.0.2's implementation, copied verbatim, which passes all 37 published
-    conformance vectors — reached through ``src.core.signing.canonical``, the ONE seam
-    over that package. The version this repo pins (6.6.0) fails 14 of them and is
-    terminal on its line; that package's docstring has the detail, and salesagent-3xcdk
-    deletes it by migrating.
+    The algorithm is not reimplemented here. It comes from the PINNED SDK
+    (``adcp.signing.canonical``), reached through ``src.core.signing.canonical``, the ONE
+    seam over it. The SDK is measured at 37/37 against the published conformance vectors.
+    A verbatim copy of adcp 7.0.2 used to stand in that position, because the then-pinned
+    6.6.0 failed 14 of those vectors; the 9.0.0b1 pin retired it.
 
     ``producer_target_uri`` and not the seam's ``canonical_target_uri``: they differ on
     url-canonicalization.mdx step 2, and this is the PRODUCER side. A raw non-ASCII host is
