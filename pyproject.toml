@@ -7,7 +7,7 @@ requires-python = ">=3.12"
 
 dependencies = [
     "a2wsgi>=1.10.0",
-    "adcp==9.0.0b1+prs1435.1415.1456",  # exact pin — see [tool.uv.sources] for what the local segment is
+    "adcp==9.0.0b2+prs1435.1415.1447.1456",  # exact pin — see [tool.uv.sources] for what the local segment is
     "fastmcp>=4.0.0,<5.0.0", # 4.0.0 is the first fastmcp whose mcp floor allows mcp 2.x, which adcp 9 requires; fastmcp.tools.tool moved to fastmcp.tools.base
     "mcp>=2.0.0", # adcp 9 requires mcp>=2.0,<3.0 (mcp.server.fastmcp was renamed mcp.server.mcpserver); supersedes the 1.28.1 floor for CVE-2026-59950 / GHSA-vj7q-gjh5-988w
     "google-cloud-iam>=2.19.1",
@@ -154,7 +154,8 @@ dev = [
 # editable tree's code. An editable SDK has to be declared here to survive.
 
 [tool.uv.sources]
-# v9.0.0-beta.1 plus the two PRs this seller needs before they are released:
+# Upstream main at 0c7e8b86d (9.0.0b2) plus the four PRs this seller needs before they are
+# released, each merged at its live head with no conflict:
 #
 #   #1435  fix(codegen): name the JSON Schema keyword an injected check enforces
 #          Generated validators raised a bare ValueError for a oneOf/anyOf violation,
@@ -163,6 +164,16 @@ dev = [
 #          Measured in the integrated tree: 43 keyworded refusals (33 anyOf, 10 oneOf)
 #          where there were none.
 #   #1415  docs: say who owns the format_kind check now that the SDK does not
+#   #1447  fix(types)!: keep ProductFormatDeclaration a class. Restores it to a `Format`
+#          subclass, so every projection entry point in `adcp.canonical_formats` accepts it
+#          and the validate-then-publish friction goes away.
+#   #1456  fix(signing)!: apply canonicalization step 5 whatever the query does
+#
+# The base moved from a post-beta.1 snapshot to current main deliberately. All four PRs base
+# on main, so merging their CURRENT heads brings main with them — and the previous branch had
+# drifted, carrying #1415 and #1456 at stale heads that were no longer the PRs' own commits.
+# `require_canonical_format_kind` and `CanonicalFormatKindStr` arrive from main's own
+# 2efd14f34, not from #1447 or #1415; the old pin lacked them because it was 38 commits behind.
 #
 # A BUILT WHEEL at a URL, not a path and not a git revision, and each of those three was
 # tried. A path source does not survive the Docker build or a cassini run: the build context
@@ -172,14 +183,12 @@ dev = [
 # with no hook, so nothing regenerates it and the error code table fails to build on import.
 # Measured: a git install of the previous fork revision had 0 tracked schema files.
 #
-# The wheel carries them (verified: 2973 `_schemas` entries, `enums/error-code.json` present,
-# and `PydanticCustomError` in the generated creative_asset module). Cut from
-# `sdk/v9beta-plus-prs` on the fork, which is upstream `v9.0.0-beta.1` plus the two PRs the
-# seller needs before they are released.
+# The wheel carries them (verified: 3735 `_schemas` entries, `enums/error-code.json` and
+# `core/product-format-declaration.json` present). Cut from `sdk/v9-prs-all4` on the fork.
 #
 # Re-cut it with: bump the local segment in the SDK worktree's pyproject, `uv build --wheel`,
 # `gh release create <tag> dist/*.whl`, then repoint this URL and `uv lock`.
-adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b1-prs1435-1415-1456/adcp-9.0.0b1%2Bprs1435.1415.1456-py3-none-any.whl" }
+adcp = { url = "https://github.com/KonstantinMirin/adcp-client-python/releases/download/sa-sdk-9.0.0b2-prs1435-1415-1447-1456/adcp-9.0.0b2%2Bprs1435.1415.1447.1456-py3-none-any.whl" }
 
 [tool.ruff]
 line-length = 120
