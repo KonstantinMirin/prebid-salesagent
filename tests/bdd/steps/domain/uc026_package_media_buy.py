@@ -2016,7 +2016,35 @@ def then_outcome(ctx: dict, outcome: str) -> None:
 
     outcome = outcome.strip()
     if outcome.startswith("success"):
-        assert "error" not in ctx, f"Expected success but got error: {ctx.get('error')}"
+        # Delegates rather than re-spelling "no error in ctx". That is all this branch
+        # used to assert, and it let a row pass with no response at all: a scenario whose
+        # dispatch never reached the seller has no error either. ``then_operation_succeeds``
+        # is the one success contract in this tree -- no error, a payload that actually
+        # arrived, and a status that is not a failure value -- so a row that graded nothing
+        # now at least grades that the seller answered and said it succeeded.
+        #
+        # WHAT THIS STILL DOES NOT GRADE, and why it is not fixable here: the Examples
+        # column names an EFFECT ("success with keyword added", "success with bid_price
+        # updated", "success with catalogs replaced"), and update_media_buy returns
+        # ``affected_packages=[]``, so there is no response state for an effect assertion
+        # to read.
+        #
+        # That was not assumed, it was RUN. The effect assertion was written here --
+        # every (keyword, match_type) in ctx["update_kwargs"]'s keyword_targets_add must
+        # appear in the updated package's targeting_overlay -- and
+        # T-UC-026-partition-keyword-add's new_keyword and existing_keyword_update_bid
+        # rows went from xpass to FAIL on all three in-process transports, 6/6, each on
+        # "update response carries no package". The assertion was then reverted, because
+        # a Then that cannot pass until production changes belongs in the same change as
+        # the production fix; what stays is this note and the routing that says so.
+        #
+        # It is the same gap that keeps the @T-UC-026-alt-* update scenarios xfailed:
+        # src/core/tools/media_buy_update.py appends an AffectedPackage on five branches
+        # only (budget, creative_ids, creatives, creative_assignments, targeting_overlay),
+        # and the keyword ops have no handler anywhere under src/ at all. When the update
+        # response carries its packages, this assertion comes back, derived from
+        # ctx["update_kwargs"].
+        then_operation_succeeds(ctx)
         return
     if not outcome.startswith("error"):
         raise ValueError(f"Unknown outcome format: {outcome}")
@@ -2641,19 +2669,47 @@ def then_created_with_paused(ctx: dict, paused: str) -> None:
 
 @then("the package should be created with both catalogs")
 def then_created_with_catalogs(ctx: dict) -> None:
-    """Assert package was created with both catalog entries."""
+    """Assert the created package echoes exactly the catalogs the request carried.
+
+    Graded as a set of ``(type, catalog_id)`` pairs against the REQUEST, not as a
+    count plus a distinct-type tally. The pinned 3.2.1 ``core/package.json`` says
+    catalogs are "Echoed from the create_media_buy request", so the obligation is an
+    echo and the request is the only thing it can be compared with. A count-and-types
+    check passed on two catalogs of the right types carrying the wrong ids -- and on a
+    seller that substituted its own catalog_ids, which is precisely the echo failing.
+
+    The distinct-type rule (BR-RULE-089 INV-2, and the schema's "Each catalog MUST have
+    a distinct type") still holds, and holds more strongly: equal pair sets means the
+    response carries the two distinct types the request did.
+    """
     pkgs = _assert_has_packages(ctx)
     catalogs = _pkg_field(pkgs[0], "catalogs")
     assert catalogs is not None, "catalogs not echoed in response — production should echo catalogs"
     assert isinstance(catalogs, list), f"Expected catalogs to be a list, got {type(catalogs)}"
-    assert len(catalogs) == 2, f"Expected 2 catalogs, got {len(catalogs)}"
-    # Verify catalogs have distinct types (per BR-RULE-089 INV-2)
-    types = set()
-    for cat in catalogs:
-        cat_type = cat.get("type") if isinstance(cat, dict) else getattr(cat, "type", None)
-        if cat_type:
-            types.add(cat_type)
-    assert len(types) == 2, f"Expected 2 distinct catalog types, got types: {types}"
+
+    def _scalar(value: Any) -> str | None:
+        # ``type`` arrives as a str on the request side and may arrive as an enum member
+        # on the response side, depending on which model the transport parsed into.
+        # Comparing those two directly would report a mismatch for an identical value.
+        if value is None:
+            return None
+        return str(getattr(value, "value", value))
+
+    def _pairs(entries: list) -> set[tuple[str | None, str | None]]:
+        out: set[tuple[str | None, str | None]] = set()
+        for cat in entries:
+            getter = cat.get if isinstance(cat, dict) else lambda name, cat=cat: getattr(cat, name, None)
+            out.add((_scalar(getter("type")), _scalar(getter("catalog_id"))))
+        return out
+
+    requested = (ctx.get("request_kwargs") or {}).get("packages") or []
+    assert requested, "no packages on the request — this step compares the echo against what was sent"
+    expected = _pairs(requested[0].get("catalogs") or [])
+    assert len(expected) == 2, (
+        f"the scenario must send two catalogs for this step to grade both, got {sorted(expected)}"
+    )
+    actual = _pairs(catalogs)
+    assert actual == expected, f"Expected catalogs {sorted(expected)} echoed, got {sorted(actual)}"
 
 
 @then("the package should be created without catalogs")

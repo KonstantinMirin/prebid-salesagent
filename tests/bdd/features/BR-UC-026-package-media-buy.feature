@@ -377,6 +377,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "product_id"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -394,6 +395,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "format_ids"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -411,6 +413,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "pricing_option_id"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -491,6 +494,7 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the update_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "package_id"
     And the error should include "suggestion" field
     And the error recovery should be "correctable"
     # POST-F1: Buyer knows the operation failed
@@ -566,8 +570,12 @@ Feature: BR-UC-026 Package Media Buy
     Then the response is compliant with the create_media_buy error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
+    And the error field should contain "format_ids"
     And the error should include "suggestion" field
-    # BR-RULE-197 INV-4: Empty array violates minItems: 1
+    And the error recovery should be "correctable"
+    # BR-RULE-197 INV-4: Empty array violates minItems: 1 — the refusal must name the
+    # offending field (core/error.json `field`) and classify recovery as correctable
+    # (3.2.1 enums/error-code.json INVALID_REQUEST metadata).
 
   @T-UC-026-inv-198-4 @invariant @BR-RULE-198
   Scenario: INV-4 holds -- update only mutable fields succeeds
