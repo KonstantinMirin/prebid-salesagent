@@ -2451,6 +2451,16 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # INVALID_REQUEST); the oneOf-both shape is rejected by Pydantic at the
         # boundary as VALIDATION_ERROR. The feature outcomes were reconciled to
         # match production and the scenarios now pass on a2a/mcp/rest.
+        # One reason, two rows' worth of entries: the two outlines exhibit the SAME fixture
+        # gap on their inline-upload rows, so the sentence is named once rather than written
+        # twice (a second copy is a second thing to correct when the fixture is fixed).
+        _UC002_INLINE_FORMAT_FIXTURE = (
+            "salesagent-tpr3: inline-creative upload. The seeded product advertises format id "
+            "'display_300x250', which no agent serves (the reference catalog has "
+            "display_300x250_image) — a test-fixture gap measured in both directions, not a "
+            "seller gap. These three rows graduate when tpr3 reconciles the id; the ticket is "
+            "named here so they cannot become permanent"
+        )
         _UC002_VALIDATION_XFAIL: list[tuple[str, set[str], str]] = [
             # GRADUATED: the two daily-spend-cap entries are gone. Their reason -- "production
             # raises plain ValueError -> code=validation_error, no suggestion. Spec expects
@@ -2465,29 +2475,72 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # zero executed. Both markers came off together: the routing moved to the
             # uc002-ext row and this pair was deleted, because removing either one alone
             # leaves the scenarios exactly as dormant as before.
-            # FIXME: creative error code mismatch
-            # Production uses CREATIVES_NOT_FOUND / VALIDATION_ERROR / INVALID_CREATIVES,
-            # spec expects CREATIVE_REJECTED. No max_creatives limit in production either.
-            (
-                "T-UC-002-partition-creative-asset",
-                {"creative_not_found", "format_mismatch", "missing_required_assets"},
-                "creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR/INVALID_CREATIVES, spec expects CREATIVE_REJECTED — spec-production gap",
-            ),
-            (
-                "T-UC-002-partition-creative-asset",
-                {"exceeds_max_creatives"},
-                "max_creatives limit not enforced in production — spec-production gap",
-            ),
-            (
-                "T-UC-002-boundary-creative-asset",
-                {"cr-bad", "wrong format"},
-                "creative error code mismatch: production uses NOT_FOUND/VALIDATION_ERROR, spec expects CREATIVE_REJECTED — spec-production gap",
-            ),
-            (
-                "T-UC-002-boundary-creative-asset",
-                {"101 uploads"},
-                "max_creatives limit not enforced in production — spec-production gap",
-            ),
+            # GRADUATED, and the four entries that stood here are replaced by the two below
+            # — a narrowing from seven marked rows to three, every one of them measured.
+            #
+            # The four deleted entries carried two reasons and BOTH WERE FALSE. "Production
+            # uses NOT_FOUND/VALIDATION_ERROR/INVALID_CREATIVES, spec expects
+            # CREATIVE_REJECTED" described a disagreement the feature itself had already
+            # settled in production's favour: the three invalid partition rows were
+            # regrounded to CREATIVE_NOT_FOUND / VALIDATION_ERROR (the citation sits above
+            # those Examples), so there was nothing left to mismatch. "max_creatives limit
+            # not enforced in production" was wrong about its own row, which asks for
+            # INVALID_REQUEST — exactly what production raises for 101 creatives.
+            #
+            # Neither could be tested while it stood. Both outlines also sat on the
+            # uc002-not-wired ENV_ROUTES catch-all, which xfails at FIXTURE SETUP, so nothing
+            # dispatched and these strict=True markers had nothing to grade. MEASURED
+            # baseline (box run 3b83d400e1234a7bb0ec79df6a32fadd): 54 items, 54 xfailed,
+            # ZERO executed. Both markers come off together, exactly as the daily-spend-cap
+            # pair above did: removing either alone leaves the rows as ungraded as before.
+            #
+            # With the outlines claimed on the uc002-ext row, 45 of the 54 items PASS across
+            # a2a/mcp/rest — 24 of 30 on the partition outline (box run
+            # d376b293041b48629441884f67699a44) and 21 of 24 on the boundary outline (box run
+            # d9e341c094e845b3b1ff3a2608e67295), the latter reported as XPASS(strict) because
+            # these markers were still on them.
+            #
+            # WHAT THE THREE SURVIVING ROWS ARE, and why the reason is a fixture and not a
+            # seller. They are the three rows that UPLOAD AN INLINE CREATIVE, and they cannot
+            # pass on either spelling of this suite's canonical test format id:
+            #   display_300x250       — no agent serves it. An inline creative goes through
+            #     sync_creatives, whose creatives/_validation.py resolves format_id through
+            #     the creative-agent registry, and in a test process
+            #     get_creative_agent_registry() returns ReferenceFormatsRegistry — the 71
+            #     formats in tests/fixtures/creative_formats/reference_formats.json, which is
+            #     also what the e2e server serves. That catalog carries
+            #     display_300x250_image / _html / _generative / _2x and NO bare
+            #     display_300x250, so the seller correctly answered REFERENCE_NOT_FOUND and
+            #     the create surfaced it as CREATIVE_REJECTED.
+            #   display_300x250_image — the agent serves it, but the product
+            #     _seed_media_buy_chain creates advertises the bare id
+            #     (tests/harness/media_buy_create.py:180), so the create correctly answers
+            #     VALIDATION_ERROR "not accepted by product prod_1".
+            # Production is right in both directions; the FIXTURE is wrong.
+            #
+            # AND THE FIX IS NOT LOCAL TO THE HARNESS — MEASURED, not estimated. Moving the
+            # product's seeded format_ids to the catalog id (tests/harness/
+            # media_buy_create.py:180) and renaming the fabricated spec at :340 was tried on
+            # this branch and REVERTED: box run e2370f95c3804e7ea214da9c64fffa8a turned these
+            # two outlines from 45 passed / 9 xfailed into 24 passed / 23 failed, and every
+            # new failure is a LIBRARY-REFERENCE row — assignments_only,
+            # assignment_with_weight_zero, assignment_with_placement_targeting, "assignment
+            # cr-001", weight=0, weight=100. The cause is symmetrical to the one above: those
+            # rows seed their creative through given_media_buy._create_approved_creative,
+            # whose default fmt is the BARE id, so moving only the product inverts the
+            # product-vs-creative compatibility check for every one of them.
+            # So the bare id is a shared fixture CONSTANT, not three sites: ~10 more in
+            # tests/bdd/steps/generic/given_media_buy.py (including an @T-UC-002-ext-g step
+            # that ASSERTS the literal, and an ext-q Given that adds the catalog id to the
+            # product precisely because the default lacks it), ~9 in
+            # uc003_update_media_buy.py and ~7 in uc006_sync_creatives.py — and
+            # MediaBuyDualEnv SUBCLASSES MediaBuyCreateEnv, so the UC-003 and UC-026 products
+            # move with it. That is the scope tpr3 actually has.
+            #
+            # So the three rows keep a marker, with a reason that names the fixture and the
+            # ticket instead of inventing a seller gap.
+            ("T-UC-002-partition-creative-asset", {"uploads_only", "both_paths"}, _UC002_INLINE_FORMAT_FIXTURE),
+            ("T-UC-002-boundary-creative-asset", {"upload with format"}, _UC002_INLINE_FORMAT_FIXTURE),
         ]
         if any(t.startswith("T-UC-002") for t in marker_names):
             for tag, substrings, reason in _UC002_VALIDATION_XFAIL:
@@ -6540,6 +6593,17 @@ ENV_ROUTES: list[EnvRoute] = [
                 # plain ValueError") had expired. Neither reason was the reason.
                 or "T-UC-002-partition-daily-spend-cap" in m
                 or "T-UC-002-boundary-daily-spend-cap" in m
+                # The two creative-asset outlines join on the same reading. Their Givens need
+                # this row's seed and nothing else: the creative Givens
+                # (given_media_buy.py:2112, :2187) build fixtures off ``ctx["tenant"]`` and
+                # ``ctx["principal"]`` through CreativeFactory, read ``ctx["default_product"]``
+                # for the format a mismatch has to mismatch, and hang creative_ids / inline
+                # creatives on the request defaults — then dispatch_mode="create" makes the
+                # shared When dispatch exactly what they built. 45 of their 54 items PASS on
+                # this row; the nine that do not are the three inline-upload rows, kept on a
+                # row-keyed marker whose reason is at ``_UC002_INLINE_FORMAT_FIXTURE``.
+                or "T-UC-002-partition-creative-asset" in m
+                or "T-UC-002-boundary-creative-asset" in m
             ),
         ),
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
