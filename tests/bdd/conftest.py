@@ -512,10 +512,20 @@ _XFAIL_TAGS: dict[str, str] = {
     # (src/core/tools/creative_formats.py:386). It stays xfailed on e2e_rest alone, via
     # _UC005_E2E_FIXTURE_INJECTION_TAGS, because that stack cannot be told to serve
     # specific format fixtures.
-    # DELETED as stale: "T-UC-005-inv-049-1-holds" and "T-UC-005-inv-049-1-violated"
-    # named no scenario. The feature's BR-RULE-049 tags are inv-049-10-* and
-    # inv-049-11-*; there is no inv-049-1-*, so these two rows xfailed nothing and
-    # carried the same non-existent "adcp 3.12" citation.
+    # DELETED: T-UC-005-inv-049-1-holds and -violated. Not a graduation — the two tags
+    # ROUTE NOTHING. `git grep T-UC-005-inv-049-1-holds -- tests/bdd/features/` returns
+    # nothing, and the invariant tags BR-UC-005 actually carries run inv-049-2 through
+    # inv-049-11 (plus -8-capabilities); there is no inv-049-1 scenario to xfail. Both
+    # entries are matched by exact set membership (`tag in marker_names`), so the
+    # similarly-named -10-* and -11-* tags were never covered by them either. They also
+    # stood in _UC005_E2E_FIXTURE_INJECTION_TAGS, equally inert, and go from there in the
+    # same change.
+    #
+    # Their shared citation was "adcp 3.12", which is not a version that exists in the
+    # schema tree. `type` was really removed, at the 3.0 MAJOR — present in 2.5, absent in
+    # 3.0/3.1/3.2 — and it still stands on the "(Creative Agent)" variant of the request.
+    # Two lanes found this pair independently, which is why the entries are gone once here
+    # rather than twice.
     # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
@@ -583,14 +593,25 @@ _XFAIL_TAGS: dict[str, str] = {
     # scenario), and none appears in tests/bdd/e2e_rest_known_failures.txt, so there is
     # no sibling-transport or e2e ledger entry to graduate alongside them.
     #
-    # NOT graduated — T-UC-005-ext-b-disclosure-dupes still xfails, and it is a
-    # SPEC question rather than a production gap: the pinned
-    # list-creative-formats-request declares minItems=1 on disclosure_positions but NO
-    # uniqueItems, so ["prominent","prominent"] violates no schema constraint and
-    # production is right to accept it. The scenario is over-specified; reconciling it
-    # upstream is the fix, not patching production to match.
-    "T-UC-005-ext-b-disclosure-dupes": "scenario demands rejection of duplicate disclosure_positions, "
-    "but the pinned schema declares no uniqueItems — over-specified scenario, pending upstream reconciliation",
+    # GRADUATED — T-UC-005-ext-b-disclosure-dupes. Its reason asserted a fact about the pin
+    # and the fact was FALSE: "the pinned schema declares no uniqueItems, so
+    # ["prominent","prominent"] violates no schema constraint and production is right to
+    # accept it". MEASURED against the pin this tree installs (adcp
+    # 9.0.0b2+prs1435.1415.1447.1456, get_adcp_spec_version() == 3.2.1):
+    # _schemas/3.2/media-buy/list-creative-formats-request.json AND
+    # _schemas/3.2/creative/list-creative-formats-request.json both declare
+    # "uniqueItems": true on disclosure_positions — and on disclosure_persistence. So the
+    # scenario was never over-specified; the seller was under-implemented, and the entry
+    # closed the question in the wrong direction for the whole life of the marker.
+    #
+    # What hid it: adcp 9's types._ergonomic._patch_unique_enum_list attaches a WrapValidator
+    # whose coerce_to_unique_enum_list DEDUPES (list(dict.fromkeys(...))), so the generated
+    # model silently rewrote the buyer's duplicate array instead of refusing it, and reading
+    # the SDK rather than the schema produced the reason above. The constraint is now asserted
+    # on the DTO (ListCreativeFormatsRequest._refuse_duplicate_disclosure_members) and the
+    # scenario gets the INVALID_REQUEST / error.field=disclosure_positions / suggestion it
+    # always asked for. Verified a2a-only, as the note above records, and absent from
+    # e2e_rest_known_failures.txt, so there is no sibling entry to graduate with it.
     # Graduated: T-UC-002-ext-f. The gap was never in production -- it was in the harness.
     # The step built CreateMediaBuyRequest IN THE TEST PROCESS, so an unknown targeting
     # field raised pydantic's ValidationError there and never crossed a transport; the
@@ -1148,19 +1169,17 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # the assignments block the pin defaults to including — which is what makes the ordering
     # observable on the wire at all. The 60-creative library now seeds rotating counts, so
     # the row cannot pass over a constant column.
-    (
-        "T-UC-005-partition-disclosure",
-        {"duplicate_positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
+    # GRADUATED: the duplicate_positions row of T-UC-005-partition-disclosure and the
+    # "duplicate positions" row of T-UC-005-boundary-disclosure. Their shared reason,
+    # "disclosure_positions filter/validation not implemented", was half true and half stale:
+    # the FILTER has been implemented since creative_formats.py:405, and what was missing was
+    # the uniqueItems VALIDATION — which is now on the DTO
+    # (ListCreativeFormatsRequest._refuse_duplicate_disclosure_members), so both rows get the
+    # INVALID_REQUEST with error.field=disclosure_positions they ask for. Measured XPASS
+    # (strict) with these two entries still in place, on a2a/mcp/rest.
     # Graduated: all_positions, no_matching_formats on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    (
-        "T-UC-005-boundary-disclosure",
-        {"duplicate positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
     # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
@@ -1684,34 +1703,35 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # three transports answer AUTH_MISSING. The ordering divergence needs its own
         # scenario -- no credential AND a malformed body -- which #2243 describes.
 
-        # uc005 disclosure-validation scenarios cannot hold as strict xfails over
-        # e2e_rest — but NOT because the body is dropped (build_rest_body now
-        # serializes the request and the live server observes the filters). The
-        # remaining gap is a transport-independent production gap that the in-process
-        # transports xfail strict=True: disclosure_positions lacks the pin's
-        # uniqueItems validation. Against the live Docker server these scenarios pass
-        # rather than failing deterministically, so strict=True would XPASS — weaken to
-        # strict=False to tolerate either outcome.
+        # THIS ESCAPE HATCH IS NOW EMPTY, and both halves were emptied by different lanes
+        # for independent reasons. A UNION MERGE: each lane deleted the entries it had
+        # earned the right to delete, and neither deletion subsumes the other.
         #
-        # The `type` filter is no longer part of this set. It was described here as
-        # "removed from the SDK 5.7 request model (adcp 3.12 — the pin 3.1.0-beta.3
-        # still lists it)", which read as codegen drift. It is not drift: the pin ships
-        # TWO list-creative-formats requests, and `type` belongs to the
-        # "(Creative Agent)" one. The media-buy request this seller serves has not
-        # declared `type` since the 3.0 major, so there was never a filter to carry.
-        uc005_filter_e2e_untestable = {
-            # The three type-filter entries are gone: inv-031-1-violated now filters on
-            # asset_types + name_search, and the two outlines are deleted. Nothing here
-            # "passes vacuously over the live server" any more, because nothing here
-            # dispatches unfiltered.
-            # disclosure_positions duplicate — prod lacks the pin's uniqueItems validation
-            "T-UC-005-partition-disclosure",
-            "T-UC-005-boundary-disclosure",
-        }
+        # The three TYPE-FILTER entries are gone because their scenarios are gone.
+        # inv-031-1-violated now filters on asset_types + name_search, and the two type
+        # outlines are deleted, so nothing here "passes vacuously over the live server"
+        # any more — nothing here dispatches unfiltered. The reason they used to carry
+        # was also wrong: "removed from the SDK 5.7 request model (adcp 3.12)" read as
+        # codegen drift, and 3.12 is not a version that exists in the schema tree. The pin
+        # ships TWO list-creative-formats requests; `type` belongs to the "(Creative
+        # Agent)" one, and the media-buy request this seller serves has not declared it
+        # since the 3.0 MAJOR. There was never a filter to carry.
+        #
+        # The two DISCLOSURE entries are gone because PRODUCTION WAS FIXED: the pin's
+        # uniqueItems refusal on disclosure_positions now exists, so the transport-
+        # independent gap the hatch existed for is closed. The consequence is deliberate
+        # and belongs in a bdd-in-network run's reading: with no escape hatch, the
+        # disclosure outlines are now GRADED over e2e_rest, where the duplicate rows
+        # should pass for the same DTO-level reason they pass in-process.
+        #
+        # With the set empty, the two `tag in uc005_filter_e2e_untestable` branches below
+        # can never match. They are inert rather than wrong, and deleting them changes
+        # control flow, so that is a follow-up and not a merge resolution.
+        uc005_filter_e2e_untestable: set[str] = set()
         uc005_filter_e2e_reason = (
-            "e2e_rest: type filter removed from SDK 5.7 request model / disclosure_positions "
-            "uniqueItems not validated in production — transport-independent gaps that pass "
-            "vacuously over the live server, so the strict in-process xfail cannot hold here"
+            "e2e_rest: unreachable — uc005_filter_e2e_untestable is empty, so no tag selects "
+            "this reason. Kept only so the branches that read it still type-check; see the "
+            "comment above for why both halves were removed"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —
@@ -1793,8 +1813,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated e2e_rest: inv-031-1-violated, inv-049-3-violated,
             # inv-049-4-violated, inv-049-4-nodim (pass with strong assertions)
             "T-UC-005-inv-031-2-holds",
-            "T-UC-005-inv-049-1-holds",
-            "T-UC-005-inv-049-1-violated",
+            # DELETED: inv-049-1-holds / -violated. No such scenario exists in any feature
+            # file, so these two matched nothing here either — see the note at their former
+            # _XFAIL_TAGS entry.
             "T-UC-005-inv-049-2-holds",
             "T-UC-005-inv-049-2-violated",
             "T-UC-005-inv-049-3-holds",
@@ -6605,9 +6626,22 @@ ENV_ROUTES: list[EnvRoute] = [
     # ── UC-003 ──────────────────────────────────────────────────────────────
     EnvRoute(
         tag="uc003-ext",
+        # The two creative-state outlines share this row rather than getting one of their
+        # own: their Givens need exactly this seed — the update chain plus an existing media
+        # buy and its package, which is what ``_seed_update_with_existing_buy`` builds — and
+        # nothing else. ONE marker held them: the uc003-not-wired catch-all, which xfails at
+        # fixture setup, so neither outline had ever dispatched. Verified to be the only one
+        # — neither tag appears in _XFAIL_TAGS, in e2e_rest_known_failures.txt, or in
+        # dormant_scenarios.txt — so unlike the UC-002 creative-asset pair there is no second
+        # marker to remove alongside this.
         when=_uc(
             "UC-003",
-            lambda m: any(t.startswith("T-UC-003-ext-") for t in m) or bool(m & _UC003_TARGETING_OVERLAY_TAGS),
+            lambda m: (
+                any(t.startswith("T-UC-003-ext-") for t in m)
+                or bool(m & _UC003_TARGETING_OVERLAY_TAGS)
+                or "T-UC-003-partition-creative-state" in m
+                or "T-UC-003-boundary-creative-state" in m
+            ),
         ),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
         seed=_seed_update_with_existing_buy,
