@@ -506,8 +506,14 @@ _XFAIL_TAGS: dict[str, str] = {
     # (src/core/tools/creative_formats.py:386). It stays xfailed on e2e_rest alone, via
     # _UC005_E2E_FIXTURE_INJECTION_TAGS, because that stack cannot be told to serve
     # specific format fixtures.
-    "T-UC-005-inv-049-1-holds": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
-    "T-UC-005-inv-049-1-violated": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
+    # DELETED: T-UC-005-inv-049-1-holds and -violated. Not a graduation — the two tags
+    # ROUTE NOTHING. `git grep T-UC-005-inv-049-1-holds -- tests/bdd/features/` returns
+    # nothing, and the invariant tags BR-UC-005 actually carries run inv-049-2 through
+    # inv-049-11 (plus -8-capabilities); there is no inv-049-1 scenario to xfail. Both
+    # entries are matched by exact set membership (`tag in marker_names`), so the
+    # similarly-named -10-* and -11-* tags were never covered by them either. They also
+    # stood in _UC005_E2E_FIXTURE_INJECTION_TAGS, equally inert, and go from there in the
+    # same change.
     # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
@@ -1774,8 +1780,9 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # Graduated e2e_rest: inv-031-1-violated, inv-049-3-violated,
             # inv-049-4-violated, inv-049-4-nodim (pass with strong assertions)
             "T-UC-005-inv-031-2-holds",
-            "T-UC-005-inv-049-1-holds",
-            "T-UC-005-inv-049-1-violated",
+            # DELETED: inv-049-1-holds / -violated. No such scenario exists in any feature
+            # file, so these two matched nothing here either — see the note at their former
+            # _XFAIL_TAGS entry.
             "T-UC-005-inv-049-2-holds",
             "T-UC-005-inv-049-2-violated",
             "T-UC-005-inv-049-3-holds",
