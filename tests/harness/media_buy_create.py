@@ -19,7 +19,9 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.gam import GAM_AD_UNIT_ID, GAM_CLIENT_PATCH, seed_gam_seller
 from tests.harness.transport import DeliverResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -72,6 +74,9 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        # The SOAP client under the real GAM adapter. Inert until ``sell_through_gam``
+        # makes the tenant a GAM seller; the Mock-adapter path never constructs it.
+        **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -192,6 +197,100 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
                 product=product, pricing_model="cpm", currency=currency, is_fixed=True
             )
         return product, pricing_option
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the live server has no stand-in GAM network: a GoogleAdManager tenant there "
+            "would call Google, so its tenants run the Mock adapter"
+        )
+    )
+    def sell_through_gam(
+        self,
+        tenant: Any,
+        principal: Any,
+        product: Any,
+        *,
+        network_time_zone: str,
+        implementation_config: dict[str, Any] | None = None,
+    ) -> None:
+        """Make the tenant a Google Ad Manager seller whose network is a stand-in.
+
+        Production's own ``get_adapter`` builds the ``GoogleAdManager`` adapter from the
+        rows seeded here: the tenant's ad server, its GAM ``AdapterConfig``, the buyer's
+        GAM advertiser and the product's ad unit. Only the SOAP client underneath is
+        replaced (``tests/helpers/gam_client``), because GAM is the one party a test
+        cannot call. ``gam_objects_sent`` reads back what the seller sent it.
+
+        ``implementation_config`` is merged over the minimal valid GAM product config, for
+        a scenario about a product-level setting (priority, line item type, ...).
+        """
+        from src.core.helpers.adapter_helpers import get_adapter
+        from tests.helpers.gam_client import stub_gam_client_manager
+
+        seed_gam_seller(self, tenant, principal)
+        self.sell_product_through_gam(product, implementation_config)
+
+        self.mock["gam_client"].return_value = stub_gam_client_manager(network_time_zone=network_time_zone)
+        self.mock["adapter"].side_effect = get_adapter
+
+    def sell_product_through_gam(self, product: Any, implementation_config: dict[str, Any] | None = None) -> None:
+        """Configure *product* to book into the GAM seller's ad unit.
+
+        ``implementation_config`` is merged over the minimal valid GAM product config, for
+        a scenario about a product-level setting (priority, line item type, ...).
+        """
+        # The adapter resolves a line item's creative sizes through the creative-agent
+        # registry, which under test answers from the reference catalog only.
+        product.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+        product.implementation_config = {
+            "targeted_ad_unit_ids": [GAM_AD_UNIT_ID],
+            "priority": 8,
+            "creative_placeholders": [{"width": 300, "height": 250}],
+            **(implementation_config or {}),
+        }
+        self._commit_factory_data()
+
+    def add_gam_product(
+        self, product_id: str, *, delivery_type: str, cpm: str, implementation_config: dict[str, Any]
+    ) -> Any:
+        """Another product of the GAM seller, sold at a fixed *cpm*; returns its pricing option.
+
+        The product starts from the configuration the Admin UI generates for its delivery
+        type (``GAMProductConfigService.generate_default_config``), with
+        *implementation_config* on top, so a scenario states only the setting it is about.
+        """
+        from decimal import Decimal
+
+        from src.core.database.models import Tenant
+        from src.services.gam_product_config_service import GAMProductConfigService
+
+        product, pricing_option = self.setup_product_chain(
+            self.get_session().get(Tenant, self._tenant_id), product_id=product_id
+        )
+        product.delivery_type = delivery_type
+        pricing_option.rate = Decimal(cpm)
+        self.sell_product_through_gam(
+            product, {**GAMProductConfigService.generate_default_config(delivery_type), **implementation_config}
+        )
+        return pricing_option
+
+    def gam_order_id(self) -> str:
+        """The id the stand-in GAM network gave the order, as the adapter reads it back."""
+        return str(self.mock["gam_client"].return_value.get_service("OrderService").createOrders.return_value[0]["id"])
+
+    def gam_objects_sent(self, service: str, method: str) -> list[dict[str, Any]]:
+        """Every object the seller sent the stand-in GAM network through ``service.method``.
+
+        GAM's ``create*`` / ``update*`` methods take a list of objects; this flattens the
+        lists of every call, in order. Any service is recorded, configured or not
+        (``stub_gam_client_manager`` hands back one stand-in per service name).
+        """
+        calls = getattr(self.mock["gam_client"].return_value.get_service(service), method).call_args_list
+        return [obj for call in calls for obj in call.args[0]]
+
+    def gam_line_items_sent(self) -> list[dict[str, Any]]:
+        """Every line item the seller sent the stand-in GAM network, in order."""
+        return self.gam_objects_sent("LineItemService", "createLineItems")
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /

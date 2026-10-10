@@ -29,6 +29,8 @@ from typing import Any
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
+from tests.harness._realize import e2e_unsupported, realize_e2e
+from tests.harness.gam import GAM_CLIENT_PATCH, seed_gam_seller
 from tests.harness.transport import DeliverResult
 
 
@@ -94,3 +96,43 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
         return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
 
     # parse_rest_response: the base's, which revives RESPONSE_MODEL.
+
+
+class GAMDeliveryPollEnv(DeliveryPollEnv):
+    """``DeliveryPollEnv`` with the REAL Google Ad Manager adapter reading a GAM report.
+
+    ``DeliveryPollEnv`` replaces the adapter's answer, so it cannot grade how the seller
+    reads what GAM reports. This variant keeps the adapter -- report job, freshness
+    handling, aggregation -- and stands in for the two things GAM owns: its SOAP client,
+    which runs the report job (``serve_gam_report``), and the HTTP download of the
+    finished report's CSV (``empty_gam_report_download``). The report has no rows unless
+    a scenario says otherwise.
+
+    The tenant is made a GAM seller by ``sell_through_gam``.
+    """
+
+    EXTERNAL_PATCHES = {
+        **GAM_CLIENT_PATCH,
+        "gam_report_download": "src.adapters.gam_reporting_service.send",
+    }
+
+    def _configure_mocks(self) -> None:
+        from tests.helpers.gam_client import empty_gam_report_download, serve_gam_report, stub_gam_client_manager
+
+        client_manager = stub_gam_client_manager()
+        serve_gam_report(client_manager)
+        self.mock["gam_client"].return_value = client_manager
+        self.mock["gam_report_download"].return_value = empty_gam_report_download()
+
+    @realize_e2e(e2e_unsupported("the live stack has no stand-in GAM network to report from"))
+    def sell_through_gam(self) -> None:
+        """Make the env's tenant a GAM seller and its principal a GAM advertiser."""
+        tenant, principal = self.setup_default_data()
+        seed_gam_seller(self, tenant, principal)
+
+    @realize_e2e(e2e_unsupported("the live stack has no Google Ad Manager report job to fail"))
+    def fail_gam_report(self) -> None:
+        """GAM fails the report job -- a real report failure, not an empty report."""
+        from tests.helpers.gam_client import serve_gam_report
+
+        serve_gam_report(self.mock["gam_client"].return_value, status="FAILED")

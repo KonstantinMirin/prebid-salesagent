@@ -95,7 +95,7 @@ from src.core.helpers.creative_helpers import (
     extract_media_url_and_dimensions,
     process_and_upload_package_creatives,
 )
-from src.core.helpers.pricing_helpers import pricing_info_for
+from src.core.helpers.pricing_helpers import package_volume, pricing_info_for
 from src.core.logging_config import log_safe
 from src.core.resolved_identity import AccountIdentity, ResolvedIdentity, identity_of
 from src.core.schemas import (
@@ -1090,14 +1090,11 @@ def execute_approved_media_buy(
                     budget_data = package_config.get("budget")
                     if isinstance(budget_data, dict):
                         # Legacy dict format (Budget object) - extract total
-                        total_budget = float(budget_data.get("total", 0.0))
-                        budget = total_budget  # MediaPackage expects float
+                        budget = float(budget_data.get("total", 0.0))
                     elif isinstance(budget_data, (int, float)):
                         # AdCP 2.5.0 format - flat number
-                        total_budget = float(budget_data)
-                        budget = total_budget  # MediaPackage expects float
+                        budget = float(budget_data)
                     else:
-                        total_budget = 0.0
                         budget = None
 
                     # Get pricing option from product
@@ -1122,20 +1119,16 @@ def execute_approved_media_buy(
                         logger.error(f"[APPROVAL] {error_msg}")
                         return ApprovalResult.failed(error_msg)
 
-                    # Calculate CPM and impressions (convert Decimal to float for math operations)
-                    cpm = float(pricing_option_inner.rate) if pricing_option_inner.rate else 0.0
-                    impressions = int(total_budget / cpm * 1000) if cpm > 0 else 0
+                    # Reconstruct package_pricing_info from package_config if available:
+                    # the stored pricing_info carries the bid_price for auction pricing.
+                    # Buys stored without it fall back to the option's terms with no
+                    # bid_price, because the package that bid one is not on hand.
+                    pricing_info = package_config.get("pricing_info") or pricing_info_for(pricing_option_inner)
+                    if package_id:
+                        package_pricing_info[package_id] = pricing_info
 
-                    # Reconstruct package_pricing_info from package_config if available
-                    # This includes the bid_price for auction pricing
-                    pricing_info_from_config = package_config.get("pricing_info")
-                    if pricing_info_from_config and package_id:
-                        # Use the stored pricing_info which has the correct bid_price
-                        package_pricing_info[package_id] = pricing_info_from_config
-                    elif package_id:
-                        # Fallback for buys stored without pricing_info: the option's terms
-                        # with no bid_price, because the package that bid one is not on hand.
-                        package_pricing_info[package_id] = pricing_info_for(pricing_option_inner)
+                    # This package's volume: its own budget at the price it was sold at.
+                    cpm, impressions = package_volume(budget, pricing_info)
 
                     # Get targeting_overlay from package_config if present
                     # Fallback to "targeting" key for data written before fix.
@@ -3357,16 +3350,6 @@ async def _create_media_buy_impl(
                 else:
                     format_ids_to_use = []
 
-            # Get CPM from pricing_options
-            cpm = 10.0  # Default
-            if pkg_product.pricing_options and len(pkg_product.pricing_options) > 0:
-                first_option = pkg_product.pricing_options[0]
-                # adcp 2.14.0+ uses RootModel wrapper - access via .root
-                inner_option = getattr(first_option, "root", first_option)
-                rate = getattr(inner_option, "rate", None)
-                if rate:
-                    cpm = float(rate)
-
             # Generate permanent package ID (not product_id)
             package_id = f"pkg_{pkg_product.product_id}_{secrets.token_hex(4)}_{idx}"
 
@@ -3395,13 +3378,18 @@ async def _create_media_buy_impl(
                 Literal["guaranteed", "non_guaranteed"], delivery_type_str
             )
 
+            # This package's volume: its own budget at the price of the option it selected.
+            cpm, planned_impressions = package_volume(
+                package_budget_value, package_pricing_info_by_index.get(pkg_index)
+            )
+
             packages.append(
                 MediaPackage(
                     package_id=package_id,
                     name=pkg_product.name,
                     delivery_type=delivery_type_value,
                     cpm=cpm,
-                    impressions=int(float(total_budget) / cpm * 1000),
+                    impressions=planned_impressions,
                     format_ids=cast(list[Any], format_ids_to_use),
                     targeting_overlay=cast(
                         "Targeting | None",

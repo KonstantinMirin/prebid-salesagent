@@ -144,11 +144,16 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 - **Field**: `priority` (required)
 - **Type**: Integer, 1-16, where 1 is the highest priority
 - **Defaults**: 6 for guaranteed, 10 for non-guaranteed
-- **Guidelines**:
-  - 1-4: Reserved for emergency or critical campaigns
-  - 4-6: Guaranteed inventory
-  - 8-12: Non-guaranteed and price priority
-  - 16: House ads
+- **Booked priority**: the line item gets the configured priority when GAM allows it for the line item type, and the type's default otherwise. GAM's ranges (`LineItemSummary.priority`):
+
+  | Line item type | Default | Allowed |
+  |----------------|---------|---------|
+  | `SPONSORSHIP` | 4 | 2-5 |
+  | `STANDARD` | 8 | 6-10 |
+  | `PRICE_PRIORITY`, `BULK`, `NETWORK` | 12 | 11-14 |
+  | `HOUSE` | 16 | 15-16 |
+
+  The generated non-guaranteed default of 10 is outside the `PRICE_PRIORITY` range, so those products book 12 until you set a priority in range.
 
 #### Creative placeholders
 
@@ -182,6 +187,7 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 
 - **Fields**: `primary_goal_type` (`DAILY`, `LIFETIME`, `NONE`) and `primary_goal_unit_type` (`IMPRESSIONS`, `CLICKS`, `VIEWABLE_IMPRESSIONS`)
 - **Defaults**: `DAILY` for guaranteed, `NONE` for non-guaranteed; unit defaults to `IMPRESSIONS`
+- **Booked goal**: GAM allows only a `LIFETIME` goal on `STANDARD` line items, so a guaranteed product books `LIFETIME` whatever this field says. The goal's units are the package's own volume: its budget divided by the CPM of the pricing option it selected, times 1,000. A `DAILY` goal (on a line item type that allows one, such as `PRICE_PRIORITY`) spreads that volume over the flight's days.
 
 #### Inventory targeting
 

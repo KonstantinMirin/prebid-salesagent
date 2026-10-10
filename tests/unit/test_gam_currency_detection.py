@@ -52,13 +52,10 @@ class TestGAMOrderCurrency:
         currency this test is named for. It does now: the claim is what
         ``totalBudget.currencyCode`` carries when the caller omits ``currency``.
         """
-        from datetime import datetime
 
         order_id = orders_manager.create_order(
             order_name="Test Order",
             total_budget=1000.0,
-            start_time=datetime(2025, 1, 1),
-            end_time=datetime(2025, 1, 31),
         )
 
         assert order_id == "12345"
@@ -67,13 +64,10 @@ class TestGAMOrderCurrency:
 
     def test_create_order_accepts_custom_currency(self, orders_manager, mock_orders_service):
         """Test that create_order uses specified currency."""
-        from datetime import datetime
 
         order_id = orders_manager.create_order(
             order_name="Test Order",
             total_budget=1000.0,
-            start_time=datetime(2025, 1, 1),
-            end_time=datetime(2025, 1, 31),
             currency="EUR",
         )
 
@@ -89,7 +83,6 @@ class TestGAMOrderCurrency:
 
     def test_create_order_with_different_currencies(self, orders_manager, mock_orders_service):
         """Test create_order with various currency codes."""
-        from datetime import datetime
 
         currencies_to_test = ["USD", "EUR", "GBP", "JPY", "CAD"]
 
@@ -99,8 +92,6 @@ class TestGAMOrderCurrency:
             orders_manager.create_order(
                 order_name=f"Test Order {currency}",
                 total_budget=500.0,
-                start_time=datetime(2025, 1, 1),
-                end_time=datetime(2025, 1, 31),
                 currency=currency,
             )
 

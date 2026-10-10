@@ -7,12 +7,13 @@ for Google Ad Manager orders.
 
 import logging
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from googleads import ad_manager
 
 from src.adapters.gam.utils.error_handler import map_gam_exception
+from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
 from src.core.errors.details import CapabilityRefusalDetails
 from src.core.exceptions import (
@@ -51,8 +52,6 @@ class GAMOrdersManager:
         self,
         order_name: str,
         total_budget: float,
-        start_time: datetime,
-        end_time: datetime,
         currency: str = "USD",
         applied_team_ids: list[str] | None = None,
         po_number: str | None = None,
@@ -62,8 +61,6 @@ class GAMOrdersManager:
         Args:
             order_name: Name for the order
             total_budget: Total budget amount
-            start_time: Order start datetime
-            end_time: Order end datetime
             currency: Currency code for budget (ISO 4217, default: USD)
             applied_team_ids: Optional list of team IDs to apply
             po_number: Optional PO number
@@ -86,18 +83,8 @@ class GAMOrdersManager:
             "traffickerId": self.trafficker_id,
             "status": "DRAFT",  # Start as DRAFT - will approve after line items are created
             "totalBudget": {"currencyCode": currency, "microAmount": int(total_budget * 1_000_000)},
-            "startDateTime": {
-                "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                "hour": start_time.hour,
-                "minute": start_time.minute,
-                "second": start_time.second,
-            },
-            "endDateTime": {
-                "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                "hour": end_time.hour,
-                "minute": end_time.minute,
-                "second": end_time.second,
-            },
+            # No startDateTime/endDateTime: GAM derives an order's flight from its line
+            # items, and the Order fields are read-only.
         }
 
         # Add PO number if provided
@@ -331,6 +318,21 @@ class GAMOrdersManager:
         statement_builder.WithBindVariable("orderId", order_id)
         return statement_builder.ToStatement()
 
+    def _line_item_flight(self, start_time: datetime, end_time: datetime) -> dict[str, Any]:
+        """A line item's flight, written in the zone GAM reads its DateTime fields in.
+
+        That zone is the network's own, asked of GAM rather than assumed. A start that
+        is no longer in the future (an "asap" buy, or one approved after its start) is
+        sent as IMMEDIATELY, because GAM requires a startDateTime in the future.
+        """
+        time_zone = self.client_manager.get_service("NetworkService").getCurrentNetwork()["timeZone"]
+        flight: dict[str, Any] = {"endDateTime": format_datetime_for_gam(end_time, time_zone)}
+        if start_time <= datetime.now(UTC):
+            flight["startDateTimeType"] = "IMMEDIATELY"
+        else:
+            flight["startDateTime"] = format_datetime_for_gam(start_time, time_zone)
+        return flight
+
     @timeout(seconds=300)  # 5 minutes timeout for batch line item creation
     def create_line_items(
         self,
@@ -384,6 +386,7 @@ class GAMOrdersManager:
 
         created_line_item_ids: list[str] = []
         flight_duration_days = (end_time - start_time).days
+        flight = self._line_item_flight(start_time, end_time)
 
         for package_index, package in enumerate(packages, start=1):
             # Get product-specific configuration
@@ -714,18 +717,11 @@ class GAMOrdersManager:
             elif not creative_placeholders:
                 log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
 
-            # Determine goal type and units
+            # Determine goal type and units. The units are the package's whole-flight
+            # volume until the goal type GAM will book is settled below.
             goal_type = impl_config.get("primary_goal_type", "LIFETIME")
             goal_unit_type = impl_config.get("primary_goal_unit_type", "IMPRESSIONS")
-
-            if goal_type == "LIFETIME":
-                goal_units = package.impressions
-            elif goal_type == "DAILY":
-                # For DAILY goals, divide total impressions by flight days
-                goal_units = int(package.impressions / max(flight_duration_days, 1))
-            else:
-                # For other goal types (NONE, etc), use package impressions
-                goal_units = package.impressions
+            goal_units = package.impressions
 
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
@@ -816,7 +812,13 @@ class GAMOrdersManager:
                 # Automatically select based on pricing model and product's delivery guarantee
                 # The select_line_item_type method ensures compatibility between pricing and line item type
                 line_item_type = PricingCompatibility.select_line_item_type(pricing_model, is_guaranteed)
-                priority = PricingCompatibility.get_default_priority(line_item_type)
+                configured_priority = impl_config.get("priority")
+                priority = PricingCompatibility.resolve_priority(line_item_type, configured_priority)
+                if configured_priority is not None and priority != configured_priority:
+                    log(
+                        f"[yellow]Configured priority {configured_priority} is outside GAM's range for "
+                        f"{line_item_type} line items; booking the type's default {priority}[/yellow]"
+                    )
 
                 # Set goal type based on line item type (per GAM API documentation)
                 # SPONSORSHIP: Only supports DAILY goal type (percentage-based)
@@ -843,6 +845,13 @@ class GAMOrdersManager:
                 else:
                     # PRICE_PRIORITY, BULK, HOUSE can use configured goal type or default to LIFETIME
                     pass  # Keep goal_type from impl_config (set earlier)
+
+                # A DAILY goal is the package's volume spread over the flight's days, decided
+                # by the goal type GAM books -- a STANDARD line item configured DAILY books
+                # LIFETIME above, so its units stay the whole flight's. FLAT_RATE sponsorships
+                # set their percentage share above.
+                if goal_type == "DAILY" and pricing_model != "flat_rate":
+                    goal_units = int(package.impressions / max(flight_duration_days, 1))
 
                 # Update goal units based on pricing model (for non-SPONSORSHIP or non-FLAT_RATE)
                 if pricing_model != "flat_rate":
@@ -892,20 +901,7 @@ class GAMOrdersManager:
                 },
                 "creativeRotationType": impl_config.get("creative_rotation_type", "EVEN"),
                 "deliveryRateType": impl_config.get("delivery_rate_type", "EVENLY"),
-                "startDateTime": {
-                    "date": {"year": start_time.year, "month": start_time.month, "day": start_time.day},
-                    "hour": start_time.hour,
-                    "minute": start_time.minute,
-                    "second": start_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
-                },
-                "endDateTime": {
-                    "date": {"year": end_time.year, "month": end_time.month, "day": end_time.day},
-                    "hour": end_time.hour,
-                    "minute": end_time.minute,
-                    "second": end_time.second,
-                    "timeZoneId": impl_config.get("time_zone", "America/New_York"),
-                },
+                **flight,
                 # Set status based on whether manual approval is required
                 # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
                 "status": "READY",  # Always create as READY since creatives will be added

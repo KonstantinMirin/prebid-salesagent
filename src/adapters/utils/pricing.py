@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.core.helpers.pricing_helpers import package_unit_price
 from src.core.schemas import MediaPackage
 
 
@@ -31,6 +32,5 @@ def resolve_package_rate(
         # Fallback to legacy package.cpm
         return package.cpm
     # Use rate from pricing option (fixed) or bid_price (auction)
-    if pricing_info["is_fixed"]:
-        return pricing_info["rate"]
-    return pricing_info.get("bid_price", package.cpm)
+    unit_price = package_unit_price(pricing_info)
+    return package.cpm if unit_price is None else unit_price

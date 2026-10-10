@@ -58,6 +58,8 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "UC-GET-PRODUCTS",
         # literal ENV_ROUTES block
         "codes-declared-code-reaches-buyer",
+        # local-gam-delivery-report.feature: the delivery env with the REAL GAM adapter.
+        "gam-delivery",
         # The context echo, graded on every outcome across all four transports. Three routes.
         # Two because the scenarios need both a read tool and a write tool: a schema rejection
         # and a seller's own refusal do not both reach the buyer from one tool.
