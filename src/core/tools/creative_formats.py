@@ -140,7 +140,11 @@ def _list_creative_formats_impl(
 
     Returns formats from all registered creative agents (default + tenant-specific).
     Uses CreativeAgentRegistry for dynamic format discovery with caching.
-    Supports optional filtering by type, standard_only, category, and format_ids.
+    Filters on what the request declares: format_ids, name_search, asset_types,
+    output_format_ids and input_format_ids, each narrowing the same list in turn so
+    several filters AND together. `type` is not among them -- the media-buy
+    list-creative-formats request has not declared it since the 3.0 major, and
+    `standard_only` and `category` never existed on it.
     """
     start_time = time.time()
 

@@ -494,11 +494,17 @@ _XFAIL_TAGS: dict[str, str] = {
     # omitting the `type` filter, and missing uniqueItems on
     # disclosure_positions/persistence). Presence was never the defect here; application
     # was. #1660 stays open on its own subject.
-    # adcp 3.12: FormatCategory/type filter removed from ListCreativeFormatsRequest.
-    # Scenarios that rely on type filter or type-based sorting can no longer pass.
-    "T-UC-005-main-filtered": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
-    "T-UC-005-inv-031-1-holds": "adcp 3.12: type filter removed — combined type+asset_types AND filter not possible",
-    "T-UC-005-inv-031-1-violated": "adcp 3.12: type filter removed — combined type+asset_types AND filter not possible",
+    # REGROUNDED, not graduated-by-hope: T-UC-005-main-filtered,
+    # T-UC-005-inv-031-1-holds and T-UC-005-inv-031-1-violated were xfailed as
+    # "adcp 3.12: type filter removed". Two things were wrong with that. The version
+    # does not exist -- `type` left the media-buy list-creative-formats request at the
+    # 3.0 major (2.5 declares it) and still stands on the "(Creative Agent)" variant,
+    # which this seller does not serve. And the scenarios were stated over a parameter
+    # the request never carries, so they graded nothing either way. Each now filters on
+    # fields the request declares and production applies -- asset_types
+    # (creative_formats.py:365) and name_search (:360) -- with their Givens and Thens
+    # unchanged, so the obligations they always claimed (POST-S3, and BR-RULE-031's AND
+    # semantics) are reached for the first time. No entry here is needed.
     # T-UC-005-inv-031-2-holds GRADUATED. It was xfailed as "adcp 3.12: type field removed —
     # sort by type then name not possible", which described an OBSOLETE SCENARIO, not a
     # production gap: the rule it graded no longer exists. The scenario now grades the rule
@@ -506,8 +512,10 @@ _XFAIL_TAGS: dict[str, str] = {
     # (src/core/tools/creative_formats.py:386). It stays xfailed on e2e_rest alone, via
     # _UC005_E2E_FIXTURE_INJECTION_TAGS, because that stack cannot be told to serve
     # specific format fixtures.
-    "T-UC-005-inv-049-1-holds": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
-    "T-UC-005-inv-049-1-violated": "adcp 3.12: type filter removed from ListCreativeFormatsRequest",
+    # DELETED as stale: "T-UC-005-inv-049-1-holds" and "T-UC-005-inv-049-1-violated"
+    # named no scenario. The feature's BR-RULE-049 tags are inv-049-10-* and
+    # inv-049-11-*; there is no inv-049-1-*, so these two rows xfailed nothing and
+    # carried the same non-existent "adcp 3.12" citation.
     # Un-graduated: T-UC-005-sandbox-happy — sandbox=True not set on response (all transports)
     "T-UC-005-sandbox-happy": "sandbox mode not implemented in list_creative_formats response — spec-production gap",
     # Un-graduated: T-UC-005-sandbox-validation — sandbox validation not triggered (all transports)
@@ -538,12 +546,24 @@ _XFAIL_TAGS: dict[str, str] = {
     # Graduated: creative agent partition/boundary tests
     # Steps now dispatch through harness — all 34 tests pass across 4 transports.
     # FIXME(#1660): suggestion field not in production error model
-    # NOTE(ah98 red-step inspection, 2026-07-06): NOT graduatable as-is — the
-    # When step no-ops (type filter removed in adcp 3.12), so the scenario
-    # fails on "operation should fail", not on the missing suggestion.
-    # Suggestion parity for list_creative_formats is pinned instead by
+    # Graduated: T-UC-005-ext-b, xfailed as "suggestion field not implemented in error
+    # responses". NOTE(ah98 red-step inspection, 2026-07-06) had already found it "NOT
+    # graduatable as-is -- the When step no-ops (type filter removed), so the scenario
+    # fails on 'operation should fail', not on the missing suggestion". That inspection
+    # was right about the cause and could not act on it: the scenario named a `type`
+    # filter this seller's request does not declare, so no rejection was reachable and
+    # the cited gap was never what stopped it. The When now sends an out-of-enum
+    # `asset_types` member, which production does reject, and the scenario passes END TO
+    # END on mcp, a2a and rest -- the error code, the `field` pointer naming asset_types,
+    # AND the suggestion. Measured: [XPASS(strict)] on all three transports.
+    #
+    # Not a vacuous pass: `the error code should be` and `the error field should contain`
+    # read the wire envelope with no reconstructed fallback (then_error.py:539, :1554),
+    # and `suggestion` is wire-first on all three of these transports. `suggestion` is a
+    # read-only property over CODE_TABLE, which is why the 2026-07 reason had gone stale.
+    # No e2e_rest ledger row for this tag, so there is no sibling to reconcile.
+    # Suggestion parity for list_creative_formats stays additionally pinned by
     # tests/integration/test_request_validation_suggestion_parity.py.
-    "T-UC-005-ext-b": "suggestion field not implemented in error responses",
     # Graduated (cassini run 4e57e3338ca3407ab0d78d70f3a20a09):
     # T-UC-005-ext-b-disclosure-invalid, -disclosure-empty, -output-empty,
     # -output-invalid, -output-noid, -input-empty, -input-invalid, -input-noid.
@@ -1144,17 +1164,10 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    # adcp 3.12: type filter removed — only "invalid" examples fail (valid rows dispatch unfiltered and pass)
-    (
-        "T-UC-005-partition-type-filter",
-        {"invalid_type"},
-        "adcp 3.12: type filter removed from ListCreativeFormatsRequest — invalid type no longer rejected",
-    ),
-    (
-        "T-UC-005-boundary-type-filter",
-        {"invalid type (rejected)"},
-        "adcp 3.12: type filter removed from ListCreativeFormatsRequest — invalid type no longer rejected",
-    ),
+    # DELETED with their outlines: T-UC-005-partition-type-filter and
+    # T-UC-005-boundary-type-filter. Each row here parked the ONE example that expected
+    # a rejection, which left the outline's five valid rows passing for asserting that
+    # type filtering had not happened. Both outlines are gone from the feature.
     # Graduated: T-UC-005-boundary-asset-types (all 4 transports pass — brief/catalog now in enum)
     # Graduated: T-UC-005-partition-agent-type, T-UC-005-boundary-agent-type,
     # T-UC-005-boundary-agent-asset — all pass now that When steps dispatch through harness.
@@ -1521,10 +1534,11 @@ _MCP_SELECTIVE_XFAIL: list[tuple[str, set[str], str, bool]] = [
 # NOTE: the former _REST_XFAIL_TAGS set was retired once the stale
 # CreativeFormatsEnv.build_rest_body override (which returned {}) was removed.
 # In-process REST now serializes the request body and filters for real, so these
-# UC-005 filter scenarios pass on [rest] like every other transport. The only
-# UC-005 filter tags that still cannot hold are not REST-specific: inv-031-1-holds
-# / inv-031-1-violated stay xfailed via _XFAIL_TAGS because adcp 3.12 removed the
-# `type` filter for ALL transports (not a REST body issue).
+# UC-005 filter scenarios pass on [rest] like every other transport. inv-031-1-holds
+# / inv-031-1-violated used to be named here as the exception, xfailed for ALL
+# transports because the `type` filter they stated does not exist on this seller's
+# request. They no longer state it: both filter on asset_types + name_search, so
+# there is no remaining UC-005 filter tag that cannot hold.
 
 
 # Every transport a BDD nodeid can be parametrized over. `impl` is vestigial
@@ -1670,21 +1684,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # three transports answer AUTH_MISSING. The ordering divergence needs its own
         # scenario -- no credential AND a malformed body -- which #2243 describes.
 
-        # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
-        # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
-        # now serializes the request and the live server observes the filters). The
-        # remaining gaps are transport-independent production gaps that the in-process
-        # transports xfail strict=True: the `type` filter was removed from the SDK 5.7
-        # request model (adcp 3.12 — the pin 3.1.0-beta.3 still lists it, but the
-        # generated request cannot carry it), and disclosure_positions lacks the pin's
+        # uc005 disclosure-validation scenarios cannot hold as strict xfails over
+        # e2e_rest — but NOT because the body is dropped (build_rest_body now
+        # serializes the request and the live server observes the filters). The
+        # remaining gap is a transport-independent production gap that the in-process
+        # transports xfail strict=True: disclosure_positions lacks the pin's
         # uniqueItems validation. Against the live Docker server these scenarios pass
-        # vacuously (valid rows dispatch unfiltered) rather than failing deterministically,
-        # so strict=True would XPASS — weaken to strict=False to tolerate either outcome.
+        # rather than failing deterministically, so strict=True would XPASS — weaken to
+        # strict=False to tolerate either outcome.
+        #
+        # The `type` filter is no longer part of this set. It was described here as
+        # "removed from the SDK 5.7 request model (adcp 3.12 — the pin 3.1.0-beta.3
+        # still lists it)", which read as codegen drift. It is not drift: the pin ships
+        # TWO list-creative-formats requests, and `type` belongs to the
+        # "(Creative Agent)" one. The media-buy request this seller serves has not
+        # declared `type` since the 3.0 major, so there was never a filter to carry.
         uc005_filter_e2e_untestable = {
-            # type filter — removed from the SDK 5.7 request model (pin still lists it)
-            "T-UC-005-inv-031-1-violated",
-            "T-UC-005-partition-type-filter",
-            "T-UC-005-boundary-type-filter",
+            # The three type-filter entries are gone: inv-031-1-violated now filters on
+            # asset_types + name_search, and the two outlines are deleted. Nothing here
+            # "passes vacuously over the live server" any more, because nothing here
+            # dispatches unfiltered.
             # disclosure_positions duplicate — prod lacks the pin's uniqueItems validation
             "T-UC-005-partition-disclosure",
             "T-UC-005-boundary-disclosure",

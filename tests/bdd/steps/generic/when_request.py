@@ -186,15 +186,10 @@ def when_send_request_invalid_dimensions(ctx: dict) -> None:
     _call_raw(ctx, min_width=-1)
 
 
-# ── Filter: type + asset_types combined ──────────────────────────────
-
-
-@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}" and asset_types {asset_types}'))
-def when_request_type_and_asset(ctx: dict, fmt_type: str, asset_types: str) -> None:
-    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12;
-    # only asset_types filter is applied
-    parsed_assets = json.loads(asset_types)
-    _call_raw(ctx, asset_types=parsed_assets)
+# There is no "type + asset_types" step. It parsed a `type` the request does not
+# declare, dropped it, and sent asset_types alone -- so BR-RULE-031's AND semantics
+# were stated over one filter. The two scenarios now use the asset_types +
+# name_search step below, which sends two filters production actually applies.
 
 
 # ── Filter: asset_types + name_search combined ──────────────────────
@@ -206,14 +201,10 @@ def when_request_asset_types_and_name_search(ctx: dict, asset_types: str, name_s
     _call_raw(ctx, asset_types=parsed_assets, name_search=name_search)
 
 
-# ── Filter: type only ────────────────────────────────────────────────
-
-
-@when(parsers.parse('the Buyer Agent requests formats with type filter "{fmt_type}"'))
-@when(parsers.parse('the Buyer Agent requests formats with type "{fmt_type}"'))
-def when_request_type_filter(ctx: dict, fmt_type: str) -> None:
-    # type filter was removed from ListCreativeFormatsRequest in adcp 3.12
-    _call(ctx)
+# There is no "type only" step. It accepted a type value and then dispatched an
+# UNFILTERED request, so every sentence naming a type filter was a no-op that the
+# matching Then then certified. `type` is not a parameter of the media-buy
+# list-creative-formats request.
 
 
 # ── Filter: format_ids ───────────────────────────────────────────────
@@ -295,15 +286,6 @@ def when_request_input_format_ids(ctx: dict, filter_value: str) -> None:
 # ── Partition dispatch steps ──────────────────────────────────────────
 # Each partition When step maps the semantic label to an actual filter
 # and calls production code through the harness.
-
-
-def _partition_type(ctx: dict, partition: str) -> None:
-    """Map type partition label to filter and call harness.
-
-    type filter was removed from ListCreativeFormatsRequest in adcp 3.12.
-    All partitions now dispatch an unfiltered request.
-    """
-    _call(ctx)
 
 
 def _partition_format_ids(ctx: dict, partition: str) -> None:
@@ -502,11 +484,6 @@ def _partition_input_format_ids(ctx: dict, partition: str) -> None:
     _partition_format_id_list(ctx, partition, "input")
 
 
-@when(parsers.parse('the Buyer Agent requests creative formats with type filter "{partition}"'))
-def when_partition_type_filter(ctx: dict, partition: str) -> None:
-    _partition_type(ctx, partition)
-
-
 @when(parsers.parse('the Buyer Agent requests creative formats with format_ids "{partition}"'))
 def when_partition_format_ids(ctx: dict, partition: str) -> None:
     _partition_format_ids(ctx, partition)
@@ -555,18 +532,6 @@ def when_partition_input_ids(ctx: dict, partition: str) -> None:
 # ── Boundary dispatch steps ──────────────────────────────────────────
 # Boundary steps reuse the same partition mapping — the boundary_point
 # label is just a more descriptive partition label.
-
-
-@when(parsers.parse('the Buyer Agent requests creative formats at type boundary "{boundary_point}"'))
-def when_boundary_type(ctx: dict, boundary_point: str) -> None:
-    # Map human-readable boundary labels to partition labels
-    mapping = {
-        "display (valid enum)": "display",
-        "video (valid enum)": "video",
-        "omitted (no filter)": "omitted",
-        "invalid type (rejected)": "invalid_type",
-    }
-    _partition_type(ctx, mapping.get(boundary_point, boundary_point))
 
 
 @when(parsers.parse('the Buyer Agent requests creative formats at format_ids boundary "{boundary_point}"'))
