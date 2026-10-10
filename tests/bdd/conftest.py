@@ -569,14 +569,25 @@ _XFAIL_TAGS: dict[str, str] = {
     # scenario), and none appears in tests/bdd/e2e_rest_known_failures.txt, so there is
     # no sibling-transport or e2e ledger entry to graduate alongside them.
     #
-    # NOT graduated — T-UC-005-ext-b-disclosure-dupes still xfails, and it is a
-    # SPEC question rather than a production gap: the pinned
-    # list-creative-formats-request declares minItems=1 on disclosure_positions but NO
-    # uniqueItems, so ["prominent","prominent"] violates no schema constraint and
-    # production is right to accept it. The scenario is over-specified; reconciling it
-    # upstream is the fix, not patching production to match.
-    "T-UC-005-ext-b-disclosure-dupes": "scenario demands rejection of duplicate disclosure_positions, "
-    "but the pinned schema declares no uniqueItems — over-specified scenario, pending upstream reconciliation",
+    # GRADUATED — T-UC-005-ext-b-disclosure-dupes. Its reason asserted a fact about the pin
+    # and the fact was FALSE: "the pinned schema declares no uniqueItems, so
+    # ["prominent","prominent"] violates no schema constraint and production is right to
+    # accept it". MEASURED against the pin this tree installs (adcp
+    # 9.0.0b2+prs1435.1415.1447.1456, get_adcp_spec_version() == 3.2.1):
+    # _schemas/3.2/media-buy/list-creative-formats-request.json AND
+    # _schemas/3.2/creative/list-creative-formats-request.json both declare
+    # "uniqueItems": true on disclosure_positions — and on disclosure_persistence. So the
+    # scenario was never over-specified; the seller was under-implemented, and the entry
+    # closed the question in the wrong direction for the whole life of the marker.
+    #
+    # What hid it: adcp 9's types._ergonomic._patch_unique_enum_list attaches a WrapValidator
+    # whose coerce_to_unique_enum_list DEDUPES (list(dict.fromkeys(...))), so the generated
+    # model silently rewrote the buyer's duplicate array instead of refusing it, and reading
+    # the SDK rather than the schema produced the reason above. The constraint is now asserted
+    # on the DTO (ListCreativeFormatsRequest._refuse_duplicate_disclosure_members) and the
+    # scenario gets the INVALID_REQUEST / error.field=disclosure_positions / suggestion it
+    # always asked for. Verified a2a-only, as the note above records, and absent from
+    # e2e_rest_known_failures.txt, so there is no sibling entry to graduate with it.
     # Graduated: T-UC-002-ext-f. The gap was never in production -- it was in the harness.
     # The step built CreateMediaBuyRequest IN THE TEST PROCESS, so an unknown targeting
     # field raised pydantic's ValidationError there and never crossed a transport; the
@@ -1134,19 +1145,17 @@ _SELECTIVE_XFAIL: list[tuple[str, set[str], str]] = [
     # the assignments block the pin defaults to including — which is what makes the ordering
     # observable on the wire at all. The 60-creative library now seeds rotating counts, so
     # the row cannot pass over a constant column.
-    (
-        "T-UC-005-partition-disclosure",
-        {"duplicate_positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
+    # GRADUATED: the duplicate_positions row of T-UC-005-partition-disclosure and the
+    # "duplicate positions" row of T-UC-005-boundary-disclosure. Their shared reason,
+    # "disclosure_positions filter/validation not implemented", was half true and half stale:
+    # the FILTER has been implemented since creative_formats.py:405, and what was missing was
+    # the uniqueItems VALIDATION — which is now on the DTO
+    # (ListCreativeFormatsRequest._refuse_duplicate_disclosure_members), so both rows get the
+    # INVALID_REQUEST with error.field=disclosure_positions they ask for. Measured XPASS
+    # (strict) with these two entries still in place, on a2a/mcp/rest.
     # Graduated: all_positions, no_matching_formats on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific disclosure xfails are in _MCP_SELECTIVE_XFAIL
-    (
-        "T-UC-005-boundary-disclosure",
-        {"duplicate positions"},
-        "disclosure_positions filter/validation not implemented",
-    ),
     # Graduated: "all 8 positions", "format has no" on impl (disclosure filter now partially works)
     # Non-impl transports still fail — handled in transport-aware section below.
     # MCP-specific boundary disclosure xfails are in _MCP_SELECTIVE_XFAIL
@@ -1676,29 +1685,34 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         # three transports answer AUTH_MISSING. The ordering divergence needs its own
         # scenario -- no credential AND a malformed body -- which #2243 describes.
 
-        # uc005 type-filter / disclosure-validation scenarios cannot hold as strict
-        # xfails over e2e_rest — but NOT because the body is dropped (build_rest_body
-        # now serializes the request and the live server observes the filters). The
-        # remaining gaps are transport-independent production gaps that the in-process
-        # transports xfail strict=True: the `type` filter was removed from the SDK 5.7
-        # request model (adcp 3.12 — the pin 3.1.0-beta.3 still lists it, but the
-        # generated request cannot carry it), and disclosure_positions lacks the pin's
-        # uniqueItems validation. Against the live Docker server these scenarios pass
-        # vacuously (valid rows dispatch unfiltered) rather than failing deterministically,
-        # so strict=True would XPASS — weaken to strict=False to tolerate either outcome.
+        # uc005 type-filter scenarios cannot hold as strict xfails over e2e_rest — but NOT
+        # because the body is dropped (build_rest_body now serializes the request and the
+        # live server observes the filters). The remaining gap is a transport-independent
+        # production gap that the in-process transports xfail strict=True: the `type` filter
+        # was removed from the SDK 5.7 request model (adcp 3.12 — the pin 3.1.0-beta.3 still
+        # lists it, but the generated request cannot carry it). Against the live Docker
+        # server these scenarios pass vacuously (valid rows dispatch unfiltered) rather than
+        # failing deterministically, so strict=True would XPASS — weaken to strict=False to
+        # tolerate either outcome.
+        #
+        # DELETED: the two disclosure tags, and the half of the reason that named them. Both
+        # branches that consult this set are keyed on membership of _SELECTIVE_XFAIL or
+        # _XFAIL_TAGS, and the duplicate-positions rows that put T-UC-005-partition-disclosure
+        # and -boundary-disclosure in either one are graduated (see their former entries), so
+        # the two names were left matching nothing — the same dead shape as the inv-049-1
+        # pair. The consequence is deliberate and belongs in a bdd-in-network run's reading:
+        # with no escape hatch, the disclosure outlines are now GRADED over e2e_rest, where
+        # the duplicate rows should pass for the same DTO-level reason they pass in-process.
         uc005_filter_e2e_untestable = {
             # type filter — removed from the SDK 5.7 request model (pin still lists it)
             "T-UC-005-inv-031-1-violated",
             "T-UC-005-partition-type-filter",
             "T-UC-005-boundary-type-filter",
-            # disclosure_positions duplicate — prod lacks the pin's uniqueItems validation
-            "T-UC-005-partition-disclosure",
-            "T-UC-005-boundary-disclosure",
         }
         uc005_filter_e2e_reason = (
-            "e2e_rest: type filter removed from SDK 5.7 request model / disclosure_positions "
-            "uniqueItems not validated in production — transport-independent gaps that pass "
-            "vacuously over the live server, so the strict in-process xfail cannot hold here"
+            "e2e_rest: type filter removed from SDK 5.7 request model — a transport-independent "
+            "gap that passes vacuously over the live server, so the strict in-process xfail "
+            "cannot hold here"
         )
 
         # Graduated: UC-005 creative agent type/asset_type filter tests now pass —

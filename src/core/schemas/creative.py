@@ -682,6 +682,36 @@ class ListCreativeFormatsRequest(BuyerRequest, LibraryListCreativeFormatsRequest
 
     model_config = ConfigDict(extra=get_pydantic_extra_mode())
 
+    @field_validator("disclosure_positions", "disclosure_persistence", mode="before")
+    @classmethod
+    def _refuse_duplicate_disclosure_members(cls, v: Any) -> Any:
+        """Both disclosure filters declare ``uniqueItems: true`` — the generated model dedupes.
+
+        3.2.1 list-creative-formats-request.json puts ``uniqueItems: true`` on
+        ``disclosure_positions`` AND ``disclosure_persistence``, in both role variants
+        (``media-buy/`` and ``creative/``). The generated model does not express it: adcp 9's
+        ``types._ergonomic._patch_unique_enum_list`` attaches a ``WrapValidator`` whose
+        ``coerce_to_unique_enum_list`` SILENTLY DEDUPES (``list(dict.fromkeys(...))``), so
+        ``["prominent", "prominent"]`` arrived as ``["prominent"]`` and a buyer's schema
+        violation became a quiet rewrite. A constraint the pin states and the generated model
+        drops is asserted on the DTO — the one shape every transport validates into — the same
+        way :meth:`ListCreativesRequest._account_required_when_pricing_requested` asserts an
+        if/then the generator cannot carry.
+
+        ``mode="before"`` so the raw array is seen ahead of that dedupe. Members are
+        ``StrEnum`` values, so a mixed spelling (``["prominent", DisclosurePosition.prominent]``)
+        hashes equal and is caught too; an unhashable member is left for the enum validator to
+        refuse on type rather than being reported as a duplicate.
+        """
+        if isinstance(v, list):
+            try:
+                distinct = len(dict.fromkeys(v))
+            except TypeError:
+                return v
+            if distinct != len(v):
+                raise PydanticCustomError("unique_list", "members must be unique")
+        return v
+
 
 class ListCreativeFormatsResponse(
     NestedModelSerializerMixin, LibraryListCreativeFormatsResponse, SalesAgentAdcpResponse
