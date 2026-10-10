@@ -71,6 +71,9 @@ being a rule and becomes a type. Measured over the whole affected population:
 What survives as checks is the root conjuncts <em>beside</em> the combinator (41 occurrences), and those
 keep the constraint compiler &mdash; shrunk to that jurisdiction, with the closure rule unchanged:
 compiled, classified by a named rule, or <code>UnexpressibleKeywordError</code>. No skip lane, no ledger.
+The size of the change is not an input to any choice in this document: the shape that is correct against
+the schema wins, and consumer-facing consequences are documented (&sect;5) so adopters can migrate, never
+weighed as counter-arguments.
 </div>
 
 <h2>1&nbsp;&middot;&nbsp;The affected population, measured</h2>
@@ -284,14 +287,19 @@ hand-authored semantics per schema &mdash; the thing this design exists to stop.
 
 <p><strong>Everything else is a plain union in left-to-right mode</strong>
 (<code>union_mode='left_to_right'</code>), not smart mode, for one reason: determinism of the <em>returned
-class</em>. The <code>anyOf</code> schemas of the at-least-one-of idiom (&sect;6) have overlapping branches
+class</em>. The <code>anyOf</code> schemas of the at-least-one-of idiom (&sect;9) have overlapping branches
 &mdash; a <code>control_media_buy</code> document carrying both <code>paused</code> and
 <code>total_budget</code> satisfies two branches &mdash; and smart mode&rsquo;s match choice is a scoring
 heuristic. Left-to-right is the schema&rsquo;s own order, stable under regeneration of the same bundle, and
-JSON Schema <code>anyOf</code> semantics exactly: accepted iff at least one branch accepts. For
-<code>oneOf</code> roots, exactly-one must also hold: <strong>every <code>oneOf</code> in the population is
-pairwise disjoint by construction</strong> (distinct required consts, or mutual absence sets &mdash;
-verified branch by branch in the census), so at-least-one equals exactly-one and the union is the full
+JSON Schema <code>anyOf</code> semantics exactly: accepted iff at least one branch accepts. Disjointness
+was measured, not assumed: a first-order prover over the census (shared required <code>const</code>s with
+distinct values, or one branch requiring a field another bans) proves 12 of the 43 schemas (27 branches)
+pairwise disjoint; three more &mdash; <code>create-media-buy</code> (the two <code>mode</code> consts clash
+once branch 1&rsquo;s required <code>budget_allocation</code> is present), <code>buy-products</code> and
+<code>request-proposals</code> (the negated-nested-shape conjunct separates the brand and account branches)
+&mdash; are disjoint by reasoning the emitter can also perform from the Arm records. For
+<code>oneOf</code> roots, exactly-one must also hold: <strong>every <code>oneOf</code> in the population
+is in the first-order-provable set</strong>, so at-least-one equals exactly-one and the union is the full
 semantics. The emitter <em>proves</em> that disjointness from the Arm records when it renders a
 <code>oneOf</code> as a union; a <code>oneOf</code> it cannot prove disjoint refuses generation
 (<code>UndisjointOneOfError(file, pointer)</code> in the same family as
@@ -325,7 +333,18 @@ design deletes; they are rewritten against the union error in the commit that de
 the offending key: <code>proposal_id is not accepted by this request shape</code> with the pointer, under
 the branch&rsquo;s group.</p>
 
-<h2>5&nbsp;&middot;&nbsp;Consumer-facing cost, stated plainly</h2>
+<h2>5&nbsp;&middot;&nbsp;Consumer-facing consequences, documented for migration</h2>
+
+<p>Nothing in this section is a counterweight. These are the consequences an adopter migrating to 9.0
+needs written down &mdash; what breaks, what the migration looks like, what the error reads like &mdash;
+and the governing distinction is: <strong>parsing accepts what the wire may carry; construction must only
+permit what the schema permits.</strong> A <code>TypeAdapter</code> over the union is parsing &mdash;
+reading a document the schema already governs. Any mechanism that keeps the flat shape constructible is
+construction of the illegal &mdash; so there is <em>no</em> permissive constructor accepting arbitrary
+kwargs, no <code>__new__</code> that inspects arguments and routes to a branch, and no alias keeping
+<code>CreateMediaBuyRequest(&hellip;)</code> callable. Each of those is a place where the wrong
+combination can be spelled again, which is precisely what is being removed; if the common path becomes
+less convenient, that is the correct outcome, because the convenience <em>was</em> the defect.</p>
 
 <p><strong>What breaks.</strong> <code>adcp.types.CreateMediaBuyRequest</code> (and 42 peers) stops being a
 class and becomes a <code>TypeAlias</code> union &mdash; the exact shape responses already have.
@@ -466,40 +485,128 @@ commit per the pipeline&rsquo;s idempotence contract. Commit 4 is deliberately t
 leaves either two readers alive or a window where the old validator is deleted before the branch classes
 exist, and both halves of that split are states this document exists to end.</p>
 
-<h2>8&nbsp;&middot;&nbsp;The strongest argument against this design</h2>
+<h2>8&nbsp;&middot;&nbsp;Verifying the flaw class is eliminated, not just these instances</h2>
+
+<p>This class of defect has twice been believed fixed and then found again in the same kind. So the
+design states how the <em>class</em> is confirmed gone, and the statement rests on a distinction: a
+validation defect is tested by sending a bad document and checking the refusal; <strong>an impossibility
+is tested by trying to spell the bad thing and failing before anything runs.</strong> Verification has
+four layers, from instance to class.</p>
+
+<h3>8.1&nbsp;&middot;&nbsp;Spelling failures: negative type-check fixtures</h3>
+
+<p>The SDK already grades adopter-visible typing with fixture files under two checkers:
+<code>make test-type-checks</code> (mypy <code>--strict</code>, zero <code>type: ignore</code> allowed)
+and <code>scripts/run_pyright_type_checks.py</code> over <code>tests/type_checks/</code> (72 fixtures
+today, all positive &mdash; code that must check clean). This design adds the inverted lane the
+impossibility claims need: <code>tests/type_checks_negative/</code>, graded by the same runner with the
+expectation reversed &mdash; each fixture spells exactly one forbidden construction and carries a marker
+comment naming the expected diagnostic code and line; the runner asserts the checker reports
+<em>that</em> diagnostic <em>there</em>, and <strong>a negative fixture that type-checks clean fails the
+suite</strong> (the impossibility has regressed to a possibility). The zero-ignore contract on the
+positive lane is untouched. The concrete fixtures, one per defect of &sect;2.1:</p>
+
+<ul>
+<li><code>CreateMediaBuyRequestCommittedProposalExecution(packages=&hellip;, proposal_id=&hellip;,
+&hellip;)</code> &mdash; expected: unknown keyword argument (<code>call-arg</code> /
+<code>reportCallIssue</code>). Both names together are a <em>type error</em>, not a validation error, on
+every branch class.</li>
+<li>a fixed-allocation branch package without <code>budget</code> &mdash; expected: missing required
+argument on the branch&rsquo;s own item model, at construction, with no validator involved.</li>
+<li><code>mode="seller_optimized"</code> on the fixed-allocation branch&rsquo;s
+<code>budget_allocation</code> &mdash; expected: <code>Literal</code> incompatibility naming the field
+<code>mode</code>, not a composition keyword.</li>
+</ul>
+
+<h3>8.2&nbsp;&middot;&nbsp;Construction failures: the error comes from the branch class itself</h3>
+
+<p>The same three spellings exercised at runtime assert the <em>provenance</em> of the refusal, not just
+its existence: a pydantic <code>ValidationError</code> whose <code>loc</code> names the field
+(<code>packages.0.budget</code>, <code>type=missing</code>; <code>budget_allocation.mode</code>,
+<code>type=literal_error</code>) raised by the branch class&rsquo;s own constructor &mdash; asserted by
+error type and location, never by message text. A refusal that instead arrives from a root-level
+model validator would mean the shape regressed to flat-plus-check, so the assertions pin where the
+refusal originates.</p>
+
+<h3>8.3&nbsp;&middot;&nbsp;The differential witness: the parity corpus, population derived</h3>
+
+<p>The parity suite (<code>4ad62cdaf</code>/<code>00720022b</code>) remains the independent witness that
+model verdicts equal bundled-schema verdicts on real documents, with both of that work&rsquo;s rules kept:
+population membership is <em>derived</em> (every generated union alias and every flat-root module &mdash;
+read off the generated tree, not an id list kept in the test), the suite asserts the population is
+non-empty, and it reads no ledger &mdash; there is no file to append a divergence to, because
+<code>validation-model-divergences.json</code> is deleted in commit&nbsp;5 and the divergence set is
+asserted equal to the empty set with no allowlist parameter left to grow.</p>
+
+<h3>8.4&nbsp;&middot;&nbsp;The class-level guarantee: what a future schema would have to contain</h3>
+
+<p>The actual test of the class is the generalisation: <strong>what would a future schema branch have to
+contain for the generator to produce a model that permits something the schema forbids?</strong> After
+this design there are exactly two channels, and they are different in kind:</p>
+
+<ul>
+<li><strong>A keyword kind the grammar does not know.</strong> This cannot produce a weaker model, because
+it cannot produce a model: the reader is key-consuming, and an unaccounted key raises
+<code>UnexpressibleKeywordError(file, pointer, keyword)</code>, aborting generation before install
+(<code>generate_types.py</code>&rsquo;s staging-and-rollback keeps the checkout clean). The
+refusal-at-generation step <em>is</em> the class-level guarantee, and it is exercised, not assumed:
+a fixture schema carrying a deliberately unknown constraint keyword runs through the generator in a test
+that asserts the abort and its named file/pointer/keyword (the build fails; no test has to catch a shipped
+model, because no model ships); and the break-it-on-purpose probe &mdash; comment out one compiler case,
+regeneration goes red at the closure test &mdash; is run once per landing commit, red only counting at
+this design&rsquo;s own assertion. The bundle-wide emit-closure test (commit&nbsp;5) re-derives the full
+accounting &mdash; every parsed constraint is a type, a named-rule classification, or a compiled check
+&mdash; on every run, so the census of &sect;2 is a guard, not a snapshot.</li>
+<li><strong>A semantic slip inside a kind the grammar does know</strong> &mdash; suppliedness of an
+explicit null, vacuous descent through an absent parent, the <code>extra='allow'</code> interplay of
+&sect;2.2. This is the honest residual channel, and it is detection, not impossibility: it is bounded to
+the ~10 hand-written vocabulary primitives (each pinned by its own convention test) plus the emitter&rsquo;s
+composition of them, and the differential corpus of &sect;8.3 is the instrument that catches a
+composition slip first, on real documents against the canonical validator. Claiming this channel closed
+by construction would be the overclaim this document refuses to make.</li>
+</ul>
+
+<p>&ldquo;We fixed the instances we found&rdquo; is what has happened twice. The statement this section
+makes instead: a model that under-enforces its schema&rsquo;s combinator content cannot be generated
+&mdash; the attempt fails at generation, and the run that proves the attempt fails is in the suite &mdash;
+and the one channel that remains (primitive semantics) is named, bounded, and witnessed differentially.</p>
+
+<h2>9&nbsp;&middot;&nbsp;The strongest argument against this design</h2>
 
 <div class="lead">
-<strong>It multiplies classes without multiplying meaning, and it keeps the compiler anyway.</strong>
-33 of the 124 branches belong to three schemas of the at-least-one-of idiom
-(<code>control-media-buy-request</code> 12, <code>package-control</code> 15,
-<code>frequency-cap-constraints</code> 6), where a branch is not an alternative a buyer chooses but a spec
-idiom for &ldquo;supply at least one of these fields.&rdquo; Those branches overlap: a document carrying
-<code>paused</code> and <code>total_budget</code> satisfies two of them, validation returns whichever
-matches first, and the instance&rsquo;s class name then asserts an identity
-(&ldquo;the paused update&rdquo;) the document does not have. Fifteen near-identical public names replace
-one sentence of validator. And the runtime-check machinery does not disappear &mdash; 41 root conjuncts
-still need the compiler, the vocabulary module, and the closure rule &mdash; so the design pays the class
-multiplication <em>and</em> keeps a reduced constraint compiler.
+<strong>It reifies a partition the schema does not define.</strong> <code>anyOf</code> is a satisfaction
+condition over documents, not a taxonomy; this design turns each branch into a nominal type, and a parsed
+document comes back as exactly one of them. Measured with the disjointness prover of &sect;4: only 15 of
+the 43 schemas (34 branches) have a partition the schema itself defines; the other
+<strong>28 schemas &mdash; 90 of the 124 branches &mdash; are the overlapping at-least-one-of idiom</strong>
+(<code>package-control</code> 15, <code>control-media-buy-request</code> 12,
+<code>frequency-cap-constraints</code> 6, <code>user-match</code> 5, and 24 more), where a document
+carrying both <code>paused</code> and <code>total_budget</code> satisfies two branches. The SDK must still
+return one class, and left-to-right makes the pick deterministic but <em>schema-arbitrary</em>: two bundles
+identical in meaning that differ only in branch order (a null edit under <code>anyOf</code> semantics)
+generate SDKs that hand the same document different class identities. A consumer&rsquo;s
+<code>isinstance</code> dispatch on that identity looks type-safe and is actually coupled to branch
+order &mdash; the type system presenting noise as signal. The flat class, whatever else was wrong with
+it, had no such channel.
 </div>
 
-<p>The answer, in three parts. First, the identity noise is bounded and harmless by construction: in the
-at-least-one-of schemas every branch class carries the identical field set &mdash; only requiredness
-differs &mdash; so no data is lost whichever branch matches, left-to-right order makes the match
-deterministic, and nothing may dispatch on which at-least-one branch an instance is (there is nothing to
-dispatch on; the classes are evidence the group was satisfied, not routing). Second, the multiplication is
-not what the design is judged by &mdash; what it makes impossible is: all five measured defect classes
-stop having a spelling, where the flat shape plus any validator &mdash; including a complete one &mdash;
-leaves them spellable and merely refused, and the measured history of the flat shape is that its
-incomplete validator taught its wrong contract to the SDK&rsquo;s own test suite
-(<code>test_decisioning_webhook_emit.py:497</code>) and to 28 fixtures. Third, the surviving compiler is
-not the old design surviving in disguise: its jurisdiction fell from every keyword of every root
-constraint (including all 247 branch-level occurrences) to 41 conjunct occurrences in 17 schemas, its
-output lands on classes whose shape already carries the branch content, and the closure rule it enforces
-is the same one either design needs for the next bundle&rsquo;s unknown keyword. What would genuinely
-weigh against shipping is the same corner as before: a compiled predicate or a presence-ban whose
-semantics slip from JSON Schema&rsquo;s on nulls or absent parents &mdash; and the suppliedness
-conventions, the per-primitive tests, and the parity corpus against the canonical validator remain the
-instruments that catch that first.</p>
+<p>The answer, in three parts, all about what is and is not schema information. First, for the 15
+schema-defined partitions &mdash; titles, discriminator consts, provable mutual absence &mdash; the class
+identity of a parsed document <em>is</em> schema information the flat shape destroyed; recovering it is
+the point, and that set contains every schema whose branches carry distinct shapes (every
+<code>oneOf</code>, every const-discriminated schema, <code>create-media-buy</code> itself). Second, for
+the overlapping 28 the design does not pretend otherwise &mdash; and the census closes the exposure: in
+every one of those 28 schemas the branch content is <em>requiredness only</em>, so the branch classes are
+generated with identical field sets and an order-coupled <code>isinstance</code> can read nothing that
+differs between the candidates. The channel exists and carries zero bits. What cannot be removed is a
+consumer <em>writing</em> code that branches on it; what the design guarantees is that such code cannot
+observe different data by doing so, and the union alias &mdash; not the member &mdash; is the documented
+contract for parsed documents. Third, the residual correctness exposure that actually matters is not this
+one but &sect;8.4&rsquo;s second channel &mdash; a primitive whose semantics slip from JSON
+Schema&rsquo;s on nulls or absent parents &mdash; and that is where the verification instruments point. If
+a stronger argument against the design exists, it is there, not in the number of classes or the size of
+the migration: those are consequences, documented in &sect;5, and they were given no weight in any choice
+this document makes.</p>
 
 <p class="note">Sources measured for this design: the pinned bundle <code>schemas/cache/3.2</code> (census
 scripts run per-branch over the 43-schema population; totals in &sect;2&ndash;&sect;4 are from those runs);
