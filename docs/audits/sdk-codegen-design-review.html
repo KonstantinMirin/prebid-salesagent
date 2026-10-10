@@ -90,6 +90,11 @@ removed on branches that never merged, and the pass-through it was said to close
 <p>An unconstructible design does exist. It is one change with two parts, specified in &sect;1,
 and it dissolves all four issues plus the two defects the sibling lanes found, because all six are
 consequences of one arrangement.</p>
+<p><strong>Amended after writing</strong> (&sect;1.3): the dropped arm conditions turn out to be
+cheaply expressible in ordinary pydantic logic, so #1414 can be closed without schema delegation.
+That narrows Part A from &ldquo;the only possible fix&rdquo; to &ldquo;the only fix that makes the
+class unconstructible,&rdquo; and it strengthens the FAIL &mdash; the residue set's justification
+was that these conditions are hard, and they are not.</p>
 </div>
 
 <h2>1. Is there a design that makes this class of defect unconstructible?</h2>
@@ -135,7 +140,7 @@ expressed is dropped. Receiving a rule means inheriting, which means subtyping.
 <tr>
 <td><strong>#1414</strong></td>
 <td>Root <code>anyOf</code> branch conditions reduced to a presence check over <code>required</code></td>
-<td>A schema keyword has to be transcribed into a Python expression. <code>not</code>, <code>const</code> and nested <code>allOf</code> have no cheap transcription, so they are dropped. Transcription is lossy by construction.</td>
+<td>A schema keyword has to be transcribed into a Python expression, and nothing requires the transcription to be complete. The extractor reads one key per arm and drops the rest silently. See the amendment in &sect;1.3: the dropped conditions turn out to be cheaply expressible, which changes why this happens but not that it can happen again.</td>
 </tr>
 <tr>
 <td><strong>#1409</strong></td>
@@ -267,6 +272,59 @@ The honest limit on the precedent: <code>VersionedSchemaModel</code>'s docstring
 &ldquo;intended for boundary validation and schema generation, not as a base class for
 adopter-defined models.&rdquo; So it does not authorize Part A by itself. It does remove three of
 the four objections the design gave for ruling it out (&sect;4).
+</p>
+
+<h3>1.3 Amendment: the dropped conditions are expressible, which narrows Part A's premise</h3>
+
+<p class="meta">
+Added after the sections above were written, on a measurement reported by a sibling lane and not
+re-derived by me &mdash; marked accordingly.
+</p>
+
+<p>
+A subsequent experiment hand-patched <code>CreateMediaBuyRequest</code> with every dropped arm
+condition written out as ordinary pydantic boolean logic. Reported result: nine parity cases green,
+and the cost within noise of the baseline (+0.9&micro;s / &minus;0.7&micro;s against my 64&micro;s
+figure for schema evaluation). I did not re-run it.
+</p>
+
+<p>
+If that holds, my reasoning above overstated one thing. I wrote that <code>not</code>,
+<code>const</code> and nested <code>allOf</code> &ldquo;have no cheap transcription&rdquo; and that
+&ldquo;transcription is lossy by construction.&rdquo; That is wrong as stated for this schema: the
+conditions were transcribable, cheaply. The accurate claim is narrower and still holds &mdash;
+<strong>nothing forces a transcription to be complete</strong>. The extractor reads one key per arm
+because that is what it was written to read; the loss is a choice, not a ceiling.
+</p>
+
+<p>What this changes, and what it does not:</p>
+
+<ul>
+<li><strong>Part A is no longer needed to fix this bug.</strong> If the twelve models' conditions can
+be expressed at no cost, express them. The defect closes without schema delegation, and the cost
+objection in &sect;2 stops applying to the fix at all.</li>
+<li><strong>Part A remains the only thing that makes the class unconstructible.</strong> A
+hand-expressed boolean is complete today and silently incomplete the next time a spec version adds
+a keyword shape nobody transcribes &mdash; which is the same failure, one bump later, and the
+reason &sect;6.1 matters regardless. So Part A becomes a question about the class rather than about
+this bug, and the user may reasonably decide the class is worth less than the cost.</li>
+<li><strong>The FAIL verdict stands, and gets stronger.</strong> The design's recommendation was a
+residue set re-admitting the twelve present defects. If those conditions are expressible at
+negligible cost, a ledger that tolerates them has no remaining justification &mdash; the argument
+for the residue rested on the conditions being hard, and they are not.</li>
+<li><strong>Part B and the ordering constraint are untouched.</strong> They rest on the canonical
+layer's inheritance being the delivery route for injected validators (&sect;3), which this
+measurement does not bear on. The ordering constraint survives in a modified form: Part B still
+needs <em>some</em> route other than inheritance, and a hand-expressed boolean on the generated
+class is still delivered by inheritance. So Part B still cannot precede a change to how rules
+reach the canonical layer.</li>
+</ul>
+
+<p>
+Honest note on how this correction arose: it was found by someone trying the cheap thing I had
+argued past. My claim about expressibility was an inference from the extractor's docstring
+(&ldquo;those narrow an arm further&rdquo;) and the design's framing, not a measurement &mdash; and
+it is the one load in this review I asserted without running anything.
 </p>
 
 <h2>2. The cost objection, measured</h2>
