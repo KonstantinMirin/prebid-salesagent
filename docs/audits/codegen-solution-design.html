@@ -107,9 +107,12 @@ schema with nothing anywhere saying so.</p>
 all three <code>create_media_buy</code> arms &mdash; each arm's <code>not</code>, its
 <code>budget_allocation.mode</code> const, and arm&nbsp;0's per-package <code>budget</code>-required and
 <code>min_spend_target</code>-forbidden item conditions &mdash; as ordinary Python over
-<code>model_fields_set</code> and attribute reads. All nine differential parity cases pass, and the cost is noise:
-6.0&micro;s&nbsp;&rarr;&nbsp;6.9&micro;s on one document, 4.9&micro;s&nbsp;&rarr;&nbsp;4.2&micro;s on another
-(best-of-5 over 500 iterations), against the ~64&micro;s a runtime-schema-evaluation design would cost.
+<code>model_fields_set</code> and attribute reads. All nine differential parity cases pass. On cost, the
+before/after delta from the experiment is contaminated (its baseline leg raced another measurement over the same
+file) and is not cited here; what is solid, measured twice and under load, is the absolute: <strong>the patched
+model validates in 4.1&ndash;6.9&micro;s total</strong>, while the schema-delegation alternative was measured at
+<strong>+64&micro;s on top of</strong> a 9&ndash;102&micro;s baseline &mdash; the entire patched validation costs
+roughly a tenth of what the alternative merely adds.
 <strong>&ldquo;Inexpressible in pydantic&rdquo; is false.</strong> The emission target is cheap, readable Python;
 what is missing is only the machine that writes it.</p>
 
@@ -150,16 +153,26 @@ nested <code>oneOf</code>&nbsp;2, <code>additionalProperties</code>&nbsp;6 (valu
 </table>
 
 <div class="box">
-<p><strong>The census's most important finding:</strong> five keyword kinds the hand-patch never met appear at the pin
+<p><strong>The census's most important finding:</strong> six keyword kinds the hand-patch never met appear at the pin
 and are inside this design's scope: <code>not</code> in its <code>{properties, required}</code> form (12 arms &mdash;
 <code>creative/preview-creative-response.json</code>: &ldquo;status must not be <code>submitted</code>&rdquo;),
-arm-level <code>if/then</code> (<code>media-buy/build-creative-response.json</code> oneOf[2]:
+a <strong>nested <code>oneOf</code> inside an arm</strong>
+(<code>media-buy/get-reporting-status-response.json</code>, both arms &mdash; unread by any current pass even though
+that module carries the required-group validator), arm-level <code>if/then</code>
+(<code>media-buy/build-creative-response.json</code> oneOf[2]:
 &ldquo;if <code>vendor_cost</code> is supplied then <code>currency</code> is required and every variant carries four
 fields&rdquo;), root <code>dependencies</code>/<code>dependentRequired</code> (27 files, including the
-get-signals ledger entry), <code>contains</code> (1), and <code>propertyNames</code> (1). All five are expressible
+get-signals ledger entry), <code>contains</code> (1), and <code>propertyNames</code> (1). All six are expressible
 in the same vocabulary the hand-patch used. A design covering only the hand-patch's four kinds would have shipped
 with holes in its first release; this one's grammar is sized by the census, and its closure rule (&sect;3.3) is what
 keeps the <em>next</em> bundle's new kind from becoming a hole.</p>
+<p class="small">Reconciliation with the file-level histogram measured independently on the same 42-module
+population (12 of 42 modules have arms with discarded constraining keywords; by top-level arm keyword:
+<code>not</code> 8 files, <code>properties</code> 6, <code>oneOf</code> 1): consistent with the occurrence counts
+above &mdash; that histogram reads each arm's top-level keys only and leaves the layer nested under
+<code>properties</code> open, while the counts in this section come from a recursive walk of every arm, so the
+nested layer is measured, not assumed. Going forward the guarantee rests on neither measurement: the bundle-closure test
+(&sect;4, commit 1) re-derives the full accounting on every run.</p>
 </div>
 
 <p>Deliberately outside the defect class (already rendered correctly by existing machinery): root
@@ -240,14 +253,21 @@ explicit_packages_with_fixed_allocation = (
 <ul>
 <li><strong><code>required</code></strong> &rarr; <code>model_fields_set</code> membership. The hand-patch's
 documented convention is kept: an explicit null is supplied (on a mutation input it is the command to clear); a
-default the caller never sent is not.</li>
+default the caller never sent is not. <strong>The presence guard is membership, never <code>is None</code></strong>
+&mdash; measured: an <code>is&nbsp;None</code> guard is only correct when the field's default happens to be None; a
+non-None default makes it false for an absent field and the check over-refuses, while unguarded attribute access
+raises on absence and explicit null alike.</li>
 <li><strong><code>not</code></strong>, all three measured forms: <code>{required:&nbsp;[...]}</code> &rarr; absence;
 <code>{anyOf:&nbsp;[...]}</code> &rarr; <code>not any(...)</code>; <code>{properties, required}</code> &rarr;
 negated conjunction of presence and the property predicate
 (&ldquo;not (status supplied and status&nbsp;==&nbsp;'submitted')&rdquo;).</li>
 <li><strong>Property <code>const</code>/<code>enum</code></strong>, including through nested
 <code>properties</code>/<code>required</code> chains &rarr; attribute comparison, vacuous when the carrying object
-was not supplied (JSON Schema <code>properties</code> grades present members only).</li>
+was not supplied <em>or is an explicit null</em> (JSON Schema <code>properties</code> grades present object members
+only). The descent short-circuits on the nested instance's own <code>model_fields_set</code>
+(<code>'mode'&nbsp;in&nbsp;self.budget_allocation.model_fields_set</code>), which is what keeps the
+<code>const</code> case mechanical: the emitter never needs to statically resolve a nested annotation like
+<code>budget_allocation</code>'s discriminated union alias at runtime.</li>
 <li><strong>Nested <code>allOf</code> over array items</strong> &rarr; <code>all(...)</code> over the list, with a
 <code>$ref</code> arm admitted only as a proven restatement (&sect;3.3).</li>
 <li><strong><code>if/then/else</code></strong> &rarr; implication; <strong><code>dependencies</code> /
@@ -255,6 +275,23 @@ was not supplied (JSON Schema <code>properties</code> grades present members onl
 <code>propertyNames</code> / <code>min</code>/<code>maxProperties</code> / <code>uniqueItems</code> /
 value bounds / patterns</strong> &rarr; the obvious one-line predicates.</li>
 </ul>
+
+<p><strong>Wire aliases.</strong> <code>model_fields_set</code> holds <em>field</em> names, not wire names
+(measured: a field aliased <code>schema</code> appears as <code>schema_</code>), so every schema-named property in a
+compiled predicate passes through a wire&rarr;field map before emission. The map comes from the imported staged
+class's <code>model_fields</code> &mdash; <code>FieldInfo.alias</code> carries it &mdash; which is the second
+reason &sect;3.2 resolves classes by import rather than by AST. Where a nested annotation is a union alias, the map
+is taken from the union's members, and members that disagree on a constrained name refuse; nothing is skipped and
+nothing guessed. (No field in the arms measured at the pin is aliased, so this path is a precondition proof, not a
+live rewrite.)</p>
+
+<p><strong>Why a recursive compiler and not a flat rule table.</strong> The <code>contains</code> case
+(<code>control-media-buy-request</code>'s root <code>allOf</code>, under <code>if&nbsp;{required:[bidding]}</code>)
+needs a per-element predicate over a path two hops deep (<code>goal.target.kind</code>), and each hop needs its own
+vacuity decision &mdash; the second hop is past where the runtime <code>model_fields_set</code> short-circuit alone
+can carry it, because emitting the hop requires the first hop's type. Import-based resolution supplies that type at
+generation time, and the <code>Cond</code> tree composes the per-hop guards the same way at every depth. A flat
+table of arm-shape rules bottoms out exactly here; the recursive grammar does not.</p>
 
 <p><strong>Combinator semantics.</strong> <code>anyOf</code> &rarr; at least one arm's full predicate holds.
 <code>oneOf</code> on a flat root &rarr; <em>exactly one</em> &mdash; derivable now, because predicates are
@@ -273,8 +310,14 @@ before the import-hygiene passes (it adds imports), honoring the ordering contra
 <code>docs/design/type-generation.md</code>. A constraint naming a field that exists on no class for that schema is
 a refusal, not a skip &mdash; that is a generator field-drop surfacing loudly.</p>
 
-<p><strong>Error messages</strong> name the arms by their schema titles (schema-derived text, not authored), as the
-hand-patch's message does.</p>
+<p><strong>Error messages are a contract surface.</strong> Two tests match on the emitted wording
+(<code>tests/test_codegen_contract_compatibility.py:297</code> and <code>:322</code>, both
+<code>match="at least one of these field groups"</code>), so a generator that changes the text breaks tests
+regardless of behavior &mdash; the experiment already tripped this. The emitted message therefore keeps the
+<code>"at least one of these field groups"</code> prefix and names the arms by their schema <code>title</code>s
+(&ldquo;&hellip; field groups: Explicit packages with fixed allocation | &hellip;&rdquo;) &mdash; schema-derived
+text, not authored, and more readable than synthesized field lists. This is the one place the series could break
+tests for a non-behavioral reason, and this sentence is what prevents it.</p>
 
 <p><strong>Cost.</strong> Compiled Python, no runtime schema walking: the hand-patch measured the whole approach at
 noise level (&sect;1). The vocabulary module adds no import weight beyond what generated modules already carry.</p>
