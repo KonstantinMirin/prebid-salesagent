@@ -97,7 +97,11 @@
 </div>
 
 <div class="callout">
-  <strong>The one finding that is new.</strong> Our local workaround for <strong>#1414</strong> closes the absent-key case and not the explicit-null case, because <strong>#1359</strong>'s largest remaining cause puts an explicit <code>null</code> into <code>model_fields_set</code>. A <code>create_media_buy</code> whose single package carries <code>"budget": null</code> is <em>accepted</em> by our DTO, <code>get_total_budget()</code> returns <code>0</code>, and the pinned bundled schema calls the same document invalid in two places. That is the exact symptom #1414 was filed about, still reachable through a different spelling. <span class="ev">EXECUTION</span>
+  <strong>Finding 1 — our #1414 workaround has a hole, and #1359 is the hole.</strong> It closes the absent-key case and not the explicit-null case, because #1359's largest remaining cause puts an explicit <code>null</code> into <code>model_fields_set</code>. A <code>create_media_buy</code> whose single package carries <code>"budget": null</code> is <em>accepted</em> by our DTO, <code>get_total_budget()</code> returns <code>0</code>, and the pinned bundled schema calls the same document invalid in two places. That is the exact symptom #1414 was filed about, still reachable through a different spelling. <span class="ev">EXECUTION</span>
+</div>
+
+<div class="callout">
+  <strong>Finding 2 — the empty derivation is not dormant; it silently drops valid-looking formats and blames the wrong thing.</strong> <code>_KNOWN_ASSET_TYPES</code> is empty, so <em>every</em> asset type reads as unknown. A format whose only real defect is <code>requirements.codecs</code> being a string instead of a list is therefore dropped by <code>_validate_formats_tolerant</code> with the warning <em>"unsupported additive asset_type(s) ['video']"</em> — naming a first-class, fully modelled asset type. Separately, the SDK union grew an <code>_unknown</code> catch-all arm, so an unmodelled asset type no longer fails validation at all: the module's stated promise to <em>drop</em> such a format is inverted and it is now kept. Both measured end to end; see cross-cutting question&nbsp;2. <span class="ev">EXECUTION</span>
 </div>
 
 <h2>One row per issue</h2>
@@ -322,37 +326,110 @@ GeoCountry is a RootModel?                                    -> False</code></p
 </ul>
 <p>The fix shape is also single, and #1409 is already written in it: <strong>express the keyword or refuse</strong>. <code>union_arm_names.py</code> raises <code>UnnameableArmError</code> rather than falling back to a number, which is exactly what #1414 asks for in its own words — "raise at import time or emit a documented gap, rather than silently narrow the contract". Asking upstream for one generator invariant ("no schema keyword is discarded without a recorded gap") reframes four issues as one, and gives a test that cannot go stale: enumerate the keywords in the bundle, subtract the keywords the generator can express, and require the remainder to be a declared, shrinking list.</p>
 <p><strong>#1397 is a different thing.</strong> It is about <code>canonical_creative.py</code>, which is hand-written, not generated: a deliberate API-design choice to make a tolerant boundary model subtype a strict wire model. No keyword is lost. Its second axis — the top-level export not being the annotated class — is a naming question that rhymes with #1409 without sharing its mechanism, and on our pin (above) it has already moved. Grouping it with the four would hand upstream a bundle it cannot act on as one.</p>
+<p><strong>The shape of dependence we should not be taking.</strong> All five issues are the generator losing structure; our exposure to them is a function of how <em>deep into a generated annotation</em> we read. That gradient is measurable, and it is sharper than "values are safe, annotations are exposed":</p>
+<pre><code>across the 1316 models reachable from src.core.schemas
+
+field.annotation retaining a TOP-LEVEL Annotated        2      pydantic strips it into .metadata
+field annotations carrying a NESTED Annotated        2867      pydantic does NOT strip these</code></pre>
+<p>So the top of <code>field.annotation</code> sits in a zone pydantic normalizes for us, and anything read <em>inside</em> it does not. That is the actual dividing line, and it explains both outcomes exactly: <code>_known_asset_types()</code> reads inside the annotation and was silently killed by a <code>Discriminator</code> the SDK added; the required-nullable rule at <code>_base.py:878</code> reads only the top level and is correct. <strong>Reading a generated annotation is not the error — reading through it is.</strong> Stated as "walk no annotations", the rule would condemn a correct site and still permit a <code>__pydantic_core_schema__</code> walk that is strictly more fragile.</p>
 </div>
 
-<h2>Cross-cutting question 2 — what should we audit routinely?</h2>
-<p><code>_known_asset_types()</code> at <code>src/core/creative_agent_registry.py:62</code> returns an <strong>empty frozenset</strong> on this pin. Confirmed by execution: <code>len(_KNOWN_ASSET_TYPES) == 0</code>. The cause is one missing unwrap level. <code>Format.assets</code> is now</p>
-<pre><code>list[Annotated[Union[Annotated[Assets, Tag('image')], ..., Annotated[Assets29, Tag('repeatable_group')]],
-               Discriminator(...)]] | None</code></pre>
-<p>and the function's three nested <code>get_args</code> loops land on the <code>Union</code> itself rather than its arms, so <code>getattr(branch, "model_fields", {})</code> finds no <code>asset_type</code> and the set stays empty. <code>_unknown_asset_types</code> then calls every asset type unknown, and the tolerant-ingestion path treats every format as purely additive.</p>
-<p>Four sites in <code>src/</code> derive a population by walking an SDK annotation. Measured:</p>
+<h2>Cross-cutting question 2 — what makes the empty-derivation failure mode unconstructible?</h2>
+
+<p>Not a check. A guard over <code>_known_asset_types()</code> would catch this instance of an empty derivation and nothing adjacent to it, because the set of ways to write a traversal wrong is not finite. The question is what authority already knows each answer, and whether asking it removes the derivation or only shrinks it.</p>
+
+<h3>First: the proposed answer does not work, and measuring why is what finds the real bug</h3>
+<p>The suggested fix is a <code>TypeAdapter</code> over the discriminated union, on the ground that <em>"is this <code>asset_type</code> one the pin models?"</em> is a validation question the model answers by accepting or raising. The union has a catch-all arm, so it never raises:</p>
+<pre><code>Format.model_validate({... "assets": [{"asset_type": "hologram", ...}]})   -> SUCCEEDS
+  arm class: adcp.types.aliases.UnknownFormatAsset
+  asset_type value: "hologram"</code></pre>
+<p><span class="ev">EXECUTION</span> Accept-or-raise answers "accept" for every unmodelled asset type, so it cannot answer the question that was asked. The premise that pydantic already holds the mapping is nonetheless correct — it is reachable, and it is a trap:</p>
+<pre><code>Format.__pydantic_core_schema__ -> tagged-union, choices.keys() =
+  ['_unknown','audio','brief','catalog','css','daast','html','image','javascript',
+   'markdown','repeatable_group','text','url','vast','video','webhook']</code></pre>
+<p><span class="ev">EXECUTION</span> That is the vocabulary the hand-walk is trying to rediscover, and reading it would be a <em>deeper</em> structure read — into a private dunder, still needing <code>_unknown</code> subtracted by hand. It is the route that looks like the fix and is the same class of dependence.</p>
+<p>The form that works is narrower than either: ask the <strong>validated instance</strong> which arm it landed in.</p>
+<pre><code>isinstance(asset, UnknownFormatAsset)      asset_type=image  -> False
+                                           asset_type=video  -> False
+                                           asset_type=hologram -> True</code></pre>
+<p><span class="ev">EXECUTION</span> <code>UnknownFormatAsset</code> is importable by name from <code>adcp.types.aliases</code>, so a rename is an <code>ImportError</code> at import, not a set that quietly empties. There is no derived vocabulary, nothing to traverse, and no <code>Discriminator</code> the SDK can add next release that changes the answer.</p>
+
+<div class="callout">
+<p><strong>And the deletion is larger than the derived set, because the branch it feeds is already dead.</strong> <code>_validate_formats_tolerant</code> (<code>src/core/creative_agent_registry.py:114–146</code>) only consults the asset-type machinery inside <code>except ValidationError</code>. An unknown <code>asset_type</code> no longer raises, so that branch is unreachable for the thing it was written for. What it <em>is</em> still reachable by is any other validation failure — and there the empty set is actively harmful. Measured end to end:</p>
+<pre><code>format with ONE real defect: assets[0].requirements.codecs is a str, must be a list
+
+Format.model_validate(doc)                    -> refused at assets.0.video.requirements.codecs
+_KNOWN_ASSET_TYPES                            -> set()
+_unknown_asset_types(doc)                     -> {'video'}          &lt;- because the set is empty
+_is_purely_additive_asset_type(doc, {'video'}) -> True              &lt;- substituting "image" hides it
+_validate_formats_tolerant([doc], log)        -> 0 formats returned
+
+WARNING  Skipped 1 creative format(s) using unsupported additive asset_type(s) ['video']
+         (not modeled by the pinned adcp schema); returning the 0 compatible format(s).</code></pre>
+<p><span class="ev">EXECUTION</span> A format whose only defect is a mistyped video field is <strong>silently dropped</strong>, and the warning blames <code>video</code> — a first-class, fully modelled asset type. The function exists so that <em>"any other ValidationError still fails LOUD so real contract breakage is not masked"</em>; the empty set inverts it into a universal masker. The mechanism is that both asset arms carry <code>extra="allow"</code> and differ only in their <code>requirements</code> sub-model, so substituting <code>"image"</code> turns the 12 video-only fields into permitted extras and the defect disappears.</p>
+<p>In the other direction the module's stated promise is inverted too. Its docstring says an unrecognized additive <code>asset_type</code> is <em>"DROPPED (never mis-represented — we never model a creative we cannot fully understand)"</em>. Today it is <strong>kept</strong>, carrying an <code>UnknownFormatAsset</code> arm. Nothing of ours decided that; the SDK's union grew a catch-all arm and our drop path went dark.</p>
+</div>
+
+<h3>The four sites, and what already knows the answer</h3>
 <div class="scroll">
 <table>
-<thead><tr><th>Site</th><th>Population</th><th>Size on this pin</th></tr></thead>
+<thead><tr><th>Site</th><th>What it derives</th><th>Authority that already knows</th><th>Removes or shrinks</th></tr></thead>
 <tbody>
-<tr><td class="loc">src/core/creative_agent_registry.py:72–77</td><td><code>_KNOWN_ASSET_TYPES</code></td><td><strong>0 — broken</strong></td></tr>
-<tr><td class="loc">src/core/tools/creatives/listing.py:290</td><td><code>_SELECTABLE_WIRE_FIELDS</code></td><td>22</td></tr>
-<tr><td class="loc">src/core/schemas/__init__.py:49–56</td><td>model-rebuild closure</td><td>non-empty (import succeeds)</td></tr>
-<tr><td class="loc">src/core/schemas/_base.py:878</td><td>per-field nullability, not a population</td><td>n/a</td></tr>
+<tr>
+  <td class="loc">src/core/creative_agent_registry.py:62–77</td>
+  <td>the <code>asset_type</code> vocabulary the pin models</td>
+  <td>the validated instance's arm class — <code>isinstance(asset, UnknownFormatAsset)</code></td>
+  <td><strong>Removes entirely</strong>, and takes <code>_unknown_asset_types</code>, <code>_is_purely_additive_asset_type</code> and the <code>except</code> branch with it</td>
+</tr>
+<tr>
+  <td class="loc">src/core/tools/creatives/listing.py:290</td>
+  <td>the wire fields a buyer's <code>fields</code> list can name</td>
+  <td>the generated enum itself — 20 members, importable by name; or <code>model_json_schema()</code>, which returns the same 20 values without naming the class</td>
+  <td><strong>Shrinks.</strong> The set is the answer, so it stays; the traversal goes</td>
+</tr>
+<tr>
+  <td class="loc">src/core/schemas/__init__.py:49–56</td>
+  <td>the models still needing <code>model_rebuild()</code></td>
+  <td><code>__pydantic_complete__</code></td>
+  <td><strong>Different failure mode.</strong> Not in scope — see below</td>
+</tr>
+<tr>
+  <td class="loc">src/core/schemas/_base.py:878</td>
+  <td>required fields whose value may be <code>null</code></td>
+  <td><code>model_json_schema()</code> — reproduces the identical 6 fields</td>
+  <td><strong>Replaceable, and should not be replaced</strong> — see below</td>
+</tr>
 </tbody>
 </table>
 </div>
 
-<h3>The proposed check (not implemented)</h3>
-<p>One small unit module, <code>tests/unit/test_sdk_derived_populations.py</code>, with two tests. The design constraint is that it must be <em>derived</em>, must assert the population is <em>non-empty</em>, and must be <em>fire-probed</em> — and, from the lesson of <code>_known_asset_types</code>, it must not be able to pass by deriving its expectation from the same annotation the code under test reads.</p>
-<ol>
-  <li><strong>Parametrized cross-artifact equality.</strong> One parameter per derived population: a dotted module attribute and the pointer into the pinned <em>bundled JSON Schema</em> that declares the same vocabulary. The test reads the schema document through <code>get_named_schema_document</code>, resolves the pointer, and asserts the derived set is non-empty <em>and</em> equal to (or a stated superset of) the schema's. The expectation comes from the schema and the value comes from the model, so the two cannot drift together — which is precisely why a non-emptiness assertion alone is not enough, and why computing the expectation from <code>model_fields</code> would be a self-derived fixture that cannot falsify.
-    <ul><li><code>_KNOWN_ASSET_TYPES</code> → the <code>asset_type</code> enum under <code>core/format.json</code></li>
-        <li><code>_SELECTABLE_WIRE_FIELDS</code> → <code>creative/list-creatives-request.json#/properties/fields/items</code></li></ul>
-  </li>
-  <li><strong>Completeness, so a new site cannot be born uncovered.</strong> AST-scan <code>src/</code> for a module-level binding whose value derives from an SDK annotation walk, and assert every <code>file:name</code> found appears in the parameter list. This is the one declared part, and it is the part that keeps the derived part closed: a fifth derivation site fails the suite until someone names its schema pointer. A missing pointer is a loud failure, which is the whole difference from today.</li>
-</ol>
-<p><strong>The fire probe:</strong> remove one <code>get_args</code> level from <code>_known_asset_types</code> and the <code>_KNOWN_ASSET_TYPES</code> case must go red at the <em>equality</em> assertion — then restore. Red only counts if it is red at that assertion; a failure in collection or import proves nothing about the check. Second probe: add a new module-level derivation in a throwaway file under <code>src/</code> and watch test&nbsp;2 refuse it.</p>
-<p><strong>Cost and placement:</strong> two schema document reads and two set comparisons, so it belongs in the unit suite and runs on every <code>make quality</code>. It also doubles as a standing #1359 parity probe over exactly the facts we depend on, rather than over all 84 tools.</p>
+<h3>Site 2 — a real tension worth naming</h3>
+<p>The enum is reachable two ways, and the obvious one is compromised by #1409. Its class name is <code>Field1</code> — a positional codegen name, exactly the kind #1409 proposes to rename. Importing it by name trades a silent traversal for a loud <code>ImportError</code>, which is an improvement, but it couples us to a name upstream has already said will change. The announced-schema route takes neither dependence:</p>
+<pre><code>ListCreativesRequest.model_json_schema()  -> fields enum: 20 values
+                                             ['creative_id','name','format_id','format_kind', ...]</code></pre>
+<p><span class="ev">EXECUTION</span> That reads the model's own published contract rather than its Python type graph, so it is immune to arm naming, to pointer wrappers, and to <code>Discriminator</code> insertion — the #1409 / #1362 / #1414 family in one step. It costs a small <code>$ref</code> resolution. For this site that is the right trade, because the answer genuinely is a set and the set has to come from somewhere.</p>
+
+<h3>Site 4 — the honest case where asking the authority is worse</h3>
+<p>This is the site the question is most interesting about, and the answer is not the tidy one. The structural read is <em>correct here</em>, and both alternative authorities are worse.</p>
+<p><strong>Validation cannot answer it.</strong> <code>TypeAdapter(ann).validate_python(None)</code> over the same 1316 models produces 47 false positives, every one a bare <code>typing.Any</code>:</p>
+<pre><code>required + nullable, found by the current structural rule       6
+the rule's apparent "misses" under validation                  48
+  ... of which bare typing.Any                                 47
+  ... of which a RootModel TypeVar                              1
+  ... genuine misses                                            0</code></pre>
+<p><span class="ev">EXECUTION</span> <strong>What the authority does not expose:</strong> pydantic's validator conflates <em>"the schema declares this nullable"</em> with <em>"the type is unconstrained"</em>. <code>TypeAdapter(Any).validate_python(None)</code> succeeds, and no runtime API distinguishes the two, because at validation time there is nothing to distinguish — both accept <code>None</code>. The JSON Schema fact the wire serializer needs is a <em>declaration</em>, and a declaration is only legible in the declaration.</p>
+<p><strong>The announced schema can answer it, and gains nothing.</strong> It does draw the distinction (<code>{"anyOf":[{"type":"string"},{"type":"null"}]}</code> versus <code>{}</code>), and over the 1316 models it returns exactly the same six fields — <code>CreateMediaBuyResponse1.confirmed_at</code>, <code>CreateMediaBuySuccess.confirmed_at</code>, <code>DiscriminatorItem.value</code>, <code>GetMediaBuysMediaBuy.confirmed_at</code>, <code>MediaBuy.confirmed_at</code>, <code>ReportingRevision.data_through</code> — with no asymmetry in either direction. <span class="ev">EXECUTION</span> But reaching them needs a <code>$ref</code>/<code>anyOf</code> resolver, which is the "150 lines of <code>$ref</code> / <code>allOf</code> / JSON-pointer walking" the comment at <code>_base.py:862–874</code> records as having been deleted in favour of this rule. Reintroducing it would restore a pointer walk to return an identical answer.</p>
+<p>So the site stays as it is, for a reason that is now measured rather than asserted: it reads the <em>top</em> of <code>field.annotation</code>, which is the zone pydantic normalizes (2 of 1316 retain an <code>Annotated</code> there), so it is structurally outside the failure mode this question is about. The empty-derivation mode needs a traversal, and a single <code>get_args</code> at a normalized top level is not one.</p>
+
+<h3>Site 3 — out of scope, and why that is the right answer rather than a dodge</h3>
+<p>The model-rebuild closure walks annotations, so it looks like a fourth instance. Its failure mode is not silent: a model the closure misses raises <code>'MockValSer' object cannot be converted to 'SchemaSerializer'</code> on its first dump. An empty worklist does not produce a wrong answer quietly — it produces a loud one at the first serialization. The authority that would replace the walk is <code>__pydantic_complete__</code>, and after import exactly one model in our namespace reports incomplete (<code>BaseModel</code> itself, re-exported and abstract). <span class="ev">EXECUTION</span></p>
+<p>Not measured, and stated rather than smoothed: whether iterating <code>__pydantic_complete__</code> over our 257 declared models would reach everything the annotation walk reaches. The walk touches 1316 models, so the large majority are library leaves, and the comment's account of the bug is that those leaves are the ones needing the explicit rebuild. Isolating that would mean unwinding an import that has already run.</p>
+
+<h3>So: is anything only observable rather than structurally enforceable?</h3>
+<p>Yes, one thing, and it is not any of the four sites.</p>
+<p>Site 1's architecture makes the empty-derivation mode unconstructible — there is no derived set, and <code>isinstance</code> against an imported arm class either resolves or fails at import. What it does <em>not</em> make unconstructible is the SDK silently changing what validation means. The <code>_unknown</code> arm turned a raising path into an accepting one, and no shape of ours could have refused that: our code was correct before and after, and the behaviour inverted underneath it. That is a property of the dependency, not of our code, and the only thing that surfaces it is reading the diff of what the union admits.</p>
+<p>We are not reaching for a check there. The honest conclusion is that the tolerant-ingestion <em>policy</em> — "drop a format we cannot fully model" — cannot be implemented against a union that models everything. Either the policy changes to "keep it, and mark the unmodelled arms", which the SDK now implements for us and which the <code>isinstance</code> read expresses directly, or the policy is wrong and should be deleted along with the code. Both are design decisions, not detections, and that is the deliverable here: <strong>stop deriving the vocabulary, ask the arm, and decide which policy we actually want.</strong></p>
+
 
 <h2>What could not be verified</h2>
 <ul>
@@ -361,6 +438,9 @@ GeoCountry is a RootModel?                                    -> False</code></p
   <li><strong>#1418's cold-start numbers.</strong> The 127–204&nbsp;ms cold versus 0.001&nbsp;ms warm figures are the reporter's; not reproduced here, and not reproducible from the seller side.</li>
   <li><strong>#1414's 42/14/12 blast radius.</strong> Taken from the issue. We verified only that our one exposed model is <code>CreateMediaBuyRequest</code> and that the workaround is live for the absent-key case; the other 11 models were not re-counted on our local-segment pin.</li>
   <li><strong>The <code>.root</code> deprecation horizon.</strong> The shim warns today. Whether it is removed in 9.0 GA or later is not stated in any open issue we read, so the 12 call sites have no dated deadline.</li>
+  <li><strong>Whether <code>__pydantic_complete__</code> alone would replace the rebuild closure.</strong> The walk touches 1316 models against our 257 declared ones, so most are library leaves, and the comment's account of the bug says those leaves are what need the explicit rebuild. Confirming it would mean unwinding an import that has already run. Stated as unmeasured rather than assumed either way.</li>
+  <li><strong>When the <code>_unknown</code> arm was added.</strong> We measured that it absorbs unmodelled asset types on this pin, not which SDK release introduced it, so we cannot say how long our drop path has been dark. A delta needs two measurements and we took one.</li>
+  <li><strong>Whether the false-drop has occurred in production.</strong> The path is reachable and reproduced locally. We did not search logs for the warning, so its real-world frequency is unknown.</li>
 </ul>
 
 <p class="small">Every measurement above was taken in a dedicated worktree against the pin named at the top. Numbers are evidence for that pin and that tree only; a different local segment of the SDK can move several of them, as #1397 and #1359 both demonstrate.</p>
