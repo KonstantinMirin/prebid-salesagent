@@ -3734,10 +3734,26 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             # seller that stopped echoing them entirely would never have turned it red
             # . As a tag this XPASSes the day production populates them.
             "T-UC-019-main",
-            # Creative approval mapping — not implemented
-            "T-UC-019-partition-approval",
-            "T-UC-019-partition-approval-invalid",
-            "T-UC-019-boundary-approval",
+            # GRADUATED: T-UC-019-partition-approval and T-UC-019-boundary-approval. The
+            # entry read "Creative approval mapping — not implemented", which was false on
+            # both halves: production maps internal status to the AdCP enum (its four
+            # invariant siblings inv-152-1/2/3/5 are graduated and green on that very
+            # mapping), and these two tags were never the thing reporting the failure. Both
+            # outlines were held by ONE imperative pytest.xfail() in
+            # given_package_creative_assignment, whose stated reason ("No
+            # CreativeAssignmentFactory") was false too -- the factory is imported at the top
+            # of uc019_query_media_buys.py and used by the two Givens directly above it.
+            # pytest.xfail() ABORTS the scenario, so this tag never fired and the four
+            # further inline xfails below that Given were dead code. MEASURED before the fix:
+            # 39 items, 39 xfailed, ZERO executed, every one of them citing that one Given.
+            # The Givens now seed and move real rows, and the boundary outline's four outcome
+            # sentences have step definitions for the first time.
+            #
+            # T-UC-019-partition-approval-invalid is NOT listed here. It keeps a marker, but
+            # from its own branch below, so it can carry the reason it actually has instead
+            # of this set's generic one -- and listing it in both would be the second-marker
+            # shape this sweep exists to remove (the branch runs first in the elif chain, so
+            # a set entry would be dead and would still read as live).
             # Graduated (#1545 review), now wired + passing on the A2A/MCP wire:
             #   inv-150-1 (pre-flight active -> pending_start)
             #   inv-150-3 (post-flight active -> completed)
@@ -3819,6 +3835,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
                     "(get_media_buys list is a pure DB read), so the snapshot Given steps "
                     "(given_adapter_supports_reporting / given_adapter_no_reporting) cannot "
                     "configure anything and fail before reaching the graded behavior — FIXME",
+                    strict=False,
+                )
+            )
+        elif "T-UC-019-partition-approval-invalid" in marker_names:
+            # BR-RULE-152 INV-4 asks for an assignment that references a creative row which
+            # does not exist. ``creative_assignments`` carries a composite
+            # ForeignKeyConstraint (creative_id, tenant_id, principal_id) -> creatives with
+            # no ondelete (src/core/database/models.py), so the row cannot be inserted and
+            # the creative cannot be deleted from under it: the precondition is UNREACHABLE
+            # in this schema, which makes production's silent-skip defensive code nothing can
+            # exercise. Named here rather than left in the generic set above, because
+            # "feature not yet implemented" is the one thing this is not -- there is nothing
+            # to implement until either the invariant is withdrawn upstream or the schema
+            # admits the state. Its sibling boundary row, which asked for the same
+            # unreachable state, is deleted from BR-UC-019 rather than parked twice.
+            item.add_marker(
+                pytest.mark.xfail(
+                    reason="BR-RULE-152 INV-4 precondition is unreachable: creative_assignments "
+                    "FKs (creative_id, tenant_id, principal_id) into creatives, so an assignment "
+                    "to a nonexistent creative cannot exist — scenario needs upstream "
+                    "reconciliation, not production work",
                     strict=False,
                 )
             )
