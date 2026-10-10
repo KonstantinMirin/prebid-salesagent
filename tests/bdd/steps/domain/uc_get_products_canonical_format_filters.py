@@ -39,6 +39,38 @@ _CUSTOM_KIND = "custom"
 _PARAMS: dict[str, Any] = {"width": 300, "height": 250}
 
 
+#: The option id BOTH scope-collision products declare. An option id is unique only inside
+#: its scope: core/format-option-ref.json's two arms make publisher_domain required on one
+#: and forbidden on the other, so one id under two scopes is a legal catalogue and the
+#: collision is what the filter has to tell apart.
+_SHARED_OPTION_ID = "premium_above_fold"
+
+#: The publisher whose catalogue the OTHER product's option belongs to. The filter names the
+#: product-scoped option, so this one is the counter-example.
+_PUBLISHER_DOMAIN = "publisher.example.com"
+
+
+def _canonical_product_declaring_option(tenant: Any, publisher_domain: str | None) -> Any:
+    """Persist a canonical-only product declaring ``_SHARED_OPTION_ID`` in one scope.
+
+    ``publisher_domain=None`` is PRODUCT scope and a domain is PUBLISHER scope, which is how
+    the pin discriminates the two arms -- the product arm declares ``"publisher_domain":
+    false``, forbidding the member outright, so presence is the discriminator rather than a
+    stored ``scope`` beside it. The two products are otherwise identical, so a failing row
+    reports on the scope comparison and nothing else.
+    """
+    declaration: dict[str, Any] = {
+        "format_kind": _NAMED_KIND,
+        "params": dict(_PARAMS),
+        "format_option_id": _SHARED_OPTION_ID,
+    }
+    if publisher_domain is not None:
+        declaration["publisher_domain"] = publisher_domain
+    product = ProductFactory(tenant=tenant, format_ids=None, format_options=[declaration])
+    PricingOptionFactory(product=product)
+    return product
+
+
 def _canonical_product_declaring(tenant: Any, format_kind: str) -> Any:
     """Persist one CANONICAL-ONLY product declaring *format_kind*, and return it.
 
@@ -81,6 +113,14 @@ def given_two_canonical_products_with_different_kinds(ctx: dict) -> None:
     ctx["other_product"] = _canonical_product_declaring(tenant, _OTHER_KIND)
 
 
+@given("the seller stores two products whose format options share one id under two different scopes")
+def given_two_products_sharing_an_option_id(ctx: dict) -> None:
+    """Store the product-scoped option the filter names and its publisher-scoped twin."""
+    tenant = ctx["tenant"]
+    ctx["named_product"] = _canonical_product_declaring_option(tenant, None)
+    ctx["other_product"] = _canonical_product_declaring_option(tenant, _PUBLISHER_DOMAIN)
+
+
 @given("the seller stores two canonical products, one declaring a custom format kind")
 def given_two_canonical_products_one_custom(ctx: dict) -> None:
     """Store a standard-kind product and the custom-kind counter-example."""
@@ -101,6 +141,21 @@ def when_request_products_filtered_by_format_kind(ctx: dict) -> None:
     items are ``core/format-id.json`` references.
     """
     dispatch_request(ctx, brief="format_kinds filter test", filters={"format_kinds": [_NAMED_KIND]})
+
+
+@when("the buyer requests products filtering format_option_refs by the product-scoped option only")
+def when_request_products_filtered_by_option_ref(ctx: dict) -> None:
+    """Dispatch get_products naming ONE option ref, in product scope.
+
+    ``scope`` is carried explicitly because core/format-option-ref.json declares
+    ``discriminator: {propertyName: "scope"}``: a reference without it names no arm of the
+    union, and the request would be refused rather than filtered.
+    """
+    dispatch_request(
+        ctx,
+        brief="format_option_refs filter test",
+        filters={"format_option_refs": [{"scope": "product", "format_option_id": _SHARED_OPTION_ID}]},
+    )
 
 
 @when("the buyer requests products with standard_formats_only")
@@ -150,6 +205,16 @@ def then_only_named_kind_product_announced(ctx: dict) -> None:
 @then("the announced products do not include the product declaring the other kind")
 def then_other_kind_product_excluded(ctx: dict) -> None:
     _assert_counter_example_excluded(ctx, what=f"the other kind ({_OTHER_KIND})")
+
+
+@then("the announced products are exactly the product whose option the filter named")
+def then_only_named_option_product_announced(ctx: dict) -> None:
+    _assert_exactly_the_named_product(ctx, filter_name="format_option_refs")
+
+
+@then("the announced products do not include the product declaring that id under publisher scope")
+def then_publisher_scoped_product_excluded(ctx: dict) -> None:
+    _assert_counter_example_excluded(ctx, what=f"the same option id under publisher scope ({_PUBLISHER_DOMAIN})")
 
 
 @then("the announced products are exactly the product declaring the standard kind")

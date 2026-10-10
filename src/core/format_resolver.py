@@ -26,6 +26,7 @@ from src.core.schemas import (
     CreativeFormatIdentity,
     Format,
     FormatKey,
+    FormatOptionIdentity,
     LibraryCreativeAsset,
     creative_format_identity,
     format_id_identity,
@@ -291,6 +292,43 @@ def product_format_kinds(format_options: Iterable[Any] | None) -> set[str]:
     is a ``StrEnum``; normalizing both sides means that stays true if it ever is not.
     """
     return {str(declaration.format_kind) for declaration in format_options or []}
+
+
+def product_format_option_identities(format_options: Iterable[Any] | None) -> set[FormatOptionIdentity]:
+    """The format-option identities a product's declarations name.
+
+    The third reader beside :func:`product_format_identities` (legacy arm) and
+    :func:`product_format_kinds` (canonical kind), and the finest-grained of them:
+    ``core/product-filters.json`` asks ``format_option_refs`` for products accepting "any of
+    these EXACT publisher- or product-scoped canonical format options", so the comparison is
+    whole identities and never their parts.
+
+    :class:`FormatOptionIdentity` already owns the scope distinction, and owns it the way the
+    pin defines it: the two arms of ``core/format-option-ref.json`` make ``publisher_domain``
+    required on one and forbidden on the other, so the domain's PRESENCE is the discriminator
+    and a publisher-catalog option and a product-local option sharing one
+    ``format_option_id`` are DIFFERENT options. Constructed directly here rather than through
+    ``of_reference`` because a declaration carries no ``scope`` member to read -- the
+    declaration schema's own allOf says ``publisher_domain`` "is addressable only alongside
+    ``format_option_id``" -- so presence is the only signal there is, which is what that
+    identity derives its scope from anyway.
+
+    A declaration naming NO option is skipped rather than given an empty identity. A bare
+    canonical declaration (``format_kind`` + ``params``, no option id) narrows a kind without
+    naming a catalogued option, so it accepts none of the refs this filter can name.
+    """
+    identities: set[FormatOptionIdentity] = set()
+    for declaration in format_options or []:
+        option_id = declaration.format_option_id
+        if not option_id:
+            continue
+        identities.add(
+            FormatOptionIdentity(
+                publisher_domain=declaration.publisher_domain,
+                format_option_id=option_id,
+            )
+        )
+    return identities
 
 
 def format_display(identity: FormatKey) -> str:

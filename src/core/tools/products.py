@@ -25,11 +25,16 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_resolver import product_format_identities, product_format_kinds
+from src.core.format_resolver import (
+    product_format_identities,
+    product_format_kinds,
+    product_format_option_identities,
+)
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
 from src.core.schemas import (
+    FormatOptionIdentity,
     GetProductsRequest,  # OURS, extending the SDK's — the accepted shape
     GetProductsResponse,
     Product,  # Extends library Product
@@ -567,14 +572,24 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 if not (product_format_kinds(product.format_options) & requested_kinds):
                     continue
 
-            # NOT IMPLEMENTED HERE: filters.format_option_refs, the same question at the
-            # OPTION level ("products accepting any of these exact publisher- or
-            # product-scoped canonical format options"). It needs an option-ref identity
-            # whose scope discriminator is part of the key -- a product-scoped ref and a
-            # publisher-scoped one are different references even when they share an id --
-            # and that reader does not exist yet. It is still DECLARED and read by nothing,
-            # which is the same defect this block just fixed for format_kinds; tracked on
-            # salesagent-8qela.3.3 rather than half-built here.
+            # Filter by format_option_refs -- the same question at the OPTION level, and the
+            # finest-grained of the three. core/product-filters.json: "Filter to products
+            # accepting any of these EXACT publisher- or product-scoped canonical format
+            # options". EXACT, so whole identities are compared and never their parts: the
+            # two arms of core/format-option-ref.json make publisher_domain required on one
+            # and forbidden on the other, so a publisher-catalog option and a product-local
+            # option sharing one format_option_id are DIFFERENT options. Matching on the id
+            # alone would answer a reference to a publisher's catalogue with a product-local
+            # option -- the same false positive, in the same direction, that the legacy
+            # format_ids filter's bare-id comparison used to produce.
+            #
+            # Also declared on the request and read by nothing before this.
+            # FormatOptionIdentity.of_reference is THE reader of a reference's scope, so the
+            # request side goes through it rather than reading the two members directly.
+            if req.filters.format_option_refs:
+                requested_options = {FormatOptionIdentity.of_reference(ref) for ref in req.filters.format_option_refs}
+                if not (product_format_option_identities(product.format_options) & requested_options):
+                    continue
 
             # Filter by standard_formats_only: "Only return products accepting IAB standard
             # formats" (core/product-filters.json).
