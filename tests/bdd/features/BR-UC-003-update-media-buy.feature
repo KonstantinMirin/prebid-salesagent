@@ -1063,9 +1063,22 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes keyword_targets_add AND targeting_overlay.negative_keywords
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # BR-RULE-083 INV-3: cross-dimension mixing (keyword_targets_add + overlay.negative_keywords) → accepted
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # BR-RULE-083 INV-3 says cross-dimension mixing is WELL-FORMED -- that rule is about the
+    # REQUEST's shape, and it still holds. But the request carries keyword_targets_add, which
+    # this seller cannot apply and does not declare support for, so it is refused on
+    # CAPABILITY before its shape is ever in question. docs/media-buy/specification.mdx
+    # orders the checks: "available_actions authorization first, then product capability,
+    # then accepted commercial terms, so a request that fails more than one returns the
+    # earliest code". A well-formed request for an unsupported capability is still refused.
+    #
+    # So INV-3's "accepted" outcome is not observable on this seller, and this scenario
+    # cannot grade it. It grades the refusal instead, honestly. If keyword targeting is ever
+    # implemented (salesagent-8qela.8 chose refusal over implementation), this reverts to
+    # asserting acceptance and INV-3 becomes gradable again.
 
   @T-UC-003-ext-r-cross-ok-2 @invariant @BR-RULE-083
   Scenario: Keyword operations -- negative_keywords_add with targeting_overlay.keyword_targets is valid
@@ -1079,9 +1092,15 @@ Feature: BR-UC-003 Update Media Buy
     And the package update includes negative_keywords_add AND targeting_overlay.keyword_targets
     And the package "pkg_001" exists in the media buy
     When the Buyer Agent sends the update_media_buy request
-    Then the response is compliant with the update_media_buy success spec
-    And the response status should be "completed"
-    # BR-RULE-083 INV-4: cross-dimension mixing (negative_keywords_add + overlay.keyword_targets) → accepted
+    Then the response is compliant with the update_media_buy error spec
+    And the operation should fail
+    And the error code should be "UNSUPPORTED_FEATURE"
+    And the error should include "suggestion" field
+    # BR-RULE-083 INV-4, the mirror of INV-3 above, and regrounded for the same reason: the
+    # request is well-formed and carries negative_keywords_add, which this seller cannot
+    # apply. core/targeting-overlay-support.json declares negative_keywords alongside
+    # keyword_targets and this seller declares neither, so the refusal is the obligation it
+    # holds. INV-4's "accepted" outcome is not observable here either.
 
   @T-UC-003-partition-idempotency-key @partition @idempotency_key
   Scenario Outline: Idempotency key partition validation - <partition>

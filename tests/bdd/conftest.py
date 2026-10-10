@@ -2087,9 +2087,22 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         #
         # Both are fixed together: the scenario now asserts UNSUPPORTED_FEATURE (the
         # obligation this seller actually holds, per core/targeting.json's "applied exactly
-        # or rejected") and _update_media_buy_impl refuses the op above the UoW. So the
-        # routing goes rather than being re-reasoned -- with it in place and strict=True,
-        # the now-passing scenario would fail as an unexpected pass.
+        # or rejected") and _update_media_buy_impl refuses the op above the UoW.
+        #
+        # CORRECTION to the reason this marker was first removed. The removal was justified
+        # as "with strict=True the now-passing scenario would fail as an unexpected pass".
+        # That was WRONG: this scenario is not graded at all. MEASURED on a UC-003 keyword
+        # slice -- test_add_keyword_targets_incrementally, _remove_, and the negative-keyword
+        # sibling are XFAIL on every transport, because the `uc003-not-wired` EnvRoute below
+        # xfails every UC-003 scenario that is not `T-UC-003-ext-*` with "harness not yet
+        # wired for non-extension scenarios". So the marker was redundant with that route,
+        # not standing between a pass and a failure.
+        #
+        # It stays removed because its TEXT was false twice over -- production applied
+        # nothing, and the scenario no longer claims a production gap -- and because the
+        # not-wired route already carries the honest reason. The thing to fix here is the
+        # WIRING, not the marker: until UC-003's non-extension scenarios are wired, this
+        # scenario and the two keyword siblings grade nothing whatever they assert.
 
         # FIXME: UC-003 inline creatives — _sync_creatives_impl
         # FK violation: creative_assignments references creative before commit.

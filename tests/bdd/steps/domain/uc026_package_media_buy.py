@@ -2021,10 +2021,15 @@ def _requested_packages(ctx: dict) -> list[dict[str, Any]]:
     Update dispatch builds ``ctx["update_kwargs"]``; create dispatch accumulates
     into ``ctx["request_kwargs"]``. A scenario that set neither never reached
     dispatch at all.
+
+    Both keys are read as LITERALS rather than looped over as a variable.
+    ``test_architecture_bdd_ctx_keys`` resolves every ctx key statically so the
+    set a step reads is knowable, and a loop variable -- even over a tuple of two
+    literals right here -- is the one form it cannot resolve. Two reads cost
+    nothing and keep the key set legible to the reader as well as the guard.
     """
 
-    for key in ("update_kwargs", "request_kwargs"):
-        kwargs = ctx.get(key)
+    for kwargs in (ctx.get("update_kwargs"), ctx.get("request_kwargs")):
         if not kwargs:
             continue
         packages = kwargs.get("packages")
