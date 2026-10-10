@@ -138,6 +138,10 @@ mcp = FastMCP(
     # Sessions enabled for HTTP context (tenant detection via headers)
     # Note: stateless_http is now configured at runtime via run() or global settings
     lifespan=lifespan_context,
+    # Keep $defs/$ref in tools/list. FastMCP inlines every $ref by default, which expands
+    # create_media_buy from ~250 KB to ~1.25 MB and update_media_buy to ~4.2 MB: too large
+    # for an LLM client's context, and the dereference itself drives #1821's memory growth.
+    dereference_schemas=False,
 )
 
 # (Deleted) MCPAuthMiddleware resolved an identity before every tool call and stashed it on
