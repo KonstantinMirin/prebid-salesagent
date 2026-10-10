@@ -46,6 +46,7 @@ def stub_gam_client_manager(
     created_creative_id: str = "gam_creative_1",
     created_order_id: str = "9000001",
     created_line_item_id: str = "9100001",
+    network_time_zone: str = "America/New_York",
 ) -> MagicMock:
     """A ``GAMClientManager`` instance stand-in serving the order's line items.
 
@@ -59,8 +60,12 @@ def stub_gam_client_manager(
     MagicMock does) and yields ``"<MagicMock ...>"``, which fails much later as
     ``invalid literal for int()`` -- a create that never touched a real client looking
     like an ad-server fault.
+
+    ``getCurrentNetwork`` names the network's time zone, the zone production writes a
+    line item's flight in.
     """
     services = {
+        "NetworkService": MagicMock(getCurrentNetwork=MagicMock(return_value=SoapObject(timeZone=network_time_zone))),
         "OrderService": MagicMock(createOrders=MagicMock(return_value=[{"id": int(created_order_id)}])),
         "LineItemService": MagicMock(
             getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items))),

@@ -764,6 +764,17 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "a process this harness does not configure — there is no surface for setting or "
             "clearing another process's env-derived config mid-scenario",
         ),
+        # Added by fix/gam-flight-timezone, for scenarios that did not exist before it,
+        # against this pin's direction of travel like the #1721 entries above: the
+        # scenarios grade what the real GoogleAdManager adapter sends GAM, and a GAM tenant
+        # on the live server would call Google. Only the in-process env can put a stand-in
+        # SOAP client under the adapter. They grade fully on a2a/mcp/rest.
+        (
+            "tests/harness/media_buy_create.py",
+            "sell_through_gam",
+            "the live server has no stand-in GAM network: a GoogleAdManager tenant there "
+            "would call Google, so its tenants run the Mock adapter",
+        ),
         (
             "tests/harness/_base.py",
             "inject_untyped_exception",
