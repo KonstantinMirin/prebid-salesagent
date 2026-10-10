@@ -4118,7 +4118,20 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             "T-UC-026-inv-199-3",
             "T-UC-026-inv-199-4",
             # Graduated: T-UC-026-inv-200-1 (all 4 transports pass)
-            "T-UC-026-inv-200-2",
+            # Graduated: T-UC-026-inv-200-2 (PASSED on a2a, mcp and rest -- the three
+            # transports this module parametrizes; not in e2e_rest_known_failures.txt,
+            # so there is no ledger line to mirror).
+            # 3.2.1 media-buy/package-request.json types the request's ``paused``
+            # "Whether this package should be created in a paused state. Paused packages
+            # do not deliver impressions. Defaults to false." The seller used to write a
+            # hardcoded False into package_config and read the pause state back off it,
+            # so a package asked for paused delivered AND reported paused=false. The ask
+            # now rides MediaPackage to the ad server, which is where the response's
+            # value comes from (``Package.SELLER_DECIDED`` names paused), and GAM/Kevel/
+            # Triton create the line item held. The scenario's Then was strengthened with
+            # the graduation to read the persisted package_config as well as the response
+            # -- the record get_media_buys serves the field from -- so an echo cannot
+            # satisfy it. Fire-probed: restoring the hardcoded literal turns it red.
             "T-UC-026-inv-201-1",
             "T-UC-026-inv-201-2",
             "T-UC-026-inv-201-3",

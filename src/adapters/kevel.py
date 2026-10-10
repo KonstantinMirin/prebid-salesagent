@@ -252,7 +252,9 @@ class Kevel(AdServerAdapter):
                 "Price": rate,  # Use pricing from pricing option or fallback
                 "StartDate": start_time.isoformat(),
                 "EndDate": end_time.isoformat(),
-                "IsActive": True,
+                # The create-time pause, through the same flag ``pause_package`` flips
+                # below: a flight created with IsActive=false does not deliver.
+                "IsActive": not package.paused,
             }
 
             # Add targeting if provided (from package-level targeting_overlay per AdCP spec)

@@ -2992,6 +2992,19 @@ class MediaPackage(SalesAgentBaseModel):
     product_id: str | None = None  # Product ID for this package
     budget: float | None = None  # Budget allocation in the currency specified by the pricing option
     creative_ids: list[str] | None = None  # Creative IDs to assign to this package
+    # The create-time pause the buyer asked for, carried to the ad server.
+    # media-buy/package-request.json (AdCP 3.2.1): "Whether this package should be created
+    # in a paused state. Paused packages do not deliver impressions. Defaults to false."
+    #
+    # It has to travel on the CARRIER rather than be answered from the request, because
+    # ``Package.SELLER_DECIDED`` names ``paused``: the response reports the state the ad
+    # server created the line item in. With nothing on this carrier the adapters had no
+    # way to be told, so every create answered False no matter what was asked --
+    # a package asked for paused delivered, and said it was active.
+    #
+    # ``bool`` and not ``bool | None``: the pin types the request field boolean with
+    # ``default: false``, so absent means active and there is no third state.
+    paused: bool = False
 
 
 class AssetStatus(SalesAgentBaseModel):

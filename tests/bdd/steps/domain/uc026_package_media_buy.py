@@ -280,6 +280,36 @@ def _assert_has_packages(ctx: dict) -> list:
     return packages
 
 
+def _created_media_buy_id(ctx: dict) -> str:
+    """The media_buy_id the create response reported, for reading the buy back."""
+    resp = require_payload(ctx)
+    inner = getattr(resp, "response", resp)
+    media_buy_id = getattr(inner, "media_buy_id", None)
+    assert media_buy_id, "create response carries no media_buy_id — nothing to read back"
+    return str(media_buy_id)
+
+
+def _stored_package_config(ctx: dict, media_buy_id: str, package_id: str) -> dict[str, Any]:
+    """The persisted ``package_config`` for one package, through the repository.
+
+    Reached from a UoW rather than a raw ``select()``: the repository's ``get_package``
+    joins through MediaBuy for tenant scoping, so this reads the row the way production
+    reads it and cannot see another tenant's package.
+    """
+    from src.core.database.repositories.uow import MediaBuyUoW
+
+    tenant = ctx.get("tenant")
+    assert tenant is not None, "No tenant in ctx — conftest must seed one"
+    with MediaBuyUoW(tenant.tenant_id) as uow:
+        assert uow.media_buys is not None
+        row = uow.media_buys.get_package(media_buy_id, package_id)
+        assert row is not None, (
+            f"no persisted package {package_id!r} on media buy {media_buy_id!r}; "
+            "the create reported it but stored nothing"
+        )
+        return dict(row.package_config or {})
+
+
 def _create_media_buy_for_update(ctx: dict, **pkg_overrides: Any) -> None:
     """Create a media buy with a single package, store in ctx for update scenarios.
 
@@ -2659,12 +2689,35 @@ def then_created_with_formats(ctx: dict, fmt_ids: str) -> None:
 
 @then(parsers.parse("the package should be created with paused={paused}"))
 def then_created_with_paused(ctx: dict, paused: str) -> None:
-    """Assert package was created with specific paused value."""
+    """Assert the package was CREATED in the asked-for pause state, reported and stored.
+
+    Two assertions, because the response alone cannot carry this one. ``paused`` is in
+    ``Package.SELLER_DECIDED``, so the create response does not echo the request -- it
+    reports what the ad server answered, which is the first half. The second half is the
+    record: ``package_config["paused"]`` is where a package's pause state is kept and is
+    the field ``get_media_buys`` serves back (``media_buy_list.py``), so a seller that
+    reported the ask and stored the opposite would hand the buyer "active" on the very
+    next read. Grading only the response passed against exactly that.
+
+    Both halves are the EFFECT, not an echo: a seller that drops the buyer's ask before
+    the adapter answers ``paused=false`` here, and a seller that drops it before the
+    write stores ``false``.
+    """
     pkgs = _assert_has_packages(ctx)
     expected = as_bool(paused)
     actual = _pkg_field(pkgs[0], "paused")
     assert actual is not None, f"paused not echoed in response; expected {expected}"
     assert actual == expected, f"Expected paused={expected}, got {actual!r}"
+
+    media_buy_id = _created_media_buy_id(ctx)
+    package_id = _pkg_field(pkgs[0], "package_id")
+    assert package_id, "created package has no package_id — cannot read back what was stored"
+    stored = _stored_package_config(ctx, media_buy_id, package_id)
+    assert stored.get("paused") == expected, (
+        f"stored package_config['paused']={stored.get('paused')!r}, expected {expected}; "
+        "this is the record get_media_buys serves paused from, so the next read would "
+        "report the wrong state"
+    )
 
 
 @then("the package should be created with both catalogs")

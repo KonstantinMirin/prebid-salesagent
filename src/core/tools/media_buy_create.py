@@ -1140,6 +1140,11 @@ def execute_approved_media_buy(
                         targeting_overlay=targeting_overlay,
                         product_id=product_id,
                         budget=budget,
+                        # Off the row the pending arm wrote, which is where the buyer's
+                        # create-time ask was parked while the buy waited for a human.
+                        # An approval replay places the buy on the ad server for the
+                        # first time, so this is that ask's only chance to be honoured.
+                        paused=bool(package_config.get("paused", False)),
                     )
                     packages.append(media_package)
 
@@ -2905,9 +2910,13 @@ async def _create_media_buy_impl(
                     # AnyUrl, enums, and datetimes in JSONType columns automatically
                     package_config = {
                         "package_id": mapped_package_id,
-                        # A newly created package is not paused (adcp 2.12.0 replaced the
-                        # status enum with this bool).
-                        "paused": False,
+                        # What the buyer ASKED for. Nothing is on the ad server yet — this
+                        # arm is a buy parked for a human decision — so the record is the
+                        # only place the ask can survive until ``execute_approved_media_buy``
+                        # rebuilds the carrier from it.
+                        # This was a hardcoded ``False`` with a comment asserting "a newly
+                        # created package is not paused", which made the ask unrecoverable.
+                        "paused": bool(req_pkg.paused),
                         "product_id": req_pkg.product_id,
                         "budget": budget_value,
                         "targeting_overlay": req_pkg.targeting_overlay,
@@ -3382,6 +3391,11 @@ async def _create_media_buy_impl(
                     targeting_overlay=(matching_package.targeting_overlay if matching_package else None),
                     product_id=pkg_product.product_id,  # Include product_id
                     budget=package_budget_value,  # Include budget from request (now normalized)
+                    # The create-time pause the buyer asked for, on its way to the ad
+                    # server. ``bool(...)`` rather than a passthrough because the
+                    # generated request field is ``bool | None`` while the pin types it
+                    # boolean with default false — absent and null both mean active.
+                    paused=bool(matching_package.paused) if matching_package else False,
                     creative_ids=(
                         _get_creative_ids(matching_package) if matching_package else None
                     ),  # Include creative_ids from uploaded creatives

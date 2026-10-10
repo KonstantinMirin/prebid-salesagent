@@ -293,6 +293,14 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             too, one response package per requested package, which is what keeps
             the tool's positional ``req.packages[i] -> response.packages[i]`` walk
             lined up.
+
+            ``paused`` is read off the CARRIER for the same reason, and that is what
+            makes it gradeable. ``Package.SELLER_DECIDED`` names ``paused``, so the tool
+            does not echo the request — it reports what the ad server answered. A real
+            adapter answers from ``MediaPackage.paused`` (every one of them through
+            ``AdServerAdapter._build_package_responses``), so this answers from the same
+            place. A seller that fails to put the buyer's ask on the carrier gets
+            ``False`` back here, exactly as it would from a real ad server.
             """
             # The tool calls adapter.create_media_buy(request, packages, ...)
             # positionally, so the MediaPackage list arrives as args[1].
@@ -300,7 +308,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
 
             return AdapterCreateResult(
                 media_buy_id=mint(f"mb_{uuid.uuid4().hex[:8]}"),
-                packages=[ResponsePackage(package_id=pkg.package_id, paused=False) for pkg in media_packages],
+                packages=[ResponsePackage(package_id=pkg.package_id, paused=pkg.paused) for pkg in media_packages],
             )
 
         mock_adapter.create_media_buy.side_effect = _adapter_create_response

@@ -906,9 +906,12 @@ class GAMOrdersManager:
                     "second": end_time.second,
                     "timeZoneId": impl_config.get("time_zone", "America/New_York"),
                 },
-                # Set status based on whether manual approval is required
-                # DRAFT = needs manual approval, READY = ready to serve (when creatives added)
-                "status": "READY",  # Always create as READY since creatives will be added
+                # READY = ready to serve once creatives are added; PAUSED = created held,
+                # which is what media-buy/package-request.json's create-time ``paused``
+                # means ("Paused packages do not deliver impressions"). Reporting the ask
+                # without setting this would have been worse than ignoring it: the buyer
+                # would read paused=true off a line item GAM was serving.
+                "status": "PAUSED" if package.paused else "READY",
             }
 
             # Add frequency caps - merge buyer's frequency cap with product config
