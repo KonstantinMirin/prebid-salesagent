@@ -39,11 +39,24 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-main-filtered @UC-005-MAIN-MCP-05 @main-flow @post-s3
   Scenario: Discover filtered format catalog
-    Given the creative agent registry has formats of types "display" and "video"
-    When the Buyer Agent requests formats with type filter "display"
+    # Filters on asset_types, which the media-buy request declares. `type` is NOT a
+    # parameter of this seller's request: it was removed from
+    # media-buy/list-creative-formats-request.json at the 3.0 major (2.5 had it) and
+    # survives only on the "(Creative Agent)" variant under creative/, which this
+    # seller does not serve.
+    #
+    # The outcome is asserted on `name`, not on the format's category. `type` is not a
+    # field of core/format.json either, so a Format carries one only as pydantic
+    # model_extra that the test factory injected -- measured: FormatFactory.build(
+    # type="display") puts it in model_extra, and Format.model_fields has no "type".
+    # An assertion on it grades a value no buyer ever receives. `name` is REQUIRED on
+    # the pinned Format, and `only "..." should be returned` also pins the count at 1,
+    # so an empty result cannot satisfy it.
+    Given the registry has format "display-banner" of type "display" with asset type "image"
+    And the registry has format "pre-roll" of type "video" with asset type "video"
+    When the Buyer Agent requests formats with asset_types filter ["image"]
     Then the response is compliant with the list_creative_formats spec
-    And the response should include only display formats
-    And no video formats should be present in the results
+    And only "display-banner" should be returned
     # POST-S3: Only matching formats returned when filters applied
 
   @T-UC-005-main-referrals @UC-005-MAIN-MCP-13 @main-flow @post-s4
@@ -107,23 +120,34 @@ Feature: BR-UC-005 Discover Creative Formats
     # media-buy request carries no `include_pricing` gate, so the aggregator never strips
     # pricing_options — formats lack them only when the registry supplies none.
 
+  # BR-RULE-031 INV-1 is AND semantics across multiple filters. It was stated with
+  # `type` + `asset_types`; `type` is not a parameter of this seller's request (removed
+  # from the media-buy variant at 3.0, present only on the "(Creative Agent)" variant),
+  # so the pair graded nothing. Restated over two filters the request DOES declare --
+  # asset_types and name_search -- which production applies as sequential narrowings of
+  # one list (creative_formats.py:365 and :360) and therefore ANDs. The Givens and the
+  # Thens are unchanged: the same registry and the same expected survivor now follow
+  # from filters that exist.
   @T-UC-005-inv-031-1-holds @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 holds - Multiple filters combine as AND
     Given the registry has format "display-banner" of type "display" with asset type "image"
     And the registry has format "video-banner" of type "display" with asset type "video"
     And the registry has format "pre-roll" of type "video" with asset type "video"
-    When the Buyer Agent requests formats with type "display" and asset_types ["video"]
+    When the Buyer Agent requests formats with asset_types ["video"] and name_search "banner"
     Then the response is compliant with the list_creative_formats spec
     And only "video-banner" should be returned
-    # BR-RULE-031 INV-1: both filters must match (type=display AND asset=video)
+    # BR-RULE-031 INV-1: both filters must match (asset=video AND name contains "banner").
+    # asset_types alone would also return "pre-roll"; name_search alone would also
+    # return "display-banner". Only the AND leaves "video-banner".
 
   @T-UC-005-inv-031-1-violated @UC-005-MAIN-MCP-16 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-1 violated - AND combination excludes partial matches
     Given the registry has format "pre-roll" of type "video" with asset type "video"
-    When the Buyer Agent requests formats with type "display" and asset_types ["video"]
+    When the Buyer Agent requests formats with asset_types ["video"] and name_search "banner"
     Then the response is compliant with the list_creative_formats spec
     And no formats should be returned
-    # BR-RULE-031 INV-1: type=display excludes video-type format despite matching asset_types
+    # BR-RULE-031 INV-1: "pre-roll" matches asset_types but not name_search, so the AND
+    # excludes it. A seller that ORed the filters would return it.
 
   @T-UC-005-inv-031-2-holds @UC-005-MAIN-MCP-04 @invariant @BR-RULE-031
   Scenario: BR-RULE-031 INV-2 holds - Results sorted by name
@@ -467,12 +491,16 @@ Feature: BR-UC-005 Discover Creative Formats
 
   @T-UC-005-ext-b @extension @ext-b @error @post-f1 @post-f2 @post-f3
   Scenario: Invalid request parameters
+    # Stated as an invalid `type` value, which this seller's request does not declare,
+    # so no rejection was reachable. asset_types is declared and enum-typed
+    # (asset-content-type.json), so an unknown member is a real INVALID_REQUEST naming
+    # a real parameter.
     Given a tenant is resolvable from the request context
-    When the Buyer Agent requests formats with type "not_a_category"
+    When the Buyer Agent requests formats with asset_types filter ["not_a_category"]
     Then the error is compliant with the AdCP error spec
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
-    And the error field should contain "type"
+    And the error field should contain "asset_types"
     And the error should include a "suggestion" field
     # POST-F1: Buyer knows the operation failed
     # POST-F2: Error explains which parameters are invalid and why
@@ -663,25 +691,21 @@ Feature: BR-UC-005 Discover Creative Formats
   # This matches the codes the ext-b error scenarios above already assert for the same
   # conditions, so one feature no longer names two codes for one rejection.
 
-  @T-UC-005-partition-type-filter @partition @format_type_filter
-  Scenario Outline: Format type filter partition - <partition>
-    Given a seller with formats of various types
-    When the Buyer Agent requests creative formats with type filter "<partition>"
-    Then the response is compliant with the list_creative_formats spec
-    And the type filtering should result in <expected>
-
-    Examples: Valid partitions
-      | partition     | expected |
-      | display       | valid    |
-      | video         | valid    |
-      | audio         | valid    |
-      | dooh          | valid    |
-      | omitted       | valid    |
-
-    Examples: Invalid partitions
-      | partition     | expected |
-      | invalid_type  | INVALID_REQUEST  |
-
+  # DELETED: @T-UC-005-partition-type-filter ("Format type filter partition").
+  # `type` is not a parameter of this seller's request, so every row's When dispatched
+  # an UNFILTERED request and the Then asserted that no filtering had occurred -- five
+  # rows reading green for asserting the absence of a behaviour nobody implements, and
+  # a sixth xfailed for a rejection that cannot happen. The pin's declared filters are
+  # graded by @T-UC-005-partition-asset-types and @T-UC-005-partition-format-ids below;
+  # restating this outline over either would duplicate one of them.
+  #
+  # ON RECOMPILE: upstream still authors both outlines, so `compile_bdd --merge` will
+  # bring them back. That is LOUD, not silent: their step definitions are deleted too,
+  # and neither tag is in tests/bdd/dormant_scenarios.txt, so each resurrected row
+  # fails as "NEW DORMANT SCENARIO". Delete them again -- do not add a baseline line,
+  # and do not re-add the step. (The note at scripts/compile_bdd.py:1180 says such a
+  # scenario "goes quiet rather than red"; that predates the dormancy baseline and is
+  # no longer true for a tag the baseline does not list.)
   @T-UC-005-partition-format-ids @UC-005-MAIN-MCP-06 @partition @format_ids_filter
   Scenario Outline: Format IDs filter partition - <partition>
     Given a seller with known format IDs in the catalog
@@ -868,22 +892,10 @@ Feature: BR-UC-005 Discover Creative Formats
       | invalid_format_id_missing_agent_url | INVALID_REQUEST  |
       | invalid_format_id_missing_id        | INVALID_REQUEST  |
 
-  @T-UC-005-boundary-type-filter @boundary @format_type_filter
-  Scenario Outline: Format type filter boundary - <boundary_point>
-    Given a seller with formats of various types
-    When the Buyer Agent requests creative formats at type boundary "<boundary_point>"
-    Then the response is compliant with the list_creative_formats spec
-    And the type handling should be <expected>
-
-    Examples:
-      | boundary_point              | expected |
-      | display (valid enum)        | valid    |
-      | video (valid enum)          | valid    |
-      | audio (valid enum)          | valid    |
-      | dooh (valid enum)           | valid    |
-      | omitted (no filter)         | valid    |
-      | invalid type (rejected)     | INVALID_REQUEST  |
-
+  # DELETED: @T-UC-005-boundary-type-filter ("Format type filter boundary"), for the
+  # same reason as the partition outline above -- five valid rows dispatched unfiltered
+  # and asserted that nothing was filtered. Boundary coverage for the pin's declared
+  # filters is @T-UC-005-boundary-asset-types and @T-UC-005-boundary-format-ids.
   @T-UC-005-boundary-format-ids @UC-005-MAIN-MCP-06 @boundary @format_ids_filter
   Scenario Outline: Format IDs filter boundary - <boundary_point>
     Given a seller with known format IDs in the catalog

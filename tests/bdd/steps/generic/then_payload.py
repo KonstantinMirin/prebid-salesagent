@@ -97,25 +97,15 @@ def then_all_formats(ctx: dict) -> None:
     )
 
 
-@then("the response should include only display formats")
-def then_only_display(ctx: dict) -> None:
-    formats = _get_formats(ctx)
-    registered = ctx.get("registry_formats", [])
-    expected_display = [r for r in registered if _fmt_type_str(r) == "display"]
-    assert len(formats) == len(expected_display), (
-        f"Expected {len(expected_display)} display formats, got {len(formats)}"
-    )
-    for f in formats:
-        assert _fmt_type_str(f) == "display", f"Expected type 'display', got '{_fmt_type_str(f)}'"
-
-
-@then("no video formats should be present in the results")
-def then_no_video(ctx: dict) -> None:
-    """Assert no video formats are present in the results."""
-    video_formats = [f for f in _get_formats(ctx) if _fmt_type_str(f) == "video"]
-    assert not video_formats, (
-        f"Expected no video formats but found {len(video_formats)}: {[_fmt_name(f) for f in video_formats]}"
-    )
+# Deleted: "the response should include only display formats" and "no video formats
+# should be present in the results". Both graded a format's `type`, and `type` is not a
+# field of the pinned core/format.json -- Format.model_fields has none, so a Format
+# carries one only as pydantic model_extra that FormatFactory injected in the test
+# process. Measured: FormatFactory.build(type="display") lands it in model_extra. So
+# both steps asserted a value no buyer receives, on an object the test itself had
+# decorated. @T-UC-005-main-filtered was their only caller and now asserts on `name`,
+# which the pinned Format REQUIRES, through `only "..." should be returned` -- which
+# also pins the count at 1, so an empty result cannot satisfy it.
 
 
 def _referral_url(ref: Any) -> str | None:
@@ -566,23 +556,16 @@ def _assert_filter_content(ctx: dict, field: str, label: str) -> None:
     returned_names = {_fmt_name(f) for f in formats}
     was_narrowed = bool(registry) and returned_names != registry_names
 
-    if field == "type":
-        # type filter was removed in adcp 3.12 -- all partitions dispatch
-        # unfiltered requests so the result should equal the full catalog.
-        assert not was_narrowed or len(formats) == 0, (
-            f"{label} 'type': type filter was removed in adcp 3.12 so the "
-            f"result should equal the full registry. Got {len(formats)} "
-            f"formats vs {len(registry)} in registry. "
-            f"Missing: {registry_names - returned_names}"
-        )
-        for f in formats:
-            type_str = _fmt_type_str(f)
-            assert type_str is not None, (
-                f"{label} 'type': format '{_fmt_name(f)}' has no type attribute -- "
-                "all formats in the catalog must carry a type category"
-            )
-
-    elif field == "format_ids":
+    # There is deliberately no ``field == "type"`` branch. It asserted
+    # ``not was_narrowed`` -- that type filtering had NOT happened -- for the two
+    # outlines whose When steps dispatched an unfiltered request, so ten rows read green
+    # for asserting the absence of a behaviour this seller does not implement and is not
+    # obliged to. ``type`` is not a parameter of the media-buy
+    # list-creative-formats request (removed at the 3.0 major; 2.5 had it) and survives
+    # only on the "(Creative Agent)" variant. Both outlines are deleted; a ``type``
+    # sentence reaching here now falls through to the shared checks below, which is the
+    # honest answer for a field this request does not carry.
+    if field == "format_ids":
         known_ids = ctx.get("known_format_ids", [])
         if known_ids:
             known_id_set = {fid.id for fid in known_ids}

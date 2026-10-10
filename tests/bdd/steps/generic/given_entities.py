@@ -105,16 +105,6 @@ def given_registry_multi_categories(ctx: dict) -> None:
     _sync_registry(ctx)
 
 
-@given(parsers.parse('the creative agent registry has formats of types "{type_a}" and "{type_b}"'))
-def given_registry_two_types(ctx: dict, type_a: str, type_b: str) -> None:
-    """Registry has formats of exactly two specified types."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name=f"{type_a}-format", type=CATEGORY_MAP.get(type_a)),
-        FormatFactory.build(name=f"{type_b}-format", type=CATEGORY_MAP.get(type_b)),
-    ]
-    _sync_registry(ctx)
-
-
 @given("the seller has additional creative agents beyond the default")
 def given_additional_creative_agents(ctx: dict) -> None:
     """One extra creative agent, seeded as the operator ROW production reads.
@@ -158,15 +148,12 @@ def given_no_formats(ctx: dict) -> None:
 # ── Partition / boundary: seller-with-various-X stubs ────────────────
 
 
-@given("a seller with formats of various types")
-def given_seller_various_types(ctx: dict) -> None:
-    """Seller has formats across various type categories (partition/boundary)."""
-    ctx["registry_formats"] = [
-        FormatFactory.build(name="display-ad", type=CATEGORY_MAP["display"]),
-        FormatFactory.build(name="video-ad", type=CATEGORY_MAP["video"]),
-        FormatFactory.build(name="native-card", type=CATEGORY_MAP["native"]),
-    ]
-    _sync_registry(ctx)
+# Deleted with the two type-filter outlines they seeded: "a seller with formats of
+# various types" and 'the creative agent registry has formats of types "x" and "y"'.
+# Both seeded a registry distinguished ONLY by format type, which is not a filterable
+# parameter of this seller's request, so neither Given could set up a filter. Keeping
+# an unused step definition alive is what makes a regenerated scenario go quiet instead
+# of red (scripts/compile_bdd.py:1180), so they go with the sentences that used them.
 
 
 @given("a seller with known format IDs in the catalog")
