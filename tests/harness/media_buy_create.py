@@ -253,17 +253,25 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
     def add_gam_product(
         self, product_id: str, *, delivery_type: str, cpm: str, implementation_config: dict[str, Any]
     ) -> Any:
-        """Another product of the GAM seller, sold at a fixed *cpm*; returns its pricing option."""
+        """Another product of the GAM seller, sold at a fixed *cpm*; returns its pricing option.
+
+        The product starts from the configuration the Admin UI generates for its delivery
+        type (``GAMProductConfigService.generate_default_config``), with
+        *implementation_config* on top, so a scenario states only the setting it is about.
+        """
         from decimal import Decimal
 
         from src.core.database.models import Tenant
+        from src.services.gam_product_config_service import GAMProductConfigService
 
         product, pricing_option = self.setup_product_chain(
             self.get_session().get(Tenant, self._tenant_id), product_id=product_id
         )
         product.delivery_type = delivery_type
         pricing_option.rate = Decimal(cpm)
-        self.sell_product_through_gam(product, implementation_config)
+        self.sell_product_through_gam(
+            product, {**GAMProductConfigService.generate_default_config(delivery_type), **implementation_config}
+        )
         return pricing_option
 
     def gam_order_id(self) -> str:
