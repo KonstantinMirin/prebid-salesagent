@@ -89,7 +89,15 @@ _DUPLICATE_THRESHOLD = 2
 # grade the adapter channel alone, which its "advisory warning" twin does not. Both were listed
 # above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
 # the groups are gone rather than merged.
-_DUPLICATE_GROUP_BASELINE = 21
+# 22 -> 21 -> 20: the four-lane SDK-9 integration removed one more group. The guard's
+# equality arm caught it ("Only 20 duplicate group(s) remain but the baseline still says
+# 21"), which is the ratchet working in the shrink direction rather than a failure. The
+# likely source is 82cc8c4fd, which deleted four dead `type`-filter When steps and the two
+# Givens that seeded only the deleted outlines -- leaving an unused step definition behind is
+# what turns a regenerated scenario into silent dormancy, so they went with the outlines.
+# Not asserted: the guard reports counts, not which group left, and the AST fragment it
+# prints does not identify one step pair unambiguously.
+_DUPLICATE_GROUP_BASELINE = 20
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -114,7 +122,10 @@ _ALLOWED_DUPLICATES: set[str] = set()
 #
 # So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
 # carry both sides' obligation: no new group, and no group growing.
-_DUPLICATE_MEMBER_BASELINE = 43
+# 43 -> 41: the same four-lane integration that took the GROUP count 21 -> 20. Two members
+# left with their group, which is why both numbers move together here -- and why the member
+# arm exists: a group losing members without disappearing is invisible to the group count.
+_DUPLICATE_MEMBER_BASELINE = 41
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
