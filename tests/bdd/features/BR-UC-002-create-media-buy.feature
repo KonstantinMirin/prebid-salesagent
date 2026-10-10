@@ -2078,6 +2078,59 @@ Feature: BR-UC-002 Create Media Buy
     # observable the live server also writes); a duplicate sandbox read was not one.
     # BR-RULE-209 INV-4: response includes sandbox: true
 
+  @T-UC-002-sandbox-no-live-ad-server @invariant @br-rule-209 @sandbox @live-ad-server
+  Scenario: Sandbox account on a live-ad-server tenant is never routed to the live ad server
+    Given a valid create_media_buy request with packages
+    And the tenant runs the "google_ad_manager" ad server
+    And the request targets a sandbox account
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy success spec
+    And the response status should be "completed"
+    # BR-RULE-209 INV-2: real ad platform calls suppressed.
+    #
+    # THIS is the grading the sibling @T-UC-002-sandbox-happy says it cannot do:
+    # "Grading INV-2 needs an instrument outside a Then ... a duplicate sandbox read
+    # was not one." The instrument is the TENANT. The Given gives it a real
+    # google_ad_manager configuration with a network code and no credential, and
+    # stops the harness faking the adapter decision — so the request is answered by
+    # whatever production selection actually picks. A selection that reaches GAM
+    # cannot answer at all from a deployment holding no GAM credential:
+    # GoogleAdManager.__init__ raises AdCPConfigurationError(field="authentication")
+    # at google_ad_manager.py:176, which is BEFORE the client manager is built and
+    # therefore well before createOrders. So "completed" here is strictly stronger
+    # than "createOrders was not called" — it says the GAM adapter was never
+    # CONSTRUCTED for this request. Pinned AdCP 3.1.1
+    # docs/media-buy/advanced-topics/sandbox.mdx:229 "MUST NOT make real ad platform
+    # API calls (no real orders, line items, etc.)" and :11 "Once a request
+    # references a sandbox account, the entire request is treated as sandbox".
+    #
+    # Deliberately asserts NOTHING about a sandbox echo on the response: that is the
+    # separate, still-open gap @T-UC-002-sandbox-happy is xfailed for
+    # (CreateMediaBuyResult declares no sandbox field), and binding the two together
+    # would make this isolation grade wait on it.
+
+  @T-UC-002-live-ad-server-reached @invariant @br-rule-209 @sandbox @live-ad-server
+  Scenario: Production account on the same tenant is routed to the live ad server
+    Given a valid create_media_buy request with packages
+    And the tenant runs the "google_ad_manager" ad server
+    And the request targets a production account
+    When the Buyer Agent sends the create_media_buy request
+    Then the response is compliant with the create_media_buy error spec
+    And the error code should be "CONFIGURATION_ERROR"
+    # The INSTRUMENT CHECK for the scenario above, and the reason its green mark
+    # means something. Byte-identical Givens except the account's sandbox flag, so
+    # the only difference between the two outcomes is the flag. If the adapter_config
+    # row were never written, or the harness were still faking the adapter decision,
+    # or the account never reached the identity, THIS scenario would complete like
+    # any other create — and the pair could not both be green. Neither scenario is
+    # evidence alone; the pair is.
+    #
+    # CONFIGURATION_ERROR is the honest answer here, not a contrivance: a tenant
+    # configured for an ad server whose credentials this deployment does not hold is
+    # precisely what AdCPConfigurationError documents ("a missing API key"), and the
+    # pinned table classifies the code terminal — the buyer has no lever over the
+    # seller's ad-server credentials.
+
   @T-UC-002-sandbox-production @invariant @br-rule-209 @sandbox
   Scenario: Production account media buy response does not include sandbox flag
     Given a valid create_media_buy request with packages

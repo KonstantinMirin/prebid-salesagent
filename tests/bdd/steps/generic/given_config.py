@@ -1,6 +1,12 @@
-"""Given steps for registry/configuration setup with specific format definitions.
+"""Given steps for seller CONFIGURATION: which ad server the tenant runs, and the
+format registry it serves.
 
-These steps populate ``ctx["registry_formats"]`` with real Format objects
+Most of this module is the format half. The tenant's ad server lives here too
+because it is the same kind of fact — something configured about the seller, asked
+by more than one domain — and a Given that names it belongs where every feature can
+reach it rather than inside one domain's step module.
+
+The format steps populate ``ctx["registry_formats"]`` with real Format objects
 for invariant and edge-case scenarios. They use pytest-bdd data tables where
 the feature file includes ``| col | col |`` rows.
 
@@ -28,6 +34,24 @@ from tests.factories.format import (
     make_responsive_renders,
 )
 from tests.factories.webhook import PushNotificationConfigRequestFactory
+
+
+@given(parsers.parse('the tenant runs the "{adapter_type}" ad server'))
+def given_ad_server(ctx: dict, adapter_type: str) -> None:
+    """The tenant genuinely runs *adapter_type* as its ad server.
+
+    Generic because it says something about the TENANT and two domains now ask it:
+    publisher authorization (which reads the adapter the tenant declares) and
+    BR-UC-002's sandbox-isolation pair (which needs a LIVE ad server configured so
+    that reaching it is observable). Each env realizes the sentence its own way —
+    ``PublisherAuthorizationEnv.run_ad_server`` writes the row,
+    ``MediaBuyCreateEnv.run_ad_server`` writes the row and stops faking the adapter
+    decision, because an env that keeps faking it is not running this ad server.
+
+    One sentence, one binding, the env realizes it: the step says WHAT is true and
+    never branches on which env is answering.
+    """
+    ctx["env"].run_ad_server(adapter_type)
 
 
 def _add_format(ctx: dict, fmt: object) -> None:

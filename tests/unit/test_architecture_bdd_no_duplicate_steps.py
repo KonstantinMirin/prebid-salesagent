@@ -89,14 +89,23 @@ _DUPLICATE_THRESHOLD = 2
 # grade the adapter channel alone, which its "advisory warning" twin does not. Both were listed
 # above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
 # the groups are gone rather than merged.
-# 22 -> 21 -> 20: the four-lane SDK-9 integration removed one more group. The guard's
-# equality arm caught it ("Only 20 duplicate group(s) remain but the baseline still says
-# 21"), which is the ratchet working in the shrink direction rather than a failure. The
-# likely source is 82cc8c4fd, which deleted four dead `type`-filter When steps and the two
-# Givens that seeded only the deleted outlines -- leaving an unused step definition behind is
-# what turns a regenerated scenario into silent dormancy, so they went with the outlines.
-# Not asserted: the guard reports counts, not which group left, and the AST fragment it
-# prints does not identify one step pair unambiguously.
+#
+# 22 -> 21 -> 20: two independent drops, and the ratchet's equality arm caught each one
+# ("Only N duplicate group(s) remain but the baseline still says N+1") -- which is this
+# counter working in the shrink direction rather than failing.
+#
+# The identified one: ``the tenant runs the "<adapter_type>" ad server`` moved out of
+# steps/domain/publisher_authorization.py into steps/generic/given_config.py when
+# BR-UC-002's sandbox-isolation pair started using it (salesagent-kf5mn). Its body was a
+# bare delegation to ``env.run_ad_server``, byte-identical to its neighbours' bodies in
+# that module, which is what put it in a group; the group is GONE rather than merged,
+# because there is now one binding for the sentence and two envs realizing it.
+#
+# The other drop came with the four-lane SDK-9 integration and is NOT attributed: the guard
+# reports counts, and the AST fragment it prints does not identify one step pair
+# unambiguously. The plausible source is the deletion of four dead `type`-filter When steps
+# and the two Givens that seeded only the deleted outlines, but that was not measured, so it
+# is recorded as a guess and not as a fact.
 _DUPLICATE_GROUP_BASELINE = 20
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
@@ -122,9 +131,12 @@ _ALLOWED_DUPLICATES: set[str] = set()
 #
 # So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
 # carry both sides' obligation: no new group, and no group growing.
-# 43 -> 41: the same four-lane integration that took the GROUP count 21 -> 20. Two members
-# left with their group, which is why both numbers move together here -- and why the member
-# arm exists: a group losing members without disappearing is invisible to the group count.
+#
+# 43 -> 41: two members left alongside the group drops recorded above -- the ad-server Given's
+# group being the identified one. Both numbers moving together is the ordinary case; the member
+# arm exists for the case where they do NOT, because a group that loses members without
+# disappearing is invisible to the group count. Neither number is hand-reasoned: both are what
+# the scan reports on this tree, and the guard's equality arm fails if either drifts.
 _DUPLICATE_MEMBER_BASELINE = 41
 
 
