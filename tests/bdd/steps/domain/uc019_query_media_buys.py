@@ -629,79 +629,169 @@ def given_package_creative_rejected(ctx: dict, pkg_id: str, status: str, reason:
     env._commit_factory_data()
 
 
+def _seeded_creative(ctx: dict, creative_id: str) -> Any:
+    """The creative this scenario seeded under *creative_id*, or a loud failure.
+
+    The two-step Given shape of the approval outlines -- "package has a creative
+    assignment with creative_id X" and then "the creative X has internal status Y" --
+    means the second step has to find what the first one created. Recorded on ctx by
+    id rather than re-queried, because the composite PK is
+    (creative_id, tenant_id, principal_id) and a re-query would have to reproduce all
+    three; the step that made the row already holds it.
+    """
+    seeded = ctx.get("seeded_creatives", {})
+    creative = seeded.get(creative_id)
+    assert creative is not None, (
+        f"No creative seeded for {creative_id!r}. The scenario must carry a "
+        f'\'package "<pkg>" has a creative assignment with creative_id "{creative_id}"\' '
+        f"Given before naming its status; seeded so far: {sorted(seeded)}"
+    )
+    return creative
+
+
 @given(parsers.parse('package "{pkg_id}" has a creative assignment with creative_id "{creative_id}"'))
 def given_package_creative_assignment(ctx: dict, pkg_id: str, creative_id: str) -> None:
-    """Record creative assignment — cannot seed real DB records.
+    """Seed a creative under *creative_id* and assign it to *pkg_id*.
 
-    FIXME: When CreativeAssignmentFactory exists, seed real DB records.
+    The reason this step used to carry -- "No CreativeAssignmentFactory -- cannot seed
+    creative assignment ... FIXME: Create factory to seed real DB records" -- was FALSE
+    when written and false since: CreativeAssignmentFactory is imported at the top of this
+    module and ``given_package_creative_status`` / ``given_package_creative_rejected``
+    directly above both use it. This is the same seeding, with the creative_id the
+    scenario names, and it recorded nothing in the DB only because ``pytest.xfail()``
+    raised before it could.
+
+    It also aborted every scenario that reached it, which is why four further inline
+    xfails below it were dead code: the first one always won.
+
+    The creative starts in ``submitted`` (production maps that to pending_review); the
+    status rows that follow move it. The literal creative_id is safe under xdist because
+    the creatives PK is composite and each env owns a freshly-minted tenant.
     """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot seed creative assignment "
-        f"for '{creative_id}' on package '{pkg_id}'. "
-        f"FIXME: Create factory to seed real DB records."
+    env = ctx["env"]
+    media_buy = _find_media_buy_for_package(ctx, pkg_id)
+    creative = CreativeFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        creative_id=creative_id,
+        status="submitted",
     )
+    CreativeAssignmentFactory(
+        creative=creative,
+        media_buy=media_buy,
+        package_id=pkg_id,
+    )
+    env._commit_factory_data()
+    ctx.setdefault("seeded_creatives", {})[creative_id] = creative
 
 
-@given(parsers.parse('the creative "{creative_id}" has internal status "{status}" and rejection_reason "{reason}"'))
-def given_creative_status_with_reason(ctx: dict, creative_id: str, status: str, reason: str) -> None:
-    """Update creative status/reason — cannot update real DB records.
+#: ``rejection_reason`` sentinel for "the cell named no reason at all, so do not touch the
+#: stored data". Distinct from ``None``, which means "the cell asked for NO reason" and
+#: clears it: a row that grades an absent reason and a row that is silent about reasons are
+#: different obligations, and collapsing them would let one pass on the other's state.
+_LEAVE_DATA_ALONE = object()
 
-    FIXME: When CreativeAssignmentFactory exists, update real DB records.
+
+def _set_creative_state(ctx: dict, creative_id: str, status: str, *, rejection_reason: Any) -> None:
+    """Move the seeded creative to *status*, writing *rejection_reason* into its data.
+
+    One writer for the status Givens below -- they differ only in where the rejection
+    reason comes from, so the write itself is named once. ``status`` is stored verbatim,
+    including the literal "null" and the empty string the boundary rows use: the column is
+    NOT NULL and production's ``_map_creative_status`` treats anything it does not
+    recognize as pending_review, which is the behaviour those rows grade.
     """
-    import pytest
+    creative = _seeded_creative(ctx, creative_id)
+    creative.status = status
+    if rejection_reason is not _LEAVE_DATA_ALONE:
+        data = dict(creative.data or {})
+        if rejection_reason is None:
+            data.pop("rejection_reason", None)
+        else:
+            data["rejection_reason"] = rejection_reason
+        creative.data = data
+    ctx["env"]._commit_factory_data()
 
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
-        f"'{creative_id}' with status='{status}', rejection_reason='{reason}' in DB. "
-        f"FIXME: Create factory to seed/update real DB records."
-    )
+
+#: The extra-condition clause of ``the creative "<id>" has internal status "<s>" <extra>``
+#: that names the rejection reason explicitly, e.g. ``and rejection_reason "Image too dark"``.
+_REJECTION_REASON_CLAUSE = re.compile(r'^and rejection_reason "(?P<reason>.*)"$')
 
 
 @given(parsers.parse('the creative "{creative_id}" has internal status "{status}" {extra_condition}'))
 def given_creative_status_extra(ctx: dict, creative_id: str, status: str, extra_condition: str) -> None:
-    """Update creative status with extra conditions — cannot update real DB records.
+    """Move the seeded creative to *status* under the extra condition the Examples cell names.
 
-    FIXME: When CreativeAssignmentFactory exists, update real DB records.
+    THIS STEP OWNS EVERY VARIANT, including the explicit ``and rejection_reason "..."``
+    one. A separate, narrower step for that sentence was written first and never ran:
+    pytest-bdd matched this more general pattern, so the narrow step was dead and its
+    scenario rows failed here instead (box run, ValueError on cr-002). One pattern that
+    can match is one pattern that must handle them all.
+
+    Recognized clauses, which is exactly what the approval outlines write:
+      ``and rejection_reason "<text>"``       record that reason
+      ``and no rejection_reason in data``     clear it
+      ``and empty data``                      clear it
+      ``with rejection data``                 record a reason (the cell names none)
+      empty                                   the status alone; data untouched
+    Anything else is refused by name rather than silently treated as "no reason": a new
+    Examples cell must not quietly grade a state this step did not establish.
     """
-    import pytest
+    condition = extra_condition.strip()
+    if not condition:
+        _set_creative_state(ctx, creative_id, status, rejection_reason=_LEAVE_DATA_ALONE)
+    elif match := _REJECTION_REASON_CLAUSE.match(condition):
+        _set_creative_state(ctx, creative_id, status, rejection_reason=match["reason"])
+    elif condition in ("and no rejection_reason in data", "and empty data"):
+        _set_creative_state(ctx, creative_id, status, rejection_reason=None)
+    elif condition == "with rejection data":
+        _set_creative_state(ctx, creative_id, status, rejection_reason="Image too dark")
+    else:
+        raise ValueError(
+            f"Unknown creative-state extra condition {condition!r} for creative {creative_id!r}. "
+            "Add it here deliberately — an unrecognized condition must not fall through to "
+            "'no rejection reason', which is itself a graded state."
+        )
 
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
-        f"'{creative_id}' status to '{status}' with '{extra_condition}' in DB. "
-        f"FIXME: Create factory to seed/update real DB records."
-    )
 
-
-@given(parsers.parse('the creative "{creative_id}" has internal status "{status}"'))
+@given(parsers.re(r'the creative "(?P<creative_id>[^"]*)" has internal status "(?P<status>[^"]*)"$'))
 def given_creative_status_simple(ctx: dict, creative_id: str, status: str) -> None:
-    """Set creative internal status — cannot update real DB records.
+    """Move the seeded creative to *status*, leaving its data untouched.
 
-    FIXME: When CreativeAssignmentFactory exists, update real DB records.
+    ``parsers.re``, not ``parsers.parse``, for ONE reason: a ``parse`` field does not match
+    the empty string, and the boundary outline has a row whose cell is literally
+    ``internal status ""`` -- the empty status a NOT NULL column can still hold, which
+    production maps to pending_review. Under ``parse`` that line matched no step at all and
+    the row was reported as dormant rather than graded. The ``$`` anchor keeps this pattern
+    off the lines that carry an extra condition, which belong to the step above.
     """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: No CreativeAssignmentFactory — cannot update creative "
-        f"'{creative_id}' status to '{status}' in DB. "
-        f"FIXME: Create factory to seed/update real DB records."
-    )
+    creative = _seeded_creative(ctx, creative_id)
+    creative.status = status
+    ctx["env"]._commit_factory_data()
 
 
 @given(parsers.parse('no creative with id "{creative_id}" exists in the tenant'))
 def given_no_creative_exists(ctx: dict, creative_id: str) -> None:
-    """Mark creative as nonexistent — cannot verify or enforce DB absence.
+    """Assert the state BR-RULE-152 INV-4 asks for, and record that it is unreachable.
 
-    FIXME: When CreativeAssignmentFactory exists, verify actual
-    DB absence rather than relying on ctx-only sentinels.
+    The scenario wants an assignment pointing at a creative row that does not exist.
+    ``creative_assignments`` carries a composite ForeignKeyConstraint
+    (creative_id, tenant_id, principal_id) -> creatives with no ondelete
+    (src/core/database/models.py), so that row cannot be inserted and the creative cannot
+    be deleted out from under it. The condition is unreachable in this schema, which means
+    production's silent-skip is defensive code nothing can exercise.
+
+    This step therefore establishes nothing and says so: it asserts the one thing that IS
+    true -- the creative the preceding Given seeded exists, and by the FK must -- and leaves
+    the scenario's own routing to report the gap, rather than carrying a per-step escape
+    hatch. The old inline ``pytest.xfail`` here was never reached anyway:
+    ``given_package_creative_assignment`` aborted first. Nothing is recorded on ctx for a
+    later step to read, because there is no established state to describe.
     """
-    import pytest
-
-    pytest.xfail(
-        f"SPEC-PRODUCTION GAP: Cannot enforce DB absence for creative '{creative_id}' — "
-        f"no CreativeAssignmentFactory to verify or control DB state. "
-        f"FIXME: Verify actual DB absence."
+    creative = _seeded_creative(ctx, creative_id)
+    assert creative.creative_id == creative_id, (
+        f"seeded creative is {creative.creative_id!r}, not {creative_id!r} — the assignment "
+        "Given and this one disagree about which creative the scenario is about"
     )
 
 
@@ -1766,78 +1856,128 @@ def then_errors_name_omitted_media_buy(ctx: dict, mb_id: str) -> None:
     )
 
 
+def _response_approvals(ctx: dict) -> list[Any]:
+    """Every creative_approvals entry on every package of every returned media buy.
+
+    One walk, named once. Four Then steps below each wrote the same
+    buys -> packages -> creative_approvals triple loop inline, and the boundary outline
+    needs it a fifth time; a fifth copy is where the versions start to disagree about
+    what "no approvals at all" means.
+    """
+    return [
+        approval
+        for buy in _get_media_buys(ctx)
+        for pkg in getattr(buy, "packages", []) or []
+        for approval in getattr(pkg, "creative_approvals", None) or []
+    ]
+
+
+def _approval_status(approval: Any) -> str:
+    """The approval_status as a plain string, whether the payload parsed it to an enum."""
+    value = getattr(approval, "approval_status", None)
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _assert_some_approval_has_status(ctx: dict, status: str) -> Any:
+    """Return an approval whose status is *status*, or fail naming what was there instead."""
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        if _approval_status(approval) == status:
+            return approval
+    raise AssertionError(
+        f"No creative approval with approval_status={status!r} in the response; "
+        f"found {[(getattr(a, 'creative_id', None), _approval_status(a)) for a in approvals]}"
+    )
+
+
 @then(parsers.parse('the creative approval for "{creative_id}" should have approval_status "{status}"'))
 def then_creative_approval_status(ctx: dict, creative_id: str, status: str) -> None:
-    """Assert a specific creative's approval status in the response.
-
-    Searches ALL packages across ALL media buys for a creative_approvals
-    entry matching creative_id, then asserts approval_status.
-    """
-
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                aid = getattr(approval, "creative_id", None)
-                if aid == creative_id:
-                    actual = getattr(approval, "approval_status", None)
-                    actual_str = actual.value if hasattr(actual, "value") else str(actual)
-                    assert actual_str == status, (
-                        f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual_str}'"
-                    )
-                    return
-    raise AssertionError(f"No approval entry found for creative '{creative_id}' across {len(buys)} media buy(s)")
+    """Assert a NAMED creative's approval status in the response."""
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        if getattr(approval, "creative_id", None) == creative_id:
+            actual = _approval_status(approval)
+            assert actual == status, f"Expected approval_status '{status}' for creative '{creative_id}', got '{actual}'"
+            return
+    raise AssertionError(
+        f"No approval entry found for creative '{creative_id}'; "
+        f"the response carried {[getattr(a, 'creative_id', None) for a in approvals]}"
+    )
 
 
 @then(parsers.parse('the creative approval should have approval_status "{status}"'))
+@then(parsers.parse('approval_status should be "{status}"'))
 def then_any_creative_approval_status(ctx: dict, status: str) -> None:
-    """Assert creative approval status on any package (any creative matches)."""
+    """Assert creative approval status on any package (any creative matches).
 
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                actual = getattr(approval, "approval_status", None)
-                actual_str = actual.value if hasattr(actual, "value") else str(actual)
-                if actual_str == status:
-                    return  # Found a matching approval
-    raise AssertionError(f"No approval with status='{status}' found across {len(buys)} media buy(s)")
+    TWO step texts, ONE body. The invariant scenarios write the sentence in full and the
+    boundary outline writes the bare outcome in its Examples column, but the obligation is
+    the same one -- BR-RULE-152's mapping of internal status to the AdCP enum -- so the
+    two sentences are registered on this function rather than on a second function with an
+    identical body.
+    """
+    _assert_some_approval_has_status(ctx, status)
+
+
+@then(parsers.parse('approval_status should be "{status}" with rejection_reason'))
+def then_boundary_approval_status_with_reason(ctx: dict, status: str) -> None:
+    """The mapped status AND a non-empty rejection_reason on the SAME approval entry.
+
+    Both on one entry, not one assertion each: a response carrying a rejected entry with
+    no reason and a different entry with a reason would satisfy two independent checks
+    while failing the obligation (BR-RULE-152: the reason belongs to the rejection).
+    """
+    approval = _assert_some_approval_has_status(ctx, status)
+    reason = getattr(approval, "rejection_reason", None)
+    assert reason, (
+        f"Expected a rejection_reason on the {status!r} approval for "
+        f"{getattr(approval, 'creative_id', None)!r}, got {reason!r}"
+    )
+
+
+@then(parsers.parse('approval_status should be "{status}" with null rejection_reason'))
+def then_boundary_approval_status_null_reason(ctx: dict, status: str) -> None:
+    """The mapped status, and rejection_reason ABSENT on that same entry.
+
+    The row that binds this seeds a rejected creative with empty ``data``, so the
+    obligation is that a missing stored reason is reported as absent rather than as an
+    empty string -- ``""`` would pass a truthiness check written the other way round.
+    """
+    approval = _assert_some_approval_has_status(ctx, status)
+    reason = getattr(approval, "rejection_reason", None)
+    assert reason is None, (
+        f"Expected rejection_reason to be absent on the {status!r} approval for "
+        f"{getattr(approval, 'creative_id', None)!r}, got {reason!r}"
+    )
 
 
 @then(parsers.parse('the rejection_reason should be "{reason}"'))
+@then(parsers.parse('rejection_reason should be "{reason}"'))
 def then_rejection_reason(ctx: dict, reason: str) -> None:
-    """Assert rejection_reason matches expected value on any approval."""
+    """Assert rejection_reason matches expected value on any approval.
 
-    buys = _get_media_buys(ctx)
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                actual_reason = getattr(approval, "rejection_reason", None)
-                if actual_reason is not None:
-                    assert str(actual_reason) == reason, f"Expected rejection_reason '{reason}', got '{actual_reason}'"
-                    return
-    raise AssertionError(
-        f"No approval with rejection_reason found across {len(buys)} media buy(s), expected '{reason}'"
-    )
+    Both spellings, one body. The invariant scenarios write "the rejection_reason should
+    be ..." and the partition outline's rejection_check column writes it without the
+    article; only the first was registered, so that Examples cell bound no step and the row
+    was dormant while looking like a graded assertion.
+    """
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        actual_reason = getattr(approval, "rejection_reason", None)
+        if actual_reason is not None:
+            assert str(actual_reason) == reason, f"Expected rejection_reason '{reason}', got '{actual_reason}'"
+            return
+    raise AssertionError(f"No approval with rejection_reason found in the response, expected '{reason}'")
 
 
 @then(parsers.parse("rejection_reason should be absent"))
 def then_rejection_reason_absent(ctx: dict) -> None:
     """Assert rejection_reason is absent on ALL approvals when not rejected."""
-
-    buys = _get_media_buys(ctx)
-    checked = 0
-    for buy in buys:
-        for pkg in getattr(buy, "packages", []) or []:
-            approvals = getattr(pkg, "creative_approvals", None) or []
-            for approval in approvals:
-                checked += 1
-                actual_reason = getattr(approval, "rejection_reason", None)
-                assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
-    assert checked > 0, "No approval entries found in response — cannot verify rejection_reason absence"
+    approvals = _response_approvals(ctx)
+    for approval in approvals:
+        actual_reason = getattr(approval, "rejection_reason", None)
+        assert actual_reason is None, f"Expected rejection_reason to be absent, got '{actual_reason}'"
+    assert approvals, "No approval entries found in response — cannot verify rejection_reason absence"
 
 
 @then(parsers.parse('the creative approvals for package "{pkg_id}" should not include an entry for "{creative_id}"'))

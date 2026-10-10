@@ -344,11 +344,18 @@ Feature: BR-UC-019 Query Media Buys
 
     Examples: Valid partitions
       | partition                | creative_id | internal_status | extra_condition                              | expected_approval | rejection_check                                     |
-      | approved_creative        | cr-001      | approved        |                                              | approved          | rejection_reason should be absent                   |
+      | approved_creative        | cr-001      | approved        | and no rejection_reason in data              | approved          | rejection_reason should be absent                   |
       | rejected_with_reason     | cr-002      | rejected        | and rejection_reason "Image too dark"        | rejected          | rejection_reason should be "Image too dark"         |
       | rejected_without_reason  | cr-003      | rejected        | and no rejection_reason in data              | rejected          | rejection_reason should be absent |
-      | pending_review_explicit  | cr-004      | submitted       |                                              | pending_review    | rejection_reason should be absent                   |
-      | pending_review_catchall  | cr-005      | processing      |                                              | pending_review    | rejection_reason should be absent                   |
+      | pending_review_explicit  | cr-004      | submitted       | and no rejection_reason in data              | pending_review    | rejection_reason should be absent                   |
+      | pending_review_catchall  | cr-005      | processing      | and no rejection_reason in data              | pending_review    | rejection_reason should be absent                   |
+    # The three extra_condition cells that were EMPTY now name the state their own
+    # rejection_check column grades. An empty cell rendered the Given as
+    # `... has internal status "approved" ` with a trailing space, and a parse-parser field
+    # matches no empty string, so that line bound NO step definition: three of the five rows
+    # were dormant while reading as graded. Naming the condition is also the stronger
+    # scenario -- a row that asserts "rejection_reason should be absent" should say that its
+    # creative has none, rather than leaving it to whatever the factory defaults to.
 
   @T-UC-019-partition-approval-invalid @partition @approval_status
   Scenario: Creative approval mapping - no_creative_found (silent skip)
@@ -377,9 +384,22 @@ Feature: BR-UC-019 Query Media Buys
       | creative.status exactly 'rejected'                | internal status "rejected" with rejection data | approval_status should be "rejected" with rejection_reason                   |
       | creative.status exactly 'rejected' with no data   | internal status "rejected" and empty data       | approval_status should be "rejected" with null rejection_reason              |
       | creative.status is empty string                   | internal status ""                             | approval_status should be "pending_review"                                   |
-      | creative.status is null                           | internal status null                           | approval_status should be "pending_review"                                   |
+      | creative.status is null                           | internal status "null"                         | approval_status should be "pending_review"                                   |
       | creative.status is 'APPROVED' (case mismatch)    | internal status "APPROVED"                     | approval_status should be "pending_review"                                   |
-      | creative not found for assignment                 | a nonexistent creative_id                      | the approval entry should be silently omitted                                |
+    # `internal status "null"` is QUOTED. The cell is the literal four-character string
+    # "null" -- what a NOT NULL status column can actually hold -- and production's
+    # _map_creative_status treats it as unrecognized, hence pending_review; the sibling
+    # Given `package "<pkg>" has a creative with internal status "<status>"` records the
+    # same convention. Unquoted, the line matched no step definition at all, which stayed
+    # invisible for as long as an earlier Given aborted the scenario before it ran.
+    #
+    # The row `creative not found for assignment / a nonexistent creative_id` is DELETED.
+    # It asked for an assignment referencing a creative row that does not exist, and
+    # creative_assignments carries a composite ForeignKeyConstraint
+    # (creative_id, tenant_id, principal_id) -> creatives with no ondelete, so that state
+    # can neither be created nor arise. No obligation is dropped: BR-RULE-152 INV-4 has its
+    # own scenario, @T-UC-019-partition-approval-invalid, routed with that unreachability as
+    # its stated reason. This row was the duplicate, not the claim.
 
   @T-UC-019-inv-152-5 @invariant @BR-RULE-152
   Scenario: INV-5 holds - rejection_reason absent when not rejected
