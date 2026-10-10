@@ -155,7 +155,8 @@ class TestDefaultPriorities:
         assert PricingCompatibility.get_default_priority("STANDARD") == 8
         assert PricingCompatibility.get_default_priority("PRICE_PRIORITY") == 12
         assert PricingCompatibility.get_default_priority("BULK") == 12
-        assert PricingCompatibility.get_default_priority("NETWORK") == 16
+        # GAM documents NETWORK's default as 12 within 11..14 (LineItemSummary.priority).
+        assert PricingCompatibility.get_default_priority("NETWORK") == 12
         assert PricingCompatibility.get_default_priority("HOUSE") == 16
 
     def test_unknown_type_defaults_to_standard_priority(self):

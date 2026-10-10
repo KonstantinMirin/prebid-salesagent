@@ -79,3 +79,36 @@ def stub_gam_client_manager(
     # still recorded where a test can read it back.
     client_manager.get_service.side_effect = lambda name: services.setdefault(name, MagicMock())
     return client_manager
+
+
+#: Where GAM's ``getReportDownloadURL`` points: a host the reporting service's provenance
+#: check accepts (``ReportingConfig.ALLOWED_DOMAINS``).
+GAM_REPORT_DOWNLOAD_URL = "https://storage.googleapis.com/gam-report.csv.gz"
+
+
+def serve_gam_report(client_manager: MagicMock, *, status: str = "COMPLETED") -> None:
+    """Give *client_manager*'s SOAP client a ReportService whose job ends in *status*.
+
+    ``GAMReportingService`` talks to the SOAP client the adapter holds
+    (``client_manager.get_client()``), not to ``get_service``: it runs the job, polls its
+    status, and asks for the CSV's download URL. A ``FAILED`` job is the report failure the
+    seller must still surface. The CSV itself is fetched over HTTP -- see
+    ``empty_gam_report_download``.
+    """
+    report_service = MagicMock(
+        runReportJob=MagicMock(return_value={"id": 7001}),
+        getReportJobStatus=MagicMock(return_value=status),
+        getReportDownloadURL=MagicMock(return_value=GAM_REPORT_DOWNLOAD_URL),
+    )
+    network_service = MagicMock(getCurrentNetwork=MagicMock(return_value=SoapObject(timeZone="America/New_York")))
+    services = {"ReportService": report_service, "NetworkService": network_service}
+    client_manager.get_client.return_value.GetService.side_effect = lambda name, *a, **kw: (
+        services.get(name) or MagicMock()
+    )
+
+
+def empty_gam_report_download() -> MagicMock:
+    """The HTTP response carrying a GAM report with no rows: a gzipped header-only CSV."""
+    import gzip
+
+    return MagicMock(content=gzip.compress(b"Dimension.DATE,Column.AD_SERVER_IMPRESSIONS\n"))

@@ -160,9 +160,20 @@ class PricingCompatibility:
             )
         return cost_type
 
+    # (default, minimum, maximum) priority per line item type, as GAM documents them
+    # (LineItemSummary.priority, GAM API v202605). Lower number = higher priority.
+    PRIORITY_RANGES: dict[str, tuple[int, int, int]] = {
+        "SPONSORSHIP": (4, 2, 5),
+        "STANDARD": (8, 6, 10),
+        "NETWORK": (12, 11, 14),
+        "BULK": (12, 11, 14),
+        "PRICE_PRIORITY": (12, 11, 14),
+        "HOUSE": (16, 15, 16),
+    }
+
     @classmethod
     def get_default_priority(cls, line_item_type: LineItemType) -> int:
-        """Get default priority for line item type (GAM best practices).
+        """Get GAM's default priority for a line item type.
 
         Args:
             line_item_type: GAM line item type
@@ -170,12 +181,18 @@ class PricingCompatibility:
         Returns:
             Default priority level (1-16, lower = higher priority)
         """
-        priorities = {
-            "SPONSORSHIP": 4,
-            "STANDARD": 8,
-            "PRICE_PRIORITY": 12,
-            "BULK": 12,
-            "NETWORK": 16,
-            "HOUSE": 16,
-        }
-        return priorities.get(line_item_type, 8)
+        return cls.PRIORITY_RANGES.get(line_item_type, (8, 1, 16))[0]
+
+    @classmethod
+    def resolve_priority(cls, line_item_type: LineItemType, configured: int | None) -> int:
+        """The priority to book: the product's configured one when GAM allows it for the type.
+
+        ``configured`` is ``implementation_config.priority``, the operator's choice for the
+        product (docs/adapters/gam/product-configuration.md). GAM rejects a priority outside
+        the type's range, so such a value -- including a default generated before the line
+        item type was known -- books the type's default instead.
+        """
+        default, minimum, maximum = cls.PRIORITY_RANGES.get(line_item_type, (8, 1, 16))
+        if configured is not None and minimum <= configured <= maximum:
+            return configured
+        return default

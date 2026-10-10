@@ -248,6 +248,19 @@ class DeliveryWebhookScheduler:
                 )
                 return False
 
+            # The ad server named when its figures for the period will be complete: the
+            # scheduled report waits for them rather than sending partial ones.
+            delayed_until = [
+                d.expected_availability for d in delivery_response.media_buy_deliveries if d.expected_availability
+            ]
+            if delayed_until:
+                logger.info(
+                    "Holding daily delivery webhook for media buy %s – ad server data expected complete at %s",
+                    media_buy_id,
+                    max(delayed_until),
+                )
+                return False
+
             # Get sequence number for this webhook (get max sequence + 1)
             sequence_number = 1
             try:

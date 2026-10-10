@@ -101,6 +101,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.publisher_authorization",
+    "tests.bdd.steps.domain.gam_adapter",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -6201,6 +6202,17 @@ ENV_ROUTES: list[EnvRoute] = [
         # it takes the UC-GET-PRODUCTS branch.
         when=lambda m: any(t.startswith("T-PROTOCOL-001") for t in m),
         env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="gam-delivery",
+        # local-gam-delivery-report.feature grades how the REAL GAM adapter reads a GAM
+        # report, so it needs the delivery env with only GAM's client and report download
+        # replaced. Its T-UC-004-local-* tags would otherwise fall to the UC-004 rows below,
+        # whose env replaces the adapter's answer. Seeded like the UC-004 polling row, whose
+        # media-buy Givens it reuses.
+        when=lambda m: "gam_delivery" in m,
+        env_builder=_env("tests.harness.delivery_poll.GAMDeliveryPollEnv", principal_id="buyer-001"),
+        seed=_seed_delivery_poll,
     ),
     EnvRoute(
         tag="codes-declared-code-reaches-buyer",

@@ -553,6 +553,21 @@ def _harness_declaration_sites() -> list[tuple[str, str, str]]:
 # is sometimes right (format-injection has no surface), but never silent.
 EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
     {
+        # local-gam-delivery-report.feature, scenarios that did not exist before it --
+        # noted against this pin's shrink-only direction like the precedents below. They
+        # grade how the seller reads a Google Ad Manager report, through the in-process
+        # stand-ins for GAM's SOAP client and its report download; the live stack runs no
+        # GAM network. They grade fully on the three in-process transports.
+        (
+            "tests/harness/delivery_poll.py",
+            "sell_through_gam",
+            "the live stack has no stand-in GAM network to report from",
+        ),
+        (
+            "tests/harness/delivery_poll.py",
+            "fail_gam_report",
+            "the live stack has no Google Ad Manager report job to fail",
+        ),
         # Added by #1721, both for scenarios that did not exist before it. Noted
         # against this pin's own direction of travel (the remediation plan wants this
         # SET to shrink): neither scenario could exist at all without the declaration,
