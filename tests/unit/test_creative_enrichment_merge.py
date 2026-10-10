@@ -12,7 +12,8 @@ from src.core.tools.media_buy_create import _merge_creative_enrichment
 
 def _gam_status(**overrides) -> AssetStatus:
     base = {
-        "creative_id": "gam_123",
+        "creative_id": "buyer_cr_1",
+        "platform_creative_id": "gam_123",
         "status": "approved",
         "concept_id": "gam-order-789",
         "concept_name": "GAM Order 789",
@@ -56,14 +57,14 @@ def test_never_overwrites_existing_platform_creative_id():
 
 def test_no_concept_written_when_status_has_none():
     """Adapters that don't derive a concept (e.g. non-GAM) leave the blob concept-free."""
-    status = AssetStatus(creative_id="c1", status="approved")
+    status = AssetStatus(creative_id="c1", platform_creative_id="ad_42", status="approved")
 
     result = _merge_creative_enrichment({"assets": {}}, status)
 
     assert "concept_id" not in result
     assert "concept_name" not in result
     assert "concept_source" not in result
-    assert result["platform_creative_id"] == "c1"
+    assert result["platform_creative_id"] == "ad_42"
 
 
 def test_concept_source_defaults_when_omitted():

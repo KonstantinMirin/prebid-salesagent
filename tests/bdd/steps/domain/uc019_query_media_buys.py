@@ -3004,6 +3004,29 @@ def then_included_entry_exposes_id_and_status(ctx: dict, expected_status: str) -
     )
 
 
+@then("the freshly-created buy's package should echo the product_id and budget the create request booked")
+def then_created_package_echoes_booked_terms(ctx: dict) -> None:
+    """Assert the polled package carries the product and budget its request package booked.
+
+    The expected values are the create REQUEST's (``ctx["request_kwargs"]``, written by
+    ``build_create_request_kwargs``), never the create response's: the response is the
+    adapter-shaped document the defect read them from. One request package, so the
+    buy must come back with exactly one package to compare against.
+    """
+    media_buy_id = ctx["created_media_buy_id"]
+    (booked,) = ctx["request_kwargs"]["packages"]
+    document = wire_dict(ctx)
+    (buy,) = [b for b in document.get("media_buys", []) if b.get("media_buy_id") == media_buy_id]
+    packages = buy.get("packages") or []
+    assert len(packages) == 1, f"expected the one created package, got {packages!r}"
+    assert packages[0].get("product_id") == booked["product_id"], (
+        f"package product_id {packages[0].get('product_id')!r}, booked {booked['product_id']!r}"
+    )
+    assert packages[0].get("budget") == booked["budget"], (
+        f"package budget {packages[0].get('budget')!r}, booked {booked['budget']!r}"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # THE BLOB RULE — package_config is untyped, so every value read out of it
 # is a legacy value the pinned types may reject, so every one is resolved before the

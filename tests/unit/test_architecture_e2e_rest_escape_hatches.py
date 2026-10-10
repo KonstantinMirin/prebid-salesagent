@@ -610,6 +610,17 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
             "e2e needs effect capture at the server (a notification sink the test can poll), "
             "which is its own build",
         ),
+        # Added with the GAM creative-trafficking feature, against the pin's shrink-only
+        # direction like the precedents above, for scenarios that did not exist before it.
+        # What they grade is the payload the seller sends GAM's SOAP client; the live
+        # server's client talks to a real GAM network and nothing reads its calls back.
+        # Graded fully on the three in-process transports.
+        (
+            "tests/harness/gam_creative_sync.py",
+            "setup_gam_live_package",
+            "the live server's GAM adapter talks to the GAM network its tenant is configured for; "
+            "nothing on that surface accepts a stand-in SOAP client, so what it sends cannot be read back",
+        ),
         (
             "tests/harness/creative_sync.py",
             "committed_sync_effects",

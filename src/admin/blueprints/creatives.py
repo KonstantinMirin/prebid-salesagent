@@ -594,6 +594,11 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
             # Snapshot buy statuses here to avoid a second UoW after commit
             assignment_buy_statuses: dict[str, str] = {}
+            # Buys whose order already exists in the ad server. confirmed_at is the
+            # seller-commitment event (MediaBuyRepository._stamp_confirmation_if_needed):
+            # an auto-approved buy that had no creatives yet sits in pending_creatives
+            # with its order created, and executing it again would create a second order.
+            committed_buys: dict[str, bool] = {}
             for assignment in assignments:
                 media_buy_id = assignment.media_buy_id
                 media_buy = uow.media_buys.get_by_id(media_buy_id)
@@ -602,9 +607,10 @@ def approve_creative(tenant_id, creative_id, **kwargs):
                     continue
 
                 assignment_buy_statuses[media_buy_id] = media_buy.status
+                committed_buys[media_buy_id] = media_buy.confirmed_at is not None
                 logger.info(f"[CREATIVE APPROVAL] Media buy {media_buy_id} status: {media_buy.status}")
 
-                if media_buy.status in {"pending_creatives", "draft"}:
+                if media_buy.status in {"pending_creatives", "draft"} and not committed_buys[media_buy_id]:
                     # The same gate the writer applies, asked once. Open-coding it here
                     # meant the route evaluated it, decided to call execute, and the
                     # callee then evaluated it again in the same request.
@@ -664,7 +670,9 @@ def approve_creative(tenant_id, creative_id, **kwargs):
 
         # Use the status snapshot from the first loop — no need for a second UoW
         buys_to_push = [
-            buy_id for buy_id in assignment_buy_ids if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES
+            buy_id
+            for buy_id in assignment_buy_ids
+            if assignment_buy_statuses.get(buy_id) in _LIVE_BUY_STATUSES or committed_buys.get(buy_id, False)
         ]
 
         for buy_id in buys_to_push:
