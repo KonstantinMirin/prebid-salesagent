@@ -1712,6 +1712,20 @@ Feature: BR-UC-019 Query Media Buys
     # check_buy_status: post-create get_media_buys must resolve the freshly-created buy synchronously
     # @source repo=adcp ref=v3.1.1 path=static/compliance/source/protocols/media-buy/index.yaml phase=create_buy step=check_buy_status
 
+  @T-UC-019-post-create-package-echo @hand-edited @post-create-poll
+  Scenario: get_media_buys echoes the product and budget each created package booked
+    # media-buy/get-media-buys-response.json @ 3.1.1, media_buys[].packages[].product_id:
+    # "For packages created from an explicit create_media_buy package request, sellers
+    # MUST echo the request package's product_id on every response package";
+    # packages[].budget is the package budget amount. What was booked is the buyer's
+    # request package -- an ad server's create reply carries only the ids and state it
+    # decides, so a package persisted from that reply comes back without either.
+    # Ungraded by the storyboards: check_buy_status validates media_buy_id and status only.
+    Given the buyer captured a media_buy_id from a successful create_media_buy response
+    When the Buyer Agent calls get_media_buys with that media_buy_id under the same account
+    Then the response is compliant with the get_media_buys spec
+    And the freshly-created buy's package should echo the product_id and budget the create request booked
+
   @T-UC-019-confirmed-at-null-survives-exclude-none @hand-edited @BR-RULE-150 @schema-v3.1
   Scenario Outline: A buy that was never confirmed still carries confirmed_at as null
     Given the principal "buyer-001" owns media buy "mb-001" with persisted status "<persisted>"

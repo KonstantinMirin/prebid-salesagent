@@ -20,63 +20,25 @@ from ..utils.validation import GAMValidator
 logger = logging.getLogger(__name__)
 
 
-def _extract_package_info(package_assignments: list) -> list[tuple[str, int]]:
-    """Extract package IDs and weights from package_assignments.
+def _line_item_weights(package_assignments: list[dict[str, Any]]) -> list[tuple[str, int]]:
+    """(GAM line item id, weight) for each of an asset's package assignments.
 
-    Supports both legacy format (list of strings) and new format (list of dicts with weight).
-
-    Args:
-        package_assignments: List of package IDs (strings) or dicts with package_id/weight
-
-    Returns:
-        List of (package_id, weight) tuples. Weight defaults to 100 if not provided.
+    The line item id is the seller's own package -> line item mapping: the adapter
+    returns it from create_media_buy (``AdapterCreateResult.platform_line_item_ids``)
+    and the tool persists it as ``package_config["platform_line_item_id"]``, which is
+    where every caller reads it from. Nothing here derives it from a package id or a
+    line item name -- names follow the tenant's naming template and package ids are
+    opaque. An assignment without one names a package with no line item, and is skipped
+    out loud.
     """
     result = []
     for assignment in package_assignments:
-        if isinstance(assignment, str):
-            # Legacy format: just package_id string
-            result.append((assignment, 100))
-        elif isinstance(assignment, dict):
-            # New format: {"package_id": "...", "weight": N}
-            pkg_id = assignment.get("package_id", "")
-            weight = assignment.get("weight", 100)
-            if pkg_id:
-                result.append((pkg_id, weight))
-            else:
-                logger.warning(f"Skipping malformed package assignment (missing package_id): {assignment}")
+        line_item_id = assignment.get("platform_line_item_id")
+        if line_item_id:
+            result.append((str(line_item_id), assignment.get("weight", 100)))
+        else:
+            logger.warning(f"Package {assignment.get('package_id')} has no GAM line item; assignment skipped")
     return result
-
-
-def _get_package_ids(package_assignments: list) -> list[str]:
-    """Extract just the package IDs from package_assignments.
-
-    Supports both legacy format (list of strings) and new format (list of dicts).
-    """
-    return [pkg_id for pkg_id, _ in _extract_package_info(package_assignments)]
-
-
-def _extract_product_id_from_package(package_id: str) -> str | None:
-    """Extract product ID from a package ID string.
-
-    Package IDs follow the format: pkg_prod_XXXXXX_YYYYYYYY_N
-    where XXXXXX is the product ID suffix.
-
-    Args:
-        package_id: Package ID string (e.g., "pkg_prod_2215c038_63e4864a_1")
-
-    Returns:
-        Product ID (e.g., "prod_2215c038") or None if format doesn't match.
-    """
-    if not package_id.startswith("pkg_prod_"):
-        return None
-
-    parts = package_id.split("_")
-    # Expected: ["pkg", "prod", "XXXXXX", "YYYYYYYY", "N"]
-    if len(parts) >= 3:
-        return f"prod_{parts[2]}"
-
-    logger.warning(f"Package ID '{package_id}' has unexpected format - cannot extract product ID")
-    return None
 
 
 class GAMCreativesManager:
@@ -136,25 +98,22 @@ class GAMCreativesManager:
         concept_id = f"gam-order-{media_buy_id}"
         concept_name = f"GAM Order {media_buy_id}"
 
-        def _approved(creative_id: str) -> AssetStatus:
+        def _approved(creative_id: str, platform_creative_id: str | None = None) -> AssetStatus:
             return AssetStatus(
                 creative_id=creative_id,
+                platform_creative_id=platform_creative_id,
                 status="approved",
                 concept_id=concept_id,
                 concept_name=concept_name,
                 concept_source="gam_order",
             )
 
-        # Get line item mapping and creative placeholders
-        line_item_map, creative_placeholders = self._get_line_item_info(media_buy_id, line_item_service)
-
-        # DEBUG: Log what we got from GAM
-        logger.info(f"[DEBUG] line_item_map keys: {list(line_item_map.keys())}")
-        logger.info(f"[DEBUG] creative_placeholders keys: {list(creative_placeholders.keys())}")
+        # Creative placeholders of the order's line items, keyed by line item id
+        creative_placeholders = self._get_line_item_placeholders(media_buy_id, line_item_service)
 
         # AdCP 2.5: Check if any creatives have non-default weights
         # If so, update affected line items to use MANUAL rotation
-        self._update_line_items_for_weighted_creatives(assets, line_item_map, line_item_service)
+        self._update_line_items_for_weighted_creatives(assets, line_item_service)
 
         for asset in assets:
             logger.info(
@@ -182,7 +141,9 @@ class GAMCreativesManager:
                     logger.error(f"Creative {asset['creative_id']} failed GAM validation:")
                     for issue in validation_issues:
                         logger.error(f"  - {issue}")
-                created_asset_statuses.append(AssetStatus(creative_id=asset["creative_id"], status="failed"))
+                created_asset_statuses.append(
+                    AssetStatus(creative_id=asset["creative_id"], status="failed", message="; ".join(validation_issues))
+                )
                 continue
 
             # Determine creative type using AdCP v1.3+ logic
@@ -195,16 +156,14 @@ class GAMCreativesManager:
             if creative_type == "vast":
                 # VAST is handled at line item level, not creative level
                 logger.info(f"VAST creative {asset['creative_id']} - configuring at line item level")
-                self._configure_vast_for_line_items(media_buy_id, asset, line_item_map)
+                self._configure_vast_for_line_items(media_buy_id, asset)
                 created_asset_statuses.append(_approved(asset["creative_id"]))
                 continue
 
             # Get placeholders for this asset's package assignments
-            # Use helper to extract package IDs (supports both legacy string and new dict format)
             asset_placeholders = []
-            for pkg_id in _get_package_ids(asset.get("package_assignments", [])):
-                if pkg_id in creative_placeholders:
-                    asset_placeholders.extend(creative_placeholders[pkg_id])
+            for line_item_id, _ in _line_item_weights(asset.get("package_assignments", [])):
+                asset_placeholders.extend(creative_placeholders.get(line_item_id, []))
 
             # Create GAM creative object
             try:
@@ -232,12 +191,11 @@ class GAMCreativesManager:
                 self._associate_creative_with_line_items(
                     gam_creative_id,
                     asset,
-                    line_item_map,
                     lica_service,
                     placement_targeting_map,
                 )
 
-                created_asset_statuses.append(_approved(asset["creative_id"]))
+                created_asset_statuses.append(_approved(asset["creative_id"], str(gam_creative_id)))
 
             except AdCPSalesAgentError as e:
                 # Typed rejection (e.g. CREATIVE_REJECTED): this surface reports
@@ -271,90 +229,27 @@ class GAMCreativesManager:
 
         return created_asset_statuses
 
-    def _get_line_item_info(self, media_buy_id: str, line_item_service) -> tuple[dict[str, str], dict[str, list]]:
-        """Get line item mapping and creative placeholders for an order.
+    def _get_line_item_placeholders(self, media_buy_id: str, line_item_service) -> dict[str, list]:
+        """The creative placeholders of each line item in an order, keyed by line item id.
 
         Args:
             media_buy_id: GAM order ID
             line_item_service: GAM LineItemService
 
         Returns:
-            Tuple of (line_item_map, creative_placeholders)
+            ``{line_item_id: creativePlaceholders}``
         """
-        if line_item_service:
-            statement = (
-                self.client_manager.get_statement_builder()
-                .Where("orderId = :orderId")
-                .WithBindVariable("orderId", int(media_buy_id))
-            )
-            response = line_item_service.getLineItemsByStatement(statement.ToStatement())
-            # GAM API returns a LineItemPage object (Zeep SOAP), not a dict
-            line_items = getattr(response, "results", [])
-            line_item_map = {item["name"]: item["id"] for item in line_items}
+        statement = (
+            self.client_manager.get_statement_builder()
+            .Where("orderId = :orderId")
+            .WithBindVariable("orderId", int(media_buy_id))
+        )
+        response = line_item_service.getLineItemsByStatement(statement.ToStatement())
+        # GAM API returns a LineItemPage object (Zeep SOAP), not a dict
+        line_items = getattr(response, "results", [])
+        return {str(item["id"]): getattr(item, "creativePlaceholders", []) for item in line_items}
 
-            # Collect all creative placeholders from line items for size validation
-            # Key by BOTH line item name AND extracted package ID for flexible lookup
-            creative_placeholders = {}
-            for line_item in line_items:
-                line_item_name = line_item["name"]
-                # Line item is also a Zeep object, use getattr
-                placeholders = getattr(line_item, "creativePlaceholders", [])
-
-                # Store by line item name (for backward compatibility)
-                creative_placeholders[line_item_name] = placeholders
-
-                # ALSO extract package ID from line item name and store by that
-                # NOTE: Line item names are configurable via tenant settings, but by default
-                # they end with "- prod_XXXXXX". We extract the product ID pattern.
-                # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N"
-                # We'll try to extract prod_XXXXXX and match against all package_assignments
-                if " - prod_" in line_item_name:
-                    product_id = line_item_name.split(" - prod_")[-1].strip()
-                    # Store with a "prod_" prefix for lookups
-                    creative_placeholders[f"prod_{product_id}"] = placeholders
-                    # Log the mapped sizes (Zeep objects - use getattr not .get())
-                    sizes = []
-                    for p in placeholders:
-                        size_obj = getattr(p, "size", None)
-                        if size_obj:
-                            width = getattr(size_obj, "width", 0)
-                            height = getattr(size_obj, "height", 0)
-                            sizes.append(f"{width}x{height}")
-                    logger.info(f"[DEBUG] Mapped product ID 'prod_{product_id}' to placeholders: {sizes}")
-        else:
-            # In dry-run mode, create a mock line item map and placeholders
-            # Support common test package names
-            line_item_map = {
-                "mock_package": "mock_line_item_123",
-                "package_1": "mock_line_item_456",
-                "package_2": "mock_line_item_789",
-                "test_package": "mock_line_item_999",
-            }
-            creative_placeholders = {
-                "mock_package": [
-                    {"size": {"width": 300, "height": 250}, "creativeSizeType": "PIXEL"},
-                    {"size": {"width": 728, "height": 90}, "creativeSizeType": "PIXEL"},
-                ],
-                "package_1": [
-                    {"size": {"width": 300, "height": 250}, "creativeSizeType": "PIXEL"},
-                    {"size": {"width": 728, "height": 90}, "creativeSizeType": "PIXEL"},
-                ],
-                "package_2": [
-                    {"size": {"width": 320, "height": 50}, "creativeSizeType": "PIXEL"},
-                    {"size": {"width": 970, "height": 250}, "creativeSizeType": "PIXEL"},
-                ],
-                "test_package": [
-                    {"size": {"width": 970, "height": 250}, "creativeSizeType": "PIXEL"},
-                    {"size": {"width": 336, "height": 280}, "creativeSizeType": "PIXEL"},
-                    {"size": {"width": 300, "height": 250}, "creativeSizeType": "PIXEL"},  # Common default
-                ],
-            }
-
-        return line_item_map, creative_placeholders
-
-    def _update_line_items_for_weighted_creatives(
-        self, assets: list[dict[str, Any]], line_item_map: dict[str, str], line_item_service
-    ) -> None:
+    def _update_line_items_for_weighted_creatives(self, assets: list[dict[str, Any]], line_item_service) -> None:
         """Update line items to use MANUAL rotation if creatives have non-default weights.
 
         AdCP 2.5 supports creative rotation weights. When weights differ from the default (100),
@@ -362,28 +257,14 @@ class GAMCreativesManager:
 
         Args:
             assets: List of creative assets with package_assignments containing weights
-            line_item_map: Mapping of line item names to GAM line item IDs
-            line_item_service: GAM LineItemService (None for dry run)
+            line_item_service: GAM LineItemService
         """
         # Collect all weights per line item to determine if MANUAL rotation is needed
         line_item_weights: dict[str, list[int]] = {}
 
         for asset in assets:
-            package_info = _extract_package_info(asset.get("package_assignments", []))
-            for package_id, weight in package_info:
-                # Find the line item for this package
-                line_item_id = None
-                product_id = _extract_product_id_from_package(package_id)
-                if product_id:
-                    for line_item_name, item_id in line_item_map.items():
-                        if line_item_name.endswith(f" - {product_id}"):
-                            line_item_id = item_id
-                            break
-
-                if line_item_id:
-                    if line_item_id not in line_item_weights:
-                        line_item_weights[line_item_id] = []
-                    line_item_weights[line_item_id].append(weight)
+            for line_item_id, weight in _line_item_weights(asset.get("package_assignments", [])):
+                line_item_weights.setdefault(line_item_id, []).append(weight)
 
         # Determine which line items need MANUAL rotation
         # MANUAL is required when any creative has a non-default weight (not 100)
@@ -502,7 +383,7 @@ class GAMCreativesManager:
 
         Args:
             asset: Creative asset dictionary
-            creative_placeholders: Dictionary mapping package names to placeholder lists
+            creative_placeholders: Line item id -> that line item's creative placeholders
 
         Returns:
             List of validation error messages
@@ -523,80 +404,53 @@ class GAMCreativesManager:
             validation_errors.append(f"Could not determine creative dimensions: {str(e)}")
             return validation_errors
 
-        # Check if asset dimensions match any placeholder in its assigned packages
-        # Use helper to extract package IDs (supports both legacy string and new dict format)
-        package_ids = _get_package_ids(asset.get("package_assignments", []))
-        if not package_ids:
-            logger.warning(f"Creative {asset.get('creative_id', 'unknown')} has no package assignments")
+        # Check if asset dimensions match any placeholder of its assigned packages' line items
+        line_item_ids = [line_item_id for line_item_id, _ in _line_item_weights(asset.get("package_assignments", []))]
+        if not line_item_ids:
+            if asset.get("package_assignments"):
+                validation_errors.append("None of the creative's assigned packages has a GAM line item")
+            else:
+                logger.warning(f"Creative {asset.get('creative_id', 'unknown')} has no package assignments")
             return validation_errors
 
+        placeholders = [p for line_item_id in line_item_ids for p in creative_placeholders.get(line_item_id, [])]
         matching_placeholders_found = False
-        for package_id in package_ids:
-            # Try direct lookup first (for backward compatibility with line item names)
-            placeholders = creative_placeholders.get(package_id, [])
+        for placeholder in placeholders:
+            # Placeholder can be a Zeep object or dict (in tests)
+            placeholder_size = _get_attr(placeholder, "size", None)
+            if not placeholder_size:
+                continue
+            placeholder_width = _get_attr(placeholder_size, "width", 0)
+            placeholder_height = _get_attr(placeholder_size, "height", 0)
 
-            # If not found, try matching by product ID extracted from package_id
-            # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N", extract "prod_XXXXXX"
-            if not placeholders and package_id.startswith("pkg_prod_"):
-                # Extract product ID: "pkg_prod_2215c038_63e4864a_1" -> "prod_2215c038"
-                parts = package_id.split("_")
-                if len(parts) >= 3:  # pkg_prod_XXXXXX_...
-                    product_id = f"prod_{parts[2]}"
-                    placeholders = creative_placeholders.get(product_id, [])
-                    if placeholders:
-                        logger.info(f"[DEBUG] Matched package {package_id} to product ID {product_id}")
-            for placeholder in placeholders:
-                # Placeholder can be a Zeep object or dict (in tests)
-                placeholder_size = _get_attr(placeholder, "size", None)
-                if not placeholder_size:
-                    continue
-                placeholder_width = _get_attr(placeholder_size, "width", 0)
-                placeholder_height = _get_attr(placeholder_size, "height", 0)
+            # 1x1 placeholders are wildcards in GAM (native templates or programmatic)
+            # They accept creatives of any size
+            if placeholder_width == 1 and placeholder_height == 1:
+                matching_placeholders_found = True
+                template_id = _get_attr(placeholder, "creativeTemplateId", None)
+                if template_id:
+                    logger.info(
+                        f"Creative {asset_width}x{asset_height} matches 1x1 placeholder "
+                        f"with GAM native template {template_id}"
+                    )
+                else:
+                    logger.info(
+                        f"Creative {asset_width}x{asset_height} matches 1x1 wildcard placeholder "
+                        f"(programmatic/third-party)"
+                    )
+                break
 
-                # 1x1 placeholders are wildcards in GAM (native templates or programmatic)
-                # They accept creatives of any size
-                if placeholder_width == 1 and placeholder_height == 1:
-                    matching_placeholders_found = True
-                    template_id = _get_attr(placeholder, "creativeTemplateId", None)
-                    if template_id:
-                        logger.info(
-                            f"Creative {asset_width}x{asset_height} matches 1x1 placeholder "
-                            f"with GAM native template {template_id}"
-                        )
-                    else:
-                        logger.info(
-                            f"Creative {asset_width}x{asset_height} matches 1x1 wildcard placeholder "
-                            f"(programmatic/third-party)"
-                        )
-                    break
-
-                # Standard placeholders require exact dimension match
-                if asset_width == placeholder_width and asset_height == placeholder_height:
-                    matching_placeholders_found = True
-                    break
-
-            if matching_placeholders_found:
+            # Standard placeholders require exact dimension match
+            if asset_width == placeholder_width and asset_height == placeholder_height:
+                matching_placeholders_found = True
                 break
 
         if not matching_placeholders_found:
             available_sizes = []
-            for package_id in package_ids:
-                # Try direct lookup first
-                placeholders = creative_placeholders.get(package_id, [])
-
-                # If not found, try matching by product ID extracted from package_id
-                if not placeholders and package_id.startswith("pkg_prod_"):
-                    parts = package_id.split("_")
-                    if len(parts) >= 3:
-                        product_id = f"prod_{parts[2]}"
-                        placeholders = creative_placeholders.get(product_id, [])
-                for placeholder in placeholders:
-                    # Placeholder can be a Zeep object or dict (in tests)
-                    size = _get_attr(placeholder, "size", None)
-                    if size:
-                        width = _get_attr(size, "width", 0)
-                        height = _get_attr(size, "height", 0)
-                        available_sizes.append(f"{width}x{height}")
+            for placeholder in placeholders:
+                size = _get_attr(placeholder, "size", None)
+                if size:
+                    available_sizes.append(f"{_get_attr(size, 'width', 0)}x{_get_attr(size, 'height', 0)}")
 
             validation_errors.append(
                 f"Creative size {asset_width}x{asset_height} does not match any LineItem placeholders. "
@@ -979,9 +833,7 @@ class GAMCreativesManager:
                 if processed_click_urls:
                     creative["destinationUrl"] = processed_click_urls[0]
 
-    def _configure_vast_for_line_items(
-        self, media_buy_id: str, asset: dict[str, Any], line_item_map: dict[str, str]
-    ) -> None:
+    def _configure_vast_for_line_items(self, media_buy_id: str, asset: dict[str, Any]) -> None:
         """Configure VAST creative at line item level."""
         # VAST configuration would be implemented here
         logger.info(f"Configuring VAST creative {asset['creative_id']} for line items")
@@ -990,7 +842,6 @@ class GAMCreativesManager:
         self,
         gam_creative_id: str,
         asset: dict[str, Any],
-        line_item_map: dict[str, str],
         lica_service,
         placement_targeting_map: dict[str, str] | None = None,
     ) -> None:
@@ -1006,58 +857,11 @@ class GAMCreativesManager:
         Args:
             gam_creative_id: The GAM creative ID to associate
             asset: Creative asset dictionary (contains package_assignments, placement_ids)
-            line_item_map: Map of line item names to IDs
             lica_service: GAM LICA service
             placement_targeting_map: Optional map of placement_id → targeting_name for
                 creative-level targeting. Built from product impl_config.placement_targeting.
         """
-        # Extract package IDs and weights using helper (supports legacy and new formats)
-        package_info = _extract_package_info(asset.get("package_assignments", []))
-
-        for package_id, weight in package_info:
-            # Line item map is keyed by line item name
-            # Package IDs are like "pkg_prod_XXXXXX_YYYYYYYY_N"
-            # We need to match them by product ID using multiple strategies
-            line_item_id = None
-
-            # Extract product ID from package_id: "pkg_prod_2215c038_..." -> "prod_2215c038"
-            product_id = _extract_product_id_from_package(package_id)
-            if product_id:
-                logger.info(f"[DEBUG] Looking for line item matching product_id '{product_id}'")
-                # Try multiple matching strategies for flexibility with different naming templates:
-                # 1. Line item name ends with " - {product_id}" (e.g., "Campaign Name - prod_291a023d")
-                # 2. Line item name equals "{product_id}" exactly (default template: {product_name})
-                # 3. Line item name starts with "{product_id} " (e.g., "prod_291a023d - Extra Info")
-                for line_item_name, item_id in line_item_map.items():
-                    logger.info(f"[DEBUG] Checking line item: {line_item_name}")
-                    # Strategy 1: ends with " - {product_id}"
-                    if line_item_name.endswith(f" - {product_id}"):
-                        line_item_id = item_id
-                        logger.info(
-                            f"[DEBUG] MATCH (ends with)! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
-                        )
-                        break
-                    # Strategy 2: exact match (default template uses just product_id as name)
-                    if line_item_name == product_id:
-                        line_item_id = item_id
-                        logger.info(
-                            f"[DEBUG] MATCH (exact)! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
-                        )
-                        break
-                    # Strategy 3: starts with "{product_id}" (e.g., "prod_291a023d - Extra Info")
-                    if line_item_name.startswith(f"{product_id} "):
-                        line_item_id = item_id
-                        logger.info(
-                            f"[DEBUG] MATCH (starts with)! Package {package_id} -> line item {line_item_name} (ID: {item_id})"
-                        )
-                        break
-
-            if not line_item_id:
-                logger.warning(
-                    f"Line item not found for package {package_id}. line_item_map has {len(line_item_map)} entries"
-                )
-                continue
-
+        for line_item_id, weight in _line_item_weights(asset.get("package_assignments", [])):
             # Determine targetingName for creative-level placement targeting (adcp#208)
             targeting_name = None
             first_placement_id = None

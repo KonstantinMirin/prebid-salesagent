@@ -83,6 +83,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # A publisher's adagents.json naming this agent, graded through the three admin
         # actions that read it. Pinned in the change that registered the route.
         "pubauth",
+        # GAM creative trafficking, graded on what the seller sends GAM's SOAP client.
+        # Pinned in the change that registered the route.
+        "gamtraffic",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

@@ -96,6 +96,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",
     "tests.bdd.steps.domain.publisher_authorization",
+    "tests.bdd.steps.domain.gam_trafficking",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -6005,6 +6006,15 @@ ENV_ROUTES: list[EnvRoute] = [
         when=lambda m: "pubauth" in m,
         env_builder=_env("tests.harness.publisher_authorization.PublisherAuthorizationEnv"),
         seed=_seed_tenant_and_principal,
+    ),
+    # ── @gamtraffic (local GAM creative-trafficking feature) ────────────────
+    # T-GAMTRAFFIC-* identity tags, so an UNSCOPED `when` row. The env is the UC-006
+    # sync env with the GAM SOAP client as one more stand-in; the Givens seed the GAM
+    # seller themselves, so there is no route seed.
+    EnvRoute(
+        tag="gamtraffic",
+        when=lambda m: "gamtraffic" in m,
+        env_builder=_env("tests.harness.gam_creative_sync.GamCreativeSyncEnv"),
     ),
     EnvRoute(
         tag="tenantid",

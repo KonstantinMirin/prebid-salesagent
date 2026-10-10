@@ -67,6 +67,9 @@ def stub_gam_client_manager(
             createLineItems=MagicMock(return_value=[{"id": int(created_line_item_id)}]),
         ),
         "CreativeService": MagicMock(createCreatives=MagicMock(return_value=[{"id": created_creative_id}])),
+        # Stated so the associations a test grades land on ONE object: an unstated
+        # service resolves to a fresh mock per lookup, which records nothing readable.
+        "LineItemCreativeAssociationService": MagicMock(),
     }
     client_manager = MagicMock()
     client_manager.get_service.side_effect = lambda name: services.get(name) or MagicMock()

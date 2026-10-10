@@ -516,7 +516,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
             "format": "display_970x250",
             "media_url": "https://example.com/creative.html",
             "click_url": "https://example.com/landing",
-            "package_assignments": ["test_package"],
+            "package_assignments": [{"package_id": "test_package", "weight": 100, "platform_line_item_id": "1001"}],
         }
         with patch.object(gam, "_validate_creative_for_gam", return_value=[]):
             statuses = gam.add_creative_assets(gam_order_id, [gam_asset], datetime.now(UTC))
@@ -587,8 +587,9 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative.data.get("concept_id") == expected_concept
             assert creative.data.get("concept_name") == f"GAM Order {gam_order_id}"
             assert creative.data.get("concept_source") == "gam_order"
-            # The platform_creative_id half is filled on the same path.
-            assert creative.data.get("platform_creative_id") == creative_id
+            # The platform_creative_id half is filled on the same path, with the id GAM
+            # returned from createCreatives (stub_gam_client_manager's created_creative_id).
+            assert creative.data.get("platform_creative_id") == "gam_creative_1"
             # Fill-only-when-absent preserved the pre-existing assets blob.
             assert creative.data.get("assets") is not None
 
