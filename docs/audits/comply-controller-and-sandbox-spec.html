@@ -155,6 +155,24 @@ be far more accommodating than the repo's standing note assumed. Three facts car
 </ul>
 </div>
 
+<div class="card ok">
+<p style="margin-top:0"><strong>On the <code>MUST NOT expose in production</code> clause, stated up
+front because it is a design constraint and not a footnote.</strong></p>
+<p style="margin-bottom:0">
+  <strong>Nothing in this spec gates on <code>adcp_testing</code>, anywhere.</strong> The gate's only
+  input is <code>accounts.sandbox</code> — a persisted database column a deployment sets through
+  <code>sync_accounts</code> or the admin UI, read off <code>identity.account.sandbox</code> which the
+  resolver already hydrates from the row (§6.4). No production path branches on a test flag, so
+  critical pattern #11 is satisfied by construction rather than by discipline. The pin independently
+  forbids the alternative: "Sellers MUST NOT alter behavior based on these headers. Sandbox mode is
+  determined solely by the account reference." And the clause itself is satisfied by the gate rather
+  than by hiding the tool — the same schema says "real production endpoints accept sandbox-flagged
+  traffic &hellip; no separate test-mode endpoint required", and the storyboard grading env runs
+  <code>ENVIRONMENT=production</code> deliberately, so hiding it would hide it from the only run that
+  grades it (§6.4).
+</p>
+</div>
+
 <h4>Two corrections to the brief's measurements</h4>
 <ul>
   <li>The brief says <strong>41</strong> of the 84 lost passes skip as <code>missing_test_controller</code>.
@@ -445,6 +463,37 @@ headers. Sandbox mode is determined solely by the account reference."</p>
       (<code>ls</code> shows <code>uc004_delivery.py</code>, <code>uc010_capabilities.py</code> for
       the sibling pattern) <span class="tag E">EXECUTION</span>.</li>
 </ul>
+
+<div class="card warn">
+<p style="margin-top:0"><strong>BR-UC-032 is doubly ungraded, and binding it is not a
+<code>scenarios()</code> call.</strong> <span class="tag R">READING</span></p>
+<p>
+  Even once the feature is bound, every scenario would xfail <strong>at fixture setup, before any
+  step runs</strong>. <code>tests/bdd/conftest.py:6854-6859</code>:
+</p>
+<pre><code>route = storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)
+if route is None:
+    # NOT WIRED is a real answer, not an absence. ...
+    pytest.xfail(f"No harness wired for {uc} (markers: {sorted(marker_names)})")</code></pre>
+<p>
+  BR-UC-032 has <strong>no <code>ENV_ROUTES</code> row</strong> — one of eighteen allowlisted
+  features that resolve to no harness route (measured by the bind-features lane; I verified the
+  mechanism at the line above, not the count of eighteen <span class="tag X">NOT ESTABLISHED</span>).
+  So the xfail carries no ledger entry and no baseline: there is nothing to compare a future run
+  against.
+</p>
+<p style="margin-bottom:0">
+  <strong>Consequence for this spec: a "build it" number that omits the route and the step authoring
+  is under-costed, because the tool would ship ungraded.</strong> Three artifacts are required, not
+  one — (a) the <code>scenarios()</code> binding and the allowlist removal, (b) an
+  <code>EnvRoute</code> row, (c) step definitions. The row itself is cheap: <code>tag</code>,
+  a <code>when</code> predicate over the marker set, an <code>env_builder</code>, and an optional
+  <code>seed</code> (<code>tests/bdd/conftest.py</code>, <code>class EnvRoute</code>) — and
+  <code>env_builder</code> can reuse an existing builder. The cost is (c), repeated per stage. §9
+  and §10 now price all three, and a row may carry <code>xfail_reason</code> to register a UC ahead
+  of its harness, which is the honest way to stage it.
+</p>
+</div>
 
 <h4>The standing "will not be implemented" notes this spec reverses</h4>
 <p>These are policy statements, not observations. They must be retracted in the same change, not
@@ -1109,9 +1158,12 @@ into red. §11.2 treats the inverse as the main delivery risk.</p>
   <li><strong>Change:</strong> the DTO (§6.1), arms 0/1/4/7 (§6.2), the <code>_impl</code> + service
       with a derived handler table holding <strong>only</strong> <code>list_scenarios</code> (§6.3),
       the sandbox gate (§6.4), the registry row (§6.5), the <code>compliance_testing</code>
-      capabilities block (§6.6), and the collateral fixes in §6.5. Bind
-      <code>BR-UC-032</code> and remove its <code>UNBOUND_ALLOWLIST</code> entry
-      (<code>tests/unit/test_architecture_feature_file_bound.py:56</code>). Retract the
+      capabilities block (§6.6), and the collateral fixes in §6.5.
+      <strong>Make BR-UC-032 actually grade</strong> — three artifacts, not one: the
+      <code>scenarios()</code> binding, the <code>UNBOUND_ALLOWLIST</code> removal
+      (<code>tests/unit/test_architecture_feature_file_bound.py:56</code>), <strong>and an
+      <code>EnvRoute</code> row</strong>, without which every scenario xfails at fixture setup
+      before a step runs (<code>tests/bdd/conftest.py:6854-6859</code>, §4.2). Retract the
       "will not be implemented" policy statements (§4.2).</li>
   <li><strong>Graded by</strong> (all already written, currently executing nothing):
     <ul>
@@ -1247,11 +1299,11 @@ separate decision.</p>
 <thead><tr><th>Stage</th><th>Days</th><th>Corpus checks addressed</th><th>Confidence</th><th>Why that number</th></tr></thead>
 <tbody>
 <tr><td>0 — sandbox isolation</td><td class="green">2–4</td><td>n/a (correctness)</td><td class="green">High</td><td>One resolver change, one shared response derivation, 2+ new BDD scenarios. The uncertainty is how many existing scenarios assume a live adapter for a sandbox account.</td></tr>
-<tr><td>1 — skeleton + gate</td><td class="amber">5–9</td><td>~8</td><td class="amber">Medium</td><td>DTO + 4 arms + registry row is a day or two. The rest is collateral: 7 guard/audit modules enumerate <code>TOOLS</code>, <code>ADVERTISED_TOOLS</code> reclassifies 66 storyboards, 6 policy documents must be retracted, and BR-UC-032 must be bound with ~10 scenarios' steps written. The <code>requires_account()</code> unknown (§6.3) is the variance.</td></tr>
-<tr><td>2 — <code>simulate_delivery</code></td><td class="green">2–4</td><td>59</td><td class="green">High</td><td>The storage, the repository and the adapter read all exist. One handler, one arm, 2 scenarios.</td></tr>
-<tr><td>3 — <code>force_creative_status</code></td><td class="green">3–5</td><td>89</td><td class="green">High</td><td>Two handlers over an existing column; the work is the transition matrix and <code>INVALID_TRANSITION</code>, plus 4 scenarios.</td></tr>
-<tr><td>4 — cheap forcers + seeds</td><td class="amber">6–10</td><td>~75 direct</td><td class="amber">Medium</td><td>13 handlers at roughly half a day each, plus 6 scenarios. Wide but shallow. Upside on the 931 cascade-skipped downstream checks is unquantified.</td></tr>
-<tr><td>5 — async arms</td><td class="amber">8–15</td><td>~150</td><td class="red">Low</td><td>New directive-store machinery, verbatim webhook delivery, and probes depending on proposal/catalog state I did not trace. Re-estimate after stage 4.</td></tr>
+<tr><td>1 — skeleton + gate + <strong>grading route</strong></td><td class="amber">8–14</td><td>~8</td><td class="amber">Medium</td><td>DTO + 4 arms + registry row is a day or two. The rest is collateral and grading: 7 guard/audit modules enumerate <code>TOOLS</code>, <code>ADVERTISED_TOOLS</code> reclassifies 66 storyboards, 6 policy documents must be retracted, and BR-UC-032 must be bound <em>and routed</em> — a <code>scenarios()</code> call, the <code>UNBOUND_ALLOWLIST</code> removal, an <code>EnvRoute</code> row, and ~10 scenarios' steps across four transports (§4.2). Without the route the tool ships ungraded, so this is not optional. The <code>requires_account()</code> unknown (§6.3) is the variance.</td></tr>
+<tr><td>2 — <code>simulate_delivery</code></td><td class="green">3–5</td><td>59</td><td class="green">High</td><td>The storage, the repository and the adapter read all exist. One handler, one arm, 2 scenarios.</td></tr>
+<tr><td>3 — <code>force_creative_status</code></td><td class="green">4–6</td><td>89</td><td class="green">High</td><td>Two handlers over an existing column; the work is the transition matrix and <code>INVALID_TRANSITION</code>, plus 4 scenarios.</td></tr>
+<tr><td>4 — cheap forcers + seeds</td><td class="amber">7–12</td><td>~75 direct</td><td class="amber">Medium</td><td>13 handlers at roughly half a day each, plus 6 scenarios. Wide but shallow. Upside on the 931 cascade-skipped downstream checks is unquantified.</td></tr>
+<tr><td>5 — async arms</td><td class="amber">10–18</td><td>~150</td><td class="red">Low</td><td>New directive-store machinery, verbatim webhook delivery, and probes depending on proposal/catalog state I did not trace. Re-estimate after stage 4.</td></tr>
 <tr><td>6 — reporting probe</td><td class="red">20–40</td><td>46</td><td class="red">Low</td><td>Almost entirely the missing subsystem: ~30-field model, migration, repository, SLA-derived <code>expected_at</code>, read-time health, and reconciling 3 existing unaware derivations and 16 ad-hoc <code>now</code> reads. The probe handlers themselves are ~2 days of the total.</td></tr>
 </tbody>
 </table>
@@ -1259,13 +1311,13 @@ separate decision.</p>
 
 <h4>The number to decide on</h4>
 <div class="kpis">
-  <div class="kpi"><b>12–22</b><span>days, stages 0–3</span></div>
+  <div class="kpi"><b>17–29</b><span>days, stages 0–3</span></div>
   <div class="kpi"><b>~148</b><span>corpus checks, stages 2–3</span></div>
-  <div class="kpi"><b>18–32</b><span>days, stages 0–4</span></div>
+  <div class="kpi"><b>24–41</b><span>days, stages 0–4</span></div>
   <div class="kpi"><b>20–40</b><span>days, stage 6 alone</span></div>
 </div>
 <p>
-  <strong>Stages 0–3 are the recommendation.</strong> Twelve to twenty-two days closes a live
+  <strong>Stages 0–3 are the recommendation.</strong> Seventeen to twenty-nine days closes a live
   production-exposure bug, puts the tool on the wire, and addresses the two highest-yield scenarios
   (148 of the 551 corpus checks, 27%, concentrated in 25 storyboards) using machinery that already
   exists. Stage 4 is good value and can follow immediately. Stage 5 should be re-estimated after 4.
