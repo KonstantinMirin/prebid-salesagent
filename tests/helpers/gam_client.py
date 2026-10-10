@@ -74,5 +74,8 @@ def stub_gam_client_manager(
         "CreativeService": MagicMock(createCreatives=MagicMock(return_value=[{"id": created_creative_id}])),
     }
     client_manager = MagicMock()
-    client_manager.get_service.side_effect = lambda name: services.get(name) or MagicMock()
+    # setdefault, not ``or MagicMock()``: every ask for a service gets the SAME stand-in,
+    # so a call on one nobody configured (LineItemCreativeAssociationService, ...) is
+    # still recorded where a test can read it back.
+    client_manager.get_service.side_effect = lambda name: services.setdefault(name, MagicMock())
     return client_manager
