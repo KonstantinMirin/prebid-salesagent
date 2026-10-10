@@ -31,6 +31,20 @@ class ProductFactory(factory.alchemy.SQLAlchemyModelFactory):
     format_ids = factory.LazyFunction(
         lambda: [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
     )
+    # The CANONICAL arm of core/product.json's root anyOf, defaulted to None so every
+    # existing scenario keeps the legacy-only shape it was written against.
+    #
+    # A canonically-authored product is seeded by overriding BOTH -- the canonical arm on
+    # and the legacy arm off:
+    #
+    #     ProductFactory(format_options=[{"format_kind": "image", "params": {...}}],
+    #                    format_ids=None)
+    #
+    # Passing only ``format_options`` builds a DUAL-authored product, which is a third
+    # legal shape under the anyOf and a different scenario -- so the knob deliberately
+    # does not clear ``format_ids`` for you. A scenario that means "canonical only" says
+    # so, and one that means "both" says that.
+    format_options = None
     targeting_template = factory.LazyFunction(lambda: {"geo": ["US"]})
     delivery_type = "guaranteed"
     property_tags = factory.LazyFunction(lambda: ["all_inventory"])

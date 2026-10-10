@@ -27,7 +27,12 @@ from tests.factories.creative import DEFAULT_CREATIVE_AGENT_URL
 _STORED_IMAGE_PARAMS: dict[str, Any] = {"width": 300, "height": 250}
 
 
-def _store_product(ctx: dict, format_options: list[dict[str, Any]] | None) -> None:
+def _store_product(
+    ctx: dict,
+    format_options: list[dict[str, Any]] | None,
+    *,
+    with_legacy_arm: bool = True,
+) -> None:
     """Persist one product carrying *format_options*, with a pricing option so it announces.
 
     The pricing option is NOT incidental scaffolding. A product with none cannot be
@@ -36,8 +41,17 @@ def _store_product(ctx: dict, format_options: list[dict[str, Any]] | None) -> No
     rather than on the malformed declaration they name, and the success scenarios would fail
     for a reason they say nothing about. Measured: that is exactly what happened before this
     line existed.
+
+    ``with_legacy_arm=False`` stores a CANONICAL-ONLY product -- ``format_ids`` NULL, which
+    migration 08cd415b3d91 made representable. Expressed as dropping the arm rather than as
+    a ``format_ids`` parameter because the only two shapes any scenario here wants are
+    "both arms" and "canonical only"; a parameter would invite a third caller to pass some
+    other legacy value and grade something no scenario names.
     """
-    product = ProductFactory(tenant=ctx["tenant"], format_options=format_options)
+    overrides: dict[str, Any] = {"format_options": format_options}
+    if not with_legacy_arm:
+        overrides["format_ids"] = None
+    product = ProductFactory(tenant=ctx["tenant"], **overrides)
     PricingOptionFactory(product=product)
     ctx["product"] = product
 
@@ -79,6 +93,23 @@ def given_declaration_with_v1_ref(ctx: dict, format_kind: str, legacy_id: str) -
                 "v1_format_ref": [{"agent_url": DEFAULT_CREATIVE_AGENT_URL, "id": legacy_id}],
             }
         ],
+    )
+
+
+@given(parsers.parse('the seller stores a canonically-authored product for "{format_kind}" with no format_ids'))
+def given_canonical_only_product(ctx: dict, format_kind: str) -> None:
+    """Store a product whose ONLY format declaration is canonical.
+
+    The mirror of ``given_product_without_declarations`` below, and the shape the 3.2 spec
+    tells new products to author: core/product.json's root anyOf has a "Canonical-format
+    product" branch, and ``format_ids`` is "Deprecated in AdCP 3.2; removed in AdCP 4.0"
+    and absent from the schema's root ``required``. Until migration 08cd415b3d91 the
+    column's NOT NULL made this unrepresentable.
+    """
+    _store_product(
+        ctx,
+        [{"format_kind": format_kind, "params": dict(_STORED_IMAGE_PARAMS)}],
+        with_legacy_arm=False,
     )
 
 
@@ -152,6 +183,22 @@ def then_no_format_options_key(ctx: dict) -> None:
     assert "format_options" not in product, (
         "a product declaring no canonical format options announced the key anyway, as "
         f"{product.get('format_options')!r}"
+    )
+
+
+@then("the announced product carries no format_ids key at all")
+def then_no_format_ids_key(ctx: dict) -> None:
+    """Absent, not empty -- and the distinction is the whole obligation.
+
+    ``core/product.json``'s deprecated anyOf branch requires only the KEY, so
+    ``format_ids: []`` would satisfy that branch by presence while declaring no format at
+    all. An absent key is the only shape that says "this product has no legacy arm".
+    """
+    product = _announced_product(ctx)
+    assert "format_ids" not in product, (
+        "a canonically-authored product announced the deprecated key anyway, as "
+        f"{product.get('format_ids')!r}; an empty array satisfies the deprecated anyOf "
+        "branch by presence while declaring nothing"
     )
 
 

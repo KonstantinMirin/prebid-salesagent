@@ -698,12 +698,23 @@ class TestAdCPContract:
                 # Missing publisher_properties
             )
 
-    def test_product_format_ids_required_in_conversion(self):
-        """Test that product conversion fails when format_ids is missing.
+    def test_product_declaring_neither_format_arm_is_refused_in_conversion(self):
+        """Conversion fails when a product declares NEITHER format arm.
 
-        Products without format_ids configured are invalid for media buys because
-        we cannot validate creative compatibility. Per AdCP spec, products must
-        specify supported formats to be available for purchase.
+        REGROUNDED against the pinned 3.2 schema. This test previously demanded that an
+        absent ``format_ids`` alone be refused, on the reasoning that "products must
+        specify supported formats to be available for purchase". That obligation is no
+        longer what the spec says: ``core/product.json`` makes the declaration a root
+        ``anyOf`` -- "Products MUST carry ``format_ids``, ``format_options``, or both
+        during the 3.x migration window" -- and ``format_ids`` is "Deprecated in AdCP 3.2;
+        removed in AdCP 4.0" and absent from the root ``required`` list. So the error case
+        is neither arm, and demanding the legacy arm specifically made the very shape 3.2
+        tells new products to author unservable.
+
+        Note the mock: ``format_options`` must be set to None EXPLICITLY. A bare MagicMock
+        returns a truthy child for any attribute, so a product fixture that simply omits
+        it is asserting that the canonical arm is PRESENT -- which is why this test began
+        passing for the wrong reason once the conversion started reading that arm.
         """
         from unittest.mock import MagicMock
 
@@ -715,7 +726,8 @@ class TestAdCPContract:
         product_model.name = "Product Without Formats"
         product_model.description = "This product has no format_ids configured"
         product_model.delivery_type = "guaranteed"
-        product_model.effective_format_ids = []  # Empty - no formats configured
+        product_model.effective_format_ids = []  # Empty - no legacy arm
+        product_model.format_options = None  # and no canonical arm either: the anyOf is unsatisfied
         product_model.effective_properties = [{"publisher_domain": "example.com", "property_tags": ["test"]}]
         product_model.pricing_options = [
             MagicMock(
@@ -729,14 +741,25 @@ class TestAdCPContract:
             )
         ]
 
-        # Conversion should fail with a clear error message
-        with pytest.raises(ValueError, match="has no format_ids configured"):
+        # Conversion should fail naming the declaration, not one arm of it
+        with pytest.raises(ValueError, match="declares no creative format"):
             convert_product_model_to_schema(product_model)
 
-        # Also test with None (another way format_ids might be missing)
+        # Also test with None (another way the legacy arm might be missing)
         product_model.effective_format_ids = None
-        with pytest.raises(ValueError, match="has no format_ids configured"):
+        with pytest.raises(ValueError, match="declares no creative format"):
             convert_product_model_to_schema(product_model)
+
+        # WHAT THIS TEST DELIBERATELY DOES NOT GRADE, so nobody mistakes it for sufficient:
+        # that the canonical arm ALONE is accepted. These two assertions pass equally under
+        # a conversion that still demands format_ids, because this product has neither arm.
+        # The discriminating case -- a canonically-authored product with no legacy arm,
+        # stored and served -- is
+        # BR-UC-GET-PRODUCTS-format-options.feature's @T-UC-GET-PRODUCTS-format-options-
+        # canonical-only scenario, which goes through real factories and reads the real
+        # wire. It is not reproduced here: a MagicMock complete enough to convert
+        # SUCCESSFULLY would be a hand-built fake of half the product model, and a fixture
+        # that elaborate grades itself rather than the seller.
 
     def test_adcp_create_media_buy_request(self):
         """Test AdCP create_media_buy request structure."""
