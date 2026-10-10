@@ -400,9 +400,22 @@ class AdServerAdapter(ABC):
         Per AdCP spec, CreateMediaBuyResponse.Package requires package_id.
         This builds the list consistently across adapters.
 
+        A package is reported paused when the SELLER holds it or when the BUYER asked
+        for it to be created that way. Both are real and neither overrides the other:
+        media-buy/package-request.json (AdCP 3.2.1) says ``paused`` asks for a package
+        "created in a paused state", and core/package.json says the response reports
+        whether the package "is paused by the buyer" — so an adapter that holds every
+        package pending approval cannot answer "active" to a buyer who asked for paused,
+        and a seller hold is not cancelled by a buyer who did not ask for one.
+
+        This is the one place either answer is formed: every adapter's create path
+        returns through here, so threading ``MediaPackage.paused`` to the ad server is
+        all that is left per adapter.
+
         Args:
             packages: List of MediaPackage objects from the request.
-            paused: Whether packages should be marked as paused (e.g. for HITL).
+            paused: Whether the SELLER holds these packages (e.g. for HITL), regardless
+                of what the buyer asked for.
             include_product_id: Whether to include product_id in the response
                 (useful for adapters that need product tracking, e.g. Mock).
 
@@ -413,7 +426,7 @@ class AdServerAdapter(ABC):
         for package in packages:
             kwargs: dict[str, Any] = {
                 "package_id": package.package_id,
-                "paused": paused,
+                "paused": paused or package.paused,
             }
             if include_product_id:
                 kwargs["product_id"] = package.product_id
@@ -443,7 +456,9 @@ class AdServerAdapter(ABC):
         Args:
             media_buy_id: The generated media buy ID.
             packages: List of MediaPackage objects from the request.
-            paused: Whether packages should be marked as paused.
+            paused: Whether the SELLER holds these packages; the buyer's own
+                ``MediaPackage.paused`` ask is honoured either way (see
+                :meth:`_build_package_responses`).
             creative_deadline_days: Days from now for creative deadline.
                 None means no creative deadline (e.g. GAM sets this explicitly).
             package_responses: Pre-built package responses (overrides packages).

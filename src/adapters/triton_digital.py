@@ -202,6 +202,9 @@ class TritonDigital(AdServerAdapter):
                 "rateType": "CPM",
                 "startDate": start_time.date().isoformat(),
                 "endDate": end_time.date().isoformat(),
+                # The create-time pause, through the same flag ``pause_package`` flips
+                # below: a flight created with active=false does not deliver.
+                "active": not package.paused,
             }
 
             # Add targeting if provided (from package-level targeting_overlay per AdCP spec)
