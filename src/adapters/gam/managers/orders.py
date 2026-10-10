@@ -717,18 +717,11 @@ class GAMOrdersManager:
             elif not creative_placeholders:
                 log("  [yellow]No creatives and no format_ids - line item will have no creative placeholders[/yellow]")
 
-            # Determine goal type and units
+            # Determine goal type and units. The units are the package's whole-flight
+            # volume until the goal type GAM will book is settled below.
             goal_type = impl_config.get("primary_goal_type", "LIFETIME")
             goal_unit_type = impl_config.get("primary_goal_unit_type", "IMPRESSIONS")
-
-            if goal_type == "LIFETIME":
-                goal_units = package.impressions
-            elif goal_type == "DAILY":
-                # For DAILY goals, divide total impressions by flight days
-                goal_units = int(package.impressions / max(flight_duration_days, 1))
-            else:
-                # For other goal types (NONE, etc), use package impressions
-                goal_units = package.impressions
+            goal_units = package.impressions
 
             # Apply line item naming template
             from src.adapters.gam.utils.constants import GAM_NAME_LIMITS
@@ -819,7 +812,13 @@ class GAMOrdersManager:
                 # Automatically select based on pricing model and product's delivery guarantee
                 # The select_line_item_type method ensures compatibility between pricing and line item type
                 line_item_type = PricingCompatibility.select_line_item_type(pricing_model, is_guaranteed)
-                priority = PricingCompatibility.get_default_priority(line_item_type)
+                configured_priority = impl_config.get("priority")
+                priority = PricingCompatibility.resolve_priority(line_item_type, configured_priority)
+                if configured_priority is not None and priority != configured_priority:
+                    log(
+                        f"[yellow]Configured priority {configured_priority} is outside GAM's range for "
+                        f"{line_item_type} line items; booking the type's default {priority}[/yellow]"
+                    )
 
                 # Set goal type based on line item type (per GAM API documentation)
                 # SPONSORSHIP: Only supports DAILY goal type (percentage-based)
@@ -846,6 +845,13 @@ class GAMOrdersManager:
                 else:
                     # PRICE_PRIORITY, BULK, HOUSE can use configured goal type or default to LIFETIME
                     pass  # Keep goal_type from impl_config (set earlier)
+
+                # A DAILY goal is the package's volume spread over the flight's days, decided
+                # by the goal type GAM books -- a STANDARD line item configured DAILY books
+                # LIFETIME above, so its units stay the whole flight's. FLAT_RATE sponsorships
+                # set their percentage share above.
+                if goal_type == "DAILY" and pricing_model != "flat_rate":
+                    goal_units = int(package.impressions / max(flight_duration_days, 1))
 
                 # Update goal units based on pricing model (for non-SPONSORSHIP or non-FLAT_RATE)
                 if pricing_model != "flat_rate":

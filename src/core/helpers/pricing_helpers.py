@@ -30,6 +30,23 @@ def pricing_info_for(pricing_option: Any, *, bid_price: float | None = None) -> 
     }
 
 
+def package_unit_price(pricing_info: dict[str, Any]) -> float | None:
+    """What a package pays per unit: the option's fixed ``rate``, or the ``bid_price`` it bid."""
+    return pricing_info["rate"] if pricing_info["is_fixed"] else pricing_info["bid_price"]
+
+
+def package_volume(budget: float | None, pricing_info: dict[str, Any] | None) -> tuple[float, int]:
+    """``(cpm, impressions)`` a package plans: its OWN budget at the price of its option.
+
+    The volume an ad server books for the package (a GAM line item's goal) is this
+    number, so it is the package's budget -- never the buy's total -- divided by the
+    price of the option the package selected, never the product's first option.
+    No budget or no price plans no impressions.
+    """
+    cpm = (package_unit_price(pricing_info) if pricing_info else None) or 0.0
+    return cpm, int(budget / cpm * 1000) if budget and cpm else 0
+
+
 def pricing_option_has_rate(pricing_option: Any) -> bool:
     """Check if a pricing option carries a fixed rate.
 

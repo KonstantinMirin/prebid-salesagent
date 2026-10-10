@@ -21,6 +21,7 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.gam import GAM_AD_UNIT_ID, GAM_CLIENT_PATCH, seed_gam_seller
 from tests.harness.transport import DeliverResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -75,7 +76,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
         # The SOAP client under the real GAM adapter. Inert until ``sell_through_gam``
         # makes the tenant a GAM seller; the Mock-adapter path never constructs it.
-        "gam_client": "src.adapters.google_ad_manager.GAMClientManager",
+        **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -223,34 +224,51 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         ``implementation_config`` is merged over the minimal valid GAM product config, for
         a scenario about a product-level setting (priority, line item type, ...).
         """
-        from src.core.database.models import AdapterConfig
         from src.core.helpers.adapter_helpers import get_adapter
-        from tests.factories.core import AdapterConfigFactory, GAMInventoryFactory
         from tests.helpers.gam_client import stub_gam_client_manager
 
-        tenant.ad_server = "google_ad_manager"
-        principal.platform_mappings = {"google_ad_manager": {"advertiser_id": "123456789"}}
-        # GAM ad unit ids are numeric, and the adapter refuses any other.
-        ad_unit = GAMInventoryFactory(tenant=tenant, inventory_id="23312403856")
+        seed_gam_seller(self, tenant, principal)
+        self.sell_product_through_gam(product, implementation_config)
+
+        self.mock["gam_client"].return_value = stub_gam_client_manager(network_time_zone=network_time_zone)
+        self.mock["adapter"].side_effect = get_adapter
+
+    def sell_product_through_gam(self, product: Any, implementation_config: dict[str, Any] | None = None) -> None:
+        """Configure *product* to book into the GAM seller's ad unit.
+
+        ``implementation_config`` is merged over the minimal valid GAM product config, for
+        a scenario about a product-level setting (priority, line item type, ...).
+        """
         # The adapter resolves a line item's creative sizes through the creative-agent
         # registry, which under test answers from the reference catalog only.
         product.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
         product.implementation_config = {
-            "targeted_ad_unit_ids": [ad_unit.inventory_id],
+            "targeted_ad_unit_ids": [GAM_AD_UNIT_ID],
             "priority": 8,
             "creative_placeholders": [{"width": 300, "height": 250}],
             **(implementation_config or {}),
         }
-        config = self.get_session().get(AdapterConfig, tenant.tenant_id) or AdapterConfigFactory(tenant=tenant)
-        config.adapter_type = "google_ad_manager"
-        config.gam_network_code = "123456"
-        config.gam_trafficker_id = "654321"
-        # Present so the adapter is constructible; nothing authenticates against the stand-in.
-        config.gam_refresh_token = "test_refresh_token"
         self._commit_factory_data()
 
-        self.mock["gam_client"].return_value = stub_gam_client_manager(network_time_zone=network_time_zone)
-        self.mock["adapter"].side_effect = get_adapter
+    def add_gam_product(
+        self, product_id: str, *, delivery_type: str, cpm: str, implementation_config: dict[str, Any]
+    ) -> Any:
+        """Another product of the GAM seller, sold at a fixed *cpm*; returns its pricing option."""
+        from decimal import Decimal
+
+        from src.core.database.models import Tenant
+
+        product, pricing_option = self.setup_product_chain(
+            self.get_session().get(Tenant, self._tenant_id), product_id=product_id
+        )
+        product.delivery_type = delivery_type
+        pricing_option.rate = Decimal(cpm)
+        self.sell_product_through_gam(product, implementation_config)
+        return pricing_option
+
+    def gam_order_id(self) -> str:
+        """The id the stand-in GAM network gave the order, as the adapter reads it back."""
+        return str(self.mock["gam_client"].return_value.get_service("OrderService").createOrders.return_value[0]["id"])
 
     def gam_objects_sent(self, service: str, method: str) -> list[dict[str, Any]]:
         """Every object the seller sent the stand-in GAM network through ``service.method``.
