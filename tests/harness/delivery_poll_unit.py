@@ -23,7 +23,7 @@ from typing import Any
 from unittest.mock import MagicMock
 
 from src.core.schemas import AdapterGetMediaBuyDeliveryResponse
-from tests.factories.media_buy import default_request_packages, pricing_options_for
+from tests.factories.media_buy import default_request_packages, package_rows_for, pricing_options_by_package
 from tests.harness._base import BaseTestEnv
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness._mock_uow import make_mock_uow
@@ -68,15 +68,17 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
         # Adapter: default happy path (from mixin)
         self._configure_adapter_mock()
 
-        # Pricing: answer about the ids production actually asked for, the way the real
-        # lookup does. ``get-media-buy-delivery-response.json`` REQUIRES pricing_model,
-        # rate and currency on every by_package entry, and a unit buy has no MediaPackage
-        # row to carry them, so this mock is the buy's only pricing source.
-        self.mock["pricing"].side_effect = lambda option_ids, **_: pricing_options_for(option_ids)
+        # Pricing: answer about the options the packages name, the way the real lookup
+        # does. ``get-media-buy-delivery-response.json`` REQUIRES pricing_model, rate and
+        # currency on every by_package entry, and a unit package row carries no
+        # pricing_info, so this mock is the package's only pricing source.
+        self.mock["pricing"].side_effect = pricing_options_by_package()
 
-        # Packages: a mocked repo hands back a MagicMock, which reads as a dict with no
-        # entries only by accident; say so.
-        self._uow_instance.media_buys.get_packages_for_ids.return_value = {}
+        # Packages: the rows each added buy's request names, as the repository returns
+        # them for the ids asked for (``add_buy`` may run after this).
+        self._uow_instance.media_buys.get_packages_for_ids.side_effect = lambda ids: {
+            buy_id: rows for buy_id, rows in package_rows_for(self._buys).items() if buy_id in ids
+        }
 
         # Circuit breaker: CLOSED. A bare MagicMock return value is TRUTHY, so leaving it
         # unset runs every test in this env with the breaker OPEN — which rewrites an
@@ -135,5 +137,4 @@ class DeliveryPollEnv(DeliveryPollMixin, BaseTestEnv):
 
     def set_pricing_options(self, pricing_map: dict[str, Any]) -> None:
         """Configure pricing option lookup results, replacing the derived default."""
-        self.mock["pricing"].side_effect = None
-        self.mock["pricing"].return_value = pricing_map
+        self.mock["pricing"].side_effect = pricing_options_by_package(pricing_map)

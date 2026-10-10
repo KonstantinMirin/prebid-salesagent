@@ -1461,7 +1461,7 @@ class TestPricingOptionStringLookup:
         Covers: UC-004-MAIN-14
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
+        from src.core.database.models import MediaPackage, Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1502,10 +1502,13 @@ class TestPricingOptionStringLookup:
 
         with get_db_session() as session:
             product_repo = ProductRepository(session, "t1")
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1", product_repo=product_repo)
+            result = _get_pricing_options(
+                [MediaPackage(package_config={"product_id": "prod1", "pricing_option_id": "cpm_usd_fixed"})],
+                product_repo=product_repo,
+            )
 
-        assert "cpm_usd_fixed" in result, (
-            f"Expected key 'cpm_usd_fixed', got keys: {list(result.keys())}. "
+        assert ("prod1", "cpm_usd_fixed") in result, (
+            f"Expected key ('prod1', 'cpm_usd_fixed'), got keys: {list(result.keys())}. "
             f"_get_pricing_options incorrectly uses integer PK."
         )
 
@@ -1515,7 +1518,7 @@ class TestPricingOptionStringLookup:
         Covers: UC-004-MAIN-14
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
+        from src.core.database.models import MediaPackage, Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1555,7 +1558,10 @@ class TestPricingOptionStringLookup:
 
         with get_db_session() as session:
             product_repo = ProductRepository(session, "t1")
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1", product_repo=product_repo)
+            result = _get_pricing_options(
+                [MediaPackage(package_config={"product_id": "prod1", "pricing_option_id": "cpm_usd_fixed"})],
+                product_repo=product_repo,
+            )
 
         assert len(result) > 0, "Non-numeric pricing_option_id 'cpm_usd_fixed' was silently discarded."
 
@@ -1622,7 +1628,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
+        from src.core.database.models import MediaPackage, Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1663,14 +1669,13 @@ class TestPricingOptionStringToIntComparisonRejected:
         with get_db_session() as session:
             product_repo = ProductRepository(session, "t1")
             result = _get_pricing_options(
-                tenant_id="t1",
-                pricing_option_ids=["cpm_usd_fixed"],
+                [MediaPackage(package_config={"product_id": "prod1", "pricing_option_id": "cpm_usd_fixed"})],
                 product_repo=product_repo,
             )
 
         # Key assertion: the map uses the string pricing_option_id, NOT the int PK
-        assert "cpm_usd_fixed" in result
-        assert po_id not in result
+        assert ("prod1", "cpm_usd_fixed") in result
+        assert ("prod1", po_id) not in result
 
     def test_integer_pk_lookup_returns_none(self, integration_db):
         """Looking up pricing option by integer PK returns None (type mismatch caught).
@@ -1678,7 +1683,7 @@ class TestPricingOptionStringToIntComparisonRejected:
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
         """
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
+        from src.core.database.models import MediaPackage, Product, Tenant
         from src.core.database.repositories.product import ProductRepository
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
@@ -1719,13 +1724,12 @@ class TestPricingOptionStringToIntComparisonRejected:
         with get_db_session() as session:
             product_repo = ProductRepository(session, "t1")
             result = _get_pricing_options(
-                tenant_id="t1",
-                pricing_option_ids=["cpc_usd_fixed"],
+                [MediaPackage(package_config={"product_id": "prod1", "pricing_option_id": "cpc_usd_fixed"})],
                 product_repo=product_repo,
             )
 
         # Only the string pricing_option_id should work
-        assert result.get("cpc_usd_fixed") is not None
+        assert result.get(("prod1", "cpc_usd_fixed")) is not None
 
 
 # ---------------------------------------------------------------------------

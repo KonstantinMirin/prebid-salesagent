@@ -3472,6 +3472,7 @@ class TestDeliveryImplPricingLookup:
         Source: UC-004,
         Covers: UC-002-EXT-N-08
         """
+        from src.core.database.models import MediaPackage
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
@@ -3483,10 +3484,13 @@ class TestDeliveryImplPricingLookup:
         mock_repo = MagicMock()
         mock_repo.get_all_pricing_options.return_value = [pricing_option]
 
-        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
+        package = MediaPackage(
+            package_config={"product_id": pricing_option.product_id, "pricing_option_id": "cpm_usd_fixed"}
+        )
+        result = _get_pricing_options([package], product_repo=mock_repo)
 
-        assert "cpm_usd_fixed" in result
-        assert result["cpm_usd_fixed"] == pricing_option
+        # Keyed by the package's product as well as the option id: the id is product-scoped.
+        assert result[(pricing_option.product_id, "cpm_usd_fixed")] == pricing_option
 
     def test_delivery_spend_with_correct_pricing(self):
         """UC-004-PL02: spend computed from rate and impressions.

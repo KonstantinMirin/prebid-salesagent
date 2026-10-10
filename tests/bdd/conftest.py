@@ -103,6 +103,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.publisher_authorization",
     "tests.bdd.steps.domain.gam_adapter",
     "tests.bdd.steps.domain.gam_trafficking",
+    "tests.bdd.steps.domain.gam_readback",
     "tests.bdd.steps.domain.pre_dispatch_refusals",
     "tests.bdd.steps.domain.codes_open_vocabulary",
     "tests.bdd.steps.domain.security_wire_safety",
@@ -6046,6 +6047,16 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="gamtraffic",
         when=lambda m: "gamtraffic" in m,
         env_builder=_env("tests.harness.gam_creative_sync.GamCreativeSyncEnv"),
+    ),
+    # ── @gamreadback (local GAM buy read-back feature) ──────────────────────
+    # A create through the real GAM adapter, then the buyer's two reads of that buy, on
+    # one identity: the create+list env, which also routes get_media_buy_delivery. Seeded
+    # with the create chain the GAM Background builds on.
+    EnvRoute(
+        tag="gamreadback",
+        when=lambda m: "gamreadback" in m,
+        env_builder=_env("tests.harness.media_buy_create_list.MediaBuyCreateListEnv"),
+        seed=_seed_media_buy_chain,
     ),
     EnvRoute(
         tag="tenantid",

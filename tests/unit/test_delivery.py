@@ -48,7 +48,8 @@ from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
 from src.services.webhook_delivery_service import CircuitBreaker, CircuitState, WebhookDeliveryService
 from tests.factories.media_buy import (
     default_request_packages,
-    pricing_options_for,
+    package_rows_for,
+    pricing_options_by_package,
     pricing_options_named,
     request_package,
 )
@@ -173,6 +174,7 @@ def _standard_patches(
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
     mock_uow.media_buys = MagicMock()
+    mock_uow.media_buys.get_packages_for_ids.return_value = package_rows_for(buy for _, buy in target_buys)
 
     return {
         "adapter": patch(
@@ -183,17 +185,13 @@ def _standard_patches(
             f"{_PATCH_PREFIX}._get_target_media_buys",
             return_value=target_buys,
         ),
-        # Answers about the ids production asked for, derived the way the real lookup
+        # Answers about the options the packages name, derived the way the real lookup
         # derives them, unless the caller pins its own map. The delivery report REQUIRES
         # pricing_model/rate/currency per package (get-media-buy-delivery-response.json)
-        # and these mock buys have no MediaPackage row, so this is their pricing source.
+        # and these package rows carry no pricing_info, so this is their pricing source.
         "pricing_options": patch(
             f"{_PATCH_PREFIX}._get_pricing_options",
-            # NOT ``{}`` — the pin REQUIRES pricing_model/rate/currency on every
-            # by_package entry, so an empty map makes the response unbuildable.
-            side_effect=lambda option_ids, **_: (
-                pricing_options if pricing_options is not None else pricing_options_for(option_ids)
-            ),
+            side_effect=pricing_options_by_package(pricing_options),
         ),
         "uow": patch(
             f"{_PATCH_PREFIX}.MediaBuyUoW",
@@ -845,6 +843,7 @@ class TestDeliveryPricingOptionLookup:
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-01
         """
+        from src.core.database.models import MediaPackage
         from src.core.tools.media_buy_delivery import _get_pricing_options
 
         # A real (unpersisted) row. A bare MagicMock fabricates every attribute it is
@@ -858,11 +857,13 @@ class TestDeliveryPricingOptionLookup:
         mock_repo = MagicMock()
         mock_repo.get_all_pricing_options.return_value = [pricing_option]
 
-        result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="test_tenant", product_repo=mock_repo)
+        package = MediaPackage(
+            package_config={"product_id": pricing_option.product_id, "pricing_option_id": "cpm_usd_fixed"}
+        )
+        result = _get_pricing_options([package], product_repo=mock_repo)
 
-        # Must find the pricing option keyed by synthetic ID
-        assert "cpm_usd_fixed" in result
-        assert result["cpm_usd_fixed"].id == 42
+        # Must find the pricing option keyed by the package's product and the stored id
+        assert result[(pricing_option.product_id, "cpm_usd_fixed")].id == 42
 
     def test_delivery_spend_correct_with_cpm_pricing(self):
         """CPM pricing: adapter returns correct impressions/spend with CPM pricing.

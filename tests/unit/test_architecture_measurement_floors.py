@@ -90,6 +90,9 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         # GAM creative trafficking, graded on what the seller sends GAM's SOAP client.
         # Pinned in the change that registered the route.
         "gamtraffic",
+        # GAM buy read-back (status and per-package delivery after a create through a GAM
+        # seller). Pinned in the change that registered the route.
+        "gamreadback",
         # BR-PROTOCOL-001: inbound version negotiation, graded on a tool that is not
         # get_adcp_capabilities. Pinned in the same change that registered the route.
         "protocol-version-negotiation",

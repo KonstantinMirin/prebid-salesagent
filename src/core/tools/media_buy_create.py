@@ -695,6 +695,8 @@ def _media_package_from_request(
         # adcp 2.12.0 replaced the status enum with this bool.
         "paused": paused,
         "product_id": req_pkg.product_id,
+        # Scoped to the product: two products may both name an option "cpm_usd_fixed".
+        "pricing_option_id": req_pkg.pricing_option_id,
         "budget": budget_value,
         "targeting_overlay": req_pkg.targeting_overlay,
         "creative_ids": _get_creative_ids(req_pkg),
@@ -3470,20 +3472,16 @@ async def _create_media_buy_impl(
         for i, pkg_item in enumerate(response.packages):
             logger.info(f"[DEBUG] create_media_buy: Response package {i} = {pkg_item}")
 
-        # Determine initial status using centralized logic
-        # Check if creatives are assigned and approved
-        has_creatives = False
-        creatives_approved = True  # Assume approved if any exist
-
-        # Check packages for creative_ids
-        if req.packages:
-            for pkg in req.packages:
-                if _get_creative_ids(pkg):
-                    has_creatives = True
-                    # For now, assume creatives in request are not yet approved
-                    # They need to go through sync_creatives approval flow
-                    creatives_approved = False
-                    break
+        # Determine initial status using centralized logic, from the creatives the
+        # packages are about to be assigned -- inline creatives included, which the
+        # upload above synced into the library and named by id -- as they actually are.
+        assigned_creative_ids = [cid for pkg in req.packages or [] for cid in _get_creative_ids(pkg) or []]
+        has_creatives = bool(assigned_creative_ids)
+        creatives_approved = True
+        if has_creatives:
+            with MediaBuyUoW(tenant.tenant_id) as status_uow:
+                assert status_uow.creatives is not None
+                creatives_approved = not status_uow.creatives.uncleared_ids(assigned_creative_ids, principal_id)
 
         # Use centralized status determination
         now = datetime.now(UTC)

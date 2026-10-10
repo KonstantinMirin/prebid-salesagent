@@ -15,6 +15,11 @@ test that needs a line item states one.
 
 from __future__ import annotations
 
+import csv
+import gzip
+import io
+import itertools
+from collections.abc import Iterable
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -63,13 +68,29 @@ def stub_gam_client_manager(
 
     ``getCurrentNetwork`` names the network's time zone, the zone production writes a
     line item's flight in.
+
+    Each line item GAM creates gets its own id, counting up from ``created_line_item_id``
+    in creation order and recorded by line item name on ``line_item_ids``, so a buy's
+    packages map to distinct line items the way they do on a real network. A line item
+    it created is then one of the order's line items, as GAM serves them back.
     """
+    next_line_item_id = itertools.count(int(created_line_item_id))
+    line_item_ids: dict[str, str] = {}
+    order_line_items = list(line_items)
+
+    def create_line_items(items: list[dict[str, Any]]) -> list[dict[str, int]]:
+        created = [{"id": next(next_line_item_id)} for _ in items]
+        for item, row in zip(items, created, strict=True):
+            line_item_ids[item["name"]] = str(row["id"])
+            order_line_items.append(SoapObject(item, id=row["id"]))
+        return created
+
     services = {
         "NetworkService": MagicMock(getCurrentNetwork=MagicMock(return_value=SoapObject(timeZone=network_time_zone))),
         "OrderService": MagicMock(createOrders=MagicMock(return_value=[{"id": int(created_order_id)}])),
         "LineItemService": MagicMock(
-            getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items))),
-            createLineItems=MagicMock(return_value=[{"id": int(created_line_item_id)}]),
+            getLineItemsByStatement=MagicMock(side_effect=lambda _statement: SoapObject(results=order_line_items)),
+            createLineItems=MagicMock(side_effect=create_line_items),
         ),
         "CreativeService": MagicMock(createCreatives=MagicMock(return_value=[{"id": created_creative_id}])),
         # Stated so the associations a test grades land on ONE object: an unstated
@@ -81,6 +102,7 @@ def stub_gam_client_manager(
     # so a call on one nobody configured (LineItemCreativeAssociationService, ...) is
     # still recorded where a test can read it back.
     client_manager.get_service.side_effect = lambda name: services.setdefault(name, MagicMock())
+    client_manager.line_item_ids = line_item_ids
     return client_manager
 
 
@@ -96,7 +118,7 @@ def serve_gam_report(client_manager: MagicMock, *, status: str = "COMPLETED") ->
     (``client_manager.get_client()``), not to ``get_service``: it runs the job, polls its
     status, and asks for the CSV's download URL. A ``FAILED`` job is the report failure the
     seller must still surface. The CSV itself is fetched over HTTP -- see
-    ``empty_gam_report_download``.
+    ``gam_report_download``.
     """
     report_service = MagicMock(
         runReportJob=MagicMock(return_value={"id": 7001}),
@@ -110,8 +132,26 @@ def serve_gam_report(client_manager: MagicMock, *, status: str = "COMPLETED") ->
     )
 
 
-def empty_gam_report_download() -> MagicMock:
-    """The HTTP response carrying a GAM report with no rows: a gzipped header-only CSV."""
-    import gzip
+#: The columns of the report ``GAMReportingService`` asks GAM for, as GAM's CSV names them.
+_GAM_REPORT_COLUMNS = (
+    "Dimension.DATE",
+    "Dimension.ADVERTISER_ID",
+    "Dimension.ORDER_ID",
+    "Dimension.LINE_ITEM_ID",
+    "Column.AD_SERVER_IMPRESSIONS",
+    "Column.AD_SERVER_CLICKS",
+    "Column.AD_SERVER_CPM_AND_CPC_REVENUE",
+)
 
-    return MagicMock(content=gzip.compress(b"Dimension.DATE,Column.AD_SERVER_IMPRESSIONS\n"))
+
+def gam_report_download(rows: Iterable[dict[str, Any]] = ()) -> MagicMock:
+    """The HTTP response carrying a GAM report: a gzipped CSV of *rows*, keyed by GAM column.
+
+    With no rows it is a header-only CSV, a report that ran and found no delivery.
+    ``Column.AD_SERVER_CPM_AND_CPC_REVENUE`` is in micros, as GAM reports it.
+    """
+    text = io.StringIO()
+    writer = csv.DictWriter(text, fieldnames=_GAM_REPORT_COLUMNS)
+    writer.writeheader()
+    writer.writerows(rows)
+    return MagicMock(content=gzip.compress(text.getvalue().encode()))
