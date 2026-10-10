@@ -27,7 +27,7 @@ from collections.abc import Callable, Generator, Sequence
 from contextlib import AbstractContextManager, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, NoReturn
 
 import pytest
 
@@ -6818,6 +6818,53 @@ ENV_ROUTES: list[EnvRoute] = [
 ENV_ROUTES += _uc010_dormancy_rows()
 
 
+def _refuse_unrouted(uc: str | None, marker_names: frozenset[str]) -> NoReturn:
+    """Refuse a scenario no ``ENV_ROUTES`` row claims, instead of xfailing it.
+
+    THIS USED TO BE ``pytest.xfail("No harness wired for ...")``, raised from
+    ``_harness_env`` at FIXTURE SETUP -- before a single step ran. That made it the one
+    routing mechanism with no baseline and no ledger, twenty lines from the dormancy
+    converter that refuses a scenario absent from ``dormant_scenarios.txt``. The cost
+    was not theoretical: it made a ``scenarios()`` call look like binding a feature.
+    Add the call, delete the row from ``UNBOUND_ALLOWLIST`` in
+    ``tests/unit/test_architecture_feature_file_bound.py``, and every scenario in the
+    file xfails here at setup -- so that guard goes GREEN while the feature grades
+    exactly nothing, recorded in no ledger, no xfail census and no dormancy baseline.
+    "Unbound and counted" became "bound and counted by nobody", which reads as progress
+    on every artifact we have.
+
+    A ledger was considered and is the wrong shape HERE, because the population is
+    EMPTY. Measured on run innet_091026_2116 (both BDD suites, both reconciled
+    collected == total, both exit 0): ZERO of 11569 scenario items reached this branch
+    -- 8657 in bdd_inprocess, 2912 in bdd_e2e. Every bound-but-unwired scenario today
+    is claimed by a row that names itself (``uc002-not-wired`` 1236 items,
+    ``uc003-not-wired`` 1161, the UC-010 dormancy rows 105). A shrink-only baseline
+    seeded with the empty set IS this refusal, and a zero-entry file would only add
+    something to grow.
+
+    So refusing costs nothing today and keeps costing nothing for as long as every
+    scenario is routed. If you are here because you added a ``scenarios()`` call: that
+    is the point. Binding a feature means giving it an ``ENV_ROUTES`` row AND step
+    definitions, and this is where you find out you did neither. Do not add a
+    ``<uc>-not-wired`` row to get past it -- that is an xfail wearing a route, and it
+    puts the scenario back in the population this refusal exists to keep at zero.
+
+    Graded by ``tests/unit/test_architecture_bdd_unrouted_is_refused.py``, which drives
+    this fixture for real and carries a routed control, because a mechanism whose
+    population is empty is otherwise indistinguishable from one that stopped working.
+    """
+    pytest.fail(
+        f"UNROUTED SCENARIO: no ENV_ROUTES row claims {uc} "
+        f"(markers: {sorted(marker_names)}).\n"
+        "  It reached _harness_env, so it IS collected -- it just has no environment, "
+        "and would otherwise have xfailed at setup before running a single step.\n"
+        "  Give the UC an ENV_ROUTES row that builds a real env, or revert the "
+        "scenarios() call that bound its feature. A <uc>-not-wired row is not a fix.\n"
+        "  If detect_uc returned None, the tag is unrecognised: widen detect_uc.",
+        pytrace=False,
+    )
+
+
 def _uc_bucket_rows() -> list[EnvRoute]:
     """The coarse uc-bucket rows, each re-keyed to the bucket it routes.
 
@@ -6849,12 +6896,11 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
     - UC-004 @polling → DeliveryPollEnv
     - UC-004 @webhook → WebhookEnv (unit variant, no DB needed)
     - UC-004 @webhook-reliability → CircuitBreakerEnv (unit variant)
-    - A UC recognized by ``storyboard_spec.detect_uc`` but not (yet) claimed by a row
-      xfails with a UC-specific reason via the catch-all at the bottom.
-    - A tag ``storyboard_spec.detect_uc`` does not recognize at all falls through
-      to the same catch-all as ``uc=None`` -- an opaque "No harness wired for None".
-      That is a bug, not intended behavior: widen ``detect_uc`` instead of
-      relying on this fixture to paper over it.
+    - A UC recognized by ``storyboard_spec.detect_uc`` but not claimed by any row is
+      REFUSED by ``_refuse_unrouted`` below -- it is not xfailed. See that function.
+    - A tag ``storyboard_spec.detect_uc`` does not recognize at all reaches the same
+      refusal with ``uc=None``. That is a bug, not intended behavior: widen
+      ``detect_uc`` instead of relying on this fixture to paper over it.
     """
     # ONE derivation, ONE routing call. The marker set comes from the
     # shared accessor so the conftest and the liveness plugin cannot narrow it
@@ -6872,8 +6918,5 @@ def _harness_env(request: pytest.FixtureRequest, ctx: dict) -> Generator[None, N
 
     route = storyboard_spec.resolve_env_route(marker_names, ENV_ROUTES)
     if route is None:
-        # NOT WIRED is a real answer, not an absence. Each branch UC keeps its own
-        # catch-all row (below) carrying the reason it used to xfail with inline;
-        # reaching here means no row claimed the scenario at all.
-        pytest.xfail(f"No harness wired for {uc} (markers: {sorted(marker_names)})")
+        _refuse_unrouted(uc, marker_names)
     yield from _run_env_route(request, ctx, route, e2e_config)
