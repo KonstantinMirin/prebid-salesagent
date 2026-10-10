@@ -153,6 +153,14 @@ def _make_media_package(
     """Create a minimal MediaPackage-like object for testing response builders."""
     pkg = MagicMock()
     pkg.package_id = package_id
+    # A REAL boolean, not the MagicMock attribute autospec would hand back.
+    # ``_build_package_responses`` reads ``package.paused`` since 640961ffc ("carry the
+    # buyer's create-time pause to the ad server"), and ``ResponsePackage.paused`` is a
+    # plain ``bool`` — so a MagicMock here fails pydantic validation before any of the
+    # seven tests below reach their assertions. False is not a choice being made: these
+    # tests already assert ``paused is False``, so this is the fixture catching up to the
+    # contract they grade.
+    pkg.paused = False
     return pkg
 
 
