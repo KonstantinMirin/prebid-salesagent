@@ -7,7 +7,8 @@ and geo mapping operations for Google Ad Manager campaigns.
 
 import json
 import logging
-import os
+from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
@@ -21,6 +22,9 @@ from src.core.exceptions import (
 )
 
 logger = logging.getLogger(__name__)
+
+# src/adapters/gam_geo_mappings.json: static AdCP geo codes -> GAM location ids.
+GEO_MAPPINGS_FILE = Path(__file__).parents[2] / "gam_geo_mappings.json"
 
 
 class GAMTargetingManager:
@@ -86,29 +90,21 @@ class GAMTargetingManager:
         """Load static geo mappings from JSON file on disk.
 
         Loads AdCP country codes → GAM geo IDs from gam_geo_mappings.json.
-        This is static data that doesn't change per tenant.
+        This is static data that doesn't change per tenant. A missing or unreadable file
+        raises: with empty mappings every geo overlay would book untargeted.
         """
-        try:
-            # Look for the geo mappings file relative to the adapters directory
-            mapping_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), "gam_geo_mappings.json")
-            with open(mapping_file) as f:
-                geo_data = json.load(f)
+        with GEO_MAPPINGS_FILE.open() as f:
+            geo_data = json.load(f)
 
-            self.geo_country_map = geo_data.get("countries", {})
-            self.geo_region_map = geo_data.get("regions", {})
-            self.geo_metro_map = geo_data.get("metros", {}).get("US", {})  # Currently only US metros
+        self.geo_country_map = geo_data["countries"]
+        self.geo_region_map = geo_data["regions"]
+        self.geo_metro_map = geo_data["metros"]["US"]  # Currently only US metros
 
-            logger.info(
-                f"Loaded GAM geo mappings: {len(self.geo_country_map)} countries, "
-                f"{sum(len(v) for v in self.geo_region_map.values())} regions, "
-                f"{len(self.geo_metro_map)} metros"
-            )
-        except Exception as e:
-            logger.warning(f"Could not load geo mappings file: {e}")
-            logger.warning("Using empty geo mappings - geo targeting will not work properly")
-            self.geo_country_map = {}
-            self.geo_region_map = {}
-            self.geo_metro_map = {}
+        logger.info(
+            f"Loaded GAM geo mappings: {len(self.geo_country_map)} countries, "
+            f"{sum(len(v) for v in self.geo_region_map.values())} regions, "
+            f"{len(self.geo_metro_map)} metros"
+        )
 
     def _load_axe_keys(self):
         """Load tenant-specific AXE configuration from database.
@@ -615,6 +611,66 @@ class GAMTargetingManager:
                 return regions[region_code]
         return None
 
+    @staticmethod
+    def _nielsen_dma_codes(metros) -> list[str]:
+        """The DMA codes of the buyer's metros, refusing any system but Nielsen DMA."""
+        codes: list[str] = []
+        for metro in metros or []:
+            if metro.system != MetroAreaSystem.nielsen_dma:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(
+                        capability="geo_system",
+                        rejected_value=metro.system.value,
+                        accepted_values=["nielsen_dma"],
+                    )
+                )
+            codes.extend(metro.values)
+        return codes
+
+    @staticmethod
+    def _geo_location_ids(
+        capability: str, codes: Iterable[str], lookup: Callable[[str], str | None]
+    ) -> list[dict[str, str]]:
+        """GAM location references for the buyer's geo codes, refusing a code the mapping lacks."""
+        locations = []
+        for code in codes:
+            location_id = lookup(code)
+            if location_id is None:
+                raise AdCPCapabilityNotSupportedError(
+                    details=CapabilityRefusalDetails(capability=capability, rejected_value=code)
+                )
+            locations.append({"id": location_id})
+        return locations
+
+    def _targeted_locations(
+        self, countries: list[str], regions: list[str], dma_codes: list[str]
+    ) -> list[dict[str, str]]:
+        """GAM locations for the overlay's geo inclusions.
+
+        Inclusion fields combine with AND (v3.1.1 docs/reference/migration/geo-targeting.mdx),
+        but GAM ORs every targeted location, so a country listed beside its regions would
+        book the whole country. The finest list is booked instead, cut to the listed
+        countries; a Nielsen DMA is in the US, and a finer list wholly outside them is
+        refused before the adapter (``geo_disjoint_inclusions``). Regions with metros would
+        need a state-by-DMA intersection GAM cannot express.
+        """
+        country_ids = self._geo_location_ids("geo_countries", countries, self.geo_country_map.get)
+        region_ids = self._geo_location_ids("geo_regions", regions, self._lookup_region_id)
+        metro_ids = self._geo_location_ids("geo_metros", dma_codes, self.geo_metro_map.get)
+        if regions and dma_codes:
+            raise AdCPCapabilityNotSupportedError(
+                details=CapabilityRefusalDetails(
+                    capability="geo_regions_with_geo_metros", rejected_value=[*regions, *dma_codes]
+                )
+            )
+        if regions:
+            return [
+                location
+                for region, location in zip(regions, region_ids, strict=True)
+                if not countries or region.split("-", 1)[0] in countries
+            ]
+        return metro_ids or country_ids
+
     def validate_targeting(self, targeting_overlay) -> list[str]:
         """Validate targeting and return unsupported features.
 
@@ -683,91 +739,35 @@ class GAMTargetingManager:
                 details=CapabilityRefusalDetails(capability="geo_postal_areas_exclude")
             )
 
-        # Build targeted locations
-        if any(
-            [
-                targeting_overlay.geo_countries,
-                targeting_overlay.geo_regions,
-                targeting_overlay.geo_metros,
-            ]
-        ):
-            geo_targeting["targetedLocations"] = []
-
-            # Map countries (GeoCountry → plain string via .root)
-            if targeting_overlay.geo_countries:
-                for country in targeting_overlay.geo_countries:
-                    code = country.root
-                    if code in self.geo_country_map:
-                        geo_targeting["targetedLocations"].append({"id": self.geo_country_map[code]})
-                    else:
-                        logger.warning(f"Country code '{code}' not in GAM mapping")
-
-            # Map regions (GeoRegion → ISO 3166-2 string via .root)
-            if targeting_overlay.geo_regions:
-                for region in targeting_overlay.geo_regions:
-                    code = region.root
-                    region_id = self._lookup_region_id(code)
-                    if region_id:
-                        geo_targeting["targetedLocations"].append({"id": region_id})
-                    else:
-                        logger.warning(f"Region code '{code}' not in GAM mapping")
-
-            # Map metros (GeoMetro: validate system, extract values)
-            if targeting_overlay.geo_metros:
-                for metro in targeting_overlay.geo_metros:
-                    if metro.system != MetroAreaSystem.nielsen_dma:
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="geo_system",
-                                rejected_value=metro.system.value,
-                                accepted_values=["nielsen_dma"],
-                            )
-                        )
-                    for dma_code in metro.values:
-                        if dma_code in self.geo_metro_map:
-                            geo_targeting["targetedLocations"].append({"id": self.geo_metro_map[dma_code]})
-                        else:
-                            logger.warning(f"Metro code '{dma_code}' not in GAM mapping")
-
-        # Build excluded locations
-        if any(
-            [
-                targeting_overlay.geo_countries_exclude,
-                targeting_overlay.geo_regions_exclude,
-                targeting_overlay.geo_metros_exclude,
-            ]
-        ):
-            geo_targeting["excludedLocations"] = []
-
-            # Map excluded countries
-            if targeting_overlay.geo_countries_exclude:
-                for country in targeting_overlay.geo_countries_exclude:
-                    code = country.root
-                    if code in self.geo_country_map:
-                        geo_targeting["excludedLocations"].append({"id": self.geo_country_map[code]})
-
-            # Map excluded regions
-            if targeting_overlay.geo_regions_exclude:
-                for region in targeting_overlay.geo_regions_exclude:
-                    code = region.root
-                    region_id = self._lookup_region_id(code)
-                    if region_id:
-                        geo_targeting["excludedLocations"].append({"id": region_id})
-
-            # Map excluded metros
-            if targeting_overlay.geo_metros_exclude:
-                for metro in targeting_overlay.geo_metros_exclude:
-                    if metro.system != MetroAreaSystem.nielsen_dma:
-                        raise AdCPCapabilityNotSupportedError(
-                            details=CapabilityRefusalDetails(
-                                capability="geo_system",
-                                rejected_value=metro.system.value,
-                                accepted_values=["nielsen_dma"],
-                            )
-                        )
-                    for dma_code in metro.values:
-                        if dma_code in self.geo_metro_map:
-                            geo_targeting["excludedLocations"].append({"id": self.geo_metro_map[dma_code]})
+        # Every code must map to a GAM location: a dropped inclusion books the line item
+        # broader than the overlay restricts it to, and a dropped exclusion delivers into
+        # the excluded location.
+        targeted = self._targeted_locations(
+            [c.root for c in targeting_overlay.geo_countries or []],
+            [r.root for r in targeting_overlay.geo_regions or []],
+            self._nielsen_dma_codes(targeting_overlay.geo_metros),
+        )
+        excluded = [
+            *self._geo_location_ids(
+                "geo_countries_exclude",
+                (c.root for c in targeting_overlay.geo_countries_exclude or []),
+                self.geo_country_map.get,
+            ),
+            *self._geo_location_ids(
+                "geo_regions_exclude",
+                (r.root for r in targeting_overlay.geo_regions_exclude or []),
+                self._lookup_region_id,
+            ),
+            *self._geo_location_ids(
+                "geo_metros_exclude",
+                self._nielsen_dma_codes(targeting_overlay.geo_metros_exclude),
+                self.geo_metro_map.get,
+            ),
+        ]
+        if targeted:
+            geo_targeting["targetedLocations"] = targeted
+        if excluded:
+            geo_targeting["excludedLocations"] = excluded
 
         if geo_targeting:
             gam_targeting["geoTargeting"] = geo_targeting

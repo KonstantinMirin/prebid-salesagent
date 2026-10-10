@@ -315,10 +315,9 @@ class GoogleAdManager(AdServerAdapter):
     def get_targeting_capabilities() -> TargetingCapabilities:
         """Return targeting capabilities GAM adapter supports.
 
-        Google Ad Manager supports comprehensive geo targeting:
-        - Countries and regions worldwide
-        - Nielsen DMAs (US metros)
-        - US ZIP codes
+        What this adapter can book, which is what gam_geo_mappings.json maps: countries,
+        regions and US Nielsen DMAs. Postal codes are refused (GAMTargetingManager), so
+        they are not declared: a declared capability is a commitment.
 
         Returns:
             TargetingCapabilities describing GAM's targeting support
@@ -326,8 +325,7 @@ class GoogleAdManager(AdServerAdapter):
         return TargetingCapabilities(
             geo_countries=True,
             geo_regions=True,
-            nielsen_dma=True,  # GAM supports US DMAs
-            us_zip=True,  # GAM supports US ZIP targeting
+            nielsen_dma=True,
         )
 
     # Legacy properties for backward compatibility
@@ -543,6 +541,14 @@ class GoogleAdManager(AdServerAdapter):
             self.log(f"[red]Error: {error_msg}[/red]")
             raise AdCPCapabilityNotSupportedError()
 
+        # Build targeting for each package (per AdCP spec, targeting is at package level)
+        # before anything is written: a targeting refusal must not leave behind a workflow
+        # step or a GAM order with no line items.
+        package_targeting = {}
+        for package in packages:
+            if package.targeting_overlay:
+                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
+
         # Check if manual approval is required for media buy creation
         # Skip approval workflow if this media buy was already manually approved
         # (when called from execute_approved_media_buy, we're in "post-approval execution" mode)
@@ -628,12 +634,6 @@ class GoogleAdManager(AdServerAdapter):
         )
 
         self.log(f"✓ Created GAM Order ID: {order_id}")
-
-        # Build targeting for each package (per AdCP spec, targeting is at package level)
-        package_targeting = {}
-        for package in packages:
-            if package.targeting_overlay:
-                package_targeting[package.package_id] = self._build_targeting(package.targeting_overlay)
 
         # Build placement_targeting_map from all products' impl_configs (adcp#208)
         # This maps placement_id → targeting_name for creative-level targeting
