@@ -6558,9 +6558,22 @@ ENV_ROUTES: list[EnvRoute] = [
     # ── UC-003 ──────────────────────────────────────────────────────────────
     EnvRoute(
         tag="uc003-ext",
+        # The two creative-state outlines share this row rather than getting one of their
+        # own: their Givens need exactly this seed — the update chain plus an existing media
+        # buy and its package, which is what ``_seed_update_with_existing_buy`` builds — and
+        # nothing else. ONE marker held them: the uc003-not-wired catch-all, which xfails at
+        # fixture setup, so neither outline had ever dispatched. Verified to be the only one
+        # — neither tag appears in _XFAIL_TAGS, in e2e_rest_known_failures.txt, or in
+        # dormant_scenarios.txt — so unlike the UC-002 creative-asset pair there is no second
+        # marker to remove alongside this.
         when=_uc(
             "UC-003",
-            lambda m: any(t.startswith("T-UC-003-ext-") for t in m) or bool(m & _UC003_TARGETING_OVERLAY_TAGS),
+            lambda m: (
+                any(t.startswith("T-UC-003-ext-") for t in m)
+                or bool(m & _UC003_TARGETING_OVERLAY_TAGS)
+                or "T-UC-003-partition-creative-state" in m
+                or "T-UC-003-boundary-creative-state" in m
+            ),
         ),
         env_builder=_env("tests.harness.media_buy_dual.MediaBuyDualEnv"),
         seed=_seed_update_with_existing_buy,
