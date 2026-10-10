@@ -30,6 +30,7 @@ from collections.abc import Callable
 import factory
 from adcp.types import (
     AudioFormatAsset,
+    FormatAssetUnion,
     HtmlFormatAsset,
     ImageFormatAsset,
     MarkdownFormatAsset,
@@ -59,14 +60,28 @@ _ASSET_CLASS_MAP = {
 ASSET_TYPES = frozenset(_ASSET_CLASS_MAP)
 
 
-def make_asset(asset_type: str, asset_id: str | None = None) -> ImageFormatAsset:
+def make_asset(asset_type: str, asset_id: str | None = None) -> FormatAssetUnion:
     """Create a typed asset object from an asset type string.
+
+    Refuses an asset type it cannot build. This used to resolve the class with
+    ``.get(asset_type, ImageFormatAsset)``, so a Given asking for a video, audio
+    or html asset was handed an IMAGE asset and every assertion downstream graded
+    the image path — a wrong-object pass, not a visible gap. A factory that
+    substitutes an object for the one asked for cannot fail.
 
     >>> a = make_asset("video")
     >>> a.asset_type
     'video'
     """
-    cls = _ASSET_CLASS_MAP.get(asset_type, ImageFormatAsset)
+    try:
+        cls = _ASSET_CLASS_MAP[asset_type]
+    except KeyError:
+        raise ValueError(
+            f"make_asset cannot build asset type {asset_type!r}. Buildable types: "
+            f"{sorted(_ASSET_CLASS_MAP)}. If the pinned core/format.json assets union "
+            "admits this type, add it to _ASSET_CLASS_MAP; if it does not, the scenario "
+            "is asking for an asset this spec version has no schema for."
+        ) from None
     return cls(asset_id=asset_id or f"{asset_type}_asset", required=True)
 
 
@@ -78,10 +93,12 @@ def _find_repeatable_group_class():
 
 
 def _find_inner_asset_class(asset_type: str):
-    """Find the inner asset class for a repeatable group by asset_type.
+    """Find the inner asset class for a repeatable group by asset_type, or raise.
 
     Inner assets within a repeatable_group use different classes than
-    top-level assets. We find them dynamically to survive SDK regeneration.
+    top-level assets, and those classes carry no stable alias in ``adcp.types``
+    (only the numbered generated names), so they are found dynamically — which
+    also survives SDK regeneration.
 
     The ``assets`` field annotation is nested:
         list[Annotated[Union[Annotated[AssetX, Tag], ...], Discriminator]]
@@ -100,12 +117,16 @@ def _find_inner_asset_class(asset_type: str):
     # Union[Annotated[AssetX, Tag], ...] -> concrete member classes
     members = [_unwrap_annotated(m) for m in get_args(element)]
     members = [m for m in members if hasattr(m, "model_fields")]
-    for cls in members:
-        field = cls.model_fields.get("asset_type")
-        if field is not None and field.default == asset_type:
-            return cls
-    # Fallback: first concrete member
-    return members[0] if members else None
+    by_type = {cls.model_fields["asset_type"].default: cls for cls in members if "asset_type" in cls.model_fields}
+    try:
+        return by_type[asset_type]
+    except KeyError:
+        raise ValueError(
+            f"a repeatable asset group cannot hold asset type {asset_type!r}. The pinned "
+            f"group assets union admits: {sorted(t for t in by_type if isinstance(t, str))}. "
+            "This used to fall back to the union's FIRST member (an image asset), so a group "
+            "asked for two types could come back holding two of the wrong kind."
+        ) from None
 
 
 def make_asset_group(
@@ -120,11 +141,9 @@ def make_asset_group(
     numbered class names (Assets18→Assets94, etc.) shift.
     """
     _RepeatableGroupCls = _find_repeatable_group_class()
-    inner_assets = []
-    for at in asset_types:
-        inner_cls = _find_inner_asset_class(at)
-        if inner_cls:
-            inner_assets.append(inner_cls(asset_id=f"{at}_asset", required=True))
+    # No `if inner_cls` guard: _find_inner_asset_class raises rather than returning
+    # None, so a group never comes back holding fewer assets than it was asked for.
+    inner_assets = [_find_inner_asset_class(at)(asset_id=f"{at}_asset", required=True) for at in asset_types]
     return _RepeatableGroupCls(
         item_type="repeatable_group",
         asset_group_id=group_id,
