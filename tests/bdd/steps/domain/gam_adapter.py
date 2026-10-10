@@ -6,6 +6,8 @@ local-gam-line-item-booking.feature: the seller is made a GAM seller by
 ``local_gam_line_item_flight``), the Givens add its products, the When dispatches a
 create_media_buy built from the request factory through ``dispatch_request``, and the
 Thens read the line items the REAL adapter sent to the GAM stand-in.
+local-gam-delivery-report.feature reuses the UC-004 delivery steps and adds only the
+report failure below.
 
 WHAT MAKES THESE NON-VACUOUS. Every expected number is the scenario's own arithmetic --
 a package's budget at its own product's CPM -- and two packages of the same budget at
@@ -114,3 +116,13 @@ def then_line_item_priority(ctx: dict, product_id: str, line_item_type: str, pri
     assert (item["lineItemType"], item["priority"]) == (line_item_type, priority), (
         f"line item for {product_id!r} booked as {item['lineItemType']} at priority {item['priority']}"
     )
+
+
+@given("the tenant reports delivery from Google Ad Manager")
+def given_tenant_reports_from_gam(ctx: dict) -> None:
+    ctx["env"].sell_through_gam()
+
+
+@given("Google Ad Manager fails the delivery report")
+def given_gam_report_fails(ctx: dict) -> None:
+    ctx["env"].fail_gam_report()

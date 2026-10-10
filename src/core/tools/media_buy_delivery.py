@@ -161,17 +161,24 @@ def delivery_for_media_buy(
         ),
         # Resolution from stored ids: the job acts as the buy's owner, on the buy's account.
         identity=identity_of(media_buy.tenant_id, media_buy.principal_id, media_buy.account_id),
+        for_webhook=True,
     )
 
 
 def get_media_buy_delivery(
-    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity
+    req: GetMediaBuyDeliveryRequest, *, identity: ResolvedIdentity, for_webhook: bool = False
 ) -> GetMediaBuyDeliveryResponse:
     """Gather delivery for the buys *req* names, for an already-resolved caller.
 
     The service half of :func:`_get_media_buy_delivery_impl`. It asks nothing about
     transports, auth or idempotency, so a server-initiated read can reach it through
     :func:`delivery_for_media_buy` without the front door.
+
+    ``for_webhook`` is the webhook context get-media-buy-delivery-response.json names: an
+    active buy whose ad server has not finished reporting the period is ``reporting_delayed``
+    with its ``expected_availability`` ("only present when status is reporting_delayed"). A
+    buyer's own request is answered with the figures the ad server has so far
+    (get_media_buy_delivery.mdx: "zero or partial metrics").
     """
     principal_id = identity.principal.principal_id
     tenant = identity.tenant
@@ -281,6 +288,7 @@ def get_media_buy_delivery(
                 adapter_conversions: float | None = None
                 adapter_conversion_value: float | None = None
                 adapter_viewability: float | None = None
+                expected_availability: datetime | None = None
 
                 # Call adapter to get per-package delivery metrics
                 # Note: Mock adapter returns simulated data, GAM adapter returns real data from Reporting API
@@ -318,6 +326,9 @@ def get_media_buy_delivery(
                     raw_conversion_value = getattr(adapter_response.totals, "conversion_value", None)
                     adapter_conversion_value = float(raw_conversion_value) if raw_conversion_value is not None else None
                     adapter_viewability = getattr(adapter_response.totals, "viewability", None)
+                    if for_webhook and status == "active" and adapter_response.expected_availability:
+                        status = "reporting_delayed"
+                        expected_availability = adapter_response.expected_availability
 
                 except Exception as e:
                     logger.error("Error getting delivery for %s: %s", media_buy_id, e)
@@ -465,6 +476,7 @@ def get_media_buy_delivery(
                     ),
                     by_package=package_deliveries,
                     daily_breakdown=None,  # Optional field, not calculated in this implementation
+                    expected_availability=expected_availability,
                 )
 
                 deliveries.append(delivery_data)

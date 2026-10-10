@@ -50,7 +50,7 @@ from src.adapters.gam.managers.orders import (
     NON_GUARANTEED_LINE_ITEM_TYPES,
 )
 from src.adapters.gam.pricing_compatibility import PricingCompatibility
-from src.adapters.gam_data_freshness import validate_and_log_freshness
+from src.adapters.gam_data_freshness import data_expected_complete_at
 from src.core.audit_logger import AuditLogger
 from src.core.errors.codes import AppErrorCode
 from src.core.errors.details import (
@@ -64,7 +64,6 @@ from src.core.errors.details import (
 )
 from src.core.exceptions import (
     AdCPActivationWorkflowError,
-    AdCPAdapterError,
     AdCPAuthorizationError,
     AdCPBudgetExceededError,
     AdCPBulkUpdateError,
@@ -1023,15 +1022,13 @@ class GoogleAdManager(AdServerAdapter):
             requested_timezone="America/New_York",
         )
 
-        # Validate data freshness
-        # The adapter decides whether to return data or raise error if data is stale
-        # Target date is the end of the reporting period
-        target_date = date_range.end
-
-        is_fresh = validate_and_log_freshness(reporting_data, media_buy_id, target_date=target_date)
-
-        if not is_fresh:
-            raise AdCPAdapterError(details=AdapterFailureDetails(media_buy_id=media_buy_id))
+        # A report that ran is the answer, rows or not: a buy GAM has not reported yet is
+        # zero delivery (get_media_buy_delivery.mdx, AdCP 3.1.1 -- "the seller returns the
+        # buy in `media_buy_deliveries` with zero or partial metrics"). A report GAM failed
+        # to produce raised above, out of get_reporting_data. Data GAM has not finished for
+        # the period is reported with the time it is expected complete, for the callers
+        # that wait for it.
+        expected_availability = data_expected_complete_at(reporting_data, media_buy_id, target_date=date_range.end)
 
         # Aggregate totals across all packages
         total_impressions = reporting_data.metrics.get("total_impressions", 0)
@@ -1124,6 +1121,7 @@ class GoogleAdManager(AdServerAdapter):
             ),
             currency=str(media_buy.currency or "USD"),
             daily_breakdown=daily_breakdown if daily_breakdown else None,
+            expected_availability=expected_availability,
         )
 
     def get_packages_snapshot(
