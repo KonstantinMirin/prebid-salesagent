@@ -2178,6 +2178,30 @@ def _assert_requested_package_effects(ctx: dict) -> None:
                         f"Requested targeting_overlay.{overlay_field} with {len(overlay_value)} "
                         f"entries, overlay carries {len(actual_dim)} -- a replacement is a whole swap"
                     )
+            elif field == "paused":
+                # GRADE THE RECORD, NOT ONLY THE ENVELOPE. A response echo cannot catch a
+                # seller that reports the buyer's ask and stores the opposite, and the
+                # stored row is what the next get_media_buys answers from. Measured: with
+                # the carrier hardcoded False this row PASSED on a2a, mcp and rest while
+                # T-UC-026-inv-200-2 failed, so the generic bool branch below made this
+                # field echo-satisfiable (salesagent-0a2ue).
+                #
+                # Create dispatch only. The update-side pause not persisting is a separate
+                # open defect (salesagent-1ete); reading the record there would grade that
+                # bug from this step instead of from its own scenario.
+                actual = _pkg_field(pkg, field)
+                assert str(actual) == str(value), f"Requested {field}={value!r}, package carries {actual!r}"
+                if ctx.get("request_kwargs"):
+                    package_id = _pkg_field(pkg, "package_id")
+                    assert package_id, (
+                        "response package carries no package_id, so the persisted package_config cannot be read back"
+                    )
+                    stored = _stored_package_config(ctx, _created_media_buy_id(ctx), str(package_id))
+                    assert bool(stored.get("paused")) == bool(value), (
+                        f"stored package_config['paused']={stored.get('paused')!r}, expected "
+                        f"{value!r} -- the response reported the buyer's ask while the record "
+                        "says otherwise, so the package would deliver"
+                    )
             elif isinstance(value, int | float) and not isinstance(value, bool):
                 actual = _pkg_field(pkg, field)
                 assert _numbers_equal(value, actual), f"Requested {field}={value!r}, package carries {actual!r}"
