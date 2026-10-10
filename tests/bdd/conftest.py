@@ -92,6 +92,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.uc_get_products_pricing",
     "tests.bdd.steps.domain.uc_get_products_format_options",
     "tests.bdd.steps.domain.uc_get_products_format_id_filter",
+    "tests.bdd.steps.domain.uc_get_products_canonical_format_filters",
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_context_echo",
@@ -6497,6 +6498,18 @@ ENV_ROUTES: list[EnvRoute] = [
         # means detect_uc returns None, so without this row the scenario would auto-xfail at
         # fixture setup with "No harness wired for None" and grade nothing while reading green.
         when=lambda m: "format_id_filter" in m,
+        env_builder=_build_product_env,
+    ),
+    EnvRoute(
+        tag="get-products-canonical-format-filters",
+        # BR-UC-GET-PRODUCTS canonical format filtering: stores real canonical-only
+        # products.format_options documents and reads which products get_products
+        # announces, so it takes the UC-GET-PRODUCTS branch like its three siblings above.
+        # Its own identity tag means detect_uc returns None, so WITHOUT this row the
+        # scenarios auto-xfail at fixture setup with "No harness wired for None" and grade
+        # nothing while reading green -- which is the hole salesagent-edkpt describes one
+        # layer up, and the reason this row is added in the same change as the feature.
+        when=lambda m: "canonical_format_filter" in m,
         env_builder=_build_product_env,
     ),
     EnvRoute(

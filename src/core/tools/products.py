@@ -11,9 +11,10 @@ from typing import Any, cast
 from adcp.types import LegacyProduct as LibraryProduct
 from adcp.types import PropertyListReference
 
-# FIXME(#1388): FormatId, ProductFilters have local subclasses; import from src.core.schemas (Pattern #7/#4).
-from adcp.types.domains.core.format_id import FormatReferenceStructuredObject as FormatId
-
+# The FIXME(#1388) import of FormatReferenceStructuredObject that stood here is gone with
+# its only use: standard_formats_only's isinstance(str | dict | FormatId) chain, which was
+# guarding against shapes a converted product cannot hold. One fewer library type imported
+# past its local subclass, which is what that FIXME asked for.
 from src.adapters import get_adapter_default_channels
 from src.core.audit_logger import get_audit_logger
 from src.core.errors.details import PolicyViolationDetails
@@ -24,7 +25,7 @@ from src.core.exceptions import (
     AdCPSalesAgentError,
     AdCPValidationError,
 )
-from src.core.format_resolver import product_format_identities
+from src.core.format_resolver import product_format_identities, product_format_kinds
 from src.core.helpers import enum_value
 from src.core.helpers.channel_helpers import effective_channel_names
 from src.core.resolved_identity import PublicIdentity
@@ -549,25 +550,65 @@ async def _get_products_impl(req: GetProductsRequest, identity: PublicIdentity) 
                 if not (product_format_identities(product.format_ids) & requested_identities):
                     continue
 
-            # Filter by standard_formats_only
+            # Filter by format_kinds -- the CANONICAL half of the question the format_ids
+            # filter above asks of the legacy half. core/product-filters.json: "Filter to
+            # products accepting any of these canonical format kinds", with items a $ref to
+            # canonical-format-kind.json. So membership is OR over the kind, and the
+            # comparison is between closed-vocabulary values rather than the human-chosen
+            # slugs the legacy filter has to canonicalize first.
+            #
+            # The field was DECLARED on the request and read by nothing: measured before
+            # this, `git grep format_kinds -- src/` hit one docstring. An ignored filter is
+            # not a capability gap the way an unsupported operation is -- the root of
+            # product-filters.json says filters "decide which products MAY BE RETURNED", so
+            # ignoring one returns products the buyer EXCLUDED and the buyer cannot tell.
+            if req.filters.format_kinds:
+                requested_kinds = {str(kind) for kind in req.filters.format_kinds}
+                if not (product_format_kinds(product.format_options) & requested_kinds):
+                    continue
+
+            # NOT IMPLEMENTED HERE: filters.format_option_refs, the same question at the
+            # OPTION level ("products accepting any of these exact publisher- or
+            # product-scoped canonical format options"). It needs an option-ref identity
+            # whose scope discriminator is part of the key -- a product-scoped ref and a
+            # publisher-scoped one are different references even when they share an id --
+            # and that reader does not exist yet. It is still DECLARED and read by nothing,
+            # which is the same defect this block just fixed for format_kinds; tracked on
+            # salesagent-8qela.3.3 rather than half-built here.
+
+            # Filter by standard_formats_only: "Only return products accepting IAB standard
+            # formats" (core/product-filters.json).
+            #
+            # RE-KEYED, because the previous reading had a hole that salesagent-8qela.3.2
+            # made reachable. It looped `product.format_ids or []` and prefix-guessed
+            # "standard" from the legacy slug -- startswith(("display_", "video_", "audio_",
+            # "native_")) -- so a product with NO legacy arm ran an EMPTY loop, left
+            # `has_only_standard` True, and passed this filter UNCONDITIONALLY whatever its
+            # canonical declarations said. Canonical-only products were unrepresentable when
+            # that was written, so the hole was latent; .3.2 dropped the NOT NULL and made
+            # it a live false positive, in the direction that matters (the buyer is handed a
+            # product it asked to exclude).
+            #
+            # A product must now DECLARE something for this filter to select it, through
+            # either arm, and a product declaring nothing is not "standard by default".
             if req.filters.standard_formats_only:
-                # Check if all formats are IAB standard formats
-                # IAB standard formats typically follow patterns like "display_", "video_", "audio_", "native_"
-                has_only_standard = True
-                for format_id in product.format_ids or []:  # adcp 6.6: Product.format_ids is now Optional (spec 3.1.1)
-                    format_id_str: str | None = None
-                    if isinstance(format_id, str):
-                        format_id_str = format_id
-                    elif isinstance(format_id, dict):
-                        format_id_str = format_id.get("id")
-                    elif isinstance(format_id, FormatId):
-                        format_id_str = format_id.id
-
-                    if format_id_str and not format_id_str.startswith(("display_", "video_", "audio_", "native_")):
-                        has_only_standard = False
-                        break
-
-                if not has_only_standard:
+                # ``entry.id`` directly: on a converted product this list is
+                # list[FormatReferenceStructuredObject], so every entry is a reference
+                # OBJECT. The three-way isinstance(str | dict | FormatId) this replaced was
+                # guarding against shapes the model cannot produce.
+                legacy_slugs = {entry.id for entry in product.format_ids or []}
+                canonical_kinds = product_format_kinds(product.format_options)
+                if not legacy_slugs and not canonical_kinds:
+                    # Declares no format at all: it accepts no IAB standard format either.
+                    continue
+                # The legacy half keeps the prefix heuristic, which is all a human-chosen
+                # slug supports -- it is explicitly "typically follow patterns like", not a
+                # registry lookup. The canonical half needs no heuristic: the sixteen kinds
+                # ARE the standard vocabulary, and `custom` is the one member that names a
+                # format outside it.
+                if any(not slug.startswith(("display_", "video_", "audio_", "native_")) for slug in legacy_slugs):
+                    continue
+                if any(kind == "custom" for kind in canonical_kinds):
                     continue
 
             # Filter by countries

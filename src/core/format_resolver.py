@@ -270,6 +270,29 @@ def product_format_identities(format_ids: Iterable[Any] | None) -> set[FormatKey
     return {identity for identity in identities if identity is not None}
 
 
+def product_format_kinds(format_options: Iterable[Any] | None) -> set[str]:
+    """The canonical format kinds a product's declared ``format_options`` accept.
+
+    The CANONICAL half of the question :func:`product_format_identities` asks of the
+    legacy half, and placed beside it so the two halves of one filter question stay
+    together rather than one living in whichever tool first needed it.
+
+    Empty means the product declares no canonical kind. That reading differs from the
+    legacy half's deliberately: ``product_format_identities`` treats empty as "imposes
+    no format restriction", because a product with no ``format_ids`` used to mean a
+    product that had not narrowed itself. A product with no ``format_options`` has not
+    declared a KIND, and ``core/product-filters.json`` asks for "products accepting any
+    of these canonical format kinds" -- a product declaring none accepts none of them,
+    so it is not selected. Reading empty as "matches everything" here is precisely the
+    bug ``standard_formats_only`` had: an absent arm silently satisfied every filter.
+
+    ``str()`` on the kind because it arrives as a ``StrEnum`` member on the model and as
+    a plain string in a filter. The two compare equal today because the generated type
+    is a ``StrEnum``; normalizing both sides means that stays true if it ever is not.
+    """
+    return {str(declaration.format_kind) for declaration in format_options or []}
+
+
 def format_display(identity: FormatKey) -> str:
     """``<canonical agent_url>/<id>`` — how a format identity is spelled to a buyer.
 
