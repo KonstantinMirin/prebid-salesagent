@@ -346,6 +346,8 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
+        geo_disjoint              {include, within, values} per finer inclusion field
+                                  that lies wholly outside the listed countries
 
     Empty mapping means the overlay is clean, so the caller can branch on truthiness.
 
@@ -367,6 +369,7 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
     """
     candidates: dict[str, object] = {
         "geo_overlaps": geo_overlap_conflicts(targeting),
+        "geo_disjoint": geo_disjoint_inclusions(targeting),
     }
     return {key: value for key, value in candidates.items() if value}
 
@@ -412,3 +415,29 @@ def geo_overlap_conflicts(targeting: Targeting) -> list[dict[str, object]]:
                 )
 
     return violations
+
+
+def geo_disjoint_inclusions(targeting: Targeting) -> list[dict[str, object]]:
+    """Reject a finer geo inclusion that lies wholly outside the listed countries.
+
+    Inclusion fields combine with AND (v3.1.1 docs/reference/migration/geo-targeting.mdx:
+    "delivery must match all specified constraints"), so geo_countries ["CA"] with
+    geo_regions ["US-NY"] leaves nowhere to deliver. Only containment the codes
+    themselves state is used: an ISO 3166-2 region names its country, and a Nielsen DMA
+    is in the US. A field with at least one value inside a listed country is not
+    disjoint; the intersection drops the others.
+    """
+    countries = _extract_simple_values(targeting.geo_countries or [])
+    if not countries:
+        return []
+    regions = sorted(_extract_simple_values(targeting.geo_regions or []))
+    dma_codes = sorted(_extract_system_values(targeting.geo_metros or []).get("nielsen_dma", set()))
+    finer = {
+        "geo_regions": (regions, {region.split("-", 1)[0] for region in regions}),
+        "geo_metros": (dma_codes, {"US"} if dma_codes else set()),
+    }
+    return [
+        {"include": field, "within": "geo_countries", "values": values}
+        for field, (values, in_countries) in finer.items()
+        if values and not in_countries & countries
+    ]

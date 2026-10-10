@@ -93,6 +93,7 @@ pytest_plugins = [
     "tests.bdd.steps.domain.egress_ssrf",
     "tests.bdd.steps.domain.local_constraint_relaxations",
     "tests.bdd.steps.domain.local_gam_line_item_flight",
+    "tests.bdd.steps.domain.gam_geo_targeting",
     "tests.bdd.steps.domain.local_context_echo",
     "tests.bdd.steps.domain.tenant_identification",
     "tests.bdd.steps.domain.agent_card_discovery",

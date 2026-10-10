@@ -62,14 +62,6 @@ class TestBuildTargetingGeoCountries:
         excluded = result["geoTargeting"]["excludedLocations"]
         assert any(loc["id"] == "2826" for loc in excluded)
 
-    def test_unknown_country_skipped(self, gam_manager):
-        targeting = Targeting(geo_countries=["ZZ"])
-        result = gam_manager.build_targeting(targeting)
-        # No targeted locations since ZZ is unknown
-        geo = result.get("geoTargeting", {})
-        locations = geo.get("targetedLocations", [])
-        assert len(locations) == 0
-
 
 class TestBuildTargetingGeoRegions:
     """v3 geo_regions (ISO 3166-2) → GAM targeted/excluded locations."""
@@ -86,15 +78,6 @@ class TestBuildTargetingGeoRegions:
         result = gam_manager.build_targeting(targeting)
         excluded = result["geoTargeting"]["excludedLocations"]
         assert any(loc["id"] == "21167" for loc in excluded)
-
-    def test_unknown_region_skipped(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_regions=["US-ZZ"])
-        result = gam_manager.build_targeting(targeting)
-        geo = result.get("geoTargeting", {})
-        # Only country location, no region
-        locations = geo.get("targetedLocations", [])
-        region_ids = [loc["id"] for loc in locations if loc["id"] != "2840"]
-        assert len(region_ids) == 0
 
 
 class TestLookupRegionIdISO:
@@ -157,18 +140,6 @@ class TestBuildTargetingGeoMetros:
         with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
             gam_manager.build_targeting(targeting)
         # The identifier is STRUCTURED now: details/field, not prose.
-
-    def test_unknown_dma_code_skipped(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["US"],
-            geo_metros=[{"system": "nielsen_dma", "values": ["999"]}],
-        )
-        result = gam_manager.build_targeting(targeting)
-        geo = result.get("geoTargeting", {})
-        locations = geo.get("targetedLocations", [])
-        # Only country, no metro (999 not in map)
-        metro_ids = [loc["id"] for loc in locations if loc["id"] != "2840"]
-        assert len(metro_ids) == 0
 
 
 class TestBuildTargetingGeoPostalAreas:
