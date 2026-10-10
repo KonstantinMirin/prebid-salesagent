@@ -19,6 +19,7 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
+from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
 from tests.harness.transport import DeliverResult
 
@@ -72,6 +73,9 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
+        # The SOAP client under the real GAM adapter. Inert until ``sell_through_gam``
+        # makes the tenant a GAM seller; the Mock-adapter path never constructs it.
+        "gam_client": "src.adapters.google_ad_manager.GAMClientManager",
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -192,6 +196,54 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
                 product=product, pricing_model="cpm", currency=currency, is_fixed=True
             )
         return product, pricing_option
+
+    @realize_e2e(
+        e2e_unsupported(
+            "the live server has no stand-in GAM network: a GoogleAdManager tenant there "
+            "would call Google, so its tenants run the Mock adapter"
+        )
+    )
+    def sell_through_gam(self, tenant: Any, principal: Any, product: Any, *, network_time_zone: str) -> None:
+        """Make the tenant a Google Ad Manager seller whose network is a stand-in.
+
+        Production's own ``get_adapter`` builds the ``GoogleAdManager`` adapter from the
+        rows seeded here: the tenant's ad server, its GAM ``AdapterConfig``, the buyer's
+        GAM advertiser and the product's ad unit. Only the SOAP client underneath is
+        replaced (``tests/helpers/gam_client``), because GAM is the one party a test
+        cannot call. ``gam_line_items_sent`` reads back what the seller sent it.
+        """
+        from src.core.database.models import AdapterConfig
+        from src.core.helpers.adapter_helpers import get_adapter
+        from tests.factories.core import AdapterConfigFactory, GAMInventoryFactory
+        from tests.helpers.gam_client import stub_gam_client_manager
+
+        tenant.ad_server = "google_ad_manager"
+        principal.platform_mappings = {"google_ad_manager": {"advertiser_id": "123456789"}}
+        # GAM ad unit ids are numeric, and the adapter refuses any other.
+        ad_unit = GAMInventoryFactory(tenant=tenant, inventory_id="23312403856")
+        # The adapter resolves a line item's creative sizes through the creative-agent
+        # registry, which under test answers from the reference catalog only.
+        product.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+        product.implementation_config = {
+            "targeted_ad_unit_ids": [ad_unit.inventory_id],
+            "priority": 8,
+            "creative_placeholders": [{"width": 300, "height": 250}],
+        }
+        config = self.get_session().get(AdapterConfig, tenant.tenant_id) or AdapterConfigFactory(tenant=tenant)
+        config.adapter_type = "google_ad_manager"
+        config.gam_network_code = "123456"
+        config.gam_trafficker_id = "654321"
+        # Present so the adapter is constructible; nothing authenticates against the stand-in.
+        config.gam_refresh_token = "test_refresh_token"
+        self._commit_factory_data()
+
+        self.mock["gam_client"].return_value = stub_gam_client_manager(network_time_zone=network_time_zone)
+        self.mock["adapter"].side_effect = get_adapter
+
+    def gam_line_items_sent(self) -> list[dict[str, Any]]:
+        """Every line item the seller sent the stand-in GAM network, in order."""
+        create = self.mock["gam_client"].return_value.get_service("LineItemService").createLineItems
+        return [line_item for call in create.call_args_list for line_item in call.args[0]]
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /

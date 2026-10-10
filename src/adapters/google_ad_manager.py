@@ -624,8 +624,6 @@ class GoogleAdManager(AdServerAdapter):
         order_id = self.orders_manager.create_order(
             order_name=order_name,
             total_budget=total_budget_amount,
-            start_time=start_time,
-            end_time=end_time,
             currency=order_currency,
         )
 
