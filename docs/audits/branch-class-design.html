@@ -624,5 +624,72 @@ integration branch&rsquo;s <code>sdk-codegen-design-review.html</code>; seller-s
 (<code>src/core/schemas/_base.py:2209</code>, <code>src/core/tools/registry.py:129</code>,
 <code>src/core/tools/_boundary.py:228</code>).</p>
 
+<hr style="margin:44px 0 28px;border:0;border-top:2px solid currentColor;opacity:.35">
+
+<h2>Amendment: the emit rule is a partition test, not a branch count</h2>
+
+<p><strong>This supersedes the design&rsquo;s uniform &ldquo;emit branch classes for all 43 schemas&rdquo;.</strong> The design&rsquo;s own
+objection against itself was correct &mdash; for 90 of the 124 branches it reifies a partition the schema does
+not define &mdash; and the answer is not to argue the channel carries no information. It is to stop minting
+classes where there is no partition.</p>
+
+<p>What forced the change: asking what happens to branches that overlap and carry <em>no</em>
+<code>required</code> at all. Measured over the bundle, 798 root-combinator branches across 250 schemas,
+134 carry no <code>required</code>. Most are value unions rather than object shapes &mdash;
+<code>core/start-timing.json</code> is <code>{const}</code> vs <code>{format}</code> (that is
+<code>Literal["asap"] | datetime</code>), <code>core/geo-place-type.json</code> is enum-vs-pattern, and 108
+branches are a bare <code>{$ref}</code>. Those already map to <code>A | B</code> at the field level and need
+nothing. Filtering to genuinely object-shaped branches with no <code>required</code> leaves <strong>15, in
+five schemas</strong>:</p>
+
+<pre><code>media-buy/buy-products-request.json          2 branches
+  0: {required: ["brand"]}
+  1: {properties: {account: {required: ["brand","operator"]}}}
+
+core/postal-country-system.json             10 branches
+  0: {properties: {country: {const:"US"}, system: {enum:["zip","zip_plus_four"]}}}
+  1: {properties: {country: {const:"GB"}, system: {enum:["outward","full"]}}}
+  2: {properties: {country: {const:"CA"}, system: {enum:["fsa","full"]}}}</code></pre>
+
+<p><strong>Without <code>required</code>, a branch is vacuously satisfiable</strong>, because
+<code>properties</code> grades only members that are present. A document carrying no <code>country</code>
+satisfies all ten postal branches, so left-to-right returns the US class for a document that never mentioned
+a country. And neither case is a shape: the postal schema is a lookup table (an <code>if/then</code> written
+as an <code>anyOf</code>), and <code>buy-products-request</code> is one requirement with two locations
+&mdash; brand at the top level or reachable through <code>account</code>.</p>
+
+<p><strong>The rule, replacing the two-way split:</strong> emit branch classes only where the branches
+partition by requiredness into distinct, mutually exclusive field sets. Everywhere else the
+<code>anyOf</code> is a constraint, not a type &mdash; compile it.</p>
+
+<table>
+  <thead><tr><th>Group</th><th>Count</th><th>Model</th></tr></thead>
+  <tbody>
+    <tr><td>Distinct required sets, provably disjoint</td><td>34 branches / 15 schemas</td><td>branch classes</td></tr>
+    <tr><td>Requiredness-only, overlapping</td><td>90 branches / 28 schemas</td><td>one class + compiled check</td></tr>
+    <tr><td>No <code>required</code>, vacuously overlapping</td><td>15 branches / 5 schemas</td><td>one class + compiled check</td></tr>
+  </tbody>
+</table>
+
+<p>This subsumes the awkward case rather than special-casing it: &ldquo;no <code>required</code>&rdquo; fails
+the partition test for the same reason &ldquo;overlapping <code>required</code>&rdquo; does. There is no
+partition to model.</p>
+
+<p><strong>Consequences for the commit series.</strong> Commit 4 narrows from 43 schemas to the 15 that pass
+the partition test; the other 28 keep one class and gain a compiled check, so the condition compiler&rsquo;s
+jurisdiction grows from 41 root conjuncts to 41 plus those 105 branch sets &mdash; still bounded, still the
+same vocabulary, and no new machinery. The partition test itself is the first-order disjointness prover the
+design already built, so it is a reuse rather than an addition. The order-coupled dispatch channel the design
+conceded is <strong>removed</strong> rather than argued down: where no partition exists there is no class
+identity to dispatch on, which is the property the flat class had and the uniform version gave up.</p>
+
+<p><strong>Also unenforced today, and worth stating.</strong> Because the current extractor reads only
+<code>required</code>, it finds none on those 15 branches and skips the schema outright &mdash; measured for
+<code>buy-products-request</code>, whose root <code>anyOf</code> no generated model enforces at all. The
+country&rarr;system rule and the brand-location rule are enforced by nothing in the Python SDK today.</p>
+
+<p>Whether the postal lookup table should exist in a protocol schema at all is a separate question, under
+survey; it does not change this rule, which handles the shape whatever the spec decides about the subject.</p>
+
 </body>
 </html>
