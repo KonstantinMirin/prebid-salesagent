@@ -114,6 +114,10 @@ EXPECTED_WIRED_ROUTES: frozenset[str] = frozenset(
         "uc002-account",
         "uc002-ext",
         "uc002-idempotency",
+        # The sandbox-isolation pair, wired out of the uc002-not-wired catch-all so that
+        # BR-RULE-209 INV-2 ("real ad platform calls suppressed") is graded rather than
+        # xfailed at fixture setup (salesagent-kf5mn).
+        "uc002-live-ad-server",
         "uc002-manual-approval",
         "uc003-ext",
         "uc003-manual-approval",

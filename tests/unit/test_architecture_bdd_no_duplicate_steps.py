@@ -89,7 +89,14 @@ _DUPLICATE_THRESHOLD = 2
 # grade the adapter channel alone, which its "advisory warning" twin does not. Both were listed
 # above as claims a shared body failed to distinguish -- the bodies now distinguish them, so
 # the groups are gone rather than merged.
-_DUPLICATE_GROUP_BASELINE = 21
+#
+# 21 -> 20: ``the tenant runs the "<adapter_type>" ad server`` moved out of
+# steps/domain/publisher_authorization.py into steps/generic/given_config.py when
+# BR-UC-002's sandbox-isolation pair started using it (salesagent-kf5mn). Its body was a
+# bare delegation to ``env.run_ad_server``, byte-identical to its neighbours' bodies in
+# that module, which is what put it in a group; the group is GONE rather than merged,
+# because there is now one binding for the sentence and two envs realizing it.
+_DUPLICATE_GROUP_BASELINE = 20
 
 # Steps exempt from the 3+ identical-body scan (load-bearing: each suppresses a
 # cluster that would otherwise fail test_no_excessive_duplicate_step_bodies).
@@ -114,7 +121,10 @@ _ALLOWED_DUPLICATES: set[str] = set()
 #
 # So the MEMBER count is ratcheted too, two-sided, in the same shape. Together the two numbers
 # carry both sides' obligation: no new group, and no group growing.
-_DUPLICATE_MEMBER_BASELINE = 43
+#
+# 43 -> 41: the same move that took the GROUP count from 21 to 20 (see above) removed two
+# MEMBERS, because the ad-server Given's group had three.
+_DUPLICATE_MEMBER_BASELINE = 41
 
 
 def _is_step_decorated(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

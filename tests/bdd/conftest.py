@@ -6617,6 +6617,24 @@ ENV_ROUTES: list[EnvRoute] = [
         env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
         xfail_reason="T-UC-002-inv-015-6 create_media_buy harness wiring is tracked in #1652",
     ),
+    # The sandbox-isolation pair (@T-UC-002-sandbox-no-live-ad-server and its
+    # instrument check @T-UC-002-live-ad-server-reached). A row of its own, ABOVE the
+    # catch-all, because the catch-all xfails at fixture setup — a scenario that lands
+    # there dispatches nothing and grades nothing, which is exactly how BR-RULE-209
+    # INV-2 came to be unenforced while a scenario claimed to cover it
+    # (salesagent-kf5mn).
+    #
+    # The same seed as the uc002-ext row: these scenarios need the full create chain
+    # plus dispatch_mode="create", so the When dispatches the request the Givens built
+    # rather than rebuilding it. Not a row-share with uc002-ext because the predicate
+    # there enumerates tags and this one keys on a capability the Given needs
+    # (@live-ad-server), which is the thing a future scenario would reuse.
+    EnvRoute(
+        tag="uc002-live-ad-server",
+        when=_uc("UC-002", lambda m: "live-ad-server" in m),
+        env_builder=_env("tests.harness.media_buy_create.MediaBuyCreateEnv"),
+        seed=_seed_media_buy_chain_create_dispatch,
+    ),
     EnvRoute(
         tag="uc002-not-wired",
         when=_uc("UC-002", lambda m: True),
