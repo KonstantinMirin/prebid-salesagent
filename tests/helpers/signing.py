@@ -1414,7 +1414,12 @@ def buyer_signing_profile_version() -> str:
     """The signing profile version every test-side signer sends.
 
     DERIVED from the pin, never declared — the same rule production follows in
-    ``src.core.signing.request_signer``. adcp 9 made ``signing_profile_version`` a
+    ``src.core.signing.algorithms.request_signing_profile``, which is where the seller's
+    own two halves read it (the signer held this expression inline until
+    ``salesagent-8qela.1`` moved it, because the verifier was not reading it at all).
+    Deliberately a SECOND function and not a call into that one: this is the BUYER's
+    choice of profile, and a test-side signer has to be able to sign under a profile the
+    seller does not speak. adcp 9 made ``signing_profile_version`` a
     required keyword of ``sign_request``, and the SDK helper's own docstring says a
     caller "must derive this from trusted endpoint configuration, never an unbound
     request-body field". ``get_adcp_spec_version()`` is the installed wheel reporting

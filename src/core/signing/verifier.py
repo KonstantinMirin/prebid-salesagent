@@ -103,6 +103,7 @@ from src.core.exceptions import adcp_error_for
 from src.core.metrics import record_request_unsigned, record_signature_failed, record_signature_verified
 from src.core.schemas import Principal
 from src.core.signing.agent_cache import AGENT_RESOLUTION_CACHE
+from src.core.signing.algorithms import request_signing_profile
 from src.core.signing.canonical import malformed_authority_reason, origin_of, reject_malformed_target
 from src.core.signing.capture import HttpExchange, SignatureSubject
 from src.core.signing.posture import PostureBucket, RequestSigningPosture, posture_for_tenant
@@ -721,6 +722,14 @@ def _run_verifier(
             signing_purpose=_SIGNING_PURPOSE,
             posture=bucket,
             revocation_checker=revocation_checker,
+            # ``VerifyOptions`` DEFAULTS this to "3.1", and the default is the one keyword
+            # whose omission is silently wrong rather than loud: it leaves the SDK's
+            # ``allow_legacy_base64url`` fallback on, so step 1 accepts a Base64URL
+            # ``sf-binary`` that AdCP 3.2 requires it to reject as
+            # ``request_signature_header_malformed`` — and accepts it with a signature that
+            # is cryptographically VALID for the base, so nothing downstream notices.
+            # Read from the same function the outbound signer reads.
+            signing_profile_version=request_signing_profile(),
         )
         return verify_request_signature(
             method=exchange.method, url=exchange.url, headers=headers, body=exchange.body, options=options

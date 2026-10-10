@@ -59,8 +59,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-from adcp import get_adcp_spec_version
-from adcp.signing import SigningConfig, sign_request, signing_profile_for_adcp_version
+from adcp.signing import SigningConfig, sign_request
+
+from src.core.signing.algorithms import request_signing_profile
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,12 +107,10 @@ class RequestSignerStrategy:
             alg=self.signing.alg,
             cover_content_digest=True,
             tag=self.signing.tag,
-            # DERIVED from the pin, never declared. adcp 9 made
-            # ``signing_profile_version`` a required keyword, and its own helper's
-            # docstring says callers "must derive this from trusted endpoint
-            # configuration, never an unbound request-body field" --
-            # ``get_adcp_spec_version()`` is the installed wheel reporting the version it
-            # implements, which is the most trusted source this process has and the one
-            # that moves by itself at the next pin bump.
-            signing_profile_version=signing_profile_for_adcp_version(get_adcp_spec_version()),
+            # The SAME derivation the inbound verifier reads, not a second one that
+            # agrees with it today: ``request_signing_profile`` is the one place the
+            # profile is decided, and its docstring carries why (we once signed 3.2 and
+            # verified legacy). adcp 9 made this keyword required here; ``VerifyOptions``
+            # defaults it, which is how the halves came apart.
+            signing_profile_version=request_signing_profile(),
         ).as_dict()
