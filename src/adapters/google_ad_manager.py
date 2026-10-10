@@ -936,11 +936,9 @@ class GoogleAdManager(AdServerAdapter):
         Returns:
             AdapterGetMediaBuyDeliveryResponse with real metrics from GAM
         """
-        from sqlalchemy import select
-
         from src.adapters.gam_reporting_service import GAMReportingService
         from src.core.database.database_session import get_db_session
-        from src.core.database.models import MediaBuy
+        from src.core.database.repositories.media_buy import MediaBuyRepository
         from src.core.schemas import AdapterPackageDelivery, DeliveryTotals
 
         # Input validation
@@ -969,13 +967,13 @@ class GoogleAdManager(AdServerAdapter):
                 currency="USD",
             )
 
-        # Get media buy from database to find GAM order/line item IDs
+        # The buy and its packages as the seller persisted them: each package's id and the
+        # GAM line item it was trafficked as (package_config.platform_line_item_id).
+        # A read on the caller's scoped session, not a unit of work: get_media_buy_delivery
+        # calls this inside its own, and a commit here would expire the caller's rows.
         with get_db_session() as session:
-            stmt = select(MediaBuy).where(
-                MediaBuy.media_buy_id == media_buy_id,
-                MediaBuy.tenant_id == self.tenant_id,
-            )
-            media_buy = session.scalars(stmt).first()
+            repo = MediaBuyRepository(session, self.tenant_id)
+            media_buy = repo.get_by_id(media_buy_id)
 
             if not media_buy:
                 logger.error(f"Media buy {media_buy_id} not found in database")
@@ -994,9 +992,12 @@ class GoogleAdManager(AdServerAdapter):
                     currency="USD",
                 )
 
-            # Extract package information from raw_request
-            raw_request = media_buy.raw_request or {}
-            packages_data = raw_request.get("packages", [])
+            currency = str(media_buy.currency or "USD")
+            package_by_line_item = {
+                str(line_item_id): package.package_id
+                for package in repo.get_packages(media_buy_id)
+                if (line_item_id := (package.package_config or {}).get("platform_line_item_id"))
+            }
 
         # Initialize GAM reporting service
         reporting_service = GAMReportingService(self.client)
@@ -1075,7 +1076,7 @@ class GoogleAdManager(AdServerAdapter):
 
         # Build package-level delivery data if we have line item IDs
         by_package = []
-        if packages_data:
+        if package_by_line_item:
             # Group reporting data by line item
             line_item_metrics = {}
             for row in reporting_data.data:
@@ -1091,13 +1092,9 @@ class GoogleAdManager(AdServerAdapter):
                     line_item_metrics[line_item_id]["clicks"] += row.get("clicks", 0)
                     line_item_metrics[line_item_id]["spend"] += row.get("spend", 0.0)
 
-            # Match packages to line items and build delivery data
-            for i, pkg_data in enumerate(packages_data):
-                package_id = pkg_data.get("package_id", f"pkg_{i}")
-                # Try to find platform_line_item_id from the package data
-                platform_line_item_id = pkg_data.get("platform_line_item_id")
-
-                if platform_line_item_id and platform_line_item_id in line_item_metrics:
+            # Each package's delivery is its line item's
+            for platform_line_item_id, package_id in package_by_line_item.items():
+                if platform_line_item_id in line_item_metrics:
                     metrics = line_item_metrics[platform_line_item_id]
                     by_package.append(
                         AdapterPackageDelivery(
@@ -1119,7 +1116,7 @@ class GoogleAdManager(AdServerAdapter):
                 completed_views=None,
                 completion_rate=None,
             ),
-            currency=str(media_buy.currency or "USD"),
+            currency=currency,
             daily_breakdown=daily_breakdown if daily_breakdown else None,
             expected_availability=expected_availability,
         )

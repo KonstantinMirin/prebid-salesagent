@@ -7,7 +7,7 @@ Also holds the Pydantic factory for the ``get_media_buys`` RESPONSE item
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -91,6 +91,50 @@ def pricing_options_for(pricing_option_ids: Iterable[str]) -> dict[str, PricingO
     """
     resolved = ((option_id, pricing_option_for(option_id)) for option_id in pricing_option_ids)
     return {option_id: option for option_id, option in resolved if option is not None}
+
+
+def package_rows_for(buys: Iterable[Any]) -> dict[str, list[MediaPackage]]:
+    """``MediaBuyRepository.get_packages_for_ids``'s answer for unpersisted *buys*.
+
+    For tests that mock the repository: one ``MediaPackage`` row per package a buy's
+    ``raw_request`` names a ``package_id`` for, carrying that package as its config, the
+    way ``MediaBuyFactory`` materializes rows for a persisted buy. The row states no
+    ``pricing_info``, so it is priced from the option it names.
+    """
+    return {
+        buy.media_buy_id: [
+            MediaPackage(media_buy_id=buy.media_buy_id, package_id=package["package_id"], package_config=dict(package))
+            for package in (buy.raw_request or {}).get("packages", [])
+            if package.get("package_id")
+        ]
+        for buy in buys
+    }
+
+
+def pricing_options_by_package(
+    options_by_id: dict[str, PricingOption] | None = None,
+) -> Callable[..., dict[tuple[Any, Any], PricingOption]]:
+    """A stand-in for ``_get_pricing_options``: the option each package names, by its key.
+
+    *options_by_id* is the ``pricing_options_for`` / ``pricing_options_named`` shape; by
+    default the options the packages' own ids resolve to. The answer is keyed
+    ``(product_id, pricing_option_id)``, as production keys it.
+    """
+
+    def answer(packages: list[MediaPackage], **_: Any) -> dict[tuple[Any, Any], PricingOption]:
+        configs = [package.package_config or {} for package in packages]
+        by_id = (
+            options_by_id
+            if options_by_id is not None
+            else pricing_options_for(c["pricing_option_id"] for c in configs if c.get("pricing_option_id"))
+        )
+        return {
+            (c.get("product_id"), c.get("pricing_option_id")): by_id[c["pricing_option_id"]]
+            for c in configs
+            if c.get("pricing_option_id") in by_id
+        }
+
+    return answer
 
 
 def pricing_options_named(

@@ -80,7 +80,7 @@ PLATFORM_DEFAULT_ATTRIBUTION_MODEL = AttributionModel.last_touch
 # The media-buy-specific ReportingPeriod has identical fields (start, end) but different identity.
 # Adapters are typed to accept schemas.ReportingPeriod, so we use that here.
 
-from src.core.database.models import MediaBuy, PricingOption
+from src.core.database.models import MediaBuy, MediaPackage, PricingOption
 from src.core.database.repositories import MediaBuyRepository, MediaBuyUoW
 from src.core.database.repositories.delivery import POLL_SEQUENCE_TASK_TYPE, DeliveryRepository
 from src.core.database.repositories.product import ProductRepository
@@ -228,25 +228,20 @@ def get_media_buy_delivery(
                         )
                     )
 
-        pricing_option_ids: list[Any] = []
-        for _, buy in target_media_buys:
-            if buy.raw_request and isinstance(buy.raw_request, dict):
-                for pkg in buy.raw_request.get("packages", []):
-                    pkg_id = pkg.get("pricing_option_id")
-                    if pkg_id is not None:
-                        pricing_option_ids.append(pkg_id)
+        # Per-request invariants, hoisted out of the per-buy loop:
+        # - the circuit breaker is tenant-scoped, so one check covers every buy;
+        # - packages are fetched in one batch query instead of one per buy. The persisted
+        #   MediaPackage rows are the buy's packages: they carry the seller-assigned
+        #   package_id the adapter reports under, which the buyer's request never had.
+        reporting_circuit_open = _is_circuit_breaker_open(tenant.tenant_id)
+        packages_by_buy = repo.get_packages_for_ids([buy_id for buy_id, _ in target_media_buys])
+
         # FIXME(#2129): delivery UoW should provide a product repo directly
         assert uow.session is not None
         product_repo = ProductRepository(uow.session, tenant.tenant_id)
         pricing_options = _get_pricing_options(
-            pricing_option_ids, tenant_id=tenant.tenant_id, product_repo=product_repo
+            [pkg for pkgs in packages_by_buy.values() for pkg in pkgs], product_repo=product_repo
         )
-
-        # Per-request invariants, hoisted out of the per-buy loop:
-        # - the circuit breaker is tenant-scoped, so one check covers every buy;
-        # - packages are fetched in one batch query instead of one per buy.
-        reporting_circuit_open = _is_circuit_breaker_open(tenant.tenant_id)
-        packages_by_buy = repo.get_packages_for_ids([buy_id for buy_id, _ in target_media_buys])
 
         # Collect delivery data for each media buy
         deliveries = []
@@ -360,91 +355,75 @@ def get_media_buy_delivery(
                 # Create package delivery data
                 package_deliveries = []
 
-                # Get pricing info from MediaPackage.package_config (batch-fetched above)
-                package_pricing_map = {}
+                # One entry per persisted package (batch-fetched above), priced from that
+                # package's own terms: the pricing_info agreed at create, else the option
+                # its product names.
                 media_packages = packages_by_buy.get(media_buy_id, [])
                 for media_pkg in media_packages:
+                    package_id = media_pkg.package_id
                     package_config = media_pkg.package_config or {}
                     pricing_info = package_config.get("pricing_info")
-                    if pricing_info:
-                        package_pricing_map[media_pkg.package_id] = pricing_info
+                    pricing_option = pricing_options.get(_pricing_option_key(package_config))
 
-                # Get packages from raw_request
-                if buy.raw_request and isinstance(buy.raw_request, dict):
-                    packages = buy.raw_request.get("packages", [])
+                    # Get REAL per-package metrics from adapter if available, otherwise divide equally
+                    raw_placements: list[dict[str, Any]] | None = None
+                    raw_geo: list[dict[str, Any]] | None = None
+                    raw_device_type: list[dict[str, Any]] | None = None
+                    if package_id in adapter_package_metrics:
+                        # Use real metrics from adapter
+                        pkg_metrics = adapter_package_metrics[package_id]
+                        package_spend = pkg_metrics["spend"]
+                        package_impressions = pkg_metrics["impressions"]
+                        _raw = pkg_metrics.get("by_placement")
+                        raw_placements = _raw if isinstance(_raw, list) else None
+                        _raw_geo = pkg_metrics.get("by_geo")
+                        raw_geo = _raw_geo if isinstance(_raw_geo, list) else None
+                        _raw_dt = pkg_metrics.get("by_device_type")
+                        raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
+                    else:
+                        # Fallback: divide equally if adapter didn't return this package
+                        package_spend = spend / len(media_packages)
+                        package_impressions = impressions / len(media_packages)
 
-                    i = -1
-                    for pkg_data in packages:
-                        i += 1
+                    if (
+                        pricing_option
+                        and pricing_option.pricing_model == PricingModel.cpc.value
+                        and pricing_option.rate
+                    ):
+                        package_clicks = floor(spend / (float(pricing_option.rate)))
+                    else:
+                        package_clicks = None
 
-                        package_id = pkg_data.get("package_id") or f"pkg_{pkg_data.get('product_id', 'unknown')}_{i}"
-                        pricing_option_id = pkg_data.get("pricing_option_id") or None
+                    # Build placement breakdown if reporting_dimensions includes "placement"
+                    placement_dim = req.reporting_dimensions.placement if req.reporting_dimensions else None
+                    placement_breakdown, placement_truncated = _build_placement_breakdown(
+                        placement_dim, raw_placements, package_impressions, package_spend, package_clicks
+                    )
 
-                        # Get pricing info for this package
-                        pricing_info = package_pricing_map.get(package_id)
-                        pricing_option = (
-                            pricing_options.get(pricing_option_id) if pricing_option_id is not None else None
+                    geo_breakdown, geo_truncated = _build_geo_breakdown(
+                        req, package_impressions, package_spend, raw_geo
+                    )
+                    device_type_breakdown, device_type_truncated = _build_device_type_breakdown(
+                        req, package_impressions, package_spend, raw_device_type
+                    )
+
+                    package_deliveries.append(
+                        PackageDelivery(
+                            package_id=package_id,
+                            impressions=package_impressions or 0.0,
+                            spend=package_spend or 0.0,
+                            clicks=package_clicks,
+                            completed_views=None,  # Optional field, not calculated in this implementation
+                            pacing_index=1.0 if status == "active" else 0.0,
+                            **_package_pricing(package_id, pricing_info, pricing_option),
+                            by_placement=placement_breakdown,
+                            by_placement_truncated=placement_truncated,
+                            by_geo=geo_breakdown,
+                            by_geo_truncated=geo_truncated,
+                            by_device_type=device_type_breakdown,
+                            by_device_type_truncated=device_type_truncated,
                         )
-
-                        # Get REAL per-package metrics from adapter if available, otherwise divide equally
-                        raw_placements: list[dict[str, Any]] | None = None
-                        raw_geo: list[dict[str, Any]] | None = None
-                        raw_device_type: list[dict[str, Any]] | None = None
-                        if package_id in adapter_package_metrics:
-                            # Use real metrics from adapter
-                            pkg_metrics = adapter_package_metrics[package_id]
-                            package_spend = pkg_metrics["spend"]
-                            package_impressions = pkg_metrics["impressions"]
-                            _raw = pkg_metrics.get("by_placement")
-                            raw_placements = _raw if isinstance(_raw, list) else None
-                            _raw_geo = pkg_metrics.get("by_geo")
-                            raw_geo = _raw_geo if isinstance(_raw_geo, list) else None
-                            _raw_dt = pkg_metrics.get("by_device_type")
-                            raw_device_type = _raw_dt if isinstance(_raw_dt, list) else None
-                        else:
-                            # Fallback: divide equally if adapter didn't return this package
-                            package_spend = spend / len(packages)
-                            package_impressions = impressions / len(packages)
-
-                        if (
-                            pricing_option
-                            and pricing_option.pricing_model == PricingModel.cpc.value
-                            and pricing_option.rate
-                        ):
-                            package_clicks = floor(spend / (float(pricing_option.rate)))
-                        else:
-                            package_clicks = None
-
-                        # Build placement breakdown if reporting_dimensions includes "placement"
-                        placement_dim = req.reporting_dimensions.placement if req.reporting_dimensions else None
-                        placement_breakdown, placement_truncated = _build_placement_breakdown(
-                            placement_dim, raw_placements, package_impressions, package_spend, package_clicks
-                        )
-
-                        geo_breakdown, geo_truncated = _build_geo_breakdown(
-                            req, package_impressions, package_spend, raw_geo
-                        )
-                        device_type_breakdown, device_type_truncated = _build_device_type_breakdown(
-                            req, package_impressions, package_spend, raw_device_type
-                        )
-
-                        package_deliveries.append(
-                            PackageDelivery(
-                                package_id=package_id,
-                                impressions=package_impressions or 0.0,
-                                spend=package_spend or 0.0,
-                                clicks=package_clicks,
-                                completed_views=None,  # Optional field, not calculated in this implementation
-                                pacing_index=1.0 if status == "active" else 0.0,
-                                **_package_pricing(package_id, pricing_info, pricing_option),
-                                by_placement=placement_breakdown,
-                                by_placement_truncated=placement_truncated,
-                                by_geo=geo_breakdown,
-                                by_geo_truncated=geo_truncated,
-                                by_device_type=device_type_breakdown,
-                                by_device_type_truncated=device_type_truncated,
-                            )
-                        )
+                    )
 
                 # Calculate clicks and CTR (click-through rate) where applicable
 
@@ -973,10 +952,25 @@ def _package_pricing(
     raise AdCPInternalError(details=EntityRefDetails(package_id=package_id))
 
 
+def _pricing_option_key(package_config: dict[str, Any]) -> tuple[Any, Any]:
+    """The ``(product_id, pricing_option_id)`` a persisted package was priced under.
+
+    Both parts, because a pricing option id is scoped to its product
+    (media-buy/package-request.json: "ID of the selected pricing option from the product's
+    pricing_options array"): every fixed USD CPM option defaults to "cpm_usd_fixed".
+    """
+    return package_config.get("product_id"), package_config.get("pricing_option_id")
+
+
 def _get_pricing_options(
-    pricing_option_ids: list[str], tenant_id: str, product_repo: ProductRepository
-) -> dict[str, PricingOption]:
-    wanted = set(pricing_option_ids)
+    packages: list[MediaPackage], product_repo: ProductRepository
+) -> dict[tuple[Any, Any], PricingOption]:
+    """The pricing option each of *packages* names, keyed by ``_pricing_option_key``."""
+    wanted = {_pricing_option_key(pkg.package_config or {}) for pkg in packages}
     if not wanted:
         return {}
-    return {po.pricing_option_id: po for po in product_repo.get_all_pricing_options() if po.pricing_option_id in wanted}
+    return {
+        key: po
+        for po in product_repo.get_all_pricing_options()
+        if (key := (po.product_id, po.pricing_option_id)) in wanted
+    }

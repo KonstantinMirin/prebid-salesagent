@@ -13,9 +13,15 @@ from typing import Any
 #: The ``EXTERNAL_PATCHES`` entry for GAM's SOAP client.
 GAM_CLIENT_PATCH = {"gam_client": "src.adapters.google_ad_manager.GAMClientManager"}
 
+#: The ``EXTERNAL_PATCHES`` entry for the HTTP download of a finished GAM report's CSV.
+GAM_REPORT_DOWNLOAD_PATCH = {"gam_report_download": "src.adapters.gam_reporting_service.send"}
+
 #: The synced ad unit a GAM product books into. GAM ad unit ids are numeric, and the
 #: adapter refuses any other.
 GAM_AD_UNIT_ID = "23312403856"
+
+#: The GAM advertiser the seeded buyer is mapped to.
+GAM_ADVERTISER_ID = "123456789"
 
 
 def seed_gam_seller(env: Any, tenant: Any, principal: Any) -> None:
@@ -30,7 +36,7 @@ def seed_gam_seller(env: Any, tenant: Any, principal: Any) -> None:
     from tests.factories.core import AdapterConfigFactory, GAMInventoryFactory
 
     tenant.ad_server = "google_ad_manager"
-    principal.platform_mappings = {"google_ad_manager": {"advertiser_id": "123456789"}}
+    principal.platform_mappings = {"google_ad_manager": {"advertiser_id": GAM_ADVERTISER_ID}}
     GAMInventoryFactory(tenant=tenant, inventory_id=GAM_AD_UNIT_ID)
     config = env.get_session().get(AdapterConfig, tenant.tenant_id) or AdapterConfigFactory(tenant=tenant)
     config.adapter_type = "google_ad_manager"

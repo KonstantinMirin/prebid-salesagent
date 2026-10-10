@@ -19,6 +19,7 @@ package fails rather than matching by position.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -67,9 +68,16 @@ def given_gam_product(ctx: dict, delivery_type: str, product_id: str, cpm: str, 
 # ── When ──────────────────────────────────────────────────────────────────
 
 
-@when(parsers.parse('the Buyer Agent creates a {days:d}-day media buy with packages "{packages}"'))
-def when_create_gam_media_buy(ctx: dict, days: int, packages: str) -> None:
-    start = (datetime.now(UTC) + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+def dispatch_gam_create(
+    ctx: dict,
+    packages: str,
+    *,
+    start_time: str,
+    end_time: str,
+    package_extras: Callable[[str], dict[str, Any]] = lambda _product_id: {},
+) -> None:
+    """Dispatch a create_media_buy whose packages are ``"product:budget, ..."`` at each GAM
+    product's own pricing option, with *package_extras* (by product id) on each package."""
     package_payloads = []
     for spec in packages.split(","):
         product_id, budget = spec.strip().split(":")
@@ -78,6 +86,7 @@ def when_create_gam_media_buy(ctx: dict, days: int, packages: str) -> None:
                 product_id=product_id,
                 budget=float(budget),
                 pricing_option_id=ctx["gam_pricing_options"][product_id],
+                **package_extras(product_id),
             )
         )
     dispatch_request(
@@ -85,10 +94,18 @@ def when_create_gam_media_buy(ctx: dict, days: int, packages: str) -> None:
         **CreateMediaBuyRequestFactory.payload(
             # The env names the account it seeded for this seller.
             account=OMIT,
-            start_time=start.isoformat(),
-            end_time=(start + timedelta(days=days)).isoformat(),
+            start_time=start_time,
+            end_time=end_time,
             packages=package_payloads,
         ),
+    )
+
+
+@when(parsers.parse('the Buyer Agent creates a {days:d}-day media buy with packages "{packages}"'))
+def when_create_gam_media_buy(ctx: dict, days: int, packages: str) -> None:
+    start = (datetime.now(UTC) + timedelta(days=7)).replace(hour=0, minute=0, second=0, microsecond=0)
+    dispatch_gam_create(
+        ctx, packages, start_time=start.isoformat(), end_time=(start + timedelta(days=days)).isoformat()
     )
 
 

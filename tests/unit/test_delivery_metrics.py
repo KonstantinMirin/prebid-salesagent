@@ -98,14 +98,14 @@ def test_get_media_buy_delivery_with_real_gam_data(mock_reporting_service_class,
         mock_media_buy.media_buy_id = "mb_test_123"
         mock_media_buy.budget = 1000.0
         mock_media_buy.currency = "USD"
-        mock_media_buy.raw_request = {
-            "packages": [
-                {"package_id": "pkg_1", "platform_line_item_id": "111"},
-                {"package_id": "pkg_2", "platform_line_item_id": "222"},
-            ]
-        }
 
         mock_session.scalars.return_value.first.return_value = mock_media_buy
+        # The buy's persisted packages: each one's id and the GAM line item it was
+        # trafficked as, which create_media_buy writes to package_config.
+        mock_session.scalars.return_value.all.return_value = [
+            Mock(package_id="pkg_1", package_config={"platform_line_item_id": "111"}),
+            Mock(package_id="pkg_2", package_config={"platform_line_item_id": "222"}),
+        ]
 
         # Mock GAM reporting data
         mock_reporting_instance = Mock()

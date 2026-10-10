@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.creative_sync import CreativeSyncEnv
 from tests.helpers.gam_client import gam_line_item, stub_gam_client_manager
+from tests.helpers.reference_creative_agent import reference_format, reference_preview
 
 
 class GamCreativeSyncEnv(CreativeSyncEnv):
@@ -58,7 +59,6 @@ class GamCreativeSyncEnv(CreativeSyncEnv):
         accepts the creative size of *format_id*'s primary render, read off the
         reference catalog, so the size check is the one production makes.
         """
-        from src.core.format_cache import load_reference_formats
         from tests.factories import AdapterConfigFactory, MediaBuyFactory, MediaPackageFactory, ProductFactory
 
         tenant, principal = self.setup_default_data()
@@ -86,8 +86,7 @@ class GamCreativeSyncEnv(CreativeSyncEnv):
         )
         self._commit_factory_data()
 
-        (fmt,) = [f for f in load_reference_formats() if f.format_id.id == format_id["id"]]
-        width, height = fmt.get_primary_dimensions()
+        width, height = reference_format(format_id["id"]).get_primary_dimensions()
         # Named nothing like the product: line items are matched by id, never by name.
         line_item = gam_line_item("Q4 Brand Push - Homepage", item_id=line_item_id, sizes=((width, height),))
         self.mock["gam_client"].return_value = stub_gam_client_manager(line_items=[line_item])
@@ -99,27 +98,11 @@ class GamCreativeSyncEnv(CreativeSyncEnv):
         The agent previews the creative at the format's primary render size, which is
         where sync_creatives takes a creative's dimensions from.
         """
-        from src.core.format_cache import load_reference_formats
-
-        (fmt,) = [f for f in load_reference_formats() if f.format_id.id == format_id]
-        width, height = fmt.get_primary_dimensions()
+        fmt = reference_format(format_id)
         self.set_run_async_result([fmt])
         registry = self.mock["registry"].return_value
         registry.get_format = AsyncMock(return_value=fmt)
-        registry.preview_creative = AsyncMock(
-            return_value={
-                "previews": [
-                    {
-                        "renders": [
-                            {
-                                "preview_url": "https://preview.example.com/render.html",
-                                "dimensions": {"width": width, "height": height},
-                            }
-                        ]
-                    }
-                ]
-            }
-        )
+        registry.preview_creative = AsyncMock(return_value=reference_preview(format_id))
         return {"agent_url": str(fmt.format_id.agent_url), "id": format_id}
 
     def gam_created_creatives(self) -> list[dict[str, Any]]:

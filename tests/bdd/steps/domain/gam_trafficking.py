@@ -15,6 +15,16 @@ from pytest_bdd import given, parsers, then
 _HTML = '<div style="width:300px;height:250px;background:#0a5">Autumn sale</div>'
 
 
+def html_creative(creative_id: str, format_id: dict[str, str]) -> dict:
+    """An HTML creative in *format_id*: core/assets/html-asset.json (asset_type + content)."""
+    return {
+        "creative_id": creative_id,
+        "name": "Autumn sale 300x250",
+        "format_id": format_id,
+        "assets": {"html_creative": {"asset_type": "html", "content": _HTML}},
+    }
+
+
 @given(
     parsers.parse(
         'a GAM seller whose live package "{package_id}" is trafficked as GAM line item "{line_item_id}" '
@@ -30,15 +40,8 @@ def given_gam_live_package(ctx: dict, package_id: str, line_item_id: str, format
 
 @given(parsers.parse('an HTML creative "{creative_id}" assigned to package "{package_id}"'))
 def given_html_creative_assigned(ctx: dict, creative_id: str, package_id: str) -> None:
-    """An HTML creative in the seeded package's format: core/assets/html-asset.json (asset_type + content)."""
-    ctx.setdefault("creatives", []).append(
-        {
-            "creative_id": creative_id,
-            "name": "Autumn sale 300x250",
-            "format_id": ctx["gam_format_id"],
-            "assets": {"html_creative": {"asset_type": "html", "content": _HTML}},
-        }
-    )
+    """An HTML creative in the seeded package's format."""
+    ctx.setdefault("creatives", []).append(html_creative(creative_id, ctx["gam_format_id"]))
     ctx.setdefault("assignments", {}).setdefault(creative_id, []).append(package_id)
 
 

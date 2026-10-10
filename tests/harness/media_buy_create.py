@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from typing import Any, cast
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.adapters.base import AdapterCreateResult, ResponsePackage
 from src.core.schemas import CreateMediaBuyRequest
@@ -21,7 +21,13 @@ from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
 from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
-from tests.harness.gam import GAM_AD_UNIT_ID, GAM_CLIENT_PATCH, seed_gam_seller
+from tests.harness.gam import (
+    GAM_AD_UNIT_ID,
+    GAM_ADVERTISER_ID,
+    GAM_CLIENT_PATCH,
+    GAM_REPORT_DOWNLOAD_PATCH,
+    seed_gam_seller,
+)
 from tests.harness.transport import DeliverResult
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
@@ -74,9 +80,11 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
-        # The SOAP client under the real GAM adapter. Inert until ``sell_through_gam``
-        # makes the tenant a GAM seller; the Mock-adapter path never constructs it.
+        # The SOAP client under the real GAM adapter, and the download of the reports it
+        # runs. Inert until ``sell_through_gam`` makes the tenant a GAM seller; the
+        # Mock-adapter path never constructs either.
         **GAM_CLIENT_PATCH,
+        **GAM_REPORT_DOWNLOAD_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -219,29 +227,51 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         rows seeded here: the tenant's ad server, its GAM ``AdapterConfig``, the buyer's
         GAM advertiser and the product's ad unit. Only the SOAP client underneath is
         replaced (``tests/helpers/gam_client``), because GAM is the one party a test
-        cannot call. ``gam_objects_sent`` reads back what the seller sent it.
+        cannot call. ``gam_objects_sent`` reads back what the seller sent it. Its delivery
+        report has no rows until ``gam_reports_delivery`` says otherwise. The creative
+        agent, the other party a GAM seller's create reaches, previews the creatives it is
+        sent as the reference agent would (``reference_preview``); the format lookups
+        already answer from the reference catalog.
 
         ``implementation_config`` is merged over the minimal valid GAM product config, for
         a scenario about a product-level setting (priority, line item type, ...).
         """
         from src.core.helpers.adapter_helpers import get_adapter
-        from tests.helpers.gam_client import stub_gam_client_manager
+        from tests.helpers.gam_client import gam_report_download, serve_gam_report, stub_gam_client_manager
+        from tests.helpers.reference_creative_agent import reference_preview
 
         seed_gam_seller(self, tenant, principal)
         self.sell_product_through_gam(product, implementation_config)
 
-        self.mock["gam_client"].return_value = stub_gam_client_manager(network_time_zone=network_time_zone)
+        client_manager = stub_gam_client_manager(network_time_zone=network_time_zone)
+        serve_gam_report(client_manager)
+        self.mock["gam_client"].return_value = client_manager
+        self.mock["gam_report_download"].return_value = gam_report_download()
         self.mock["adapter"].side_effect = get_adapter
 
-    def sell_product_through_gam(self, product: Any, implementation_config: dict[str, Any] | None = None) -> None:
-        """Configure *product* to book into the GAM seller's ad unit.
+        preview = patch(
+            "src.core.creative_agent_registry.CreativeAgentRegistry.preview_creative",
+            side_effect=lambda *, format_id, **_kwargs: reference_preview(format_id),
+        )
+        preview.start()
+        self._guard("creative_agent_preview", preview.stop)
+
+    def sell_product_through_gam(
+        self,
+        product: Any,
+        implementation_config: dict[str, Any] | None = None,
+        *,
+        format_id: str = "display_300x250_image",
+    ) -> None:
+        """Configure *product* to book into the GAM seller's ad unit, selling *format_id*.
 
         ``implementation_config`` is merged over the minimal valid GAM product config, for
         a scenario about a product-level setting (priority, line item type, ...).
         """
         # The adapter resolves a line item's creative sizes through the creative-agent
-        # registry, which under test answers from the reference catalog only.
-        product.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": "display_300x250_image"}]
+        # registry, which under test answers from the reference catalog only, so
+        # *format_id* is a 300x250 reference format.
+        product.format_ids = [{"agent_url": "https://creative.adcontextprotocol.org", "id": format_id}]
         product.implementation_config = {
             "targeted_ad_unit_ids": [GAM_AD_UNIT_ID],
             "priority": 8,
@@ -251,13 +281,22 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         self._commit_factory_data()
 
     def add_gam_product(
-        self, product_id: str, *, delivery_type: str, cpm: str, implementation_config: dict[str, Any]
+        self,
+        product_id: str,
+        *,
+        delivery_type: str,
+        cpm: str,
+        implementation_config: dict[str, Any],
+        pricing_option_id: str | None = None,
+        format_id: str = "display_300x250_image",
     ) -> Any:
         """Another product of the GAM seller, sold at a fixed *cpm*; returns its pricing option.
 
         The product starts from the configuration the Admin UI generates for its delivery
         type (``GAMProductConfigService.generate_default_config``), with
         *implementation_config* on top, so a scenario states only the setting it is about.
+        *pricing_option_id* names the option when a scenario is about its id; a pricing
+        option id is scoped to its product, so two products may share one.
         """
         from decimal import Decimal
 
@@ -269,14 +308,43 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         )
         product.delivery_type = delivery_type
         pricing_option.rate = Decimal(cpm)
+        if pricing_option_id is not None:
+            pricing_option.pricing_option_id = pricing_option_id
         self.sell_product_through_gam(
-            product, {**GAMProductConfigService.generate_default_config(delivery_type), **implementation_config}
+            product,
+            {**GAMProductConfigService.generate_default_config(delivery_type), **implementation_config},
+            format_id=format_id,
         )
         return pricing_option
 
     def gam_order_id(self) -> str:
         """The id the stand-in GAM network gave the order, as the adapter reads it back."""
         return str(self.mock["gam_client"].return_value.get_service("OrderService").createOrders.return_value[0]["id"])
+
+    def gam_reports_delivery(self, delivery: dict[str, tuple[int, str]]) -> None:
+        """GAM's delivery report for the order: ``{line item name: (impressions, spend)}``.
+
+        One row per line item, dated today, for the line item GAM created under that name;
+        spend is reported in micros, as GAM reports revenue.
+        """
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        from tests.helpers.gam_client import gam_report_download
+
+        line_item_ids = self.mock["gam_client"].return_value.line_item_ids
+        self.mock["gam_report_download"].return_value = gam_report_download(
+            {
+                "Dimension.DATE": datetime.now(UTC).date().isoformat(),
+                "Dimension.ADVERTISER_ID": GAM_ADVERTISER_ID,
+                "Dimension.ORDER_ID": self.gam_order_id(),
+                "Dimension.LINE_ITEM_ID": line_item_ids[name],
+                "Column.AD_SERVER_IMPRESSIONS": impressions,
+                "Column.AD_SERVER_CLICKS": 0,
+                "Column.AD_SERVER_CPM_AND_CPC_REVENUE": int(Decimal(spend) * 1_000_000),
+            }
+            for name, (impressions, spend) in delivery.items()
+        )
 
     def gam_objects_sent(self, service: str, method: str) -> list[dict[str, Any]]:
         """Every object the seller sent the stand-in GAM network through ``service.method``.

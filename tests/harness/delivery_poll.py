@@ -24,17 +24,81 @@ Available mocks via env.mock:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
-from src.core.schemas import AdapterGetMediaBuyDeliveryResponse, GetMediaBuyDeliveryResponse
+from src.core.schemas import (
+    AdapterGetMediaBuyDeliveryResponse,
+    GetMediaBuyDeliveryRequest,
+    GetMediaBuyDeliveryResponse,
+)
 from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.harness.gam import GAM_CLIENT_PATCH, seed_gam_seller
+from tests.harness.gam import GAM_CLIENT_PATCH, GAM_REPORT_DOWNLOAD_PATCH, seed_gam_seller
 from tests.harness.transport import DeliverResult
 
 
-class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
+class DeliveryDispatchMixin:
+    """get_media_buy_delivery dispatch across A2A/MCP/REST.
+
+    Owned here, beside the env whose primary verb it is, so an env that serves the tool
+    as a SECOND verb (``MediaBuyCreateListEnv``, which reads back the buy it created)
+    dispatches it through the same code. Named ``_deliver_delivery_*`` /
+    ``_build_delivery_rest_body`` for the reason ``MediaBuyListDispatchMixin`` gives:
+    a composite routes to these explicitly, so neither verb's dispatch can shadow the
+    other's by MRO accident.
+    """
+
+    #: The route get_media_buy_delivery answers on (src/routes/api_v1.py).
+    DELIVERY_REST_ENDPOINT = "/api/v1/media-buys/delivery"
+
+    #: The request fields the REST body accepts.
+    _DELIVERY_BODY_FIELDS = (
+        "media_buy_ids",
+        "status_filter",
+        "start_date",
+        "end_date",
+        "reporting_dimensions",
+        "attribution_window",
+        "include_package_daily_breakdown",
+        "account",
+    )
+
+    @staticmethod
+    def is_delivery_request(kwargs: dict[str, Any]) -> bool:
+        """Whether this dispatch is get_media_buy_delivery: the request TYPE decides."""
+        return isinstance(kwargs.get("req"), GetMediaBuyDeliveryRequest)
+
+    def _call_delivery_impl(self, **kwargs: Any) -> GetMediaBuyDeliveryResponse:
+        """Call _get_media_buy_delivery_impl with a built ``req=`` request and a real DB."""
+        from src.core.tools.media_buy_delivery import _get_media_buy_delivery_impl
+
+        self._commit_factory_data()
+        identity = kwargs.pop("identity", self.identity)
+        return _get_media_buy_delivery_impl(kwargs["req"], identity)
+
+    def _deliver_delivery_mcp(self, **kwargs: Any) -> DeliverResult:
+        """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
+        return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
+
+    def _deliver_delivery_a2a(self, **kwargs: Any) -> DeliverResult:
+        """Dispatch get_media_buy_delivery via the real A2A handler pipeline."""
+        return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
+
+    def _build_delivery_rest_body(self, **kwargs: Any) -> dict[str, Any]:
+        """The ``GetMediaBuyDeliveryBody`` for flat kwargs or a built ``req=`` request."""
+        req = kwargs.get("req")
+        if req is not None:
+            kwargs = req.model_dump(mode="json", exclude_unset=True)
+        return {k: kwargs[k] for k in self._DELIVERY_BODY_FIELDS if kwargs.get(k) is not None}
+
+    @staticmethod
+    def _parse_delivery_rest_response(data: dict[str, Any]) -> GetMediaBuyDeliveryResponse:
+        """A get_media_buy_delivery REST body, revived like the base revives its own."""
+        return cast("GetMediaBuyDeliveryResponse", GetMediaBuyDeliveryResponse.revive(data))
+
+
+class DeliveryPollEnv(DeliveryDispatchMixin, DeliveryPollMixin, IntegrationEnv):
     """Integration test environment for _get_media_buy_delivery_impl.
 
     Only mocks the adapter (external ad server). Everything else is real:
@@ -62,16 +126,16 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
     # their `_KNOWN_DELIVER_OVERRIDES` entries when #2012 lands.
     def deliver_mcp(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buy_delivery via the real FastMCP Client pipeline."""
-        return self._run_mcp_client("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
+        return self._deliver_delivery_mcp(**kwargs)
 
     def deliver_a2a(self, **kwargs: Any) -> DeliverResult:
         """Dispatch get_media_buy_delivery via the real A2A handler pipeline."""
-        return self._run_a2a_handler("get_media_buy_delivery", GetMediaBuyDeliveryResponse, **kwargs)
+        return self._deliver_delivery_a2a(**kwargs)
 
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",
     }
-    REST_ENDPOINT = "/api/v1/media-buys/delivery"
+    REST_ENDPOINT = DeliveryDispatchMixin.DELIVERY_REST_ENDPOINT
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -82,18 +146,7 @@ class DeliveryPollEnv(DeliveryPollMixin, IntegrationEnv):
 
     def build_rest_body(self, **kwargs: Any) -> dict[str, Any]:
         """Convert kwargs to GetMediaBuyDeliveryBody shape for REST POST."""
-        # Forward all request fields that the REST body accepts
-        _BODY_FIELDS = (
-            "media_buy_ids",
-            "status_filter",
-            "start_date",
-            "end_date",
-            "reporting_dimensions",
-            "attribution_window",
-            "include_package_daily_breakdown",
-            "account",
-        )
-        return {k: kwargs[k] for k in _BODY_FIELDS if k in kwargs and kwargs[k] is not None}
+        return self._build_delivery_rest_body(**kwargs)
 
     # parse_rest_response: the base's, which revives RESPONSE_MODEL.
 
@@ -105,24 +158,21 @@ class GAMDeliveryPollEnv(DeliveryPollEnv):
     reads what GAM reports. This variant keeps the adapter -- report job, freshness
     handling, aggregation -- and stands in for the two things GAM owns: its SOAP client,
     which runs the report job (``serve_gam_report``), and the HTTP download of the
-    finished report's CSV (``empty_gam_report_download``). The report has no rows unless
+    finished report's CSV (``gam_report_download``). The report has no rows unless
     a scenario says otherwise.
 
     The tenant is made a GAM seller by ``sell_through_gam``.
     """
 
-    EXTERNAL_PATCHES = {
-        **GAM_CLIENT_PATCH,
-        "gam_report_download": "src.adapters.gam_reporting_service.send",
-    }
+    EXTERNAL_PATCHES = {**GAM_CLIENT_PATCH, **GAM_REPORT_DOWNLOAD_PATCH}
 
     def _configure_mocks(self) -> None:
-        from tests.helpers.gam_client import empty_gam_report_download, serve_gam_report, stub_gam_client_manager
+        from tests.helpers.gam_client import gam_report_download, serve_gam_report, stub_gam_client_manager
 
         client_manager = stub_gam_client_manager()
         serve_gam_report(client_manager)
         self.mock["gam_client"].return_value = client_manager
-        self.mock["gam_report_download"].return_value = empty_gam_report_download()
+        self.mock["gam_report_download"].return_value = gam_report_download()
 
     @realize_e2e(e2e_unsupported("the live stack has no stand-in GAM network to report from"))
     def sell_through_gam(self) -> None:
