@@ -203,14 +203,25 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             "would call Google, so its tenants run the Mock adapter"
         )
     )
-    def sell_through_gam(self, tenant: Any, principal: Any, product: Any, *, network_time_zone: str) -> None:
+    def sell_through_gam(
+        self,
+        tenant: Any,
+        principal: Any,
+        product: Any,
+        *,
+        network_time_zone: str,
+        implementation_config: dict[str, Any] | None = None,
+    ) -> None:
         """Make the tenant a Google Ad Manager seller whose network is a stand-in.
 
         Production's own ``get_adapter`` builds the ``GoogleAdManager`` adapter from the
         rows seeded here: the tenant's ad server, its GAM ``AdapterConfig``, the buyer's
         GAM advertiser and the product's ad unit. Only the SOAP client underneath is
         replaced (``tests/helpers/gam_client``), because GAM is the one party a test
-        cannot call. ``gam_line_items_sent`` reads back what the seller sent it.
+        cannot call. ``gam_objects_sent`` reads back what the seller sent it.
+
+        ``implementation_config`` is merged over the minimal valid GAM product config, for
+        a scenario about a product-level setting (priority, line item type, ...).
         """
         from src.core.database.models import AdapterConfig
         from src.core.helpers.adapter_helpers import get_adapter
@@ -228,6 +239,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
             "targeted_ad_unit_ids": [ad_unit.inventory_id],
             "priority": 8,
             "creative_placeholders": [{"width": 300, "height": 250}],
+            **(implementation_config or {}),
         }
         config = self.get_session().get(AdapterConfig, tenant.tenant_id) or AdapterConfigFactory(tenant=tenant)
         config.adapter_type = "google_ad_manager"
@@ -240,10 +252,19 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         self.mock["gam_client"].return_value = stub_gam_client_manager(network_time_zone=network_time_zone)
         self.mock["adapter"].side_effect = get_adapter
 
+    def gam_objects_sent(self, service: str, method: str) -> list[dict[str, Any]]:
+        """Every object the seller sent the stand-in GAM network through ``service.method``.
+
+        GAM's ``create*`` / ``update*`` methods take a list of objects; this flattens the
+        lists of every call, in order. Any service is recorded, configured or not
+        (``stub_gam_client_manager`` hands back one stand-in per service name).
+        """
+        calls = getattr(self.mock["gam_client"].return_value.get_service(service), method).call_args_list
+        return [obj for call in calls for obj in call.args[0]]
+
     def gam_line_items_sent(self) -> list[dict[str, Any]]:
         """Every line item the seller sent the stand-in GAM network, in order."""
-        create = self.mock["gam_client"].return_value.get_service("LineItemService").createLineItems
-        return [line_item for call in create.call_args_list for line_item in call.args[0]]
+        return self.gam_objects_sent("LineItemService", "createLineItems")
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
