@@ -39,9 +39,10 @@ from adcp.types import (
 )
 from adcp.types.generated_poc.core.format import Dimensions, Renders  # TODO: no stable alias in adcp.types
 
+from src.core.format_cache import DEFAULT_AGENT_URL
 from src.core.schemas import Format, FormatId
 
-AGENT_URL = "https://creative.adcontextprotocol.org"
+AGENT_URL = DEFAULT_AGENT_URL
 
 # ── Asset class mapping ──────────────────────────────────────────────
 

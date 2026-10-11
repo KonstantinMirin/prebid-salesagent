@@ -156,14 +156,15 @@ class GamSellerMixin:
         scenario that needs another product setting adds a keyword here rather than a second
         product writer.
         """
-        from src.core.format_cache import DEFAULT_AGENT_URL
         from src.services.gam_product_config_service import GAMProductConfigService
         from tests.factories import ProductInventoryMappingFactory
+        from tests.factories.product import REFERENCE_FORMAT_ID, reference_format_ids
 
-        format_ids = ["display_300x250_image"]
-        product.format_ids = [{"agent_url": DEFAULT_AGENT_URL, "id": format_id} for format_id in format_ids]
+        product.format_ids = reference_format_ids(REFERENCE_FORMAT_ID)
         product.implementation_config = {
-            **GAMProductConfigService.generate_default_config(product.delivery_type, format_ids),
+            **GAMProductConfigService.generate_default_config(
+                product.delivery_type, [fmt["id"] for fmt in product.format_ids]
+            ),
             "targeted_ad_unit_ids": [ad_unit_id],
         }
         ProductInventoryMappingFactory(product=product, inventory_id=ad_unit_id, is_primary=True)
