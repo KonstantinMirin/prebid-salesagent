@@ -1,20 +1,14 @@
 """Steps for the local Google Ad Manager features: what a GAM seller sends GAM, and what it reports.
 
 local-gam-seller.feature: the Given makes the env's tenant a GAM seller
-(``GamSellerMixin.sell_through_gam``): from then on the tool's adapter is production's
-``GoogleAdManager``, built from the seeded rows, and the only stand-in under it is Google's
-SOAP client. The Thens read two things: the buyer's wire response, and the stand-in GAM
-network's record of what the seller sent it and what it created. Their expectations are the
-scenario's literals, or links the stand-in itself established (the id it gave the order), so
-nothing is compared with what the harness seeded.
+(``GamSellerMixin.sell_through_gam``). The Thens read two things: the buyer's wire response,
+and the stand-in GAM network's record of what the seller sent it and what it created. Their
+expectations are the scenario's literals, or links the stand-in itself established (the id it
+gave the order), so nothing is compared with what the harness seeded.
 
 local-gam-delivery-report.feature: the Givens make the tenant a GAM seller whose network
 reports for the buyer's advertiser (``DeliveryPollEnv.report_through_gam``); the UC-004 steps
 send the request and read the buyer's wire response.
-
-A GAM scenario states GAM's answers through the stand-in client. It does not combine with
-the Givens that configure the ``MagicMock`` adapter, which do nothing once the seller
-sells through GAM.
 """
 
 from __future__ import annotations
