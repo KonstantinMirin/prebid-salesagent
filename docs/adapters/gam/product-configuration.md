@@ -83,7 +83,7 @@ Non-guaranteed products:
 }
 ```
 
-The generator writes no `priority`: a line item books the GAM default priority of its type unless you set one (see [Priority](#priority)).
+The generator writes no `priority`: a line item books the GAM default priority of its type (see [Priority](#priority)).
 
 ### GAM configuration UI
 
@@ -106,7 +106,7 @@ The UI provides the following features:
 
 If no inventory targeting is set, validation passes but the adapter logs a warning and falls back to the network root ad unit.
 
-At media buy creation, a missing or invalid configuration fails with an explicit error message. `priority` is optional and is not checked here: the adapter checks it against the range of the line item type it books (see [Priority](#priority)), before it creates anything in GAM.
+At media buy creation, a missing or invalid configuration fails with an explicit error message.
 
 ## Line item type selection
 
@@ -139,19 +139,17 @@ The authoritative field list is the `GAMImplementationConfig` schema in `src/ada
 
 #### Priority
 
-- **Field**: `priority` (optional)
-- **Type**: Integer, where 1 is the highest priority
-- **Default**: the GAM default of the line item type the package books
-- **Behavior**: A configured priority applies to the configured `line_item_type` (or to the selected type when none is configured), and must lie inside GAM's range for that type. Otherwise the media buy is refused with `CONFIGURATION_ERROR` before anything is written to GAM. A priority configured for a type that is not booked does not carry over.
+- **Field**: `priority` (not read)
+- **Behavior**: The adapter does not read a stored `priority`. Each line item books the GAM default priority of the line item type it books, where 1 is the highest priority:
 
-| Line item type | Default | Range |
-|---|---|---|
-| `SPONSORSHIP` | 4 | 2-5 |
-| `STANDARD` | 8 | 6-10 |
-| `NETWORK` | 12 | 11-14 |
-| `BULK` | 12 | 11-14 |
-| `PRICE_PRIORITY` | 12 | 11-14 |
-| `HOUSE` | 16 | 15-16 |
+| Line item type | Priority |
+|---|---|
+| `SPONSORSHIP` | 4 |
+| `STANDARD` | 8 |
+| `NETWORK` | 12 |
+| `BULK` | 12 |
+| `PRICE_PRIORITY` | 12 |
+| `HOUSE` | 16 |
 
 #### Creative placeholders
 
@@ -358,8 +356,7 @@ Response:
 
 ### Priority
 
-- Leave `priority` unset unless you need to order line items of one type against each other; the type's GAM default then applies.
-- A priority you set must lie inside GAM's range for the line item type (see [Priority](#priority) in the field reference).
+- Each line item books its type's GAM default priority (see [Priority](#priority) in the field reference); a stored `priority` is not read.
 
 ### Inventory targeting
 

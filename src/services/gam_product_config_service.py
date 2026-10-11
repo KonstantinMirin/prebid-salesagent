@@ -20,8 +20,8 @@ class GAMProductConfigService:
 
         Returns:
             Dictionary of GAM implementation config with sensible defaults. It writes no
-            ``priority``: the line item's priority is the booked type's GAM default unless
-            the seller sets one (``PricingCompatibility.plan_line_item``).
+            ``priority``: a line item books its type's GAM default priority
+            (``PricingCompatibility.plan_line_item``).
         """
         # Base configuration shared across all types
         base_config = {
@@ -137,8 +137,7 @@ class GAMProductConfigService:
     def validate_config(config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate GAM implementation config for required fields.
 
-        ``priority`` is optional and is not checked here: ``PricingCompatibility.plan_line_item``
-        reads and validates it against the range of the line item type a package books.
+        ``priority`` is not required: a line item books its type's GAM default priority.
 
         Args:
             config: GAM implementation configuration dictionary

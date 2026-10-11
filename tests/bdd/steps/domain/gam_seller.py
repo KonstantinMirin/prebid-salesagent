@@ -10,7 +10,7 @@ is compared with what the harness seeded.
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -123,6 +123,43 @@ def given_buyer_packages_over_flight(ctx: dict, days: int, datatable: Any) -> No
         )
         for row in table_rows(datatable)
     ]
+
+
+@given("a media buy awaits the seller's approval with one package on the product, stored without its pricing_info")
+def given_pending_buy_without_pricing_info(ctx: dict) -> None:
+    """Persist a 14-day buy awaiting approval whose one package row has its budget and no ``pricing_info``.
+
+    The row a pending writer stored before it kept the terms of the selected option: the
+    request names the product's first option, and nothing on the row says which option the
+    package bought.
+    """
+    from tests.factories import MediaBuyFactory, MediaPackageFactory
+
+    product = ctx["default_product"]
+    package = {
+        "product_id": product.product_id,
+        "budget": 420.0,
+        "pricing_option_id": ctx["default_pricing_option"].pricing_option_id,
+    }
+    start = datetime.now(UTC) + timedelta(days=1)
+    end = start + timedelta(days=14)
+    media_buy = MediaBuyFactory(
+        tenant=ctx["tenant"],
+        principal=ctx["principal"],
+        budget=Decimal("420"),
+        start_date=start.date(),
+        end_date=end.date(),
+        start_time=start,
+        end_time=end,
+        raw_request={
+            "brand": {"domain": "testbrand.com"},
+            "start_time": start.isoformat(),
+            "end_time": end.isoformat(),
+            "packages": [package],
+        },
+    )
+    MediaPackageFactory(media_buy=media_buy, package_id="pkg_a", budget=Decimal("420"), package_config=package)
+    ctx["env"]._commit_factory_data()
 
 
 @when("the seller approves the media buy")
@@ -269,6 +306,19 @@ def then_approval_books_media_buy(ctx: dict) -> None:
     assert result.ok, f"expected the seller's approval to book the media buy; it returned {result}"
     pending = ctx["env"].media_buys_awaiting_approval()
     assert pending == [], f"expected no media buy to await approval; {len(pending)} still do"
+
+
+@then("the seller's approval fails on the package's missing pricing_info, and the media buy still awaits approval")
+def then_approval_fails_on_missing_pricing_info(ctx: dict) -> None:
+    """The approval failed naming the missing ``pricing_info``, and left the buy awaiting approval."""
+    from src.core.tools.media_buy_create import ApprovalOutcome
+
+    result = ctx["approval_result"]
+    assert result.outcome is ApprovalOutcome.FAILED and "missing pricing_info" in (result.error_msg or ""), (
+        f"expected the approval to fail on the package's missing pricing_info; it returned {result}"
+    )
+    pending = ctx["env"].media_buys_awaiting_approval()
+    assert len(pending) == 1, f"expected the media buy to still await approval; {len(pending)} buys do"
 
 
 @then("Google Ad Manager received no order and no line item")

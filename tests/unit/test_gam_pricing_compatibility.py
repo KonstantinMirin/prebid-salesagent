@@ -90,6 +90,33 @@ class TestLineItemTypeSelection:
         result = PricingCompatibility.select_line_item_type("cpc", is_guaranteed=True)
         assert result == "STANDARD"
 
+    def test_override_compatible_type_accepted(self):
+        """Override with compatible type should be accepted."""
+        result = PricingCompatibility.select_line_item_type("flat_rate", is_guaranteed=False, override_type="NETWORK")
+        assert result == "NETWORK"
+
+    def test_override_incompatible_type_rejected(self):
+        """An override the pricing model cannot use falls back to auto-selection."""
+        assert (
+            PricingCompatibility.select_line_item_type(
+                "flat_rate",
+                is_guaranteed=False,
+                override_type="STANDARD",  # STANDARD doesn't support CPD (used by FLAT_RATE)
+            )
+            == "SPONSORSHIP"
+        )
+
+    def test_override_vcpm_with_incompatible_rejected(self):
+        """Override VCPM with non-STANDARD type falls back to STANDARD."""
+        assert (
+            PricingCompatibility.select_line_item_type(
+                "vcpm",
+                is_guaranteed=False,
+                override_type="SPONSORSHIP",  # SPONSORSHIP doesn't support VCPM
+            )
+            == "STANDARD"
+        )
+
 
 class TestGAMCostTypeMapping:
     """Test AdCP to GAM cost type conversion."""
@@ -113,6 +140,23 @@ class TestGAMCostTypeMapping:
         for unsupported in ["cpcv", "cpv", "cpp", "invalid"]:
             with pytest.raises(AdCPCapabilityNotSupportedError):
                 PricingCompatibility.get_gam_cost_type(unsupported)
+
+
+class TestDefaultPriorities:
+    """Test default priority assignment for line item types."""
+
+    def test_default_priorities_match_gam_best_practices(self):
+        """Test priority values match GAM conventions."""
+        assert PricingCompatibility.get_default_priority("SPONSORSHIP") == 4
+        assert PricingCompatibility.get_default_priority("STANDARD") == 8
+        assert PricingCompatibility.get_default_priority("PRICE_PRIORITY") == 12
+        assert PricingCompatibility.get_default_priority("BULK") == 12
+        assert PricingCompatibility.get_default_priority("NETWORK") == 12
+        assert PricingCompatibility.get_default_priority("HOUSE") == 16
+
+    def test_unknown_type_defaults_to_standard_priority(self):
+        """Unknown line item types should default to STANDARD priority (8)."""
+        assert PricingCompatibility.get_default_priority("UNKNOWN_TYPE") == 8
 
 
 class TestCompatibleLineItemTypes:

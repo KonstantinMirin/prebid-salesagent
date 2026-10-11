@@ -26,29 +26,17 @@ PricingModel = Literal["cpm", "vcpm", "cpc", "flat_rate"]  # AdCP pricing models
 GAMCostType = Literal["CPM", "VCPM", "CPC", "CPD"]  # GAM internal types
 LineItemType = Literal["STANDARD", "SPONSORSHIP", "NETWORK", "PRICE_PRIORITY", "BULK", "HOUSE"]
 
-#: (default, minimum, maximum) priority per line item type, from GAM API LineItem.priority.
-PRIORITY_RANGES: dict[str, tuple[int, int, int]] = {
-    "SPONSORSHIP": (4, 2, 5),
-    "STANDARD": (8, 6, 10),
-    "NETWORK": (12, 11, 14),
-    "BULK": (12, 11, 14),
-    "PRICE_PRIORITY": (12, 11, 14),
-    "HOUSE": (16, 15, 16),
-}
+#: The types that take only a DAILY goal whose units are a percentage of impressions
+#: (Goal.goalType, Goal.units), not a count.
+SHARE_OF_VOICE_TYPES = frozenset({"SPONSORSHIP", "NETWORK", "HOUSE"})
 
-#: The goal types GAM accepts per line item type (Goal.goalType); the first is the type's
+#: The goal types GAM accepts on each count type (Goal.goalType); the first is the type's
 #: goal when the product configures none.
 GOAL_TYPES: dict[str, tuple[str, ...]] = {
     "STANDARD": ("LIFETIME",),
     "BULK": ("LIFETIME",),
     "PRICE_PRIORITY": ("LIFETIME", "DAILY", "NONE"),
-    "SPONSORSHIP": ("DAILY",),
-    "NETWORK": ("DAILY",),
-    "HOUSE": ("DAILY",),
 }
-
-#: The types whose goal units are a percentage of impressions (Goal.units), not a count.
-SHARE_OF_VOICE_TYPES = frozenset({"SPONSORSHIP", "NETWORK", "HOUSE"})
 
 
 class LineItemPlan(NamedTuple):
@@ -185,23 +173,20 @@ class PricingCompatibility:
     ) -> LineItemPlan:
         """Decide a package's line item type, priority, goal type and unit type, in that order.
 
-        The one reader and validator of the product's ``line_item_type``, ``priority``,
+        The one reader and validator of the product's ``line_item_type``,
         ``primary_goal_type`` and ``primary_goal_unit_type``. Run before the order exists,
         so a refusal leaves nothing behind in GAM.
 
         1. Type: ``select_line_item_type`` with the configured type as the override.
-        2. Priority: the configured ``priority`` when the booked type is the configured
-           type, or no type is configured; it must be an integer inside the booked type's
-           GAM range. A priority set for a type that was not booked does not carry over.
-           Otherwise the booked type's GAM default.
-        3. Goal type: the one GAM accepts for the type; for PRICE_PRIORITY the configured
-           ``primary_goal_type``, LIFETIME when none.
+        2. Priority: the booked type's GAM default (``get_default_priority``).
+        3. Goal type: DAILY on a share-of-voice type; otherwise the one GAM accepts for the
+           type, and for PRICE_PRIORITY the configured ``primary_goal_type``, LIFETIME when none.
         4. Unit type: IMPRESSIONS on a share-of-voice type; CLICKS for CPC; VIEWABLE_IMPRESSIONS
            for vCPM; otherwise the configured ``primary_goal_unit_type``, IMPRESSIONS when none.
 
         Raises:
-            AdCPConfigurationError: a configured priority or goal type GAM does not accept
-                for the booked type. The seller's configuration; the buyer cannot fix it.
+            AdCPConfigurationError: a configured goal type GAM does not accept for the
+                booked type. The seller's configuration; the buyer cannot fix it.
         """
         configured_type = implementation_config.get("line_item_type")
         line_item_type = cls.select_line_item_type(pricing_model, is_guaranteed, configured_type)
@@ -214,26 +199,7 @@ class PricingCompatibility:
                 line_item_type,
             )
 
-        default_priority, lowest, highest = PRIORITY_RANGES[line_item_type]
-        priority = default_priority
-        configured_priority = implementation_config.get("priority")
-        if configured_priority is not None and configured_type in (None, line_item_type):
-            if (
-                not isinstance(configured_priority, int)
-                or isinstance(configured_priority, bool)
-                or not lowest <= configured_priority <= highest
-            ):
-                raise AdCPConfigurationError(
-                    details=ConfigurationDetails(
-                        product_id=product_id,
-                        capability=f"line_item_priority:{line_item_type}",
-                        rejected_value=str(configured_priority),
-                        accepted_values=[str(p) for p in range(lowest, highest + 1)],
-                    )
-                )
-            priority = configured_priority
-
-        accepted_goal_types = GOAL_TYPES[line_item_type]
+        accepted_goal_types = ("DAILY",) if line_item_type in SHARE_OF_VOICE_TYPES else GOAL_TYPES[line_item_type]
         if len(accepted_goal_types) == 1:
             goal_type = accepted_goal_types[0]
         else:
@@ -266,7 +232,7 @@ class PricingCompatibility:
         else:
             unit_type = implementation_config.get("primary_goal_unit_type", "IMPRESSIONS")
 
-        return LineItemPlan(line_item_type, priority, goal_type, unit_type)
+        return LineItemPlan(line_item_type, cls.get_default_priority(line_item_type), goal_type, unit_type)
 
     @classmethod
     def goal_units(cls, plan: LineItemPlan, *, lifetime_units: int, flight_days: int) -> int:
@@ -305,3 +271,23 @@ class PricingCompatibility:
                 details=CapabilityRefusalDetails(capability="pricing_model", rejected_value=pricing_model)
             )
         return cost_type
+
+    @classmethod
+    def get_default_priority(cls, line_item_type: LineItemType) -> int:
+        """Get default priority for line item type (GAM best practices).
+
+        Args:
+            line_item_type: GAM line item type
+
+        Returns:
+            Default priority level (1-16, lower = higher priority)
+        """
+        priorities = {
+            "SPONSORSHIP": 4,
+            "STANDARD": 8,
+            "PRICE_PRIORITY": 12,
+            "BULK": 12,
+            "NETWORK": 12,
+            "HOUSE": 16,
+        }
+        return priorities.get(line_item_type, 8)
