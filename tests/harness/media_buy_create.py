@@ -2,8 +2,9 @@
 
 Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SOAP client.
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
-``sell_through_gam`` (``GamSellerMixin``) turns the adapter patch into production's ``get_adapter``, so a GAM
-seller runs the real ``GoogleAdManager`` adapter over the stand-in SOAP client.
+``GamSellerMixin.sell_through_gam`` (``tests/harness/gam.py``) turns the adapter patch into
+production's ``get_adapter``, so a GAM seller runs the real ``GoogleAdManager`` adapter over
+the stand-in SOAP client.
 
 Requires: integration_db fixture.
 

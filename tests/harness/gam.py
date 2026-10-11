@@ -1,24 +1,34 @@
-"""A Google Ad Manager seller, for any env whose tool runs the GAM adapter.
+"""A Google Ad Manager seller, composable into any env whose tool reaches its adapter through ``get_adapter``.
 
 ``GamSellerMixin.sell_through_gam`` makes the env's tenant a GAM seller: from then on the
 tool's adapter is production's ``GoogleAdManager``, built from the seeded rows, and the only
-stand-in under it is Google's SOAP client (``tests.helpers.gam_client.stub_gam_client``).
-``MediaBuyCreateEnv`` and ``DeliveryPollEnv`` compose it.
+stand-in under it is Google's SOAP client (``stub_gam_client``). Every env whose scenarios
+need a GAM seller mixes this in, so the capability, its e2e declaration and its readers live
+here once.
 
-Host env: an ``IntegrationEnv`` whose ``EXTERNAL_PATCHES`` spreads ``GAM_CLIENT_PATCH`` and
-names the tool's ``get_adapter`` as ``"adapter"``, and whose ``_configure_mocks`` calls
-``_configure_gam_client``.
+A host env composes it in three places:
+
+* its bases: ``class SomeEnv(GamSellerMixin, ..., IntegrationEnv)``;
+* its ``EXTERNAL_PATCHES``: ``{..., **GAM_CLIENT_PATCH}``, next to an ``"adapter"`` patch on
+  the ``get_adapter`` its tool calls;
+* its ``_configure_mocks``: ``self._configure_gam_client()``.
+
+The client patch is inert for a tenant on the Mock adapter, which never constructs an
+``AdManagerClient``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from tests.harness._realize import e2e_unsupported, realize_e2e
-from tests.helpers.gam_client import stub_gam_client
+from tests.helpers.gam_client import GAM_CREATE_METHODS, GAM_SENT_METHODS, stub_gam_client
 
-GAM_CLIENT_PATCH = {
+if TYPE_CHECKING:
+    from unittest.mock import MagicMock
+
+GAM_CLIENT_PATCH: dict[str, str] = {
     # Google's SOAP client, named where GAMClientManager constructs it. ``ad_manager`` there
     # is googleads' module, so the patch replaces the class on that module, and every
     # ``ad_manager.AdManagerClient(...)`` in src/ (each looks it up at call time) gets the
@@ -33,13 +43,29 @@ DEFAULT_GAM_AD_UNIT_ID = "4000001"
 
 
 class GamSellerMixin:
-    """Mixes a Google Ad Manager seller into an env."""
+    """Mixes a Google Ad Manager seller into an env: the setup, and readers of what GAM received.
 
-    mock: dict[str, Any]
+    Host env must be an ``IntegrationEnv`` that spreads ``GAM_CLIENT_PATCH`` into its
+    ``EXTERNAL_PATCHES``, patches ``"adapter"`` on a ``get_adapter(identity)``, and calls
+    ``_configure_gam_client`` from its ``_configure_mocks``.
+    """
+
+    if TYPE_CHECKING:
+        # Declared, not implemented: this mixin is only ever composed with IntegrationEnv,
+        # which owns the patches, the seed and the session (the same statement
+        # EgressHatchMixin makes for ``_guard``).
+        mock: dict[str, MagicMock]
+
+        def setup_default_data(self, **tenant_kwargs: Any) -> tuple[Any, Any]: ...
+
+        def _commit_factory_data(self) -> None: ...
 
     def _configure_gam_client(self) -> None:
-        """Every ``AdManagerClient(...)`` built during the scenario (the adapter's, a health
-        check's) is the same client, so one scenario has one GAM network."""
+        """Every ``AdManagerClient(...)`` built during the scenario is the same stand-in client.
+
+        The adapter's, a health check's, the approval and sync services': one scenario has
+        one GAM network.
+        """
         self.mock["gam_client"].return_value = stub_gam_client()
 
     @realize_e2e(
@@ -76,7 +102,7 @@ class GamSellerMixin:
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
 
-        tenant, principal = self.setup_default_data()  # type: ignore[attr-defined]
+        tenant, principal = self.setup_default_data()
         onboard_gam(tenant, trafficker_id=trafficker_id)
         principal.platform_mappings = {
             **(principal.platform_mappings or {}),
@@ -85,7 +111,7 @@ class GamSellerMixin:
         GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
         for product in products:
             self._sell_product_through_gam(product, ad_unit_id)
-        self._commit_factory_data()  # type: ignore[attr-defined]
+        self._commit_factory_data()
         self.mock["adapter"].side_effect = get_adapter
 
     def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
@@ -128,14 +154,14 @@ class GamSellerMixin:
     def gam_objects_sent(self, service: str, method: str) -> list[Any]:
         """Every object the seller sent the stand-in GAM network through ``service.method``, in order.
 
-        As production built them. Only for GAM's ``create*`` / ``update*`` methods, which take
-        an array of objects; this concatenates the arrays of every call. Any other method
-        raises ``ValueError``, since its first argument is not an array of objects. A service
-        nobody called reads as nothing sent. For what GAM made of a create, with the ids it
-        assigned, read ``gam_objects_created``.
+        As production built them. Only for the methods in ``GAM_SENT_METHODS``, each of which
+        takes an array of objects; this concatenates the arrays of every call. Any other
+        ``(service, method)``, a misspelled one included, raises ``ValueError``, so a Then
+        expecting nothing sent cannot pass by reading a method production never calls. For
+        what GAM made of a create, with the ids it assigned, read ``gam_objects_created``.
         """
-        if not method.startswith(("create", "update")):
-            raise ValueError(f"{service}.{method} does not take an array of objects")
+        if (service, method) not in GAM_SENT_METHODS:
+            raise ValueError(f"{service}.{method} is not a GAM method the seller sends objects through")
         calls = getattr(self.mock["gam_client"].return_value.GetService(service), method).call_args_list
         return [obj for call in calls for obj in call.args[0]]
 
@@ -143,6 +169,10 @@ class GamSellerMixin:
         """What the stand-in GAM network created through ``service.method``, as it answered.
 
         Each sent object with the id the network assigned it, in order
-        (``stub_gam_client``'s ``created_objects``).
+        (``stub_gam_client``'s ``created_objects``). Only for the methods in
+        ``GAM_CREATE_METHODS``, the ones the stand-in answers; any other ``(service, method)``
+        raises ``ValueError``, since the network never records it as created.
         """
+        if (service, method) not in GAM_CREATE_METHODS:
+            raise ValueError(f"{service}.{method} is not a GAM create the stand-in network answers")
         return list(self.mock["gam_client"].return_value.created_objects.get((service, method), []))
