@@ -16,6 +16,7 @@ Two stand-ins, one network:
 
 ``serve_gam_report`` configures a ``stub_gam_client``'s ``ReportService`` to run one report
 job, and returns the report body Google's report host serves (``gam_report_csv_dump``).
+``gam_reporting_service`` builds the real ``GAMReportingService`` over such a client.
 
 The adapter has no dry-run mode: every read and write it makes is a GAM call. It used
 to fabricate its own test data when ``dry_run`` was set — ``_get_line_item_info``
@@ -36,10 +37,12 @@ import csv
 import gzip
 import io
 import itertools
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from src.adapters.gam_reporting_service import GAMReportingService
 from src.core.security.egress.response import OutboundResult
 
 
@@ -159,6 +162,11 @@ def stub_gam_client_manager(*, line_items: tuple[SoapObject, ...] | list[SoapObj
 #: ``ReportingConfig.ALLOWED_DOMAINS`` accepts, so the seller's provenance check runs for real.
 GAM_REPORT_DOWNLOAD_URL = "https://storage.googleapis.com/gam-reports/report.csv.gz"
 
+#: The download of a finished GAM report from Google's report host, by the name
+#: ``gam_reporting_service`` calls it: the egress seam's entry point. The patch target for a
+#: test that serves the report body without an origin.
+GAM_REPORT_DOWNLOAD_TARGET = "src.adapters.gam_reporting_service.send"
+
 
 def gam_report_csv_dump(rows: Sequence[Mapping[str, object]]) -> bytes:
     """The gzipped ``CSV_DUMP`` body GAM serves for a finished report holding *rows*.
@@ -200,3 +208,26 @@ def serve_gam_report(
     return OutboundResult(
         http_status=200, headers={}, content=gam_report_csv_dump(rows), attempts=1, duration_seconds=0.0
     )
+
+
+@contextmanager
+def gam_reporting_service(
+    *, rows: Sequence[Mapping[str, object]] = (), download_url: str | None = None
+) -> Iterator[GAMReportingService]:
+    """A real ``GAMReportingService`` over a ``stub_gam_client`` whose report job finishes.
+
+    Without *download_url* the report is downloaded from Google's report host, and that
+    download is patched (``GAM_REPORT_DOWNLOAD_TARGET``) to serve *rows* for the life of the
+    block. With *download_url* nothing is patched: the job names that URL, and the caller
+    serves the body from its own origin.
+
+    ``network_timezone`` is passed so construction never reaches ``NetworkService``: the
+    network's time zone lookup is not on the path these tests grade.
+    """
+    client = stub_gam_client()
+    if download_url is not None:
+        serve_gam_report(client, rows=rows, download_url=download_url)
+        yield GAMReportingService(client, network_timezone="America/New_York")
+        return
+    with patch(GAM_REPORT_DOWNLOAD_TARGET, return_value=serve_gam_report(client, rows=rows)):
+        yield GAMReportingService(client, network_timezone="America/New_York")

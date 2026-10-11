@@ -35,7 +35,7 @@ from tests.harness._base import IntegrationEnv
 from tests.harness._mixins import DeliveryPollMixin
 from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.transport import DeliverResult
-from tests.helpers.gam_client import serve_gam_report
+from tests.helpers.gam_client import GAM_REPORT_DOWNLOAD_TARGET, serve_gam_report
 
 
 class DeliveryPollEnv(GamSellerMixin, DeliveryPollMixin, IntegrationEnv):
@@ -76,10 +76,9 @@ class DeliveryPollEnv(GamSellerMixin, DeliveryPollMixin, IntegrationEnv):
     EXTERNAL_PATCHES = {
         "adapter": "src.core.tools.media_buy_delivery.get_adapter",
         **GAM_CLIENT_PATCH,
-        # The download of a finished GAM report from Google's report host, by the name
-        # gam_reporting_service calls it. Inert unless the tenant is a GAM seller. The egress
-        # gateway's own handling of this download is graded in test_vendor_egress.py.
-        "gam_report_download": "src.adapters.gam_reporting_service.send",
+        # Inert unless the tenant is a GAM seller. The egress gateway's own handling of this
+        # download is graded in test_vendor_egress.py.
+        "gam_report_download": GAM_REPORT_DOWNLOAD_TARGET,
     }
     REST_ENDPOINT = "/api/v1/media-buys/delivery"
 

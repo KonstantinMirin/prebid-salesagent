@@ -65,7 +65,7 @@ from src.core.security.outbound_http import OutboundError
 from tests.factories import TenantFactory, UserFactory
 from tests.harness._base import IntegrationEnv
 from tests.helpers.egress_backoff import fast_backoff
-from tests.helpers.gam_client import gam_report_csv_dump, serve_gam_report, stub_gam_client
+from tests.helpers.gam_client import gam_report_csv_dump, gam_reporting_service
 from tests.helpers.local_http_origin import LocalOrigin, OriginResponse
 
 # Reused rather than restated: which escape hatches a case opens is one decision
@@ -467,8 +467,6 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, m
     monkeypatch.setattr(grs.ReportingConfig, "ALLOWED_DOMAINS", ["127.0.0.1"])
     local_origin_tls.respond_with(500, body=b"boom")
 
-    service = _gam_reporting_service(local_origin_tls)
-
     # The TYPED error reaches the caller. `_run_report` used to catch it and
     # rewrap it as `Exception("Error running GAM report: ...")`, so the only thing
     # to assert on was that relabelled string -- and the download branch's
@@ -477,7 +475,10 @@ def test_gam_report_download_does_not_retry_a_failing_origin(local_origin_tls, m
     # An `except AdCPSalesAgentError: raise` branch ahead of the catch-all is what changed, and
     # this is where it shows: the seam's own class, its attempt count, and its
     # fixed message survive to the caller.
-    with pytest.raises(OutboundDeliveryFailed) as raised:
+    with (
+        gam_reporting_service(download_url=f"{local_origin_tls.base_url}/report.csv.gz") as service,
+        pytest.raises(OutboundDeliveryFailed) as raised,
+    ):
         service._run_report({"reportQuery": {}})
 
     assert raised.value.attempts == 1, (
@@ -850,8 +851,8 @@ def test_gam_report_download_parses_the_gzipped_csv(local_origin_tls, monkeypatc
     body = gam_report_csv_dump([{"Dimension.DATE": "2026-07-29", "Column.AD_SERVER_IMPRESSIONS": 100}])
     local_origin_tls.respond_with(200, body=body, content_type="application/octet-stream")
 
-    service = _gam_reporting_service(local_origin_tls)
-    rows = service._run_report({"reportQuery": {}})
+    with gam_reporting_service(download_url=f"{local_origin_tls.base_url}/report.csv.gz") as service:
+        rows = service._run_report({"reportQuery": {}})
 
     assert rows == [{"Dimension.DATE": "2026-07-29", "Column.AD_SERVER_IMPRESSIONS": "100"}]
     assert local_origin_tls.hits == 1
@@ -1151,21 +1152,3 @@ def test_an_unauthenticated_xandr_adapter_holds_no_vendor_client(local_origin_tl
     adapter = _xandr(local_origin_tls)
 
     assert adapter._vendor is None
-
-
-# ---------------------------------------------------------------------------
-# GAM SOAP stand-in — a fake external ad server, not a transport mock.
-# ---------------------------------------------------------------------------
-
-
-def _gam_reporting_service(origin: LocalOrigin):
-    """A reporting service whose report downloads land on *origin*.
-
-    ``network_timezone`` is passed so construction never reaches
-    ``NetworkService`` — the timezone lookup is not on the path under test.
-    """
-    from src.adapters.gam_reporting_service import GAMReportingService
-
-    client = stub_gam_client()
-    serve_gam_report(client, download_url=f"{origin.base_url}/report.csv.gz")
-    return GAMReportingService(client, network_timezone="America/New_York")

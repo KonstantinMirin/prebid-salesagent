@@ -55,4 +55,4 @@ Feature: get_media_buy_delivery reports a Google Ad Manager buy while GAM has no
     When the Buyer Agent requests delivery metrics for media_buy_ids ["mb-001"]
     Then the response is compliant with the get_media_buy_delivery spec
     And the response errors include code "SERVICE_UNAVAILABLE" for media buy "mb-001"
-    And the response should NOT include delivery data for "mb-001"
+    # Whether the buy is also returned in media_buy_deliveries with zero metrics (line 15) is #2404.
