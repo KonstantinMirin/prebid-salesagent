@@ -7,7 +7,7 @@ from decimal import Decimal
 import factory
 from factory import LazyAttribute, Sequence, SubFactory
 
-from src.core.database.models import PricingOption, Product
+from src.core.database.models import PricingOption, Product, ProductInventoryMapping
 from src.core.schemas.pricing import PricingOption as PricingOptionSchema
 from tests.factories.core import TenantFactory
 from tests.factories.request import _RequestFactory
@@ -92,6 +92,27 @@ class PricingOptionFactory(factory.alchemy.SQLAlchemyModelFactory):
         ):
             del kwargs["product"]
         return kwargs
+
+
+class ProductInventoryMappingFactory(factory.alchemy.SQLAlchemyModelFactory):
+    """A product's mapping to one piece of ad-server inventory, as the Admin UI's product form saves it.
+
+    ``product`` is excluded from the model kwargs: ``ProductInventoryMapping`` has a composite
+    foreign key to ``products`` and no relationship, so only the ids reach the row.
+    """
+
+    class Meta:
+        model = ProductInventoryMapping
+        sqlalchemy_session = None
+        sqlalchemy_session_persistence = "commit"
+        exclude = ("product",)
+
+    product = SubFactory(ProductFactory)
+    tenant_id = LazyAttribute(lambda o: o.product.tenant_id)
+    product_id = LazyAttribute(lambda o: o.product.product_id)
+    inventory_type = "ad_unit"
+    inventory_id = Sequence(lambda n: f"au_{n:04d}")
+    is_primary = False
 
 
 #: The id a default-shaped pricing option carries, read off the factory rather than
