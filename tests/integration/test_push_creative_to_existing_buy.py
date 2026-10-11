@@ -143,7 +143,7 @@ def test_push_persists_the_adapter_enrichment(integration_db, factory_session):
         f"was lost. Persisted data: {data}"
     )
     assert data.get("concept_source") == "gam_order"
-    assert data.get("platform_creative_id") == PLATFORM_CREATIVE_ID, (
-        "platform_creative_id is what the function's own re-approval guard reads; without "
+    assert data.get("ad_server_creative_id") == PLATFORM_CREATIVE_ID, (
+        "ad_server_creative_id is what the function's own re-approval guard reads; without "
         "it a second approval pushes this creative to the ad server again"
     )

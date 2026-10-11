@@ -4,8 +4,8 @@
 #
 # What it grades: a creative assigned to a package of a buy booked in Google Ad Manager
 # reaches the line item that package was booked as, through sync_creatives or the seller's
-# approval of the creative; an assignment GAM cannot take is reported as an assignment
-# error; and approving the creative of a booked buy books no second order.
+# approval of the creative, once; and an assignment GAM cannot take is reported as an
+# assignment error. local-gam-seller.feature grades a buy booked at create.
 #
 # AdCP 3.1.1:
 # - creative/sync-creatives-response.json: assigned_to lists "Package IDs this creative was
@@ -14,8 +14,6 @@
 #   mapping creative IDs to package IDs. Standalone creative agents that do not manage media
 #   buys ignore this field" (a sales agent acts on them); dry_run previews changes "without
 #   applying them".
-# - enums/media-buy-status.json, pending_creatives: "the seller has already accepted the
-#   buy ... the buyer must attach creatives via sync_creatives before the buy can serve".
 # Ungraded by the storyboard runner.
 #
 # Transports: a2a, mcp and rest with the real GoogleAdManager adapter over a stand-in SOAP
@@ -95,13 +93,13 @@ Feature: UC-006 a Google Ad Manager seller traffics assigned creatives onto its 
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000005, 5000001"
 
-  # The buy was booked when it was created and then held for its creative. Approving that
-  # creative uploads it to the existing order.
-  @T-UC-006-local-gam-approval-books-no-second-order
-  Scenario: Approving the creative a booked buy was held for places it on the buy's line item without a second order
-    Given the tenant has approval_mode "require-human"
-    And the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
-    When the seller approves creative "cr-banner"
-    Then Google Ad Manager received no order
+  # The buyer re-sends the creative it already synced, with the same assignment. GAM already
+  # holds the creative on that line item, so nothing is sent again.
+  @T-UC-006-local-gam-resend-no-second-creative
+  Scenario: Re-sending a creative GAM already holds, with the same assignment, creates nothing in GAM
+    Given the buyer synced a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    And the buyer syncs a 300x250 image creative "cr-banner" showing "https://example.com/banner.png" assigned to package "pkg-banner-a"
+    When the Buyer Agent syncs the creative with assignments
+    Then creative "cr-banner" is assigned to package "pkg-banner-a"
     And Google Ad Manager created one image creative for advertiser "3000001" showing "https://example.com/banner.png"
     And Google Ad Manager associated that creative with line items "5000001"

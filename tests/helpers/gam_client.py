@@ -67,8 +67,8 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
     afterwards. Configured answers:
 
     * ``LineItemService.getLineItemsByStatement`` answers the line items the network holds,
-      ``client.line_items`` (seeded from ``line_items``; a test adds held line items there),
-      read at call time.
+      read at call time: ``client.line_items`` (seeded from ``line_items``; a test adds held
+      line items there), then the line items it created.
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
       in-request approval takes its success branch (``approve_order``).
     * The ``create*`` methods in ``GAM_CREATE_METHODS`` answer each sent object with a copy
@@ -82,9 +82,8 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
 
     Ceilings:
 
-    * ``getLineItemsByStatement`` answers every held line item; it does not evaluate PQL
-      against what was created. A test that needs GAM to read back a line item states it
-      with ``line_items=`` or in ``client.line_items``.
+    * ``getLineItemsByStatement`` answers every line item the network holds; it does not
+      evaluate PQL.
     * A test must not drive the adapter's background approval path
       (``google_ad_manager.py`` starts it when the in-request approval fails): its daemon
       thread polls for minutes and can construct a client after the test has released the
@@ -106,7 +105,11 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
 
     services: dict[str, MagicMock] = {
         "LineItemService": MagicMock(
-            getLineItemsByStatement=MagicMock(side_effect=lambda *_args: SoapObject(results=list(client.line_items)))
+            getLineItemsByStatement=MagicMock(
+                side_effect=lambda *_args: SoapObject(
+                    results=[*client.line_items, *created.get(("LineItemService", "createLineItems"), [])]
+                )
+            )
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
     }

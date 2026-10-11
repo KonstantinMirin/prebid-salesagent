@@ -15,7 +15,7 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import wire_entry, wire_field
+from tests.bdd.steps._outcome_helpers import wire_field
 from tests.bdd.steps.domain.uc006_sync_creatives import when_sync_creative_with_assignments
 from tests.bdd.steps.generic._account_resolution import ensure_tenant_principal
 
@@ -44,6 +44,32 @@ def given_seller_sells_through_gam(ctx: dict, trafficker_id: str, ad_unit_id: st
         ad_unit_id=ad_unit_id,
         products=[ctx["default_product"]],
     )
+
+
+@given(
+    parsers.parse(
+        'the package references the buyer\'s approved 300x250 image creative "{ready_id}" showing "{ready_url}" '
+        'and its creative "{held_id}" showing "{held_url}" that awaits the seller\'s review'
+    )
+)
+def given_package_references_ready_and_held_creatives(
+    ctx: dict, ready_id: str, ready_url: str, held_id: str, held_url: str
+) -> None:
+    """Two library creatives in the format the GAM product sells, both named in the package's creative_ids."""
+    from tests.bdd.steps.generic.given_media_buy import _add_creative_ids_to_package
+    from tests.factories.creative import CreativeFactory
+
+    for creative_id, url, status in ((ready_id, ready_url, "approved"), (held_id, held_url, "pending_review")):
+        CreativeFactory(
+            creative_id=creative_id,
+            tenant=ctx["tenant"],
+            principal=ctx["principal"],
+            format="display_300x250_image",
+            status=status,
+            data={"assets": {"banner_image": {"url": url, "width": 300, "height": 250}}},
+        )
+    ctx["env"]._commit_factory_data()
+    _add_creative_ids_to_package(ctx, [ready_id, held_id])
 
 
 def _orders_created(ctx: dict) -> list[Any]:
@@ -184,34 +210,21 @@ def when_seller_approves_creative(ctx: dict, creative_id: str) -> None:
     ctx["env"].approve_creative_as_seller(creative_id)
 
 
-@then(parsers.parse('creative "{creative_id}" is assigned to package "{package}"'))
-def then_creative_assigned_to_package(ctx: dict, creative_id: str, package: str) -> None:
-    """The sync's entry for the creative lists exactly that package in ``assigned_to``."""
-    entry = wire_entry(ctx, "creatives", creative_id=creative_id)
-    assert entry.get("assigned_to") == [package], (
-        f"expected creative {creative_id!r} assigned to [{package!r}]; the entry is {entry!r}"
-    )
-
-
-@then(parsers.parse('creative "{creative_id}" reports package "{package}" in assignment_errors and not in assigned_to'))
-def then_creative_package_in_assignment_errors(ctx: dict, creative_id: str, package: str) -> None:
-    """sync-creatives-response.json: ``assigned_to`` lists only the packages the creative was assigned to."""
-    entry = wire_entry(ctx, "creatives", creative_id=creative_id)
-    assert package in (entry.get("assignment_errors") or {}) and package not in (entry.get("assigned_to") or []), (
-        f"expected package {package!r} in assignment_errors and not in assigned_to; the entry is {entry!r}"
-    )
-
-
 def _creatives_created(ctx: dict) -> list[Any]:
     """The creatives the stand-in GAM network created, each carrying the id it assigned."""
     return ctx["env"].gam_objects_created("CreativeService", "createCreatives")
 
 
-@then(parsers.parse('Google Ad Manager created one image creative for advertiser "{advertiser_id}" showing "{url}"'))
-def then_gam_created_one_image_creative(ctx: dict, advertiser_id: str, url: str) -> None:
-    """GAM holds exactly one creative from this scenario: an image for the advertiser, showing the URL."""
+@then(
+    parsers.re(
+        r"Google Ad Manager created (?:one image creative|image creatives) for advertiser "
+        r'"(?P<advertiser_id>\d+)" showing "(?P<urls>[^"]+)"$'
+    )
+)
+def then_gam_created_image_creatives(ctx: dict, advertiser_id: str, urls: str) -> None:
+    """GAM holds exactly these creatives from this scenario, in order: images for the advertiser, showing the URLs."""
     created = [(c["xsi_type"], str(c["advertiserId"]), c.get("imageUrl")) for c in _creatives_created(ctx)]
-    expected = [("ImageRedirectCreative", advertiser_id, url)]
+    expected = [("ImageRedirectCreative", advertiser_id, url.strip()) for url in urls.split(",")]
     assert created == expected, f"expected GAM to create {expected}; it created {created}"
 
 
@@ -222,10 +235,14 @@ def then_gam_created_no_creative(ctx: dict) -> None:
     assert created == [], f"expected GAM to create no creative; it created {created}"
 
 
+def _licas_created(ctx: dict) -> list[Any]:
+    """The line item creative associations the stand-in GAM network created, in order."""
+    return ctx["env"].gam_objects_created("LineItemCreativeAssociationService", "createLineItemCreativeAssociations")
+
+
 def _associations(ctx: dict) -> list[tuple[str, str]]:
     """(creative id, line item id) of each line item creative association GAM created, in order."""
-    created = ctx["env"].gam_objects_created("LineItemCreativeAssociationService", "createLineItemCreativeAssociations")
-    return [(str(a["creativeId"]), str(a["lineItemId"])) for a in created]
+    return [(str(a["creativeId"]), str(a["lineItemId"])) for a in _licas_created(ctx)]
 
 
 @then(parsers.re(r'Google Ad Manager associated that creative with line items "(?P<line_items>[^"]+)"$'))
@@ -240,8 +257,7 @@ def then_gam_associated_with_line_items(ctx: dict, line_items: str) -> None:
 @then(parsers.parse('Google Ad Manager associated that creative with line item "{line_item}" at weight {weight:d}'))
 def then_gam_associated_at_weight(ctx: dict, line_item: str, weight: int) -> None:
     """The association carries the assignment's weight as GAM's manual rotation weight."""
-    created = ctx["env"].gam_objects_created("LineItemCreativeAssociationService", "createLineItemCreativeAssociations")
-    reported = [(str(a["lineItemId"]), a.get("manualCreativeRotationWeight")) for a in created]
+    reported = [(str(a["lineItemId"]), a.get("manualCreativeRotationWeight")) for a in _licas_created(ctx)]
     assert reported == [(line_item, weight)], f"expected one association at weight {weight}; GAM holds {reported}"
 
 
@@ -253,8 +269,25 @@ def then_gam_line_item_manual_rotation(ctx: dict, line_item: str) -> None:
     assert reported == [(line_item, "MANUAL")], f"expected line item {line_item} set to MANUAL; GAM got {reported}"
 
 
-@then("Google Ad Manager received no order")
-def then_gam_received_no_order(ctx: dict) -> None:
-    """The seller sent GAM no order over the whole scenario."""
-    orders = ctx["env"].gam_objects_sent("OrderService", "createOrders")
-    assert orders == [], f"expected GAM to receive no order; it received {orders}"
+@then("Google Ad Manager associated each creative it created with the line item it created")
+def then_gam_associated_each_creative_with_created_line_item(ctx: dict) -> None:
+    """Each creative GAM created is on the one line item GAM created, once, in creation order."""
+    line_items = ctx["env"].gam_objects_created("LineItemService", "createLineItems")
+    assert len(line_items) == 1, f"'the line item it created' names one line item; GAM created {len(line_items)}"
+    expected = [(str(c["id"]), str(line_items[0]["id"])) for c in _creatives_created(ctx)]
+    assert _associations(ctx) == expected, f"expected GAM to hold {expected}; it holds {_associations(ctx)}"
+
+
+@then("Google Ad Manager was asked to approve the order it created, on booking and on the creative's approval")
+def then_gam_approved_created_order_twice(ctx: dict) -> None:
+    """Both approvals the seller sent GAM name the one order GAM created."""
+    (order,) = _orders_created(ctx)
+    order_actions = ctx["env"].mock["gam_client"].return_value.GetService("OrderService").performOrderAction
+    approvals = [
+        str(bound["value"]["value"])
+        for action, statement in (call.args for call in order_actions.call_args_list)
+        if action["xsi_type"].startswith("Approve")
+        for bound in statement["values"]
+        if bound["key"] == "orderId"
+    ]
+    assert approvals == [str(order["id"])] * 2, f"expected two approvals of order {order['id']}; GAM got {approvals}"

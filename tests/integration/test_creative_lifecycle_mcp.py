@@ -918,7 +918,7 @@ class TestCreativeLifecycleMCP:
                     # Set platform_creative_id in data JSON to skip upload
                     if not creative.data:
                         creative.data = {}
-                    creative.data["platform_creative_id"] = f"gam_creative_{idx + 1}"
+                    creative.data["ad_server_creative_id"] = f"gam_creative_{idx + 1}"
                     from sqlalchemy.orm import attributes
 
                     attributes.flag_modified(creative, "data")

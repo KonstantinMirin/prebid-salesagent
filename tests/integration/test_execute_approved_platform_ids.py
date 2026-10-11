@@ -589,7 +589,7 @@ class TestExecuteApprovedEnrichesSellerConcept:
             assert creative.data.get("concept_source") == "gam_order"
             # The platform_creative_id half is filled on the same path, with the id GAM
             # returned from createCreatives (stub_gam_client_manager numbers them from 9000001).
-            assert creative.data.get("platform_creative_id") == "9000001"
+            assert creative.data.get("ad_server_creative_id") == "9000001"
             # Fill-only-when-absent preserved the pre-existing assets blob.
             assert creative.data.get("assets") is not None
 

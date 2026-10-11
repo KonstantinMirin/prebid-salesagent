@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 #: enums/creative-status.json is where the value lives.
 ARCHIVED_STATUS = CreativeStatus.archived.value
 
+#: The statuses of a creative cleared to serve: what the sync trafficking gate admits and
+#: what the push to the ad server accepts. ``active`` is what a creative already serving reads as.
+CLEARED_TO_SERVE = frozenset({CreativeStatus.approved.value, "active"})
+
 
 class CreativeListResult(NamedTuple):
     """Result of a paginated creative listing query."""

@@ -26,7 +26,7 @@ def _gam_status(**overrides) -> AssetStatus:
 def test_fills_concept_and_platform_id_when_absent():
     result = _merge_creative_enrichment({"assets": {}}, _gam_status())
 
-    assert result["platform_creative_id"] == "gam_123"
+    assert result["ad_server_creative_id"] == "gam_123"
     assert result["concept_id"] == "gam-order-789"
     assert result["concept_name"] == "GAM Order 789"
     assert result["concept_source"] == "gam_order"
@@ -44,15 +44,15 @@ def test_never_overwrites_existing_concept():
     assert result["concept_name"] == "Summer 2026"
     assert result["concept_source"] == "buyer"
     # platform_creative_id is still filled (independent of concept precedence).
-    assert result["platform_creative_id"] == "gam_123"
+    assert result["ad_server_creative_id"] == "gam_123"
 
 
 def test_never_overwrites_existing_platform_creative_id():
-    existing = {"platform_creative_id": "already_synced_999"}
+    existing = {"ad_server_creative_id": "already_synced_999"}
 
     result = _merge_creative_enrichment(existing, _gam_status())
 
-    assert result["platform_creative_id"] == "already_synced_999"
+    assert result["ad_server_creative_id"] == "already_synced_999"
 
 
 def test_no_concept_written_when_status_has_none():
@@ -64,7 +64,7 @@ def test_no_concept_written_when_status_has_none():
     assert "concept_id" not in result
     assert "concept_name" not in result
     assert "concept_source" not in result
-    assert result["platform_creative_id"] == "ad_42"
+    assert result["ad_server_creative_id"] == "ad_42"
 
 
 def test_concept_source_defaults_when_omitted():
@@ -89,4 +89,4 @@ def test_handles_none_existing_data():
     result = _merge_creative_enrichment(None, _gam_status())
 
     assert result["concept_id"] == "gam-order-789"
-    assert result["platform_creative_id"] == "gam_123"
+    assert result["ad_server_creative_id"] == "gam_123"

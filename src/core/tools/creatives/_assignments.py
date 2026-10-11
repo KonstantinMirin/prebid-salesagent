@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from typing import Any
 
 from src.core.database.models import PersistedMediaBuyStatus
+from src.core.database.repositories.creative import CLEARED_TO_SERVE
 from src.core.database.repositories.uow import CreativeUoW
 from src.core.errors.details import CreativeRefDetails, EntityRefDetails, ValidationDetails
 from src.core.exceptions import (
@@ -375,9 +376,9 @@ def _process_assignments(
                     # already holds the creative. A creative under review is trafficked when it
                     # is approved; a buy not yet booked, when it is executed.
                     if (
-                        creative_row.status in {"approved", "active"}
+                        creative_row.status in CLEARED_TO_SERVE
                         and (db_package.package_config or {}).get("platform_line_item_id")
-                        and not (existing_assignment and (creative_row.data or {}).get("platform_creative_id"))
+                        and not (existing_assignment and (creative_row.data or {}).get("ad_server_creative_id"))
                     ):
                         ad_server_pushes.setdefault((creative_id, media_buy_id), []).append(actual_package_id)
 

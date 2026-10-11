@@ -24,6 +24,8 @@ from sqlalchemy.orm import selectinload
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+    from src.core.database.models import CreativeAssignment
+    from src.core.database.models import MediaPackage as DBMediaPackage
     from src.core.database.repositories.media_buy import MediaBuyRepository
     from src.core.database.repositories.uow import MediaBuyUoW as _MediaBuyUoWType
 
@@ -34,7 +36,7 @@ from pydantic import BaseModel, ValidationError
 from rich.console import Console
 
 from src.core.database.integrity import is_constraint_violation
-from src.core.database.repositories.creative import CreativeRepository
+from src.core.database.repositories.creative import CLEARED_TO_SERVE, CreativeRepository
 from src.core.database.repositories.media_buy import RequestedPackage
 from src.core.exceptions import (
     AdCPAdapterError,
@@ -68,6 +70,19 @@ class PackageAssignmentDict(TypedDict):
     # The package's line item in the ad server (package_config["platform_line_item_id"]),
     # None for a package that has none.
     platform_line_item_id: str | None
+
+
+def _package_assignments_by_creative(
+    assignments: Sequence["CreativeAssignment"], packages: Sequence["DBMediaPackage"]
+) -> dict[str, list[PackageAssignmentDict]]:
+    """Each creative's package assignments on a buy, with the line item each package's row stores."""
+    line_items = {p.package_id: (p.package_config or {}).get("platform_line_item_id") for p in packages}
+    by_creative: dict[str, list[PackageAssignmentDict]] = {}
+    for a in assignments:
+        by_creative.setdefault(a.creative_id, []).append(
+            {"package_id": a.package_id, "weight": a.weight, "platform_line_item_id": line_items.get(a.package_id)}
+        )
+    return by_creative
 
 
 logger = logging.getLogger(__name__)
@@ -176,8 +191,10 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
     Returns a new dict; does not mutate the input. Two enrichments are folded in,
     both fill-only-when-absent so an existing value is never overwritten:
 
-    - ``platform_creative_id`` — the ad server's creative id, used to associate
-      already-synced creatives and to skip re-pushing on re-approval.
+    - ``ad_server_creative_id`` — the id the ad server gave the creative it created, used
+      to associate it with further line items instead of creating it again. Rows written
+      before it existed hold the buyer's own id under ``platform_creative_id``, which
+      nothing reads.
     - ``concept_id`` / ``concept_name`` / ``concept_source`` — the seller-side
       concept enrichment (#1506). AdCP exposes concept_id/concept_name read-only on
       list_creatives but carries no concept on sync_creatives, so an adapter may
@@ -186,8 +203,8 @@ def _merge_creative_enrichment(existing_data: dict | None, status: AssetStatus) 
       spec-defined field) is preserved and takes precedence over this fallback.
     """
     data = dict(existing_data or {})
-    if status.platform_creative_id and not data.get("platform_creative_id"):
-        data["platform_creative_id"] = status.platform_creative_id
+    if status.platform_creative_id and not data.get("ad_server_creative_id"):
+        data["ad_server_creative_id"] = status.platform_creative_id
     if status.concept_id and not data.get("concept_id"):
         data["concept_id"] = status.concept_id
         data["concept_name"] = status.concept_name
@@ -218,7 +235,7 @@ def _apply_creative_enrichment(creative: DBCreative, status: AssetStatus) -> dic
     logger.info(
         log_safe(
             f"Enriched creative {creative.creative_id} from adapter push "
-            f"(platform_creative_id={merged.get('platform_creative_id')}, "
+            f"(ad_server_creative_id={merged.get('ad_server_creative_id')}, "
             f"concept_source={merged.get('concept_source')})"
         )
     )
@@ -1245,27 +1262,13 @@ def execute_approved_media_buy(
             if assignments:
                 logger.info(f"[APPROVAL] Found {len(assignments)} creative assignments, uploading to adapter")
 
-                # Each package's line item, as the create (or the persistence above) recorded it.
-                assert uow2.media_buys is not None
-                line_item_by_package = {
-                    p.package_id: (p.package_config or {}).get("platform_line_item_id")
-                    for p in uow2.media_buys.get_packages(media_buy_id)
-                }
-
                 # Group packages by creative (REVERSED - key by creative_id, value is list of package assignments)
                 # This ensures each creative is uploaded ONCE with ALL its package assignments
                 # Each assignment includes weight for proper rotation in adapters (AdCP 2.5)
-                packages_by_creative: dict[str, list[PackageAssignmentDict]] = {}
-                for assignment in assignments:
-                    if assignment.creative_id not in packages_by_creative:
-                        packages_by_creative[assignment.creative_id] = []
-                    packages_by_creative[assignment.creative_id].append(
-                        {
-                            "package_id": assignment.package_id,
-                            "weight": assignment.weight,  # From CreativeAssignment.weight (default 100)
-                            "platform_line_item_id": line_item_by_package.get(assignment.package_id),
-                        }
-                    )
+                assert uow2.media_buys is not None
+                packages_by_creative = _package_assignments_by_creative(
+                    assignments, uow2.media_buys.get_packages(media_buy_id)
+                )
 
                 # Load all creatives scoped to the buy's principal: the composite PK
                 # (creative_id, tenant_id, principal_id) allows the same creative_id
@@ -1296,7 +1299,7 @@ def execute_approved_media_buy(
                         continue
 
                     # On an order booked at create, a creative with an ad server id was placed then.
-                    if stored_order_id and (creative.data or {}).get("platform_creative_id"):
+                    if stored_order_id and (creative.data or {}).get("ad_server_creative_id"):
                         continue
 
                     asset, err = _build_adapter_asset_from_creative(
@@ -1470,7 +1473,7 @@ def push_creative_to_existing_buy(
     was in pending_review at buy-approval time and was held back (#1038), and from
     sync_creatives for an approved creative assigned to a booked package (#2381).
     Local approval has already committed — failures here are non-fatal and logged.
-    A creative the ad server already holds (platform_creative_id set) is associated
+    A creative the ad server already holds (``ad_server_creative_id`` set) is associated
     with the packages' line items, not created again.
 
     ``package_ids`` limits the push to those of the creative's packages on the buy;
@@ -1522,7 +1525,7 @@ def push_creative_to_existing_buy(
             creative = uow.creatives.admin_get_by_id(creative_id)
             if not creative:
                 return False, f"Creative {creative_id} not found"
-            if creative.status not in {"approved", "active"}:
+            if creative.status not in CLEARED_TO_SERVE:
                 return False, f"Creative {creative_id} is not approved (status={creative.status})"
 
             all_assignments = uow.assignments.get_by_creative(creative_id)
@@ -1539,41 +1542,23 @@ def push_creative_to_existing_buy(
                 return False, "Adapter does not support creative upload"
 
             # platform_order_id is per-buy — any package on this buy has the same value
-            package_configs = {p.package_id: p.package_config or {} for p in uow.media_buys.get_packages(media_buy_id)}
-            if matching[0].package_id not in package_configs:
+            media_package = uow.media_buys.get_package(media_buy_id, matching[0].package_id)
+            if not media_package:
                 return False, f"No package found for media buy {media_buy_id}"
 
-            platform_order_id = package_configs[matching[0].package_id].get("platform_order_id")
+            platform_order_id = (media_package.package_config or {}).get("platform_order_id")
             if not platform_order_id:
                 return False, f"Media buy {media_buy_id} has no platform_order_id — buy may not be live yet"
 
-            package_assignments: list[PackageAssignmentDict] = [
-                {
-                    "package_id": a.package_id,
-                    "weight": a.weight or 100,
-                    "platform_line_item_id": package_configs.get(a.package_id, {}).get("platform_line_item_id"),
-                }
-                for a in matching
+            package_assignments = _package_assignments_by_creative(matching, uow.media_buys.get_packages(media_buy_id))[
+                creative_id
             ]
-
-            platform_creative_id = (creative.data or {}).get("platform_creative_id")
-            if platform_creative_id:
-                # Already in the ad server: place it on these packages' line items.
-                line_item_ids = [a["platform_line_item_id"] for a in package_assignments if a["platform_line_item_id"]]
-                if not line_item_ids:
-                    return False, f"No line item for creative {creative_id} on media buy {media_buy_id}"
-                refused = [
-                    r
-                    for r in adapter.associate_creatives(line_item_ids, [platform_creative_id])
-                    if r["status"] != "success"
-                ]
-                if refused:
-                    return False, refused[0].get("error") or "Adapter reported association failure"
-                return True, None
             asset, build_err = _build_adapter_asset_from_creative(creative, package_assignments, tenant_id=tenant_id)
             if build_err:
                 return False, build_err
             assert asset is not None
+            # A creative the ad server already holds is placed on the line items, not created again
+            asset["platform_creative_id"] = (creative.data or {}).get("ad_server_creative_id")
 
             try:
                 asset_statuses = adapter.creatives_manager.add_creative_assets(
@@ -3650,8 +3635,8 @@ async def _create_media_buy_impl(
                                 )
                                 continue
 
-                            # Get platform_creative_id from creative.data JSON
-                            platform_creative_id = creative.data.get("platform_creative_id") if creative.data else None
+                            # The ad server's own id for the creative, when it already holds it
+                            platform_creative_id = creative.data.get("ad_server_creative_id") if creative.data else None
                             if platform_creative_id:
                                 # Already in GAM — add to association list
                                 platform_creative_ids.append(platform_creative_id)
