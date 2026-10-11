@@ -4,6 +4,7 @@ import logging
 
 from googleads import ad_manager
 
+from src.adapters.gam.client import current_network_time_zone
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 
@@ -171,27 +172,12 @@ def get_gam_network_info(tenant_id: str) -> dict:
 
 
 def ensure_network_timezone(tenant_id: str) -> str:
-    """
-    Ensure we have the network timezone, fetching and caching it if necessary.
-
-    Returns:
-        The network timezone string (fetched or cached)
-    """
-
-    # First try to get cached timezone from adapter config
-    with get_db_session():
-        # TODO: Add proper caching once we have a config column in adapter_config table
-        # For now, always fetch from GAM
-        logger.info(f"Fetching network timezone from GAM for tenant {tenant_id}...")
-        try:
-            network_info = get_gam_network_info(tenant_id)
-            timezone = network_info.get("timezone", "America/New_York")
-            logger.info(f"Got network timezone for tenant {tenant_id}: {timezone}")
-            return timezone
-        except Exception as e:
-            logger.error(f"Error fetching network timezone for tenant {tenant_id}: {str(e)}")
-            # Default to America/New_York if we can't get the timezone
-            return "America/New_York"
+    """The tenant's GAM network time zone, or America/New_York when GAM cannot be asked."""
+    try:
+        return current_network_time_zone(get_ad_manager_client_for_tenant(tenant_id))
+    except Exception:
+        logger.exception("Could not read the GAM network time zone for tenant %s", tenant_id)
+    return "America/New_York"
 
 
 def get_gam_config_for_tenant(tenant_id: str) -> dict | None:
