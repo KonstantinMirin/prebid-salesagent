@@ -13,7 +13,6 @@ from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
-    wire_entry,
     wire_entry_errors,
     wire_error_dict,
     wire_error_envelope_or_none,
@@ -1635,24 +1634,31 @@ def then_sole_entry_error_code(ctx: dict, collection: str, code: str) -> None:
 _ENTRY_ID_KEYS = {"media_buy_deliveries": "media_buy_id"}
 
 
-def _entry_match(collection: str, entry_id: str) -> dict[str, str]:
-    """The ``wire_entry`` match naming the *collection* entry whose id field is *entry_id*.
+def _entry_index_for(ctx: dict, collection: str, entry_id: str) -> int:
+    """Index of the *collection* entry whose id field is *entry_id*, located on the wire.
 
     The selector form the sole-entry docstring said to add with the scenario that
     needs it: a sync that carries an anchor creative AND a synthesized entry for an
     assignment reference has two rows, and grading "row 0" would grade the anchor.
     The id key is the collection's singular -- ``creatives`` -> ``creative_id``,
     ``accounts`` -> ``account_id`` -- which is how every per-item entry the pinned
-    response schemas define names itself, unless ``_ENTRY_ID_KEYS`` names it. Locating
-    the entry, and refusing zero or several, is ``wire_entry``'s.
+    response schemas define names itself, unless ``_ENTRY_ID_KEYS`` names it.
     """
-    return {_ENTRY_ID_KEYS.get(collection, f"{collection[:-1]}_id"): entry_id}
+    id_key = _ENTRY_ID_KEYS.get(collection, f"{collection[:-1]}_id")
+    entries = wire_field(ctx, collection)
+    matches = [i for i, entry in enumerate(entries) if entry.get(id_key) == entry_id]
+    assert len(matches) == 1, (
+        f"expected exactly one {collection} entry with {id_key}={entry_id!r} on the wire, found "
+        f"{len(matches)} among {[e.get(id_key) for e in entries]}"
+    )
+    return matches[0]
 
 
 @then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" carries error code "(?P<code>[^"]+)"$'))
 def then_selected_entry_error_code(ctx: dict, collection: str, entry_id: str, code: str) -> None:
     """The *collection* entry selected by its id carries *code* in its ``errors[]``."""
-    errors = wire_entry_errors(ctx, collection, **_entry_match(collection, entry_id))
+    index = _entry_index_for(ctx, collection, entry_id)
+    errors = wire_entry_errors(ctx, collection, index=index)
     assert errors, f"the {collection} entry for {entry_id!r} carries an EMPTY errors[], so it reports no failure"
     codes = [error.get("code") if isinstance(error, dict) else getattr(error, "code", None) for error in errors]
     assert code in codes, f"Expected error code {code!r} on the {collection} entry for {entry_id!r}, got {codes}"
@@ -1661,7 +1667,8 @@ def then_selected_entry_error_code(ctx: dict, collection: str, entry_id: str, co
 @then(parsers.re(r'the (?P<collection>\w+) entry for "(?P<entry_id>[^"]+)" has action "(?P<action>[^"]+)"$'))
 def then_selected_entry_action(ctx: dict, collection: str, entry_id: str, action: str) -> None:
     """The *collection* entry selected by its id reports *action* on the wire."""
-    actual = wire_entry(ctx, collection, **_entry_match(collection, entry_id)).get("action")
+    index = _entry_index_for(ctx, collection, entry_id)
+    actual = wire_field(ctx, collection)[index].get("action")
     assert actual == action, f"Expected action {action!r} on the {collection} entry for {entry_id!r}, got {actual!r}"
 
 
@@ -1677,7 +1684,8 @@ def then_selected_entry_error_detail(ctx: dict, collection: str, entry_id: str, 
     files give each code its RECOMMENDED keys (creative-rejected: ``reasons``), so the grade
     is presence with content, not an exact shape.
     """
-    errors = wire_entry_errors(ctx, collection, **_entry_match(collection, entry_id))
+    index = _entry_index_for(ctx, collection, entry_id)
+    errors = wire_entry_errors(ctx, collection, index=index)
     assert errors, f"the {collection} entry for {entry_id!r} carries an EMPTY errors[], so it reports no failure"
     details = [(e.get("details") if isinstance(e, dict) else getattr(e, "details", None)) or {} for e in errors]
     assert any(d.get(key) for d in details), (
@@ -1693,7 +1701,8 @@ def then_selected_entry_omits_field(ctx: dict, collection: str, entry_id: str, f
     per-creative ``status`` on a failed or deleted action) is violated by ``"status": null``
     just as much as by a value, so the wire dict is read for the key itself.
     """
-    entry = wire_entry(ctx, collection, **_entry_match(collection, entry_id))
+    index = _entry_index_for(ctx, collection, entry_id)
+    entry = wire_field(ctx, collection)[index]
     assert field not in entry, (
         f"Expected the {collection} entry for {entry_id!r} to omit {field!r}, but it carries {entry.get(field)!r}"
     )

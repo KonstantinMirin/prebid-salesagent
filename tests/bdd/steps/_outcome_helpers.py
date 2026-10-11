@@ -177,10 +177,7 @@ def _locate_entry(ctx: dict, collection: str, index: int | None, match: dict[str
     assert isinstance(entries, list), f"{collection!r} is not a JSON array on the wire: {entries!r}"
 
     def _present() -> list:
-        return [
-            {k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "media_buy_id", "action") if k in e}
-            for e in entries
-        ]
+        return [{k: e.get(k) for k in ("account_id", "buyer_ref", "creative_id", "action") if k in e} for e in entries]
 
     if index is not None:
         assert 0 <= index < len(entries), (
