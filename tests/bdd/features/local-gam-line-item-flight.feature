@@ -24,7 +24,7 @@
 # a converter that applies a zone's daylight-saving rule after 2037.
 #
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
-# declares itself unrealizable on e2e (MediaBuyCreateEnv.sell_through_gam).
+# declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
 # @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
 # @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/start-timing.json

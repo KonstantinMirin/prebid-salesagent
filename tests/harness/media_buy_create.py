@@ -2,8 +2,9 @@
 
 Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SOAP client.
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
-``sell_through_gam`` turns the adapter patch into production's ``get_adapter``, so a GAM
-seller runs the real ``GoogleAdManager`` adapter over the stand-in SOAP client.
+``GamSellerMixin.sell_through_gam`` (``tests/harness/gam.py``) turns the adapter patch into
+production's ``get_adapter``, so a GAM seller runs the real ``GoogleAdManager`` adapter over
+the stand-in SOAP client.
 
 Requires: integration_db fixture.
 
@@ -13,7 +14,6 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import Iterable
 from typing import Any, cast
 from unittest.mock import MagicMock
 
@@ -22,10 +22,9 @@ from src.core.schemas import CreateMediaBuyRequest
 from src.core.schemas._base import CreateMediaBuyResult
 from tests.factories.mint import mint
 from tests.harness._base import IntegrationEnv, json_safe
-from tests.harness._realize import e2e_unsupported, realize_e2e
 from tests.harness.egress import EgressHatchMixin
+from tests.harness.gam import GAM_CLIENT_PATCH, GamSellerMixin
 from tests.harness.transport import DeliverResult
-from tests.helpers.gam_client import stub_gam_client
 
 # Sentinel for missing-key tests: pass idempotency_key=OMIT_IDEMPOTENCY_KEY to send a
 # request with NO key (the schema rejects it as "Field required" — AdCP 3.0.1).
@@ -61,7 +60,7 @@ def _restore_creative_ids(req: CreateMediaBuyRequest, flat: dict[str, Any]) -> N
             flat_pkgs[i]["creative_ids"] = cids
 
 
-class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
+class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
     """Integration test environment for _create_media_buy_impl.
 
     Mocks external services (adapter, audit, slack, context manager).
@@ -77,12 +76,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         "slack": "src.core.tools.media_buy_create.get_slack_notifier",
         "context_mgr": "src.core.tools.media_buy_create.get_context_manager",
         "format_spec": "src.core.tools.media_buy_create._get_format_spec_sync",
-        # Google's SOAP client, named where GAMClientManager constructs it. ``ad_manager`` there
-        # is googleads' module, so the patch replaces the class on that module, and every
-        # ``ad_manager.AdManagerClient(...)`` in src/ (each looks it up at call time) gets the
-        # stand-in. Inert until ``sell_through_gam`` makes the tenant a GAM seller: a tenant on
-        # the Mock adapter never constructs one.
-        "gam_client": "src.adapters.gam.client.ad_manager.AdManagerClient",
+        **GAM_CLIENT_PATCH,
     }
     REST_ENDPOINT = "/api/v1/media-buys"
 
@@ -203,122 +197,6 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
                 product=product, pricing_model="cpm", currency=currency, is_fixed=True
             )
         return product, pricing_option
-
-    @realize_e2e(
-        e2e_unsupported(
-            "the live server has no stand-in Google Ad Manager network: a GAM tenant there would "
-            "call Google, so its tenants run the Mock adapter"
-        )
-    )
-    def sell_through_gam(
-        self,
-        *,
-        trafficker_id: str,
-        advertiser_id: str,
-        ad_unit_id: str,
-        products: Iterable[Any],
-        network_time_zone: str | None = None,
-    ) -> None:
-        """Make this env's tenant a Google Ad Manager seller selling *products* on one ad unit.
-
-        Writes the rows a seller has after GAM onboarding in the Admin UI, and nothing else:
-        the onboarding rows (``onboard_gam``), the buyer's principal mapped to its GAM
-        advertiser, the synced ad unit (the setup checklist requires one, and the adapter
-        resolves product mappings against it), and each product as the add-product form saves
-        it. From then on the tool's adapter is production's: ``get_adapter`` builds
-        ``GoogleAdManager`` from those rows, and the only stand-in under it is Google's SOAP
-        client (``stub_gam_client``). Read what the seller sent GAM with ``gam_objects_sent``
-        and what GAM created with ``gam_objects_created``.
-
-        Ceiling: once this runs, a Given that configures the ``MagicMock`` adapter
-        (``self.mock["adapter"].return_value``, the adapter error and rejection injections)
-        does nothing, because the patch delegates to production. A GAM scenario states GAM's
-        answers through the stand-in client, and does not combine with those Givens.
-
-        ``network_time_zone`` is the GAM network's own zone (``Network.timeZone``). Given, it
-        replaces the default stand-in network that ``_configure_mocks`` built with one in that
-        zone; omitted, the default network (``STAND_IN_NETWORK_TIME_ZONE``) stays. Either way
-        the network is in place before any client is constructed, because nothing builds a
-        GAM client until this method makes the tenant a GAM seller. A later network answer a
-        scenario needs is another keyword of this method passed to the same
-        ``stub_gam_client(...)`` call, so one call carries every answer a scenario states.
-        """
-        from src.core.helpers.adapter_helpers import get_adapter
-        from tests.factories import GAMInventoryFactory
-        from tests.utils.tenant_setup import onboard_gam
-
-        if network_time_zone is not None:
-            self.mock["gam_client"].return_value = stub_gam_client(network_time_zone=network_time_zone)
-        tenant, principal = self.setup_default_data()
-        onboard_gam(tenant, trafficker_id=trafficker_id)
-        principal.platform_mappings = {
-            **(principal.platform_mappings or {}),
-            "google_ad_manager": {"advertiser_id": advertiser_id},
-        }
-        GAMInventoryFactory(tenant=tenant, inventory_id=ad_unit_id)
-        for product in products:
-            self._sell_product_through_gam(product, ad_unit_id)
-        self._commit_factory_data()
-        self.mock["adapter"].side_effect = get_adapter
-
-    def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
-        """Save *product* the way the Admin UI's add-product form saves a GAM product with one ad unit.
-
-        * Its format is ``display_300x250_image`` from the reference catalog. The adapter
-          resolves each line item's creative size through ``format_resolver.get_format``,
-          which ``_get_format_spec_sync``'s stand-in does not cover, and the creative registry
-          serves the checked-in reference catalog only while the testing flag's
-          ``reference_formats_only`` holds (#2255). When that property goes, this env has to
-          serve the format through the creative registry instead.
-        * Its ``implementation_config`` is ``GAMProductConfigService.generate_default_config``
-          for its delivery type and formats, the generator the form calls, plus the ad unit
-          the seller picks. The generator supplies ``include_descendants: True``, the form's
-          checked default.
-        * Its primary inventory mapping names the same ad unit, which the form writes for the
-          first picked ad unit. The adapter reads these rows before ``implementation_config``,
-          so the scenario runs the path every real GAM seller runs. Because the form writes
-          the same ad unit to both places, a mapping read that silently finds nothing falls
-          back to the same ids and stays green; one that raises turns the scenario red.
-
-        The form derives ``delivery_type`` from the first pricing option's ``is_fixed``. The
-        env's default product (``non_guaranteed`` with a fixed CPM option) is a pairing the
-        form cannot save; a scenario grading line item type or goal makes the two agree. A
-        scenario that needs another product setting adds a keyword here rather than a second
-        product writer.
-        """
-        from src.core.format_cache import DEFAULT_AGENT_URL
-        from src.services.gam_product_config_service import GAMProductConfigService
-        from tests.factories import ProductInventoryMappingFactory
-
-        format_ids = ["display_300x250_image"]
-        product.format_ids = [{"agent_url": DEFAULT_AGENT_URL, "id": format_id} for format_id in format_ids]
-        product.implementation_config = {
-            **GAMProductConfigService.generate_default_config(product.delivery_type, format_ids),
-            "targeted_ad_unit_ids": [ad_unit_id],
-        }
-        ProductInventoryMappingFactory(product=product, inventory_id=ad_unit_id, is_primary=True)
-
-    def gam_objects_sent(self, service: str, method: str) -> list[Any]:
-        """Every object the seller sent the stand-in GAM network through ``service.method``, in order.
-
-        As production built them. Only for GAM's ``create*`` / ``update*`` methods, which take
-        an array of objects; this concatenates the arrays of every call. Any other method
-        raises ``ValueError``, since its first argument is not an array of objects. A service
-        nobody called reads as nothing sent. For what GAM made of a create, with the ids it
-        assigned, read ``gam_objects_created``.
-        """
-        if not method.startswith(("create", "update")):
-            raise ValueError(f"{service}.{method} does not take an array of objects")
-        calls = getattr(self.mock["gam_client"].return_value.GetService(service), method).call_args_list
-        return [obj for call in calls for obj in call.args[0]]
-
-    def gam_objects_created(self, service: str, method: str) -> list[Any]:
-        """What the stand-in GAM network created through ``service.method``, as it answered.
-
-        Each sent object with the id the network assigned it, in order
-        (``stub_gam_client``'s ``created_objects``).
-        """
-        return list(self.mock["gam_client"].return_value.created_objects.get((service, method), []))
 
     def _build_mock_context_manager(self, tool_name: str) -> MagicMock:
         """Mock context manager that delegates create_context / create_workflow_step /
@@ -456,9 +334,7 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         # linked to a media buy, so no real ObjectWorkflowMapping FK row is needed.
         self.mock["context_mgr"].return_value = self._build_mock_context_manager(tool_name="create_media_buy")
 
-        # Google's SOAP client: every AdManagerClient(...) built during the scenario (the
-        # adapter's, a health check's) is the same client, so one scenario has one GAM network.
-        self.mock["gam_client"].return_value = stub_gam_client()
+        self._configure_gam_client()
 
         # Setup checklist: pass by default
 
