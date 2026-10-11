@@ -23,7 +23,13 @@ from typing import Any
 
 from pytest_bdd import given, parsers, then, when
 
-from tests.bdd.steps._outcome_helpers import assert_by_package_exactly, capture_created_media_buy, wire_field
+from tests.bdd.steps._outcome_helpers import (
+    assert_by_package_exactly,
+    capture_created_media_buy,
+    wire_delivery_ids,
+    wire_entry,
+    wire_field,
+)
 from tests.bdd.steps.generic._dispatch import dispatch_request
 from tests.bdd.steps.generic._table import rows as table_rows
 from tests.helpers.gam_client import gam_delivery_row
@@ -223,13 +229,15 @@ def then_delivery_covers_created_buy_packages(ctx: dict, datatable: Any) -> None
     Each row's ``package`` is a product id; it names the package create_media_buy
     returned for that product.
     """
-    deliveries = wire_field(ctx, "media_buy_deliveries")
-    reported = [delivery.get("media_buy_id") for delivery in deliveries]
-    assert reported == [ctx["created_media_buy_id"]], (
-        f"expected a report of exactly the created buy {ctx['created_media_buy_id']!r}; it reported {reported}"
+    media_buy_id = ctx["created_media_buy_id"]
+    reported = wire_delivery_ids(ctx)
+    assert reported == [media_buy_id], (
+        f"expected a report of exactly the created buy {media_buy_id!r}; it reported {reported}"
     )
     assert_by_package_exactly(
-        deliveries[0], table_rows(datatable), package_of=lambda product_id: ctx["created_package_ids"][product_id]
+        wire_entry(ctx, "media_buy_deliveries", media_buy_id=media_buy_id),
+        table_rows(datatable),
+        package_of=lambda product_id: ctx["created_package_ids"][product_id],
     )
 
 

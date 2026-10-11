@@ -4,7 +4,9 @@
 tool's adapter is production's ``GoogleAdManager``, built from the seeded rows, and the only
 stand-in under it is Google's SOAP client (``stub_gam_client``). Every env whose scenarios
 need a GAM seller mixes this in, so the capability, its e2e declaration and its readers live
-here once.
+here once. ``sell_through_tenant_adapter`` is the step it ends in, on its own: the adapter
+patch handed to production's ``get_adapter``, for a scenario that needs the tenant's real
+adapter without making the tenant a GAM seller.
 
 A host env composes it in three places:
 
@@ -52,6 +54,10 @@ DEFAULT_GAM_TRAFFICKER_ID = "2000001"
 DEFAULT_GAM_AD_UNIT_ID = "4000001"
 
 
+def _live_server_builds_its_own_adapter(self: Any) -> None:
+    """The live server has no adapter patch: it builds every tenant's adapter with ``get_adapter``."""
+
+
 class GamSellerMixin:
     """Mixes a Google Ad Manager seller into an env: the setup, and readers of what GAM received.
 
@@ -89,6 +95,22 @@ class GamSellerMixin:
             self.mock["gam_client"].return_value, rows=list(rows), job_status=job_status
         )
 
+    @realize_e2e(_live_server_builds_its_own_adapter)
+    def sell_through_tenant_adapter(self) -> None:
+        """From here on the tool's adapter is production's, built by ``get_adapter`` from the tenant's rows.
+
+        For the harness tenant that is the real Mock adapter (``MockAdServer``), which is
+        what the live server runs for it, so the in-process transports run the adapter code
+        e2e does. ``sell_through_gam`` ends here after making the tenant a GAM seller.
+
+        Ceiling: once this runs, a Given that configures the ``MagicMock`` adapter
+        (``self.mock["adapter"].return_value``, the adapter error and rejection injections)
+        does nothing, because the patch delegates to production.
+        """
+        from src.core.helpers.adapter_helpers import get_adapter
+
+        self.mock["adapter"].side_effect = get_adapter
+
     @realize_e2e(
         e2e_unsupported(
             "the live server has no stand-in Google Ad Manager network: a GAM tenant there would "
@@ -114,12 +136,10 @@ class GamSellerMixin:
         client (``stub_gam_client``). Read what the seller sent GAM with ``gam_objects_sent``
         and what GAM created with ``gam_objects_created``.
 
-        Ceiling: once this runs, a Given that configures the ``MagicMock`` adapter
-        (``self.mock["adapter"].return_value``, the adapter error and rejection injections)
-        does nothing, because the patch delegates to production. A GAM scenario states GAM's
-        answers through the stand-in client, and does not combine with those Givens.
+        Ceiling: the one ``sell_through_tenant_adapter`` states. A GAM scenario states GAM's
+        answers through the stand-in client, and does not combine with the Givens that
+        configure the ``MagicMock`` adapter.
         """
-        from src.core.helpers.adapter_helpers import get_adapter
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
 
@@ -133,7 +153,7 @@ class GamSellerMixin:
         for product in products:
             self._sell_product_through_gam(product, ad_unit_id)
         self._commit_factory_data()
-        self.mock["adapter"].side_effect = get_adapter
+        self.sell_through_tenant_adapter()
 
     def _sell_product_through_gam(self, product: Any, ad_unit_id: str) -> None:
         """Save *product* the way the Admin UI's add-product form saves a GAM product with one ad unit.

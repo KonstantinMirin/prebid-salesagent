@@ -38,7 +38,11 @@
 # one through `packages[].creative_assignments`, which create does not read (#2392); the
 # `creative_ids` field create does read is not in the 3.1.1 package-request schema.
 #
-# Transports: a2a, mcp, rest and e2e_rest.
+# Transports: a2a, mcp, rest and e2e_rest. On each of them the create runs the seller's own
+# adapter, the real Mock adapter (the read-back route hands the harness's adapter patch to
+# production's get_adapter, which is how the live server builds it). So the scenarios on an
+# auto-approve tenant also grade the Mock adapter's creative upload: it reads each creative's
+# id under `creative_id`, the key the create path sends (#2420).
 #
 # @source repo=adcp ref=v3.1.1 path=dist/schemas/3.1.1/enums/media-buy-status.json
 # @source repo=adcp ref=v3.1.1 path=docs/media-buy/media-buys/lifecycle.mdx

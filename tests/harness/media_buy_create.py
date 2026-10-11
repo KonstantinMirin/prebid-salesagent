@@ -4,9 +4,10 @@ Patches: adapter, audit logger, slack notifier, context manager, Google's GAM SO
 and the creative agent registry's preview and build calls (format lookups stay the
 deployment's registry).
 Real: get_db_session, MediaBuyRepository, all validation (all hit real DB).
-``GamSellerMixin.sell_through_gam`` (``tests/harness/gam.py``) turns the adapter patch into
-production's ``get_adapter``, so a GAM seller runs the real ``GoogleAdManager`` adapter over
-the stand-in SOAP client.
+``GamSellerMixin.sell_through_tenant_adapter`` (``tests/harness/gam.py``) turns the adapter
+patch into production's ``get_adapter``, so the tenant's own adapter runs: the real Mock
+adapter, or after ``sell_through_gam`` the real ``GoogleAdManager`` adapter over the stand-in
+SOAP client.
 
 Requires: integration_db fixture.
 
@@ -381,10 +382,7 @@ class MediaBuyCreateEnv(GamSellerMixin, EgressHatchMixin, IntegrationEnv):
             # Synthetic ids stay unresolvable (None), matching the server.
             from tests.factories.format import reference_format
 
-            try:
-                return reference_format(format_id)
-            except ValueError:
-                return None
+            return reference_format(format_id)
 
         self.mock["format_spec"].side_effect = _format_spec_side_effect
 

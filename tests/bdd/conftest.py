@@ -5507,6 +5507,18 @@ def _seed_media_buy_chain_create_dispatch(ctx: dict, env: object) -> None:
     ctx["dispatch_mode"] = "create"
 
 
+def _seed_buy_readback(ctx: dict, env: object) -> None:
+    """The create chain on a seller whose adapter is production's, on every transport.
+
+    The read-back scenarios grade what a real adapter's create leaves behind, so the
+    in-process transports run the tenant's own adapter as the live server does: the Mock
+    adapter (whose creative upload is #2420), or ``GoogleAdManager`` once a Given makes the
+    tenant a GAM seller.
+    """
+    _seed_media_buy_chain_create_dispatch(ctx, env)
+    env.sell_through_tenant_adapter()
+
+
 def _seed_media_buy_chain_full_create(ctx: dict, env: object) -> None:
     """The chain, plus the manual-approval full-create flag (PR #1567)."""
     _seed_media_buy_chain(ctx, env)
@@ -5978,7 +5990,7 @@ ENV_ROUTES: list[EnvRoute] = [
         tag="local-buy-readback",
         when=lambda m: any(t.startswith(("T-UC-002-local-initial-status-", "T-UC-004-local-gam-readback-")) for t in m),
         env_builder=_build_media_buy_create_list_env,
-        seed=_seed_media_buy_chain_create_dispatch,
+        seed=_seed_buy_readback,
     ),
     # ── @tenantid (local tenant-identification-routes feature) ──────────────
     # An UNSCOPED `when` row for the same reason as the rows above and below: the

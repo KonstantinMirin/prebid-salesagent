@@ -211,9 +211,14 @@ def _category_of(fmt: Format) -> str | None:
     return None if value is None else str(getattr(value, "value", value))
 
 
-def reference_format(format_id: str) -> Format:
-    """The reference catalog's definition of the format named *format_id*."""
-    return pick_reference_formats(lambda f: f.format_id.id == format_id)[0]
+def reference_format(format_id: str) -> Format | None:
+    """The reference catalog's definition of the format named *format_id*, or None when it has none.
+
+    The catalog is the fixture the live server resolves under ``ADCP_TESTING``, so an env
+    that answers format lookups from it resolves the same formats in-process as e2e does,
+    and a synthetic id stays unresolvable on both.
+    """
+    return next(iter(pick_reference_formats(lambda f: f.format_id.id == format_id, min_count=0)), None)
 
 
 def asset_ids_of_type(fmt: Format, asset_type: str) -> list[str]:

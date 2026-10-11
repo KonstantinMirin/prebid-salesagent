@@ -26,6 +26,7 @@ from tests.bdd.steps._outcome_helpers import (
     payload_or_none,
     require_payload,
     wire_advisory_errors,
+    wire_delivery_ids,
     wire_entry,
     wire_field,
 )
@@ -1782,7 +1783,7 @@ def when_request_without_field(ctx: dict, mb_id: str, field: str) -> None:
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id1>[^"]+)" and "(?P<mb_id2>[^"]+)"'))
 def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> None:
     """Assert response includes delivery data for both media buys."""
-    mb_ids = _wire_delivery_ids(ctx)
+    mb_ids = wire_delivery_ids(ctx)
     assert mb_id1 in mb_ids, f"Expected delivery data for '{mb_id1}', got: {mb_ids}"
     assert mb_id2 in mb_ids, f"Expected delivery data for '{mb_id2}', got: {mb_ids}"
 
@@ -1790,14 +1791,14 @@ def then_includes_delivery_data_both(ctx: dict, mb_id1: str, mb_id2: str) -> Non
 @then(parsers.re(r'the response should include delivery data for "(?P<mb_id>[^"]+)"$'))
 def then_includes_delivery_data(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for the given media buy."""
-    mb_ids = _wire_delivery_ids(ctx)
+    mb_ids = wire_delivery_ids(ctx)
     assert mb_id in mb_ids, f"Expected delivery data for '{mb_id}', got: {mb_ids}"
 
 
 @then(parsers.parse('the response should include delivery data for "{mb_id}" only'))
 def then_includes_delivery_data_only(ctx: dict, mb_id: str) -> None:
     """Assert response includes delivery data for ONLY the given media buy."""
-    mb_ids = _wire_delivery_ids(ctx)
+    mb_ids = wire_delivery_ids(ctx)
     assert mb_ids == [mb_id], f"Expected only '{mb_id}', got: {mb_ids}"
 
 
@@ -1819,7 +1820,7 @@ def then_excludes_delivery_data(ctx: dict, mb_id: str) -> None:
     sit here (``then_no_delivery_data``) competed for both of them, and which one
     ran was decided by plugin registration order.
     """
-    mb_ids = _wire_delivery_ids(ctx)
+    mb_ids = wire_delivery_ids(ctx)
     assert mb_id not in mb_ids, f"Expected no delivery data for '{mb_id}', got: {mb_ids}"
 
 
@@ -3225,15 +3226,6 @@ def then_packages_include_field(ctx: dict, field: str) -> None:
             assert value, f"Package {pkg.package_id!r} field {field!r} is empty list"
         checked += 1
     assert checked >= 1, "Response has no packages to check"
-
-
-def _wire_delivery_ids(ctx: dict) -> list[str]:
-    """The ``media_buy_id`` of every ``media_buy_deliveries`` entry, in wire order.
-
-    Sole reader for the include/exclude Thens, so "included" and "omitted" are graded
-    against the same representation of the response.
-    """
-    return [delivery.get("media_buy_id") for delivery in wire_field(ctx, "media_buy_deliveries")]
 
 
 def _wire_sole_delivery(ctx: dict) -> dict:

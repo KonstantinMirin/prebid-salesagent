@@ -2147,7 +2147,12 @@ def given_package_carries_inline_creative_in_product_format(ctx: dict) -> None:
     from tests.factories.format import asset_ids_of_type, reference_format
 
     product_format = ctx["default_product"].format_ids[0]
-    image_asset_id = asset_ids_of_type(reference_format(product_format["id"]), "image")[0]
+    catalog_format = reference_format(product_format["id"])
+    assert catalog_format is not None, (
+        f"the product's format {product_format['id']!r} is not in the reference catalog; "
+        "the scenario's product must be built in a format the creative agent serves"
+    )
+    image_asset_id = asset_ids_of_type(catalog_format, "image")[0]
     _add_inline_creatives(
         ctx, fmt_id=product_format["id"], agent_url=product_format["agent_url"], asset_id=image_asset_id
     )
