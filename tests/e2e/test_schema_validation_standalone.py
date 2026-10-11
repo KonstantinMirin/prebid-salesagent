@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from tests.helpers.adcp_schema_validator import AdCPSchemaValidator, SchemaError, SchemaValidationError
+from tests.helpers.pinned_schema import iter_schema_refs
 
 
 @pytest.mark.asyncio
@@ -277,37 +278,6 @@ async def test_find_schema_ref_searches_every_index_section():
         assert not unresolved, f"tasks unreachable by the resolver: {unresolved}"
 
 
-def _iter_index_schema_refs(node: object) -> list[str]:
-    """Recursively collect every ``$ref`` string under an index ``"schemas"`` subtree.
-
-    The 16 top-level sections do not share one shape: task-bearing sections
-    (account, media-buy, ...) carry refs under ``tasks[*].request/response``;
-    non-task sections (core, enums, pricing-options, extensions) carry them
-    directly under their own ``schemas`` key; several sections additionally
-    carry a ``supporting-schemas`` map; ``extensions`` carries a ``registry``
-    map; ``trusted-match`` carries ``operations`` instead of ``tasks``;
-    ``adagents``/``brand`` carry a single section-level ``$ref``. A walk that
-    hardcodes any subset of these container names (``tasks``,
-    ``supporting-schemas``, ...) silently misses refs under a name it didn't
-    anticipate — including a future one the next spec bump adds. Walking
-    every ``$ref`` regardless of its container name is the only way to
-    actually cover "every schema ref the pinned index names" (#1868 review).
-    """
-    refs: list[str] = []
-    if isinstance(node, dict):
-        ref = node.get("$ref")
-        if isinstance(ref, str):
-            refs.append(ref)
-        for key, value in node.items():
-            if key == "$ref":
-                continue
-            refs.extend(_iter_index_schema_refs(value))
-    elif isinstance(node, list):
-        for item in node:
-            refs.extend(_iter_index_schema_refs(item))
-    return refs
-
-
 @pytest.mark.asyncio
 async def test_every_indexed_schema_ref_loads():
     """Every schema ref the pinned index names must actually load, not just resolve by name.
@@ -321,14 +291,20 @@ async def test_every_indexed_schema_ref_loads():
     to actually load it — a gap only a real load exercises, not a name lookup.
 
     Walks every ``$ref`` under the index's ``"schemas"`` subtree via
-    ``_iter_index_schema_refs`` (all 16 sections, every container shape —
-    ``tasks``, ``schemas``, ``supporting-schemas``, ``registry``,
-    ``operations``, section-level ``$ref``), not just ``tasks[*].request/
-    response`` (previously 124 of 434 distinct refs, 29%).
+    ``iter_schema_refs``, not just ``tasks[*].request/response`` (previously 124
+    of 434 distinct refs, 29%). The 16 top-level sections do not share one shape:
+    task-bearing sections carry refs under ``tasks[*].request/response``; non-task
+    sections (core, enums, pricing-options, extensions) carry them directly under
+    their own ``schemas`` key; several carry a ``supporting-schemas`` map;
+    ``extensions`` carries a ``registry`` map; ``trusted-match`` carries
+    ``operations`` instead of ``tasks``; ``adagents``/``brand`` carry a single
+    section-level ``$ref``. A walk that names any subset of these containers
+    misses refs under a name it did not anticipate, including one the next spec
+    bump adds (#1868 review).
     """
     async with AdCPSchemaValidator() as validator:
         index = await validator.get_schema_index()
-        refs = sorted(set(_iter_index_schema_refs(index.get("schemas", {}))))
+        refs = sorted(set(iter_schema_refs(index.get("schemas", {}))))
 
         failed = []
         for ref in refs:

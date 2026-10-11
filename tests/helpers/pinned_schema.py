@@ -110,6 +110,7 @@ onto the other source.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -436,6 +437,23 @@ def load_canonicalized(ref: str) -> dict[str, Any]:
     """
     source, path, schema = _resolve_and_load(ref)
     return _canonicalize_refs(schema, file_dir=path.parent, source=source)
+
+
+def iter_schema_refs(node: Any) -> Iterator[str]:
+    """Every ``$ref`` string anywhere in a JSON document, in document order.
+
+    The walk names no container (``properties``, ``tasks``, ``supporting-schemas``,
+    ...), so a reference under a key nobody anticipated is still yielded.
+    """
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str):
+            yield ref
+        for value in node.values():
+            yield from iter_schema_refs(value)
+    elif isinstance(node, list):
+        for value in node:
+            yield from iter_schema_refs(value)
 
 
 def _retrieve(uri: str) -> referencing.Resource:

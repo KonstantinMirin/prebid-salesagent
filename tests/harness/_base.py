@@ -2025,23 +2025,18 @@ class BaseTestEnv:
         # would replay the pre-redirect signature against the new target-uri —
         # a genuine signature failing as request_signature_invalid.
         #
-        # ``credential={}`` means "send without a credential" everywhere else in the
-        # harness, so it decides ``credentialed`` here too rather than the leg
-        # quietly attaching the capability's bearer to a call the caller asked to
-        # make anonymous. It is the only way this leg reaches the composition rule's
-        # refusal branch at all: security.mdx :1269 makes an unsigned request
-        # carrying a valid bearer a spec-correct 200.
-        raw, headers = self.wire_request(
-            path=_A2A_PATH,
-            body=body,
-            # Merged BEFORE signing, like every other transport's framing headers, so
-            # the header set the signature covers is the one sent (``wire_request``
-            # rule 1 applied to headers).
-            extra=dict(_A2A_VERSION_HEADER),
+        # ``credential={}`` means "send without a credential" here as on every leg
+        # (``_send_frame``). The version header is merged BEFORE signing, like every
+        # other transport's framing headers, so the header set the signature covers
+        # is the one sent (``wire_request`` rule 1 applied to headers).
+        response = self._send_frame(
+            self.get_rest_client(),
+            _A2A_PATH,
+            body,
+            credential=credential,
             signed=self._signed_dispatch,
-            credentialed=_presents_a_credential(credential),
+            extra=dict(_A2A_VERSION_HEADER),
         )
-        response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
         result = _a2a_jsonrpc_result(response)
         # ``SendMessageResponse`` is a oneof: proto JSON renders the task arm as
@@ -2230,7 +2225,7 @@ class BaseTestEnv:
         uses; see :meth:`_mcp_open_session`.
 
         *credential* is what every frame of the session presents, the handshake included.
-        ``credential={}`` is "send without a credential" (see ``_run_a2a_over_http``); it
+        ``credential={}`` is "send without a credential" (see :meth:`_send_frame`); it
         applies to the handshake frames too, because a session opened under a bearer and
         used without one would differ from the anonymous request under test by more than
         the credential.
@@ -2404,21 +2399,12 @@ class BaseTestEnv:
         caller states what ITS frame carries — see :meth:`_mcp_open_session` for why
         the handshake always says ``bool(...)``.
 
-        An env that cannot sign presents *credential* as the frame's headers, as the
-        unsigned REST leg does (``_run_rest_request``); once it can sign, the frame goes
-        through ``wire_request`` and *credential* decides only whether a bearer rides.
+        The MCP framing headers are this method's own; the send is :meth:`_send_frame`.
         """
         extra = {"Accept": _MCP_ACCEPT}
         if session_id:
             extra["mcp-session-id"] = session_id
-        if not self.can_sign:
-            if signed:
-                self.signing  # raises, naming enable_request_signing()  # noqa: B018
-            return client.post(_MCP_PATH, json=body, headers={**credential, **extra})
-        raw, headers = self.wire_request(
-            path=_MCP_PATH, body=body, signed=signed, extra=extra, credentialed=_presents_a_credential(credential)
-        )
-        return client.post(_MCP_PATH, content=raw, headers=headers)
+        return self._send_frame(client, _MCP_PATH, body, credential=credential, signed=signed, extra=extra)
 
     def _mcp_post(
         self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credential: dict[str, str]
@@ -2466,44 +2452,72 @@ class BaseTestEnv:
         """
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
-        client = self.get_rest_client()
         body = self.build_rest_body(**kwargs)
+        return self._send_frame(self.get_rest_client(), endpoint, body, credential=credential, signed=signed)
 
+    def _send_frame(
+        self,
+        client: Any,
+        path: str,
+        body: Any,
+        *,
+        credential: dict[str, str],
+        signed: SignatureRealization,
+        extra: dict[str, str] | None = None,
+        method: str = "POST",
+    ) -> Any:
+        """Send ONE in-process request frame through *client*, signed-or-not, and return the response.
+
+        The one place an in-process leg (REST, MCP, A2A, and the media-buy update PUT)
+        takes the ``can_sign`` fork. *extra* is the transport's own framing (MCP's
+        ``Accept`` and ``mcp-session-id``, A2A's version header); *method* is the verb.
+
+        An env that cannot sign REFUSES a signed realization (a silent unsigned send would
+        let a signing scenario pass with no signature) and otherwise sends *body* as JSON
+        with *credential* and *extra* as its headers.
+
+        The credential travels as HEADERS even on the unsigned leg, and that is
+        ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every leg. The
+        dependency-override era posted bare here and had to bolt the tenant hint back on:
+        a bare post reached the resolver anonymous, no tenant resolved, the posture fell
+        back to the agent-level default, and a request carrying
+        ``push_notification_config.authentication`` was refused with a bodyless 401 before
+        the ingest gate ran. The tenant hint is the header that matters there, not the
+        bearer: ``resolved_identity._detect_tenant`` resolves a tenant from ``Host``
+        matched against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
+        tenant id, and from nothing else — never from the auth token. The in-process
+        ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a request
+        that states neither is refused CONFIGURATION_ERROR before any credential is
+        examined. The bearer rides along because production sends it and the signing
+        branch does too (security.mdx :1269 — an unsigned request carrying a valid bearer
+        is a spec-correct 200).
+
+        Once the env can sign, ``wire_request`` OWNS the request: it serializes once so
+        the bytes signed are the bytes sent, and it emits the single ``Authorization``
+        identity plus this env's tenant hint itself. *credential* is therefore read for one
+        bit only. ``credential={}`` means "send without a credential" everywhere in the
+        harness (``_pop_credential`` returns it verbatim, and ``RestE2EDispatcher`` reads
+        it the same way), so it decides ``credentialed`` rather than the signing path
+        quietly attaching the capability's bearer to a call the caller asked to make
+        anonymous. It is the ONLY way an in-process leg reaches the verifier's refusal
+        branch at all: security.mdx :1269 makes an unsigned request carrying a valid
+        bearer a spec-correct 200. Merging *credential* into the signed headers instead
+        would add a second bearer, which wins the precedence race in
+        ``resolved_identity._extract_auth_token`` and swaps the acting principal.
+        """
         if not self.can_sign:
             if signed:
                 self.signing  # raises, naming enable_request_signing()  # noqa: B018
-            # The credential travels as HEADERS even on the unsigned leg, and that is
-            # ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every
-            # leg. The dependency-override era posted bare here and had to bolt the
-            # tenant hint back on: a bare post reached the resolver anonymous, no tenant
-            # resolved, the posture fell back to the agent-level default, and a request
-            # carrying ``push_notification_config.authentication`` was refused with a
-            # bodyless 401 before the ingest gate ran. The in-process MCP and A2A legs put
-            # no bytes on a wire and carry their credential another way, so they did not
-            # see it — the four legs were not running the same scenario.
-            #
-            # The tenant hint is the load-bearing header there, not the bearer:
-            # ``resolved_identity._detect_tenant`` resolves a tenant from ``Host`` matched
-            # against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
-            # tenant id, and from nothing else — never from the auth token. The in-process
-            # ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a
-            # request that states neither is refused CONFIGURATION_ERROR before any
-            # credential is examined. The bearer rides along because production sends it and the SIGNED
-            # branch below already does (security.mdx :1269 — an unsigned request carrying
-            # a valid bearer is a spec-correct 200).
-            return client.post(endpoint, json=body, headers=credential)
-
-        # ``credential={}`` already means "send without a credential" everywhere else in
-        # the harness (``_pop_credential`` returns it verbatim, and ``RestE2EDispatcher``
-        # reads it the same way) — so it decides ``credentialed`` here too, rather than
-        # the signed path quietly attaching the capability's bearer to a call the caller
-        # asked to make anonymous. It is the ONLY way an in-process leg reaches the
-        # verifier's refusal branch at all: security.mdx :1269 makes an unsigned request
-        # carrying a valid bearer a spec-correct 200.
+            return client.request(method, path, json=body, headers={**credential, **(extra or {})})
         raw, headers = self.wire_request(
-            path=endpoint, body=body, signed=signed, credentialed=_presents_a_credential(credential)
+            path=path,
+            body=body,
+            signed=signed,
+            extra=extra,
+            credentialed=_presents_a_credential(credential),
+            method=method,
         )
-        return client.post(endpoint, content=raw, headers=headers)
+        return client.request(method, path, content=raw, headers=headers)
 
     @property
     def can_sign(self) -> bool:

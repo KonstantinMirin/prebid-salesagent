@@ -4545,8 +4545,8 @@ _SINGLE_TRANSPORT_TAGS = {
     "predispatch-rest": "REST",
     "predispatch-a2a": "A2A",
     "predispatch-mcp": "MCP",
-    # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame; the A2A agent
-    # card and the REST OpenAPI are different documents, graded elsewhere.
+    # local-mcp-tool-discovery.feature: tools/list is MCP's own discovery frame and exists on
+    # no other transport.
     "mcptools": "MCP",
 }
 

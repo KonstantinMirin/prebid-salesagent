@@ -16,8 +16,7 @@
 # docs/development/building-tools.md). The scenario grades that the listing IS that document,
 # and that each listed document resolves every `$ref` it carries without leaving itself.
 #
-# MCP ONLY. tools/list is MCP's own discovery frame; the A2A agent card and the REST OpenAPI
-# are different documents, graded elsewhere.
+# MCP ONLY. tools/list is MCP's own discovery frame and exists on no other transport.
 
 @mcptools
 Feature: tools/list publishes each tool's request schema as the registry declares it

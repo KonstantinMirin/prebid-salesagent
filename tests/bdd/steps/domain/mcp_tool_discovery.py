@@ -10,7 +10,6 @@ listing that inlines every reference cannot pass it on an empty population.
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
 from typing import Any
 
 from jsonschema import Draft202012Validator
@@ -20,6 +19,7 @@ from referencing.exceptions import Unresolvable
 from referencing.jsonschema import DRAFT202012
 
 from src.core.tools.registry import TOOLS
+from tests.helpers.pinned_schema import iter_schema_refs
 
 #: The URI each listed document is registered under, alone, so a ``$ref`` that resolves at
 #: all resolves inside that document.
@@ -29,19 +29,6 @@ _LISTED_URI = "urn:mcp-tools-list:input-schema"
 def _listed_tools(ctx: dict) -> dict[str, dict[str, Any]]:
     """The listed tools by name, as the buyer received them."""
     return {tool["name"]: tool for tool in ctx["mcp_tools"]}
-
-
-def _refs(node: Any) -> Iterator[str]:
-    """Every ``$ref`` value anywhere in a JSON document."""
-    if isinstance(node, dict):
-        ref = node.get("$ref")
-        if isinstance(ref, str):
-            yield ref
-        for value in node.values():
-            yield from _refs(value)
-    elif isinstance(node, list):
-        for value in node:
-            yield from _refs(value)
 
 
 @when("the buyer lists the seller's MCP tools")
@@ -81,7 +68,7 @@ def then_listed_schema_is_self_contained(ctx: dict) -> None:
         schema = tool["inputSchema"]
         Draft202012Validator.check_schema(schema)
         resolver = Registry().with_resource(_LISTED_URI, DRAFT202012.create_resource(schema)).resolver(_LISTED_URI)
-        for ref in _refs(schema):
+        for ref in iter_schema_refs(schema):
             refs_seen += 1
             try:
                 resolver.lookup(ref)
