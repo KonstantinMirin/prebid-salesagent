@@ -164,15 +164,21 @@ def given_seller_is_grading_target(ctx: dict) -> None:
     ctx["env"].declare_signed_requests_grading()
 
 
-@given("the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys")
-def given_seller_is_test_kit_grading_target(ctx: dict) -> None:
+@given(
+    parsers.parse(
+        "the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys, "
+        "with a replay cap of {cap:d} for their keyids"
+    )
+)
+def given_seller_is_test_kit_grading_target(ctx: dict, cap: int) -> None:
     """Declare this seller a ``signed_requests`` grading target for the conformance test kit.
 
     runner.yaml @ v3.1.1 L55-60 and L108-126: the accepted JWKS and the lower replay cap are
     for the test-kit counterparty's keyids only. The Buyer Agent's keyid is not among them,
-    so the Buyer stays an ordinary counterparty whose keys come from its own origin.
+    so the Buyer stays an ordinary counterparty whose keys come from its own origin and whose
+    replay cap is the deployment's (L118-120: at least 1,000,000 entries per keyid).
     """
-    ctx["env"].declare_test_kit_grading_target()
+    ctx["env"].declare_test_kit_grading_target(replay_cap=cap)
 
 
 @given("the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded")
@@ -405,6 +411,7 @@ def then_seller_recorded_failure(ctx: dict, count: int, code: str) -> None:
 
 
 @then(parsers.parse("the seller verified exactly {count:d} request under the Buyer Agent's published key"))
+@then(parsers.parse("the seller verified exactly {count:d} requests under the Buyer Agent's published key"))
 def then_seller_verified_requests(ctx: dict, count: int) -> None:
     """Pin how many requests the seller's verifier ACCEPTED under THIS buyer's key.
 

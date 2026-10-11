@@ -1385,11 +1385,11 @@ class BaseTestEnv:
 
         declare_signed_requests_grading(self)
 
-    def declare_test_kit_grading_target(self) -> None:
-        """Declare this env's tenant a signed-requests grading target accepting only the test kit's keys."""
+    def declare_test_kit_grading_target(self, *, replay_cap: int) -> None:
+        """Declare this env's tenant a signed-requests grading target for the test kit's keys and replay cap."""
         from tests.harness.signing_capability import declare_test_kit_grading_target
 
-        declare_test_kit_grading_target(self)
+        declare_test_kit_grading_target(self, replay_cap=replay_cap)
 
     def declare_request_signing(
         self,

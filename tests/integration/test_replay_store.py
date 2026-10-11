@@ -101,7 +101,9 @@ def _build_store(session: SASession, config, tuning=None):
 
     Matches the verifier's wiring: one short-lived session, one store, three calls.
     *tuning* is the grading record the verifier hands the store when the request's keyid
-    is the test kit's (:func:`_grading`), ``None`` otherwise.
+    is the test kit's (:func:`_tuning`), ``None`` otherwise. The store applies the tuning it
+    is given to every keyid it is asked about; which requests receive one is the verifier's
+    decision (``SignedRequestsGrading.for_keyid``), graded by the BDD signing scenarios.
     """
     from src.core.database.repositories.replay_nonce import ReplayNonceRepository
     from src.core.signing.replay_store import PostgresReplayStore
@@ -109,11 +111,15 @@ def _build_store(session: SASession, config, tuning=None):
     return PostgresReplayStore(ReplayNonceRepository(session), config, tuning)
 
 
-def _grading(keyid: str, **tuning):
-    """A grading record whose test-kit keyid is *keyid*, carrying *tuning*."""
+def _tuning(**fields):
+    """A grading record carrying the replay *fields*, to hand a store as its tuning.
+
+    The store reads only ``replay_cap`` and ``replay_ttl_seconds``; the record's JWKS is a
+    placeholder the model requires.
+    """
     from src.core.signing.grading import SignedRequestsGrading
 
-    return SignedRequestsGrading(jwks={"keys": [{"kid": keyid, "kty": "OKP", "crv": "Ed25519"}]}, **tuning)
+    return SignedRequestsGrading(jwks={"keys": [{"kid": "test-kit-key", "kty": "OKP", "crv": "Ed25519"}]}, **fields)
 
 
 def _live_row_count(session: SASession, keyid: str, nonce: str | None = None) -> int:
@@ -310,12 +316,13 @@ class TestPerKeyidCap:
         it pins the boundary that the OFFSET/LIMIT short-circuit form (refinement R3)
         is easy to get off by one on.
 
-        The cap is lowered per-keyid ONLY. The test-kit's
+        The store applies the cap of the tuning it is given. The test-kit's
         ``grading_target_per_keyid_cap_requests: 100`` applies to the test-kit
-        counterparty; ``production_min_per_keyid_cap_requests: 1000000`` stays the
+        counterparty only, which the verifier decides by handing the tuning to its
+        keyids alone; ``production_min_per_keyid_cap_requests: 1000000`` stays the
         global floor (see the config test below).
         """
-        store = _build_store(replay_session, _signing_config(), _grading(keyid, replay_cap=2))
+        store = _build_store(replay_session, _signing_config(), _tuning(replay_cap=2))
 
         assert store.at_capacity(keyid) is False, "no live rows: not at capacity"
         store.seen(keyid, "cap-1")
@@ -339,7 +346,7 @@ class TestPerKeyidCap:
         would pass the test above while turning any busy signer into a global outage.
         """
         other_keyid = f"a4-{uuid.uuid4().hex[:16]}"
-        store = _build_store(replay_session, _signing_config(), _grading(keyid, replay_cap=1))
+        store = _build_store(replay_session, _signing_config(), _tuning(replay_cap=1))
 
         store.seen(keyid, "cap-1")
         assert store.at_capacity(keyid) is True
@@ -427,7 +434,7 @@ class TestCapacityHappensBeforeCryptoVerify:
         _verify(filler_headers, honest_jwk, _build_store(replay_session, _signing_config()))
         assert _live_row_count(replay_session, keyid) == 1, "setup: the accepted request must occupy the cap"
 
-        store = _build_store(replay_session, _signing_config(), _grading(keyid, replay_cap=1))
+        store = _build_store(replay_session, _signing_config(), _tuning(replay_cap=1))
         impostor_pem, _ = generate_ed25519(keyid)
         headers, _ = _sign(keyid, nonce="at-capacity", signing_jwk_pair=(impostor_pem, None))
 
@@ -465,11 +472,11 @@ class TestCapacityHappensBeforeCryptoVerify:
 
 
 class TestPerKeyidTtlOverride:
-    """Refinement R1: the row lifetime comes from ``remember()``, and it is clampable
-    per counterparty only."""
+    """Refinement R1: the row lifetime comes from ``remember()``, clamped by the tuning
+    the store is given (the verifier gives it to the test kit's keyids only)."""
 
     def test_override_clamps_a_long_signature_window(self, replay_session, keyid):
-        """An overridden keyid's row does not outlive its override; an unoverridden one does.
+        """A store given a TTL clamp caps the row's lifetime; a store given no tuning does not.
 
         ``remember()`` is handed ``ttl = max(expires - now + max_skew, 0)`` computed
         from the SIGNATURE (``verifier.py:354``), and its only-extend predicate raises
@@ -490,13 +497,13 @@ class TestPerKeyidTtlOverride:
         config = _signing_config(replay_claim_ttl_seconds=360.0)
         nonce = "clamped"
 
-        store = _build_store(replay_session, config, _grading(keyid, replay_ttl_seconds=70.0))
+        store = _build_store(replay_session, config, _tuning(replay_ttl_seconds=70.0))
 
         assert store.seen(keyid, nonce) is False
         store.remember(keyid, nonce, 300.0)
         clamped = _seconds_until_expiry(replay_session, keyid, nonce)
         assert 60.0 <= clamped <= 70.0, (
-            f"an overridden keyid's row lives {clamped:.1f}s; the override must "
+            f"a row written under a 70s clamp lives {clamped:.1f}s; the clamp must "
             "clamp BOTH the claim TTL and remember()'s incoming ttl to 70s, and "
             "must still cover the test-kit's 60s window"
         )
@@ -506,9 +513,9 @@ class TestPerKeyidTtlOverride:
         untuned.remember(unclamped_keyid, nonce, 300.0)
         unclamped = _seconds_until_expiry(replay_session, unclamped_keyid, nonce)
         assert unclamped > 70.0, (
-            f"an unoverridden keyid's row lives {unclamped:.1f}s; clamping must "
-            "never apply globally — it shortens replay protection below the "
-            "signature's own validity window"
+            f"a row written with no tuning lives {unclamped:.1f}s; a store given no "
+            "tuning must keep the signature's own lifetime, or replay protection ends "
+            "before the signature's validity window does"
         )
 
     def test_config_refuses_a_global_cap_below_the_floor(self):

@@ -198,11 +198,6 @@ _TENANT_ID = "b3_conformance_tenant"
 _AGENT_HOST = "b3-conformance-seller.example.com"
 _PRINCIPAL_ID = "b3_conformance_principal"
 
-#: Above the kit's ``min_replay_ttl_seconds: 10`` and ``max_interval_seconds: 5``,
-#: and above the vectors' 60s signature window, so ``016``'s two submissions cannot
-#: both be accepted because the first entry expired between them.
-_REPLAY_TTL_SECONDS = 70.0
-
 #: ``negative/020``'s cap, carried by this test tenant's grading record so it reaches
 #: no other tenant and no other xdist worker.
 _RATE_ABUSE_CAP = 3
@@ -435,13 +430,13 @@ def _seed_tenant(plan: VectorPlan) -> Any:
     keys themselves still come from the principal's own resolution
     (:func:`tests.helpers.signing.counterparty_key`).
     """
-    from scripts.setup.storyboard_signing import counterparty_jwks
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS, counterparty_jwks
     from src.core.signing.grading import SignedRequestsGrading
 
     grading = SignedRequestsGrading(
         jwks=counterparty_jwks(),
         replay_cap=_RATE_ABUSE_CAP if plan.harness_state is HarnessState.CAP_OVERRIDE else None,
-        replay_ttl_seconds=_REPLAY_TTL_SECONDS,
+        replay_ttl_seconds=GRADING_REPLAY_TTL_SECONDS,
     )
     return TenantFactory(
         tenant_id=_TENANT_ID, subdomain="seller", virtual_host=_AGENT_HOST, signed_requests_grading=grading
@@ -508,11 +503,12 @@ def _forget(env: BareIntegrationEnv, pairs: list[tuple[str, str]]) -> None:
 
 def _claim(env: BareIntegrationEnv, pairs: list[tuple[str, str]]) -> None:
     """Claim these exact ``(keyid, nonce)`` rows through the production repository."""
+    from scripts.setup.storyboard_signing import GRADING_REPLAY_TTL_SECONDS
     from src.core.database.repositories.replay_nonce import ReplayNonceRepository
 
     repository = ReplayNonceRepository(env.get_session())
     for keyid, nonce in pairs:
-        assert not repository.claim(keyid, nonce, _REPLAY_TTL_SECONDS), (
+        assert not repository.claim(keyid, nonce, GRADING_REPLAY_TTL_SECONDS), (
             f"cap-filler nonce {nonce!r} was already live for {keyid!r} — the fixture would be "
             "measuring a leftover row rather than the cap it just established"
         )

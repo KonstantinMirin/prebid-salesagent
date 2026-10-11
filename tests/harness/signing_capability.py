@@ -395,24 +395,25 @@ def declare_signed_requests_grading(env: Any) -> None:
     _write_signed_requests_grading(env, env.signing.jwks)
 
 
-def declare_test_kit_grading_target(env: Any) -> None:
+def declare_test_kit_grading_target(env: Any, *, replay_cap: int) -> None:
     """Make the env's tenant a signed-requests grading target for the conformance test kit.
 
     The record's JWKS is the kit's published keys (``storyboard_signing.counterparty_jwks``),
-    none of which is the env's key. The env principal is untouched, so a request signed with
-    the env's key is an ordinary counterparty's on a grading tenant: its keys come from its
-    own walk, and the record's relaxations do not apply to it.
+    none of which is the env's key, and its ``replay_cap`` is *replay_cap*. The env principal
+    is untouched, so a request signed with the env's key is an ordinary counterparty's on a
+    grading tenant: its keys come from its own walk, and neither the record's JWKS nor its
+    replay cap applies to it.
     """
     from scripts.setup.storyboard_signing import counterparty_jwks
 
-    _write_signed_requests_grading(env, counterparty_jwks())
+    _write_signed_requests_grading(env, counterparty_jwks(), replay_cap=replay_cap)
 
 
-def _write_signed_requests_grading(env: Any, jwks: dict[str, Any]) -> None:
-    """Write the tenant's ``signed_requests_grading`` record with *jwks* as its accepted JWKS."""
+def _write_signed_requests_grading(env: Any, jwks: dict[str, Any], *, replay_cap: int | None = None) -> None:
+    """Write the tenant's ``signed_requests_grading`` record: *jwks* accepted, *replay_cap* for their keyids."""
     from src.core.signing.grading import SignedRequestsGrading
 
-    env.configure_tenant_field("signed_requests_grading", SignedRequestsGrading(jwks=jwks))
+    env.configure_tenant_field("signed_requests_grading", SignedRequestsGrading(jwks=jwks, replay_cap=replay_cap))
 
 
 def ensure_declarable_identity_host(env: Any) -> None:

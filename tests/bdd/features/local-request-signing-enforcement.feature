@@ -259,7 +259,7 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     Given a creative with a known format_id
     And the Buyer Agent has published a signing key the seller can resolve
     And the seller onboarded the Buyer Agent's signing key
-    And the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys
+    And the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys, with a replay cap of 1 for their keyids
     And the seller requires a request signature for "sync_creatives"
     And the Buyer has no authentication credentials
     And the Buyer Agent signs the request
@@ -272,6 +272,28 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # counterparty's keyids. The Buyer's keyid is not one of them, so its keys come from its
     # own agent URL (L1091-1092); a verifier that used the accepted JWKS for it would find
     # no key and answer request_signature_key_unknown.
+
+  @T-UC-006-local-signing-grading-target-other-counterparty-replay-cap @request-signing @invariant
+  Scenario: on a grading target an onboarded counterparty outside the test kit keeps the deployment's replay cap
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller is a signed-requests grading target whose accepted JWKS holds only the test kit's keys, with a replay cap of 1 for their keyids
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    And that creative was already synced with idempotency_key "sig-replay-cap-0001"
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 2 requests under the Buyer Agent's published key
+    # ONE variable apart from the scenario above: the Buyer has already made one signed
+    # request, so one live replay entry exists for its keyid when the second arrives. Each
+    # signature carries a fresh nonce; the shared idempotency_key only makes the second sync
+    # a retry, and the verifier runs ahead of it, so both requests reach checklist step 9a.
+    # runner.yaml L116-120 allows the lower cap "for the test-kit counterparty only" and
+    # keeps every other keyid at the production floor of 1,000,000. A verifier that applied
+    # the record's cap of 1 to the Buyer would refuse the second request with
+    # request_signature_rate_abuse.
 
   @T-UC-006-local-signing-verified-label-identifies @request-signing @invariant
   Scenario: an onboarded counterparty is identified by the signature label the seller verifies
