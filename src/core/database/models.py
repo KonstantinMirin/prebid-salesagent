@@ -53,6 +53,7 @@ from src.core.signing.algorithms import (
     signing_alg_check_clause,
     signing_purpose_check_clause,
 )
+from src.core.signing.grading import SignedRequestsGrading
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,15 @@ class Tenant(Base, JSONValidatorMixin):
         JSONType,
         nullable=True,
         comment="Implementation-backed AdCP capability declaration blocks (#1592); NULL = nothing declared",
+    )
+
+    # The signed-requests test kit's relaxations (accepted JWKS, replay cap, replay TTL) for
+    # the kit's keyids on THIS tenant. Its presence is what declares the tenant a grading
+    # target (src/core/signing/grading.py); NULL means no test-kit trust anywhere on it.
+    signed_requests_grading: Mapped[SignedRequestsGrading | None] = mapped_column(
+        JSONType(model=SignedRequestsGrading),
+        nullable=True,
+        comment="signed_requests grading target: the test kit's JWKS, replay cap and TTL; NULL = not a grading target",
     )
 
     # Pydantic AI configuration for multi-model support
@@ -785,11 +795,10 @@ class Principal(Base, JSONValidatorMixin):
     # therefore which key set) it is verified against. NULL means we cannot resolve a key
     # for this counterparty, not that it is trusted.
     #
-    # Indexed and unique PER TENANT because the resolver reads it in BOTH directions: from
-    # a bearer-resolved principal to its keys, and — when a signature verified with no
-    # bearer at all — from the verified signer's agent_url back to the principal it
-    # establishes (``_resolve_identity`` step 6). A second principal claiming one agent_url
-    # would make that second lookup ambiguous, which is a silent authentication defect.
+    # Unique PER TENANT because ``(tenant_id, agent_url)`` is the counterparty's brand.json
+    # ``agents[]`` coordinate, and ``principal_signing_keyids`` maps each onboarded keyid to
+    # it by foreign key (security.mdx @ v3.1.1 L1090, L1094): a keyid resolves to one
+    # ``agents[]`` entry, so the coordinate it names must be one principal.
     agent_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -850,6 +859,42 @@ class Principal(Base, JSONValidatorMixin):
         from src.core.platform_mappings import resolve_adapter_id
 
         return resolve_adapter_id(self.platform_mappings, adapter_name)
+
+
+class PrincipalSigningKeyid(Base):
+    """One request-signing keyid a tenant onboarded for one counterparty.
+
+    security.mdx @ v3.1.1 L1088-1094, checklist step 1: given a keyid, the verifier resolves
+    the signing agent to its brand.json ``agents[]`` entry, and "Discovery MAY come from prior
+    onboarding". This row is that onboarding: the keyid maps to the counterparty principal
+    whose ``agent_url`` is the entry, and the keys still come from the agent's own origin.
+
+    The primary key ``(tenant_id, keyid)`` makes the entry specific (L1094: a verifier MUST
+    NOT accept a keyid it cannot resolve to a specific ``agents[]`` entry). The foreign key
+    targets ``uq_principals_tenant_agent_url``, so the coordinate exists exactly once and a
+    mapped principal always has an ``agent_url``; ``ON UPDATE`` stays the default, so a
+    principal's ``agent_url`` cannot move while keyids are onboarded at it.
+
+    ``keyid`` compares byte for byte (``collation="C"``), as ``adcp_replay.keyid`` does.
+    Repository-private like ``Principal``: ``PrincipalRepository`` reads and writes it.
+    """
+
+    __tablename__ = "principal_signing_keyids"
+
+    tenant_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    keyid: Mapped[str] = mapped_column(Text(collation="C"), primary_key=True)
+    agent_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tenant_id", "agent_url"],
+            ["principals.tenant_id", "principals.agent_url"],
+            ondelete="CASCADE",
+            name="fk_principal_signing_keyids_principal",
+        ),
+        Index("idx_principal_signing_keyids_agent", "tenant_id", "agent_url"),
+    )
 
 
 class User(Base):

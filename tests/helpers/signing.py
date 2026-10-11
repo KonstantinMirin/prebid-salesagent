@@ -40,7 +40,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 from unittest.mock import patch
 
 from adcp import get_adcp_spec_version
@@ -1273,10 +1273,50 @@ MALFORMED_SIGNATURE_HEADERS = {
 #:
 #: Collapsing the two would make the (code, step) predicate lane .1 turns on
 #: unrepresentable from a scenario.
-SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, "malformed", "tampered")
+#:
+#: ``"extra_label"`` is a CORRECT signature with one more label in front of it: the
+#: ``True`` realization, then :func:`prepend_unverified_label`. security.mdx @ v3.1.1
+#: L1028 makes the verifier process exactly one label and ignore the rest, so the extra
+#: label must change nothing — including which counterparty the keyid selects.
+_NAMED_REALIZATIONS = Literal["malformed", "tampered", "extra_label"]
 
 #: The type every seam that carries a realization is annotated with.
-SignatureRealization = bool | Literal["malformed", "tampered"]
+SignatureRealization = bool | _NAMED_REALIZATIONS
+
+#: Every realization, derived from the type so a new one is one edit.
+SIGNATURE_REALIZATIONS: tuple[Any, ...] = (False, True, *get_args(_NAMED_REALIZATIONS))
+
+#: The keyid of the label :func:`prepend_unverified_label` adds. No Given onboards it and
+#: no JWKS publishes it, so a verifier that took the counterparty from this label would
+#: resolve no key.
+UNONBOARDED_KID = "unonboarded-request-signing-key"
+
+
+def prepend_unverified_label(headers: dict[str, str]) -> dict[str, str]:
+    """*headers* with a second label, ``sig2``, ahead of ``sig1`` in both signature headers.
+
+    Shaped after ``positive/004-multiple-signature-labels``: its own ``created``,
+    ``expires``, nonce, ``alg`` and ``tag``, and a well-formed ``sf-binary`` signature that
+    verifies nothing. Its keyid is :data:`UNONBOARDED_KID`. It goes FIRST, so a verifier
+    reading the first label in header order reads this one; the label the checklist
+    verifies is still ``sig1``, unchanged.
+    """
+    from uuid import uuid4
+
+    from adcp.signing import DEFAULT_TAG
+
+    signature_input = next(name for name in headers if name.lower() == "signature-input")
+    signature = next(name for name in headers if name.lower() == "signature")
+    created = int(time.time())
+    label = (
+        f'sig2=("@method" "@target-uri");created={created};expires={created + 300};'
+        f'nonce="{uuid4().hex}";keyid="{UNONBOARDED_KID}";alg="ed25519";tag="{DEFAULT_TAG}"'
+    )
+    return {
+        **headers,
+        signature_input: f"{label}, {headers[signature_input]}",
+        signature: f"sig2=:{'A' * 88}:, {headers[signature]}",
+    }
 
 
 def realization(signed: Any) -> SignatureRealization:
@@ -1295,13 +1335,14 @@ def realization(signed: Any) -> SignatureRealization:
     ``True``/``False`` but are not realizations, and a caller that produced an int
     where a realization belongs has a bug worth surfacing.
     """
-    if signed is True or signed is False or signed in ("malformed", "tampered"):
+    if signed is True or signed is False or signed in get_args(_NAMED_REALIZATIONS):
         return signed
     raise ValueError(
         f"signed={signed!r} is not a signature realization. Pass one of "
         f"{SIGNATURE_REALIZATIONS!r}: False (no signature headers), True (a real signature over "
         "the exact bytes sent), 'malformed' (unparseable headers — a step-1 pre-check failure), "
-        "or 'tampered' (a real signature over a different body — a checklist digest mismatch). "
+        "'tampered' (a real signature over a different body — a checklist digest mismatch), "
+        "or 'extra_label' (a real signature with an unverified label ahead of it). "
         "Refusing rather than falling through to a correct signature, which would make a "
         "scenario grading a refusal pass on an acceptance."
     )

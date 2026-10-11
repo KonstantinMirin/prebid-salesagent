@@ -307,8 +307,12 @@ def _publish_jwks(config: Any, control_path: str, jwks: dict[str, Any]) -> None:
     _counterparty_request(config, "PUT", f"{PUBLIC_ORIGIN}{control_path}", json=jwks)
 
 
-def attach_agent_url(env: Any, agent_url: str) -> str:
+def attach_agent_url(env: Any, agent_url: str | None) -> str:
     """Record *agent_url* on the env's own Principal row; return its bearer token.
+
+    The harness's ONE writer of that column. ``None`` records an onboarding that names no
+    agent URL: the principal still authenticates by its bearer, and no key can be resolved
+    for it.
 
     Written through ``env._session``, which in e2e mode is bound to the LIVE
     SERVER's database — the one the verifier reads. ``setup_default_data`` is
@@ -344,6 +348,55 @@ def attach_agent_url(env: Any, agent_url: str) -> str:
         "must present one, because the verifier reads token -> Principal -> agent_url"
     )
     return token
+
+
+def onboard_signing_keyid(env: Any) -> None:
+    """Record the env key's ``key_id`` as onboarded for the env's own principal.
+
+    The harness's ONE spelling of the keyid mapping for the acting principal: the
+    ``principal_signing_keyids`` row production's keyid lookup reads (security.mdx @ v3.1.1
+    L1090, "Discovery MAY come from prior onboarding"). The principal must already carry an
+    ``agent_url`` — the row's foreign key is the ``(tenant_id, agent_url)`` coordinate.
+    """
+    from tests.factories import PrincipalSigningKeyidFactory
+
+    _tenant, principal = env.setup_default_data()
+    PrincipalSigningKeyidFactory(principal=principal, keyid=env.signing.key_id)
+
+
+def onboard_buyer_agent_key_for_another_counterparty(env: Any, tenant: Any) -> None:
+    """Onboard the env key's ``key_id`` for a principal of *tenant* that is not the env's.
+
+    That principal sits at the env key's own ``agent_url``, so its keys are the ones the
+    Buyer Agent signs with: a verifier that borrowed this mapping for a request it does not
+    belong to would verify the request. *tenant* is another seller's tenant, or the env's
+    own; the two scenarios this serves differ only in that.
+    """
+    from tests.factories import PrincipalFactory, PrincipalSigningKeyidFactory
+
+    other = PrincipalFactory(tenant=tenant, agent_url=env.signing.agent_url)
+    PrincipalSigningKeyidFactory(principal=other, keyid=env.signing.key_id)
+
+
+def declare_signed_requests_grading(env: Any) -> None:
+    """Make the env's tenant a signed-requests grading target that accepts the env's keys.
+
+    The env principal becomes the test-kit counterparty: it moves to
+    :data:`~tests.helpers.signing.UNRESOLVABLE_AGENT_URL`, where nothing publishes keys (the
+    walk fails at the capabilities fetch, ``capabilities_unreachable``, on every leg), its
+    key's ``key_id`` is onboarded at that URL, and the tenant's ``signed_requests_grading``
+    record carries the env's JWKS. Only the record's accepted JWKS can then verify the
+    env's signature.
+    """
+    from src.core.database.models import Tenant
+    from src.core.signing.grading import SignedRequestsGrading
+    from tests.helpers.signing import UNRESOLVABLE_AGENT_URL
+
+    attach_agent_url(env, UNRESOLVABLE_AGENT_URL)
+    onboard_signing_keyid(env)
+    tenant = env._session.get(Tenant, env._tenant_id)
+    tenant.signed_requests_grading = SignedRequestsGrading(jwks=env.signing.jwks)
+    env._session.commit()
 
 
 def ensure_declarable_identity_host(env: Any) -> None:

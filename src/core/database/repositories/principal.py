@@ -8,6 +8,7 @@ the admin views and the seed scripts come here to list, count, create and delete
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -15,7 +16,7 @@ from typing import Any
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from src.core.database.models import MediaBuy, Principal
+from src.core.database.models import MediaBuy, Principal, PrincipalSigningKeyid
 
 
 class PrincipalRepository:
@@ -63,6 +64,32 @@ class PrincipalRepository:
         return self._session.scalars(
             select(Principal).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
         ).first()
+
+    def onboard_signing_keyids(self, agent_url: str, keyids: Iterable[str]) -> None:
+        """Make *keyids* the request-signing keyids onboarded at *agent_url* in this tenant.
+
+        The set is replaced, not merged: keyids mapped to *agent_url* and absent from
+        *keyids* are deleted, the missing ones are added. Idempotent, so a re-seed refreshes
+        the mapping. The principal at *agent_url* must exist (the foreign key refuses
+        otherwise), and a keyid already onboarded at another counterparty of this tenant is
+        refused by the primary key. The caller commits.
+        """
+        wanted = set(keyids)
+        mapped = set(
+            self._session.scalars(
+                select(PrincipalSigningKeyid.keyid).filter_by(tenant_id=self._tenant_id, agent_url=agent_url)
+            )
+        )
+        stale = mapped - wanted
+        if stale:
+            self._session.execute(
+                delete(PrincipalSigningKeyid).where(
+                    PrincipalSigningKeyid.tenant_id == self._tenant_id,
+                    PrincipalSigningKeyid.keyid.in_(sorted(stale)),
+                )
+            )
+        for keyid in sorted(wanted - mapped):
+            self._session.add(PrincipalSigningKeyid(tenant_id=self._tenant_id, keyid=keyid, agent_url=agent_url))
 
     def list_all(self) -> list[Principal]:
         """Every principal in this tenant, ordered by display name."""

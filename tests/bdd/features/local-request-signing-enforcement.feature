@@ -28,6 +28,14 @@
 # @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1375
 # @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1462-L1465
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-vectors/request-signing/negative/027-webhook-registration-authentication-unsigned.json pointer=/expected_outcome
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1028
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1088-L1094
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1100
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1120
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1212
+# @source repo=adcp ref=v3.1.1 path=docs/building/by-layer/L1/security.mdx pointer=L1216
+# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L39-L60
+# @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/test-kits/signed-requests-runner.yaml pointer=L108-L126
 Feature: Inbound request-signature enforcement on an AdCP operation (local)
 
   @T-UC-006-local-signing-required-unsigned @request-signing @error-path @invariant
@@ -168,3 +176,96 @@ Feature: Inbound request-signature enforcement on an AdCP operation (local)
     # `none` is also the arm where the promotion does the MOST work: without it this request
     # reaches no checklist at all, so the refusal cannot be explained by anything the posture
     # says.
+
+  @T-UC-006-local-signing-onboarded-no-bearer @request-signing @invariant
+  Scenario: a request signed by an onboarded counterparty is served without a bearer
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # security.mdx @ v3.1.1 L1088-1090: given a keyid, the verifier resolves the signing
+    # agent's agents[] entry, and "Discovery MAY come from prior onboarding". The seller
+    # recorded the keyid against the Buyer's agent URL; the keys come from the agent's own
+    # origin. The signature is the only credential (L1216, L631-632).
+
+  @T-UC-006-local-signing-onboarded-other-tenant @request-signing @error-path @invariant
+  Scenario: a keyid onboarded only by another seller is not resolved
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer Agent's signing key was onboarded only by another seller
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "terminal"
+    # ONE variable apart from the scenario above: the onboarding record belongs to another
+    # tenant. A seller resolves a keyid against its own onboarding records; L1094 forbids
+    # accepting a keyid it cannot resolve to a specific agents[] entry.
+
+  @T-UC-006-local-signing-bearer-never-borrows-a-key @request-signing @error-path @invariant
+  Scenario: a bearer-authenticated caller is never verified against another counterparty's onboarded key
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the Buyer's onboarding record names no agent URL
+    And the Buyer Agent's signing key was onboarded for another counterparty of this seller
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_key_unknown" and recovery "terminal"
+    # The Buyer keeps its bearer. On the bearer transport identity comes from the
+    # credential-to-agent mapping in the onboarding record (L1216), and the Buyer's names no
+    # agent URL, so no key resolves for it. The other counterparty sits at the Buyer
+    # Agent's published origin: a verifier that looked the keyid up for a bearer caller
+    # would verify and serve this request.
+
+  @T-UC-006-local-signing-grading-target @request-signing @invariant
+  Scenario: a grading target serves the test counterparty from its accepted JWKS without a bearer
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller is a signed-requests grading target that accepts the Buyer Agent's keys
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # signed-requests-runner.yaml @ v3.1.1 L55-60: the agent "MUST treat these keyids as a
+    # registered test counterparty whose JWKS contains the corresponding public keys".
+    # The Buyer is that counterparty: its keyid is onboarded at an agent URL that publishes
+    # nothing, so only the grading record's accepted JWKS can verify the signature.
+
+  @T-UC-006-local-signing-grading-target-bearer-walks @request-signing @error-path @invariant
+  Scenario: on a grading target a bearer-authenticated caller is verified only against keys at its own agent URL
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller is a signed-requests grading target that accepts the Buyer Agent's keys
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer Agent signs the request
+    When the Buyer Agent syncs the creative
+    Then the seller answers with the request-signature challenge "request_signature_capabilities_unreachable" and recovery "transient"
+    # ONE variable apart from the scenario above: the Buyer keeps its bearer. Its identity
+    # then comes from the bearer (L1216), and its keys from its own agent URL, whose
+    # capabilities fetch fails (L1100, L1120). The kit's private keys are published, so a
+    # verifier that used the accepted JWKS for a bearer caller would let anyone satisfy a
+    # signature requirement on the grading tenant (L1462-1465).
+
+  @T-UC-006-local-signing-verified-label-identifies @request-signing @invariant
+  Scenario: an onboarded counterparty is identified by the signature label the seller verifies
+    Given a creative with a known format_id
+    And the Buyer Agent has published a signing key the seller can resolve
+    And the seller onboarded the Buyer Agent's signing key
+    And the seller requires a request signature for "sync_creatives"
+    And the Buyer has no authentication credentials
+    And the Buyer Agent signs the request with an additional signature label ahead of it naming a key nobody onboarded
+    When the Buyer Agent syncs the creative
+    Then the creative should be processed successfully
+    And the seller verified exactly 1 request under the Buyer Agent's published key
+    # ONE variable apart from "a request signed by an onboarded counterparty is served
+    # without a bearer": an unverified label placed first. L1028: verifiers MUST process
+    # exactly one label (conventionally sig1) and MUST ignore any additional labels, so the
+    # keyid that selects the counterparty is the verified label's (L1212).
