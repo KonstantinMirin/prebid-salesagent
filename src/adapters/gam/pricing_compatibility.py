@@ -26,29 +26,38 @@ PricingModel = Literal["cpm", "vcpm", "cpc", "flat_rate"]  # AdCP pricing models
 GAMCostType = Literal["CPM", "VCPM", "CPC", "CPD"]  # GAM internal types
 LineItemType = Literal["STANDARD", "SPONSORSHIP", "NETWORK", "PRICE_PRIORITY", "BULK", "HOUSE"]
 
-#: (default, minimum, maximum) priority per line item type, from GAM API LineItem.priority.
-PRIORITY_RANGES: dict[str, tuple[int, int, int]] = {
-    "SPONSORSHIP": (4, 2, 5),
-    "STANDARD": (8, 6, 10),
-    "NETWORK": (12, 11, 14),
-    "BULK": (12, 11, 14),
-    "PRICE_PRIORITY": (12, 11, 14),
-    "HOUSE": (16, 15, 16),
+
+class LineItemTypeRules(NamedTuple):
+    """What Google Ad Manager accepts on one line item type."""
+
+    #: The GAM cost types the type can be billed in (LineItem.costType).
+    cost_types: frozenset[str]
+    #: (default, minimum, maximum) priority (LineItem.priority).
+    priority: tuple[int, int, int]
+    #: The goal types it accepts (Goal.goalType); the first is its goal when none is configured.
+    goal_types: tuple[str, ...]
+    #: Whether its goal units are a percentage of impressions rather than a count (Goal.units).
+    share_of_voice: bool
+    #: Whether it reserves inventory (a guaranteed type) rather than competing for it.
+    guaranteed: bool
+
+
+#: The one table of GAM's per-type rules; every per-type fact in the GAM adapter is read from it.
+LINE_ITEM_TYPE_RULES: dict[LineItemType, LineItemTypeRules] = {
+    "STANDARD": LineItemTypeRules(
+        frozenset({"CPM", "CPC", "VCPM", "CPM_IN_TARGET"}), (8, 6, 10), ("LIFETIME",), False, True
+    ),
+    "SPONSORSHIP": LineItemTypeRules(frozenset({"CPM", "CPC", "CPD"}), (4, 2, 5), ("DAILY",), True, True),
+    "NETWORK": LineItemTypeRules(frozenset({"CPM", "CPC", "CPD"}), (12, 11, 14), ("DAILY",), True, False),
+    "BULK": LineItemTypeRules(frozenset({"CPM"}), (12, 11, 14), ("LIFETIME",), False, False),
+    "PRICE_PRIORITY": LineItemTypeRules(
+        frozenset({"CPM", "CPC"}), (12, 11, 14), ("LIFETIME", "DAILY", "NONE"), False, False
+    ),
+    "HOUSE": LineItemTypeRules(frozenset({"CPM"}), (16, 15, 16), ("DAILY",), True, False),
 }
 
-#: The goal types GAM accepts per line item type (Goal.goalType); the first is the type's
-#: goal when the product configures none.
-GOAL_TYPES: dict[str, tuple[str, ...]] = {
-    "STANDARD": ("LIFETIME",),
-    "BULK": ("LIFETIME",),
-    "PRICE_PRIORITY": ("LIFETIME", "DAILY", "NONE"),
-    "SPONSORSHIP": ("DAILY",),
-    "NETWORK": ("DAILY",),
-    "HOUSE": ("DAILY",),
-}
-
-#: The types whose goal units are a percentage of impressions (Goal.units), not a count.
-SHARE_OF_VOICE_TYPES = frozenset({"SPONSORSHIP", "NETWORK", "HOUSE"})
+#: The goal unit each pricing model is sold in: the unit the package's volume counts.
+_GOAL_UNIT_TYPES: dict[str, str] = {"cpc": "CLICKS", "vcpm": "VIEWABLE_IMPRESSIONS"}
 
 
 class LineItemPlan(NamedTuple):
@@ -66,17 +75,6 @@ class PricingCompatibility:
     Note: CPD is a GAM cost type but NOT an AdCP pricing model. We use it internally
     to translate FLAT_RATE pricing (total campaign cost / days = CPD rate).
     """
-
-    # Official GAM compatibility matrix (what GAM API supports)
-    # Source: GAM API LineItem and CostType specifications
-    COMPATIBILITY_MATRIX = {
-        "STANDARD": {"CPM", "CPC", "VCPM", "CPM_IN_TARGET"},
-        "SPONSORSHIP": {"CPM", "CPC", "CPD"},
-        "NETWORK": {"CPM", "CPC", "CPD"},
-        "PRICE_PRIORITY": {"CPM", "CPC"},
-        "BULK": {"CPM"},
-        "HOUSE": {"CPM"},
-    }
 
     # AdCP to GAM cost type mapping (internal translation)
     ADCP_TO_GAM_COST_TYPE = {
@@ -98,9 +96,8 @@ class PricingCompatibility:
             True if compatible, False otherwise
         """
         gam_cost_type = cls.ADCP_TO_GAM_COST_TYPE.get(pricing_model)
-        if not gam_cost_type:
-            return False
-        return gam_cost_type in cls.COMPATIBILITY_MATRIX.get(line_item_type, set())
+        rules = LINE_ITEM_TYPE_RULES.get(line_item_type)
+        return gam_cost_type is not None and rules is not None and gam_cost_type in rules.cost_types
 
     @classmethod
     def get_compatible_line_item_types(cls, pricing_model: PricingModel) -> set[str]:
@@ -112,15 +109,11 @@ class PricingCompatibility:
         Returns:
             Set of compatible line item types
         """
-        gam_cost_type = cls.ADCP_TO_GAM_COST_TYPE.get(pricing_model)
-        if not gam_cost_type:
-            return set()
-
-        compatible: set[str] = set()
-        for line_item_type, cost_types in cls.COMPATIBILITY_MATRIX.items():
-            if gam_cost_type in cost_types:
-                compatible.add(line_item_type)
-        return compatible
+        return {
+            line_item_type
+            for line_item_type in LINE_ITEM_TYPE_RULES
+            if cls.is_compatible(line_item_type, pricing_model)
+        }
 
     @classmethod
     def select_line_item_type(
@@ -151,7 +144,7 @@ class PricingCompatibility:
         if (
             override_type
             and cls.is_compatible(override_type, pricing_model)
-            and (override_type not in SHARE_OF_VOICE_TYPES or pricing_model == "flat_rate")
+            and (not LINE_ITEM_TYPE_RULES[override_type].share_of_voice or pricing_model == "flat_rate")
         ):
             return override_type
 
@@ -185,26 +178,38 @@ class PricingCompatibility:
     ) -> LineItemPlan:
         """Decide a package's line item type, priority, goal type and unit type, in that order.
 
-        The one reader and validator of the product's ``line_item_type``, ``priority``,
-        ``primary_goal_type`` and ``primary_goal_unit_type``. Run before the order exists,
-        so a refusal leaves nothing behind in GAM.
+        The one reader and validator of the product's ``line_item_type``, ``priority`` and
+        ``primary_goal_type``. The adapter runs it before the order exists, on the create
+        path and on the seller's approval alike, so a refusal leaves nothing behind in GAM.
 
-        1. Type: ``select_line_item_type`` with the configured type as the override.
+        1. Type: a configured type must be a GAM line item type. ``select_line_item_type``
+           books it when it can sell the package, and auto-selects otherwise.
         2. Priority: the configured ``priority`` when the booked type is the configured
            type, or no type is configured; it must be an integer inside the booked type's
            GAM range. A priority set for a type that was not booked does not carry over.
            Otherwise the booked type's GAM default.
         3. Goal type: the one GAM accepts for the type; for PRICE_PRIORITY the configured
            ``primary_goal_type``, LIFETIME when none.
-        4. Unit type: IMPRESSIONS on a share-of-voice type; CLICKS for CPC; VIEWABLE_IMPRESSIONS
-           for vCPM; otherwise the configured ``primary_goal_unit_type``, IMPRESSIONS when none.
+        4. Unit type: the unit the package is sold in (CLICKS for CPC, VIEWABLE_IMPRESSIONS
+           for vCPM, IMPRESSIONS otherwise), which is the unit its volume counts. A
+           share-of-voice type is booked only for flat rate, so its goal is in IMPRESSIONS.
 
         Raises:
-            AdCPConfigurationError: a configured priority or goal type GAM does not accept
-                for the booked type. The seller's configuration; the buyer cannot fix it.
+            AdCPConfigurationError: a configured type, priority or goal type GAM does not
+                accept. The seller's configuration; the buyer cannot fix it.
         """
         configured_type = implementation_config.get("line_item_type")
+        if configured_type is not None and configured_type not in LINE_ITEM_TYPE_RULES:
+            raise AdCPConfigurationError(
+                details=ConfigurationDetails(
+                    product_id=product_id,
+                    capability="line_item_type",
+                    rejected_value=str(configured_type),
+                    accepted_values=list(LINE_ITEM_TYPE_RULES),
+                )
+            )
         line_item_type = cls.select_line_item_type(pricing_model, is_guaranteed, configured_type)
+        rules = LINE_ITEM_TYPE_RULES[line_item_type]
         if configured_type and configured_type != line_item_type:
             logger.info(
                 "Product %s configures line item type %s, which cannot book a %s package; booking %s",
@@ -214,7 +219,7 @@ class PricingCompatibility:
                 line_item_type,
             )
 
-        default_priority, lowest, highest = PRIORITY_RANGES[line_item_type]
+        default_priority, lowest, highest = rules.priority
         priority = default_priority
         configured_priority = implementation_config.get("priority")
         if configured_priority is not None and configured_type in (None, line_item_type):
@@ -233,7 +238,7 @@ class PricingCompatibility:
                 )
             priority = configured_priority
 
-        accepted_goal_types = GOAL_TYPES[line_item_type]
+        accepted_goal_types = rules.goal_types
         if len(accepted_goal_types) == 1:
             goal_type = accepted_goal_types[0]
         else:
@@ -257,16 +262,7 @@ class PricingCompatibility:
                 goal_type,
             )
 
-        if line_item_type in SHARE_OF_VOICE_TYPES:
-            unit_type = "IMPRESSIONS"
-        elif pricing_model == "cpc":
-            unit_type = "CLICKS"
-        elif pricing_model == "vcpm":
-            unit_type = "VIEWABLE_IMPRESSIONS"
-        else:
-            unit_type = implementation_config.get("primary_goal_unit_type", "IMPRESSIONS")
-
-        return LineItemPlan(line_item_type, priority, goal_type, unit_type)
+        return LineItemPlan(line_item_type, priority, goal_type, _GOAL_UNIT_TYPES.get(pricing_model, "IMPRESSIONS"))
 
     @classmethod
     def goal_units(cls, plan: LineItemPlan, *, lifetime_units: int, flight_days: int) -> int:
@@ -277,7 +273,7 @@ class PricingCompatibility:
         type is the lifetime volume spread over the flight's days. Otherwise (LIFETIME, NONE)
         the lifetime volume. It converts a volume it is given; it computes none.
         """
-        if plan.line_item_type in SHARE_OF_VOICE_TYPES:
+        if LINE_ITEM_TYPE_RULES[plan.line_item_type].share_of_voice:
             return 100
         if plan.goal_type == "DAILY":
             return lifetime_units // flight_days

@@ -12,7 +12,7 @@ from typing import Any
 
 from googleads import ad_manager
 
-from src.adapters.gam.pricing_compatibility import LineItemPlan, PricingCompatibility
+from src.adapters.gam.pricing_compatibility import LINE_ITEM_TYPE_RULES, LineItemPlan, PricingCompatibility
 from src.adapters.gam.utils.error_handler import map_gam_exception
 from src.adapters.gam.utils.formatters import format_datetime_for_gam
 from src.adapters.gam.utils.timeout_handler import timeout
@@ -28,9 +28,9 @@ from src.core.helpers.pricing_helpers import impressions_for_budget, unit_price
 
 logger = logging.getLogger(__name__)
 
-# Line item type constants for GAM automation
-GUARANTEED_LINE_ITEM_TYPES = {"STANDARD", "SPONSORSHIP"}
-NON_GUARANTEED_LINE_ITEM_TYPES = {"NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"}
+# Line item type sets for GAM automation, read off the one per-type table
+GUARANTEED_LINE_ITEM_TYPES = {t for t, rules in LINE_ITEM_TYPE_RULES.items() if rules.guaranteed}
+NON_GUARANTEED_LINE_ITEM_TYPES = {t for t, rules in LINE_ITEM_TYPE_RULES.items() if not rules.guaranteed}
 
 
 def _line_item_flight(start_time: datetime, end_time: datetime, time_zone: str) -> dict[str, Any]:

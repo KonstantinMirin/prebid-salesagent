@@ -1,6 +1,5 @@
 """Service for managing GAM product implementation configurations."""
 
-import json
 import logging
 from typing import Any
 
@@ -21,13 +20,13 @@ class GAMProductConfigService:
         Returns:
             Dictionary of GAM implementation config with sensible defaults. It writes no
             ``priority``: the line item's priority is the booked type's GAM default unless
-            the seller sets one (``PricingCompatibility.plan_line_item``).
+            the seller sets one (``PricingCompatibility.plan_line_item``). It writes no goal
+            unit type either: the goal is in the unit the package is sold in.
         """
         # Base configuration shared across all types
         base_config = {
             "cost_type": "CPM",
             "creative_rotation_type": "EVEN",
-            "primary_goal_unit_type": "IMPRESSIONS",
             "include_descendants": True,
         }
 
@@ -137,8 +136,9 @@ class GAMProductConfigService:
     def validate_config(config: dict[str, Any]) -> tuple[bool, str | None]:
         """Validate GAM implementation config for required fields.
 
-        ``priority`` is optional and is not checked here: ``PricingCompatibility.plan_line_item``
-        reads and validates it against the range of the line item type a package books.
+        The booking fields (``line_item_type``, ``priority``, ``primary_goal_type``) are not
+        checked here: ``PricingCompatibility.plan_line_item`` is their one reader and
+        validator, on the create path and on the seller's approval alike.
 
         Args:
             config: GAM implementation configuration dictionary
@@ -155,12 +155,6 @@ class GAMProductConfigService:
         for field in required_fields:
             if field not in config:
                 return False, f"Missing required GAM field: {field}"
-
-        # Validate line item type (optional - if not provided, will be auto-selected based on pricing)
-        if "line_item_type" in config:
-            valid_line_item_types = ["STANDARD", "SPONSORSHIP", "NETWORK", "BULK", "PRICE_PRIORITY", "HOUSE"]
-            if config.get("line_item_type") not in valid_line_item_types:
-                return False, f"line_item_type must be one of: {', '.join(valid_line_item_types)}"
 
         # Validate creative placeholders
         placeholders = config.get("creative_placeholders", [])
@@ -180,133 +174,3 @@ class GAMProductConfigService:
             )
 
         return True, None
-
-    @staticmethod
-    def parse_form_config(form_data) -> dict[str, Any]:
-        """Parse GAM configuration form data into implementation_config format.
-
-        Args:
-            form_data: Flask request.form object (ImmutableMultiDict)
-
-        Returns:
-            Parsed implementation_config dictionary
-        """
-        config = {}
-
-        # Basic line item settings
-        config["line_item_type"] = form_data.get("line_item_type", "STANDARD")
-        priority = form_data.get("priority", "8")
-        config["priority"] = int(priority) if priority else 8
-        config["cost_type"] = form_data.get("cost_type", "CPM")
-
-        # Delivery settings
-        config["creative_rotation_type"] = form_data.get("creative_rotation_type", "EVEN")
-        config["delivery_rate_type"] = form_data.get("delivery_rate_type", "EVENLY")
-        config["primary_goal_type"] = form_data.get("primary_goal_type", "DAILY")
-        config["primary_goal_unit_type"] = form_data.get("primary_goal_unit_type", "IMPRESSIONS")
-
-        # Automation settings
-        config["non_guaranteed_automation"] = form_data.get("non_guaranteed_automation", "confirmation_required")
-
-        # Inventory targeting
-        ad_unit_ids_text = form_data.get("targeted_ad_unit_ids", "").strip()
-        if ad_unit_ids_text:
-            config["targeted_ad_unit_ids"] = [id.strip() for id in ad_unit_ids_text.split("\n") if id.strip()]
-
-        placement_ids_text = form_data.get("targeted_placement_ids", "").strip()
-        if placement_ids_text:
-            config["targeted_placement_ids"] = [id.strip() for id in placement_ids_text.split("\n") if id.strip()]
-
-        config["include_descendants"] = "include_descendants" in form_data
-
-        # Creative placeholders (arrays)
-        widths = form_data.getlist("placeholder_width[]")
-        heights = form_data.getlist("placeholder_height[]")
-        counts = form_data.getlist("placeholder_count[]")
-        is_natives = form_data.getlist("placeholder_is_native[]")
-
-        placeholders = []
-        for i in range(len(widths)):
-            placeholders.append(
-                {
-                    "width": int(widths[i]),
-                    "height": int(heights[i]),
-                    "expected_creative_count": int(counts[i]) if i < len(counts) else 1,
-                    "is_native": str(i) in is_natives,  # Checkboxes send index as value
-                }
-            )
-        config["creative_placeholders"] = placeholders
-
-        # Frequency caps (arrays)
-        cap_max_imps = form_data.getlist("cap_max_impressions[]")
-        cap_time_units = form_data.getlist("cap_time_unit[]")
-        cap_time_ranges = form_data.getlist("cap_time_range[]")
-
-        if cap_max_imps:
-            frequency_caps = []
-            for i in range(len(cap_max_imps)):
-                frequency_caps.append(
-                    {
-                        "max_impressions": int(cap_max_imps[i]),
-                        "time_unit": cap_time_units[i] if i < len(cap_time_units) else "DAY",
-                        "time_range": int(cap_time_ranges[i]) if i < len(cap_time_ranges) else 1,
-                    }
-                )
-            config["frequency_caps"] = frequency_caps
-
-        # Competition & exclusions
-        comp_labels = form_data.get("competitive_exclusion_labels", "").strip()
-        if comp_labels:
-            config["competitive_exclusion_labels"] = [
-                label.strip() for label in comp_labels.split(",") if label.strip()
-            ]
-
-        # Custom targeting keys (JSON)
-        custom_targeting = form_data.get("custom_targeting_keys", "{}").strip()
-        if custom_targeting and custom_targeting != "{}":
-            try:
-                config["custom_targeting_keys"] = json.loads(custom_targeting)
-            except json.JSONDecodeError:
-                logger.warning("Invalid JSON in custom_targeting_keys, skipping")
-
-        # Advanced settings
-        config["environment_type"] = form_data.get("environment_type", "BROWSER")
-
-        discount_type = form_data.get("discount_type")
-        if discount_type:
-            config["discount_type"] = discount_type
-            discount_value = form_data.get("discount_value")
-            if discount_value:
-                config["discount_value"] = float(discount_value)
-
-        config["allow_overbook"] = "allow_overbook" in form_data
-        config["skip_inventory_check"] = "skip_inventory_check" in form_data
-        config["disable_viewability_avg_revenue_optimization"] = (
-            "disable_viewability_avg_revenue_optimization" in form_data
-        )
-
-        # Video settings
-        if config["environment_type"] == "VIDEO_PLAYER":
-            companion = form_data.get("companion_delivery_option")
-            if companion:
-                config["companion_delivery_option"] = companion
-
-            video_duration = form_data.get("video_max_duration")
-            if video_duration:
-                config["video_max_duration"] = int(video_duration) * 1000  # Convert seconds to milliseconds
-
-            skip_offset = form_data.get("skip_offset")
-            if skip_offset:
-                config["skip_offset"] = int(skip_offset) * 1000  # Convert seconds to milliseconds
-
-        # Native settings
-        native_style = form_data.get("native_style_id")
-        if native_style:
-            config["native_style_id"] = native_style
-
-        # Team IDs
-        team_ids = form_data.get("applied_team_ids", "").strip()
-        if team_ids:
-            config["applied_team_ids"] = [id.strip() for id in team_ids.split(",") if id.strip()]
-
-        return config

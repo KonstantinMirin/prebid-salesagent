@@ -14,6 +14,7 @@ __all__ = [
 
 import logging
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -31,6 +32,7 @@ from src.adapters.base import (
     AdapterUpdateResult,
     AdServerAdapter,
     TargetingCapabilities,
+    unsupported_targeting_features,
 )
 
 # Import modular components
@@ -351,6 +353,62 @@ class GoogleAdManager(AdServerAdapter):
     def SUPPORTED_MEDIA_TYPES(self):
         return self.targeting_manager.SUPPORTED_MEDIA_TYPES
 
+    @staticmethod
+    def _plan_line_items(
+        packages: list[MediaPackage],
+        package_pricing_info: dict[str, dict] | None,
+        products_map: Mapping[str, Mapping[str, Any]],
+    ) -> dict[str, LineItemPlan]:
+        """Each package's line item plan (``PricingCompatibility.plan_line_item``), keyed by package_id.
+
+        ``products_map`` maps a package_id to its product's ``product_id``,
+        ``implementation_config`` and ``delivery_type``; a package whose product is not in it
+        is not planned. Raises the planner's CONFIGURATION_ERROR for a configuration GAM
+        does not accept.
+        """
+        return {
+            package.package_id: PricingCompatibility.plan_line_item(
+                (package_pricing_info or {})[package.package_id]["pricing_model"],
+                is_guaranteed=product["delivery_type"] == "guaranteed",
+                implementation_config=product["implementation_config"],
+                product_id=product["product_id"],
+            )
+            for package in packages
+            if (product := products_map.get(package.package_id)) is not None
+        }
+
+    def validate_media_buy_request(
+        self,
+        request: AdapterCreateRequest,
+        packages: list[MediaPackage],
+        start_time: datetime,
+        end_time: datetime,
+        package_pricing_info: dict[str, dict] | None = None,
+    ) -> list[ErrorProblem]:
+        """The base checks, after planning every package's line item from its product's GAM configuration.
+
+        The create path and the seller's approval both run this before the adapter is
+        asked to write anything, so a configuration GAM would refuse raises
+        CONFIGURATION_ERROR (``_plan_line_items``) while nothing exists in GAM. A package
+        whose product is missing is left to ``create_media_buy``, which refuses it.
+        """
+        from src.core.database.database_session import get_db_session
+        from src.core.database.repositories.product import ProductRepository
+
+        products_map: dict[str, dict[str, Any]] = {}
+        with get_db_session() as session:
+            products = ProductRepository(session, self.tenant_id)
+            for package in packages:
+                product = products.get_by_id(package.product_id) if package.product_id else None
+                if product is not None:
+                    products_map[package.package_id] = {
+                        "product_id": product.product_id,
+                        "implementation_config": product.implementation_config or {},
+                        "delivery_type": product.delivery_type,
+                    }
+        self._plan_line_items(packages, package_pricing_info, products_map)
+        return super().validate_media_buy_request(request, packages, start_time, end_time, package_pricing_info)
+
     def create_media_buy(
         self,
         request: AdapterCreateRequest,
@@ -499,7 +557,6 @@ class GoogleAdManager(AdServerAdapter):
 
         # Validate products have required inventory targeting BEFORE creating order
         # This prevents the "hidden failure" where order is created but line items fail
-        line_item_plans: dict[str, LineItemPlan] = {}
         for package in packages:
             product_config = products_map.get(package.package_id)
             if not product_config:
@@ -531,28 +588,11 @@ class GoogleAdManager(AdServerAdapter):
                 self.log(f"[red]Error: {error_msg}[/red]")
                 raise AdCPProductUnavailableError()
 
-            # Plan the package's line item (type, priority, goal) now, so a configuration
-            # GAM would refuse is refused before the order exists.
-            pricing_info = (package_pricing_info or {}).get(package.package_id)
-            if not pricing_info:
-                raise AdCPConfigurationError(
-                    details=ConfigurationDetails(product_id=cast(str, product_config["product_id"]))
-                )
-            line_item_plans[package.package_id] = PricingCompatibility.plan_line_item(
-                pricing_info["pricing_model"],
-                is_guaranteed=product_config["delivery_type"] == "guaranteed",
-                implementation_config=product_impl_config,
-                product_id=cast(str, product_config["product_id"]),
-            )
+        # Plan each package's line item (type, priority, goal) before the order exists.
+        line_item_plans = self._plan_line_items(packages, package_pricing_info, products_map)
 
         # Validate targeting from MediaPackage objects (targeting_overlay is populated from request)
-        unsupported_features = []
-        for package in packages:
-            if package.targeting_overlay:
-                features = self._validate_targeting(package.targeting_overlay)
-                if features:
-                    unsupported_features.extend(features)
-
+        unsupported_features = unsupported_targeting_features(packages, self._validate_targeting)
         if unsupported_features:
             error_msg = f"Unsupported targeting features: {', '.join(unsupported_features)}"
             self.log(f"[red]Error: {error_msg}[/red]")
