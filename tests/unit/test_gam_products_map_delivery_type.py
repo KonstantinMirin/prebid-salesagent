@@ -63,7 +63,6 @@ def test_products_map_includes_delivery_type():
     mock_adapter.orders_manager = Mock()
     mock_adapter.workflow_manager = Mock()
     mock_adapter._requires_manual_approval = Mock(return_value=False)
-    mock_adapter._validate_targeting = Mock(return_value=[])
     mock_adapter._check_order_has_guaranteed_items = Mock(return_value=(False, []))
     mock_adapter._placement_targeting_map = {}
     mock_adapter._order_name_template = None

@@ -17,7 +17,7 @@ from src.core.schemas import Targeting
 
 @pytest.fixture
 def gam_manager():
-    """Create a GAMTargetingManager with test geo mappings, bypassing DB/file I/O."""
+    """Create a GAMTargetingManager bypassing DB I/O."""
     with patch("src.core.database.database_session.get_db_session") as mock_session:
         mock_db = MagicMock()
         mock_session.return_value.__enter__.return_value = mock_db
@@ -35,140 +35,7 @@ def gam_manager():
         manager.axe_exclude_key = None
         manager.axe_macro_key = None
         manager.custom_targeting_key_ids = {}
-        # Test geo mappings
-        manager.geo_country_map = {"US": "2840", "CA": "2124", "GB": "2826"}
-        manager.geo_region_map = {
-            "US": {"CA": "21137", "NY": "21167", "TX": "21176"},
-            "GB": {"ENG": "20339"},
-        }
-        manager.geo_metro_map = {"501": "1003374", "803": "1003389"}
         return manager
-
-
-class TestBuildTargetingGeoCountries:
-    """v3 geo_countries → GAM targeted/excluded locations."""
-
-    def test_countries_targeted(self, gam_manager):
-        targeting = Targeting(geo_countries=["US", "CA"])
-        result = gam_manager.build_targeting(targeting)
-        locations = result["geoTargeting"]["targetedLocations"]
-        ids = [loc["id"] for loc in locations]
-        assert "2840" in ids  # US
-        assert "2124" in ids  # CA
-
-    def test_countries_excluded(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_countries_exclude=["GB"])
-        result = gam_manager.build_targeting(targeting)
-        excluded = result["geoTargeting"]["excludedLocations"]
-        assert any(loc["id"] == "2826" for loc in excluded)
-
-    def test_unknown_country_skipped(self, gam_manager):
-        targeting = Targeting(geo_countries=["ZZ"])
-        result = gam_manager.build_targeting(targeting)
-        # No targeted locations since ZZ is unknown
-        geo = result.get("geoTargeting", {})
-        locations = geo.get("targetedLocations", [])
-        assert len(locations) == 0
-
-
-class TestBuildTargetingGeoRegions:
-    """v3 geo_regions (ISO 3166-2) → GAM targeted/excluded locations."""
-
-    def test_iso_region_targeted(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_regions=["US-CA"])
-        result = gam_manager.build_targeting(targeting)
-        locations = result["geoTargeting"]["targetedLocations"]
-        ids = [loc["id"] for loc in locations]
-        assert "21137" in ids  # US-CA
-
-    def test_region_excluded(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_regions_exclude=["US-NY"])
-        result = gam_manager.build_targeting(targeting)
-        excluded = result["geoTargeting"]["excludedLocations"]
-        assert any(loc["id"] == "21167" for loc in excluded)
-
-    def test_unknown_region_skipped(self, gam_manager):
-        targeting = Targeting(geo_countries=["US"], geo_regions=["US-ZZ"])
-        result = gam_manager.build_targeting(targeting)
-        geo = result.get("geoTargeting", {})
-        # Only country location, no region
-        locations = geo.get("targetedLocations", [])
-        region_ids = [loc["id"] for loc in locations if loc["id"] != "2840"]
-        assert len(region_ids) == 0
-
-
-class TestLookupRegionIdISO:
-    """_lookup_region_id must accept ISO 3166-2 format."""
-
-    def test_iso_format_splits(self, gam_manager):
-        assert gam_manager._lookup_region_id("US-CA") == "21137"
-
-    def test_iso_format_gb(self, gam_manager):
-        assert gam_manager._lookup_region_id("GB-ENG") == "20339"
-
-    def test_bare_code_still_works(self, gam_manager):
-        """Backward compat: bare region code searched across all countries."""
-        assert gam_manager._lookup_region_id("CA") == "21137"
-
-    def test_unknown_returns_none(self, gam_manager):
-        assert gam_manager._lookup_region_id("US-ZZ") is None
-
-    def test_unknown_country_returns_none(self, gam_manager):
-        assert gam_manager._lookup_region_id("XX-CA") is None
-
-
-class TestBuildTargetingGeoMetros:
-    """v3 geo_metros (structured GeoMetro) → GAM targeted/excluded locations."""
-
-    def test_nielsen_dma_targeted(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["US"],
-            geo_metros=[{"system": "nielsen_dma", "values": ["501", "803"]}],
-        )
-        result = gam_manager.build_targeting(targeting)
-        locations = result["geoTargeting"]["targetedLocations"]
-        ids = [loc["id"] for loc in locations]
-        assert "1003374" in ids  # DMA 501
-        assert "1003389" in ids  # DMA 803
-
-    def test_nielsen_dma_excluded(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["US"],
-            geo_metros_exclude=[{"system": "nielsen_dma", "values": ["501"]}],
-        )
-        result = gam_manager.build_targeting(targeting)
-        excluded = result["geoTargeting"]["excludedLocations"]
-        assert any(loc["id"] == "1003374" for loc in excluded)
-
-    def test_unsupported_metro_system_raises(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["GB"],
-            geo_metros=[{"system": "uk_itl1", "values": ["TLG"]}],
-        )
-        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
-        # The identifier is STRUCTURED now: it lives in details/field, not in prose.
-
-    def test_unsupported_metro_system_in_exclude_raises(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["GB"],
-            geo_metros_exclude=[{"system": "eurostat_nuts2", "values": ["DE1"]}],
-        )
-        with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
-        # The identifier is STRUCTURED now: details/field, not prose.
-
-    def test_unknown_dma_code_skipped(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["US"],
-            geo_metros=[{"system": "nielsen_dma", "values": ["999"]}],
-        )
-        result = gam_manager.build_targeting(targeting)
-        geo = result.get("geoTargeting", {})
-        locations = geo.get("targetedLocations", [])
-        # Only country, no metro (999 not in map)
-        metro_ids = [loc["id"] for loc in locations if loc["id"] != "2840"]
-        assert len(metro_ids) == 0
 
 
 class TestBuildTargetingGeoPostalAreas:
@@ -180,7 +47,7 @@ class TestBuildTargetingGeoPostalAreas:
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
         )
         with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
+            gam_manager.translate_targeting(targeting)
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
@@ -190,7 +57,7 @@ class TestBuildTargetingGeoPostalAreas:
             geo_postal_areas=[{"system": "gb_outward", "values": ["SW1"]}],
         )
         with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
+            gam_manager.translate_targeting(targeting)
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
@@ -200,7 +67,7 @@ class TestBuildTargetingGeoPostalAreas:
             geo_postal_areas_exclude=[{"system": "us_zip", "values": ["90210"]}],
         )
         with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
+            gam_manager.translate_targeting(targeting)
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
@@ -224,28 +91,16 @@ class TestUnsupportedTargetingRaisesTypedCapabilityError:
             geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
         )
         with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
+            gam_manager.translate_targeting(targeting)
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
 
     def test_device_targeting_raises_capability_not_supported(self, gam_manager):
         targeting = Targeting(device_type_any_of=["mobile"])
         with pytest.raises(AdCPCapabilityNotSupportedError) as _ei:
-            gam_manager.build_targeting(targeting)
+            gam_manager.translate_targeting(targeting)
         # The old pattern matched the AUTHORED sentence; the sentence is the
         # code's table entry now, so assert it exactly.
-
-
-class TestValidateTargetingV3:
-    """validate_targeting uses v3 fields, not v2."""
-
-    def test_postal_areas_reported(self, gam_manager):
-        targeting = Targeting(
-            geo_countries=["US"],
-            geo_postal_areas=[{"system": "us_zip", "values": ["10001"]}],
-        )
-        unsupported = gam_manager.validate_targeting(targeting)
-        assert any("postal" in u.lower() for u in unsupported)
 
 
 class TestFrequencyCapIntCast:

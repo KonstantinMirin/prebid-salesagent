@@ -61,7 +61,7 @@ def test_axe_include_segment_translates_to_custom_targeting(mock_adapter_config_
             axe_include_segment="x8dj3k",
         )
 
-        result = manager.build_targeting(targeting_overlay)
+        result = manager.build_targeting(manager.translate_targeting(targeting_overlay))
 
         # Verify custom targeting was set with configured "audience_include" key
         # The result has GAM API structure with CustomCriteriaSet
@@ -94,7 +94,7 @@ def test_axe_exclude_segment_translates_to_negative_custom_targeting(mock_adapte
             axe_exclude_segment="y9kl4m",
         )
 
-        result = manager.build_targeting(targeting_overlay)
+        result = manager.build_targeting(manager.translate_targeting(targeting_overlay))
 
         # Verify negative custom targeting was set (IS_NOT operator with configured key)
         assert "customTargeting" in result
@@ -127,7 +127,7 @@ def test_axe_segments_both_include_and_exclude(mock_adapter_config_three_keys):
             axe_exclude_segment="y9kl4m",
         )
 
-        result = manager.build_targeting(targeting_overlay)
+        result = manager.build_targeting(manager.translate_targeting(targeting_overlay))
 
         # Verify both positive and negative custom targeting were set with separate keys
         assert "customTargeting" in result
@@ -166,7 +166,7 @@ def test_axe_segments_combine_with_other_custom_targeting(mock_adapter_config_th
             axe_include_segment="x8dj3k",
         )
 
-        result = manager.build_targeting(targeting_overlay)
+        result = manager.build_targeting(manager.translate_targeting(targeting_overlay))
 
         # Verify AXE custom targeting is present
         assert "customTargeting" in result
@@ -195,7 +195,7 @@ def test_axe_segments_optional(mock_adapter_config_three_keys):
             # No axe_include_segment or axe_exclude_segment
         )
 
-        result = manager.build_targeting(targeting_overlay)
+        result = manager.build_targeting(manager.translate_targeting(targeting_overlay))
 
         # Verify geo targeting is present but no custom targeting for AXE
         assert "geoTargeting" in result
@@ -216,7 +216,7 @@ def test_axe_include_segment_fails_if_key_not_configured(mock_adapter_config_no_
         )
 
         with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
-            manager.build_targeting(targeting_overlay)
+            manager.build_targeting(manager.translate_targeting(targeting_overlay))
 
 
 def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_keys):
@@ -234,4 +234,4 @@ def test_axe_exclude_segment_fails_if_key_not_configured(mock_adapter_config_no_
         )
 
         with pytest.raises(AdCPCapabilityNotSupportedError) as exc_info:
-            manager.build_targeting(targeting_overlay)
+            manager.build_targeting(manager.translate_targeting(targeting_overlay))
