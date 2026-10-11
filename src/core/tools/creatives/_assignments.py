@@ -124,6 +124,8 @@ def _process_assignments(
     not_found_creative_ids: set[str] = set()  # creative_ids whose library lookup returned None
     packages_not_found_by_creative: dict[str, set[str]] = {}  # creative_id -> package_ids that do not exist
     media_buys_with_new_assignments: dict[str, Any] = {}  # media_buy_id -> MediaBuy object
+    # (creative_id, media_buy_id) -> package_ids to traffic into the ad server once committed
+    ad_server_pushes: dict[tuple[str, str], list[str]] = {}
 
     # AdCP v3 spec defines assignments as list[{creative_id, package_id, weight?,
     # placement_ids?}]; normalise to {creative_id: {package_id: (weight, placement_ids)}}
@@ -368,12 +370,59 @@ def _process_assignments(
                     if actual_package_id is not None:
                         assignments_by_creative[creative_id].append(actual_package_id)
 
+                    # An approved creative assigned to a package booked as a line item is
+                    # trafficked now (#2381), unless this assignment exists and the ad server
+                    # already holds the creative. A creative under review is trafficked when it
+                    # is approved; a buy not yet booked, when it is executed.
+                    if (
+                        creative_row.status in {"approved", "active"}
+                        and (db_package.package_config or {}).get("platform_line_item_id")
+                        and not (existing_assignment and (creative_row.data or {}).get("platform_creative_id"))
+                    ):
+                        ad_server_pushes.setdefault((creative_id, media_buy_id), []).append(actual_package_id)
+
             # Update media buy status if needed (draft -> pending_creatives).
             assert uow.media_buys is not None
             for mb_id, mb_obj in media_buys_with_new_assignments.items():
                 if mb_obj.status == "draft" and mb_obj.approved_at is not None:
                     uow.media_buys.update_status(mb_id, PersistedMediaBuyStatus.PENDING_CREATIVES)
                     logger.info(f"[SYNC_CREATIVES] Media buy {mb_id} transitioned from draft to pending_creatives")
+
+            if ad_server_pushes:
+
+                def _traffic_assignments() -> None:
+                    """Push each committed assignment to the ad server, after this unit has closed.
+
+                    sync-creatives-response.json @ 3.1.1: ``assigned_to`` lists the packages a
+                    creative was "successfully assigned to", so a package the ad server did not
+                    take moves to ``assignment_errors``. A dry_run rolls back and never gets here.
+                    """
+                    from src.core.helpers.adapter_helpers import get_adapter_class_for_tenant
+                    from src.core.tools.media_buy_create import push_creative_to_existing_buy
+
+                    if not get_adapter_class_for_tenant(tenant).capabilities.supports_creative_trafficking:
+                        return
+                    for (creative_id, media_buy_id), package_ids in ad_server_pushes.items():
+                        # structural-guard: nested-unit-of-work - after_commit runs this once BaseUoW.__exit__ has closed the unit
+                        ok, err = push_creative_to_existing_buy(
+                            creative_id=creative_id,
+                            media_buy_id=media_buy_id,
+                            tenant_id=tenant.tenant_id,
+                            package_ids=package_ids,
+                        )
+                        if ok:
+                            continue
+                        logger.error(
+                            log_safe(f"Creative {creative_id} not trafficked to media buy {media_buy_id}: {err}")
+                        )
+                        for package_id in package_ids:
+                            assignments_by_creative[creative_id].remove(package_id)
+                            assignment_errors_by_creative[creative_id][package_id] = (
+                                f"The ad server did not accept creative {creative_id} for package {package_id}"
+                            )
+
+                assert uow.creatives is not None
+                uow.creatives.after_commit(_traffic_assignments, label="assignment_ad_server_push")
 
             # An owned UoW commits on clean exit; a caller-supplied one is the
             # caller's to dispose of (rolled back under dry_run).
