@@ -18,7 +18,7 @@ from src.core.schemas import (
     GetProductsRequest,
     ReportingPeriod,
 )
-from tests.factories.media_buy import pricing_options_for, request_package
+from tests.factories.media_buy import request_package
 from tests.factories.principal import PrincipalFactory
 
 
@@ -101,10 +101,6 @@ class TestDeliveryLoopErrorHandling:
             patch("src.core.tools.media_buy_delivery.get_adapter", return_value=adapter),
             patch("src.core.tools.media_buy_delivery.MediaBuyUoW", return_value=mock_uow),
             patch("src.core.tools.media_buy_delivery._get_target_media_buys", return_value=target_buys),
-            patch(
-                "src.core.tools.media_buy_delivery._get_pricing_options",
-                side_effect=lambda option_ids, **_: pricing_options_for(option_ids),
-            ),
         ):
             response = _get_media_buy_delivery_impl(req, identity)
 

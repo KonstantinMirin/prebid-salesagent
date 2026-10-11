@@ -38,8 +38,7 @@ def request_package(index: int = 0, **overrides: Any) -> dict[str, Any]:
     Built by ``PackageRequestFactory``, which binds ``PackageRequest`` — so the fields a
     fixture package carries are the ones the accepted model declares, not a list someone
     typed. ``pricing_option_id`` is there because the model REQUIRES it, and it is what
-    ``get_media_buy_delivery`` resolves the ``pricing_model``/``rate``/``currency`` from
-    that ``get-media-buy-delivery-response.json`` requires on every ``by_package`` entry.
+    ``package_config_for`` resolves the package's stored ``pricing_info`` from.
 
     Two fields are set on the payload rather than taken from the model, each deliberately:
 
@@ -83,46 +82,6 @@ def pricing_option_for(pricing_option_id: str) -> PricingOption | None:
     return option if option.pricing_option_id == pricing_option_id else None
 
 
-def pricing_options_for(pricing_option_ids: Iterable[str]) -> dict[str, PricingOption]:
-    """The lookup result ``_get_pricing_options`` returns for *pricing_option_ids*.
-
-    For tests that mock that function: the mock answers about the ids production actually
-    asked for, so a fixture package and its pricing option cannot drift apart.
-    """
-    resolved = ((option_id, pricing_option_for(option_id)) for option_id in pricing_option_ids)
-    return {option_id: option for option_id, option in resolved if option is not None}
-
-
-def pricing_options_named(
-    pricing_model: str = "cpm",
-    rate: str | Decimal = "5.00",
-    currency: str = "USD",
-    is_fixed: bool = True,
-) -> dict[str, PricingOption]:
-    """``_get_pricing_options``'s result for ONE option with a caller-chosen *rate*.
-
-    The sibling of :func:`pricing_options_for`, for the tests that grade what a delivery
-    report says the rate WAS. ``rate`` is the one term the synthetic id does not encode —
-    the grammar is ``{model}_{currency}_{fixed|auction}`` — so it cannot be recovered by
-    inverting an id, and a test asserting a cpc buy billed 0.50 has to state it.
-
-    The KEY is READ OFF THE ROW, not computed here. ``pricing_option_id`` is a stored
-    column now, and the row the factory builds already carries the id
-    ``PricingOption.default_option_id`` assigned it — so this asks the row what it is
-    named instead of spelling the grammar a second time. That is the whole difference
-    from the helper this replaces, which took an arbitrary id (``"po_cpc"``) and
-    fabricated an option for it, so a package could name an id no reader resolves and
-    the fixture would still answer.
-    """
-    option = PricingOptionFactory.build(
-        pricing_model=pricing_model,
-        rate=Decimal(str(rate)),
-        currency=currency,
-        is_fixed=is_fixed,
-    )
-    return {option.pricing_option_id: option}
-
-
 def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
     """The ``MediaPackage.package_config`` a persisted request *package* carries.
 
@@ -132,9 +91,10 @@ def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
     package because it is what that package bid, and the GAM order manager reads a
     package's rate from it (``src/adapters/utils/pricing.py``).
 
-    ``get_media_buy_delivery`` resolves the pricing its response REQUIRES from this first,
-    falling back to the ``PricingOption`` the package names. A row with neither makes the
-    delivery report unbuildable, which is what ``_package_pricing`` refuses to paper over.
+    ``get_media_buy_delivery`` prices each ``by_package`` entry from this ``pricing_info``
+    alone (the response REQUIRES ``pricing_model``/``rate``/``currency``). A row without it
+    makes the delivery report unbuildable, which is what ``_package_pricing`` refuses to
+    paper over.
     """
     option_id = package.get("pricing_option_id")
     option = pricing_option_for(option_id) if option_id else None
@@ -150,6 +110,20 @@ def package_config_for(package: dict[str, Any]) -> dict[str, Any]:
             "build packages through PackageRequestFactory / request_package()"
         )
     return {**package, "pricing_info": pricing_info_for(option, bid_price=package.get("bid_price"))}
+
+
+def package_rows_for(media_buy_id: str, packages: Iterable[dict[str, Any]]) -> list[MediaPackage]:
+    """The unpersisted ``MediaPackage`` rows a buy's request *packages* are stored as.
+
+    One row per package that names a ``package_id`` (the id the repository injects when it
+    persists them), carrying the terms create stores with it (``package_config_for``). For
+    unit tests whose mocked repository hands the delivery service a buy's rows.
+    """
+    return [
+        MediaPackage(media_buy_id=media_buy_id, package_id=pkg["package_id"], package_config=package_config_for(pkg))
+        for pkg in packages
+        if pkg.get("package_id")
+    ]
 
 
 class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
@@ -292,10 +266,10 @@ class MediaBuyFactory(factory.alchemy.SQLAlchemyModelFactory):
         """Materialize the ``MediaPackage`` row each persisted request package names.
 
         A buy production created always has them: ``create_media_buy`` writes one row per
-        package and injects that row's ``package_id`` back into ``raw_request``. A factory
-        buy without them is a shape production cannot produce, and ``get_media_buy_delivery``
-        cannot state the pricing its response REQUIRES for a package with no row and no
-        ``PricingOption`` — the same reason ``account_id`` above seeds a real Account row.
+        package and injects that row's ``package_id`` back into ``raw_request``. The rows
+        are the buy's packages: ``get_media_buy_delivery`` reports one entry per row, priced
+        from the row's ``pricing_info``. A factory buy without them is a shape production
+        cannot produce — the same reason ``account_id`` above seeds a real Account row.
 
         Only packages that NAME a ``package_id`` get a row, because that id is what the
         repository injects when it persists them; a caller who supplies a ``raw_request``
@@ -434,34 +408,3 @@ def package_pricing_fields(
         "rate": rate if rate is not None else float(option.rate),
         "currency": currency if currency is not None else option.currency,
     }
-
-
-def seed_delivery_pricing(
-    tenant: Any,
-    product_id: str = FIXTURE_PRODUCT_ID,
-    pricing_model: str = "cpm",
-    rate: str | Decimal = "5.00",
-    currency: str = "USD",
-) -> str:
-    """PERSIST the Product + PricingOption rows a delivery-reporting buy needs; return the id.
-
-    The integration ``DeliveryPollEnv`` runs the REAL ``_get_pricing_options``, which reads
-    the tenant's ``pricing_options`` rows and reconstructs each synthetic id, so a package
-    naming an id no row produces resolves to nothing. The returned id is produced by
-    the row's own ``pricing_option_id`` column, read back rather than recomputed.
-
-    Pass ``tenant`` (the object, not the id: ``ProductFactory`` derives ``tenant_id`` from
-    its ``tenant`` SubFactory, so an id kwarg alone leaves the row on a freshly-minted
-    tenant).
-    """
-    from tests.factories.product import ProductFactory
-
-    product = ProductFactory(tenant=tenant, product_id=product_id)
-    option = PricingOptionFactory(
-        product=product,
-        pricing_model=pricing_model,
-        rate=Decimal(str(rate)),
-        currency=currency,
-        is_fixed=True,
-    )
-    return option.pricing_option_id

@@ -19,6 +19,7 @@ import pytest
 from adcp.types import MediaBuyStatus
 from pydantic import RootModel
 
+from src.core.database.models import MediaPackage
 from src.core.exceptions import AdCPPersistedStateError
 from src.core.schemas import (
     ApprovalStatus,
@@ -118,13 +119,14 @@ def make_package(
     bid_price=None,
     package_config=None,
 ):
-    pkg = MagicMock()
-    pkg.media_buy_id = media_buy_id
-    pkg.package_id = package_id
-    pkg.budget = budget
-    pkg.bid_price = bid_price
-    pkg.package_config = package_config or {}
-    return pkg
+    """An unpersisted ``MediaPackage`` row, so its readers (``platform_line_item_id``) are the model's."""
+    return MediaPackage(
+        media_buy_id=media_buy_id,
+        package_id=package_id,
+        budget=budget,
+        bid_price=bid_price,
+        package_config=package_config or {},
+    )
 
 
 # ---------------------------------------------------------------------------

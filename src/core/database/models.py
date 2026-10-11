@@ -1692,6 +1692,12 @@ class MediaPackage(Base):
     # Relationships
     media_buy = relationship("MediaBuy", back_populates="packages")
 
+    @property
+    def platform_line_item_id(self) -> str | None:
+        """The ad server line item this package booked, as create persisted it
+        (``_persist_adapter_package_ids``); None until the adapter reported one."""
+        return self.package_config.get("platform_line_item_id")
+
     __table_args__ = (
         Index("idx_media_packages_media_buy", "media_buy_id"),
         Index("idx_media_packages_package", "package_id"),

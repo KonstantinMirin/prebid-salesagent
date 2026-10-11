@@ -633,7 +633,7 @@ def _persist_adapter_package_ids(
         if li_pkg:
             if li_pkg.package_config is None:
                 li_pkg.package_config = {}
-            existing_li = li_pkg.package_config.get("platform_line_item_id")
+            existing_li = li_pkg.platform_line_item_id
             new_li = str(line_item_id)
             if existing_li and existing_li != new_li:
                 logger.warning(

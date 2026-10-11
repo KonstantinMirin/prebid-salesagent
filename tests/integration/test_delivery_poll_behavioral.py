@@ -25,7 +25,7 @@ from src.core.exceptions import (
 )
 from src.core.schemas import GetMediaBuyDeliveryResponse, PricingModel
 from tests.factories import PricingOptionFactory
-from tests.factories.media_buy import request_package, seed_delivery_pricing
+from tests.factories.media_buy import request_package
 
 # ---------------------------------------------------------------------------
 # UC-004-ALT-WEBHOOK-PUSH-REPORTING-03
@@ -756,7 +756,6 @@ class TestPackageLevelBreakdowns:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            option_id = seed_delivery_pricing(tenant)
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
@@ -765,8 +764,8 @@ class TestPackageLevelBreakdowns:
                 end_date=date(2025, 3, 31),
                 raw_request={
                     "packages": [
-                        request_package(package_id="pkg_A", product_id="prod_A", pricing_option_id=option_id),
-                        request_package(package_id="pkg_B", product_id="prod_B", pricing_option_id=option_id),
+                        request_package(package_id="pkg_A", product_id="prod_A"),
+                        request_package(package_id="pkg_B", product_id="prod_B"),
                     ],
                 },
             )
@@ -811,7 +810,6 @@ class TestPackageLevelBreakdowns:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            option_id = seed_delivery_pricing(tenant)
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
@@ -821,8 +819,8 @@ class TestPackageLevelBreakdowns:
                 end_date=date(2025, 12, 31),
                 raw_request={
                     "packages": [
-                        request_package(package_id="pkg_X", product_id="prod_X", pricing_option_id=option_id),
-                        request_package(package_id="pkg_Y", product_id="prod_Y", pricing_option_id=option_id),
+                        request_package(package_id="pkg_X", product_id="prod_X"),
+                        request_package(package_id="pkg_Y", product_id="prod_Y"),
                     ],
                 },
             )
@@ -858,7 +856,6 @@ class TestPackageLevelBreakdowns:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            option_id = seed_delivery_pricing(tenant)
             MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
@@ -867,8 +864,8 @@ class TestPackageLevelBreakdowns:
                 end_date=date(2025, 4, 30),
                 raw_request={
                     "packages": [
-                        request_package(package_id="pkg_1", product_id="prod_1", pricing_option_id=option_id),
-                        request_package(package_id="pkg_2", product_id="prod_2", pricing_option_id=option_id),
+                        request_package(package_id="pkg_1", product_id="prod_1"),
+                        request_package(package_id="pkg_2", product_id="prod_2"),
                     ],
                 },
             )
@@ -1441,126 +1438,6 @@ class TestUnpopulatedFieldsGraceful:
 
 
 # ---------------------------------------------------------------------------
-# UC-004-MAIN-14
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestPricingOptionStringLookup:
-    """Verify pricing_option_id string field is used for lookup, not integer PK.
-
-    Bug: -- string-to-integer comparison silently drops pricing
-    context, resulting in silent data loss (no clicks calculated for CPC buys).
-
-    Covers: UC-004-MAIN-14
-    """
-
-    def test_get_pricing_options_uses_string_id_not_integer_pk(self, integration_db):
-        """_get_pricing_options should return dict keyed by string pricing_option_id.
-
-        Covers: UC-004-MAIN-14
-        """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
-        from src.core.database.repositories.product import ProductRepository
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-
-        with get_db_session() as session:
-            # Required (NOT NULL) and UNIQUE. Nothing routes to this host; it exists to satisfy the column.
-            tenant = Tenant(
-                tenant_id="t1",
-                name="Test",
-                subdomain="t1",
-                virtual_host="t1.adcp.test",
-                is_active=True,
-                ad_server="mock",
-            )
-            session.add(tenant)
-            session.flush()
-            product = Product(
-                tenant_id="t1",
-                product_id="prod1",
-                name="Test Product",
-                format_ids=[],
-                property_tags=["all_inventory"],
-                targeting_template={},
-                delivery_type="standard",
-            )
-            session.add(product)
-            session.flush()
-            session.add(
-                PricingOptionFactory.build(
-                    tenant_id="t1",
-                    product_id="prod1",
-                    pricing_model="cpm",
-                    rate=5.00,
-                    currency="USD",
-                    is_fixed=True,
-                )
-            )
-            session.commit()
-
-        with get_db_session() as session:
-            product_repo = ProductRepository(session, "t1")
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1", product_repo=product_repo)
-
-        assert "cpm_usd_fixed" in result, (
-            f"Expected key 'cpm_usd_fixed', got keys: {list(result.keys())}. "
-            f"_get_pricing_options incorrectly uses integer PK."
-        )
-
-    def test_non_numeric_pricing_option_id_is_not_silently_discarded(self, integration_db):
-        """Non-numeric string pricing_option_ids must not be dropped.
-
-        Covers: UC-004-MAIN-14
-        """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
-        from src.core.database.repositories.product import ProductRepository
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-
-        with get_db_session() as session:
-            tenant = Tenant(
-                tenant_id="t1",
-                name="Test",
-                subdomain="t1",
-                virtual_host="t1.adcp.test",
-                is_active=True,
-                ad_server="mock",
-            )
-            session.add(tenant)
-            session.flush()
-            product = Product(
-                tenant_id="t1",
-                product_id="prod1",
-                name="Test Product",
-                format_ids=[],
-                property_tags=["all_inventory"],
-                targeting_template={},
-                delivery_type="standard",
-            )
-            session.add(product)
-            session.flush()
-            session.add(
-                PricingOptionFactory.build(
-                    tenant_id="t1",
-                    product_id="prod1",
-                    pricing_model="cpm",
-                    rate=5.00,
-                    currency="USD",
-                    is_fixed=True,
-                )
-            )
-            session.commit()
-
-        with get_db_session() as session:
-            product_repo = ProductRepository(session, "t1")
-            result = _get_pricing_options(["cpm_usd_fixed"], tenant_id="t1", product_repo=product_repo)
-
-        assert len(result) > 0, "Non-numeric pricing_option_id 'cpm_usd_fixed' was silently discarded."
-
-
-# ---------------------------------------------------------------------------
 # UC-004-MAIN-19
 # ---------------------------------------------------------------------------
 
@@ -1602,130 +1479,6 @@ class TestDeliveryMetricsFieldPresence:
             assert totals.spend == 250.0
             assert totals.clicks is not None or hasattr(totals, "clicks")
             assert hasattr(totals, "ctr")
-
-
-# ---------------------------------------------------------------------------
-# UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.requires_db
-class TestPricingOptionStringToIntComparisonRejected:
-    """PricingOption string-to-integer comparison is detected and rejected.
-
-    Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
-    """
-
-    def test_pricing_options_keyed_by_string_id_not_integer_pk(self, integration_db):
-        """_get_pricing_options maps by string pricing_option_id, not integer PK.
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
-        """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
-        from src.core.database.repositories.product import ProductRepository
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-
-        with get_db_session() as session:
-            tenant = Tenant(
-                tenant_id="t1",
-                name="Test",
-                subdomain="t1",
-                virtual_host="t1.adcp.test",
-                is_active=True,
-                ad_server="mock",
-            )
-            session.add(tenant)
-            session.flush()
-            product = Product(
-                tenant_id="t1",
-                product_id="prod1",
-                name="Test Product",
-                format_ids=[],
-                property_tags=["all_inventory"],
-                targeting_template={},
-                delivery_type="standard",
-            )
-            session.add(product)
-            session.flush()
-            po = PricingOptionFactory.build(
-                tenant_id="t1",
-                product_id="prod1",
-                pricing_model="cpm",
-                rate=5.00,
-                currency="USD",
-                is_fixed=True,
-            )
-            session.add(po)
-            session.commit()
-            po_id = po.id
-
-        with get_db_session() as session:
-            product_repo = ProductRepository(session, "t1")
-            result = _get_pricing_options(
-                tenant_id="t1",
-                pricing_option_ids=["cpm_usd_fixed"],
-                product_repo=product_repo,
-            )
-
-        # Key assertion: the map uses the string pricing_option_id, NOT the int PK
-        assert "cpm_usd_fixed" in result
-        assert po_id not in result
-
-    def test_integer_pk_lookup_returns_none(self, integration_db):
-        """Looking up pricing option by integer PK returns None (type mismatch caught).
-
-        Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-02
-        """
-        from src.core.database.database_session import get_db_session
-        from src.core.database.models import Product, Tenant
-        from src.core.database.repositories.product import ProductRepository
-        from src.core.tools.media_buy_delivery import _get_pricing_options
-
-        with get_db_session() as session:
-            tenant = Tenant(
-                tenant_id="t1",
-                name="Test",
-                subdomain="t1",
-                virtual_host="t1.adcp.test",
-                is_active=True,
-                ad_server="mock",
-            )
-            session.add(tenant)
-            session.flush()
-            product = Product(
-                tenant_id="t1",
-                product_id="prod1",
-                name="Test Product",
-                format_ids=[],
-                property_tags=["all_inventory"],
-                targeting_template={},
-                delivery_type="standard",
-            )
-            session.add(product)
-            session.flush()
-            session.add(
-                PricingOptionFactory.build(
-                    tenant_id="t1",
-                    product_id="prod1",
-                    pricing_model="cpc",
-                    rate=2.50,
-                    currency="USD",
-                    is_fixed=True,
-                )
-            )
-            session.commit()
-
-        with get_db_session() as session:
-            product_repo = ProductRepository(session, "t1")
-            result = _get_pricing_options(
-                tenant_id="t1",
-                pricing_option_ids=["cpc_usd_fixed"],
-                product_repo=product_repo,
-            )
-
-        # Only the string pricing_option_id should work
-        assert result.get("cpc_usd_fixed") is not None
 
 
 # ---------------------------------------------------------------------------
@@ -1819,15 +1572,12 @@ class TestEndToEndDeliveryMetricsCpmPricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            option_id = seed_delivery_pricing(tenant, product_id="prod_cpm2", pricing_model="cpm", rate="2.50")
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpm2",
                 raw_request={
-                    "packages": [
-                        request_package(package_id="pkg_cpm2", product_id="prod_cpm2", pricing_option_id=option_id)
-                    ],
+                    "packages": [request_package(package_id="pkg_cpm2", product_id="prod_cpm2")],
                 },
             )
             MediaPackageFactory(
@@ -1888,7 +1638,6 @@ class TestEndToEndDeliveryMetricsCpcPricing:
 
         from tests.factories import (
             MediaBuyFactory,
-            PricingOptionFactory,
             PrincipalFactory,
             ProductFactory,
             TenantFactory,
@@ -1943,8 +1692,7 @@ class TestEndToEndDeliveryMetricsCpcPricing:
 
         Graded on the three fields the pin requires on a by_package entry. The old
         assertion looked for `pricing_option_id` on the item, which the pin does not
-        declare, and the buy named "cpc_usd_standard" -- an id no stored row carries, so
-        `_get_pricing_options` resolved it to nothing.
+        declare. The package's terms are the ones stored on its row.
 
         Covers: UC-004-PRICINGOPTION-TYPE-CONSISTENCY-04
         """
@@ -1954,18 +1702,15 @@ class TestEndToEndDeliveryMetricsCpcPricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            # `pricing_option_id` is a STORED column and `_get_pricing_options` keys on
-            # it verbatim, so only an id some row actually carries resolves. The seeded
-            # row's own id is taken from the seeder; "cpc_usd_standard" -- what this named
-            # before -- was carried by no row at all.
-            option_id = seed_delivery_pricing(tenant, product_id="prod_cpc2", pricing_model="cpc", rate="0.50")
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpc2",
                 raw_request={
                     "packages": [
-                        request_package(package_id="pkg_cpc2", product_id="prod_cpc2", pricing_option_id=option_id)
+                        request_package(
+                            package_id="pkg_cpc2", product_id="prod_cpc2", pricing_option_id="cpc_usd_fixed"
+                        )
                     ],
                 },
             )
@@ -2091,19 +1836,15 @@ class TestDeliveryMetricsFlatRatePricing:
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            # `pricing_option_id` is a STORED column and `_get_pricing_options` keys on
-            # it verbatim: the seeded row's own id is what the package must name.
-            # "flat_rate_premium" -- what this named before -- was carried by no row.
-            option_id = seed_delivery_pricing(
-                tenant, product_id="prod_flat2", pricing_model="flat_rate", rate="5000.00"
-            )
             buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_flat2",
                 raw_request={
                     "packages": [
-                        request_package(package_id="pkg_flat2", product_id="prod_flat2", pricing_option_id=option_id)
+                        request_package(
+                            package_id="pkg_flat2", product_id="prod_flat2", pricing_option_id="flat_rate_usd_fixed"
+                        )
                     ],
                 },
             )
@@ -2461,47 +2202,32 @@ class TestCpcPackageClicksDerivation:
 
         Business rule: package_clicks = floor(spend / cpc_rate)
         """
-        from decimal import Decimal
         from math import floor
 
-        from tests.factories import (
-            MediaBuyFactory,
-            PricingOptionFactory,
-            PrincipalFactory,
-            ProductFactory,
-            TenantFactory,
-        )
+        from tests.factories import MediaBuyFactory, MediaPackageFactory, PrincipalFactory, TenantFactory
         from tests.harness import DeliveryPollEnv
 
         with DeliveryPollEnv(tenant_id="t1", principal_id="p1") as env:
             tenant = TenantFactory(tenant_id="t1")
             principal = PrincipalFactory(tenant=tenant, principal_id="p1")
-            product = ProductFactory(tenant=tenant)
-            option = PricingOptionFactory(
-                product=product,
-                pricing_model="cpc",
-                rate=Decimal("0.50"),
-                currency="USD",
-                is_fixed=True,
-            )
-
-            # Read the id off the row: pricing_option_id is a stored column now, and
-            # `_get_pricing_options` keys on it verbatim rather than rebuilding it from
-            # the row's terms, so a hand-spelled id is a guess about what was written.
-            po_id = option.pricing_option_id
-
-            MediaBuyFactory(
+            buy = MediaBuyFactory(
                 tenant=tenant,
                 principal=principal,
                 media_buy_id="mb_cpc",
                 raw_request={
                     "packages": [
-                        {
-                            "package_id": "pkg_cpc",
-                            "product_id": product.product_id,
-                            "pricing_option_id": po_id,
-                        }
+                        request_package(package_id="pkg_cpc", product_id="prod_cpc", pricing_option_id="cpc_usd_fixed")
                     ],
+                },
+            )
+            # The package's agreed terms, stored on its row as create stores them.
+            MediaPackageFactory(
+                media_buy=buy,
+                package_id="pkg_cpc",
+                package_config={
+                    "package_id": "pkg_cpc",
+                    "product_id": "prod_cpc",
+                    "pricing_info": {"pricing_model": "cpc", "rate": 0.50, "currency": "USD"},
                 },
             )
 
