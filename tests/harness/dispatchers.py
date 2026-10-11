@@ -353,7 +353,7 @@ def _deliver_e2e_rest_signed(
     credential: Any,
     signed: SignatureRealization,
 ) -> Any:
-    """E2E_REST delivery through ``env.wire_request`` — the signABLE path.
+    """E2E_REST delivery through ``env._send_frame`` — the signABLE path.
 
     Not a second copy of ``client._deliver_e2e_rest``: that function serializes
     its own request (httpx's ``json=``), which is the one thing a signature
@@ -400,26 +400,23 @@ def _deliver_e2e_rest_signed(
     """
     import httpx
 
-    from tests.harness._base import _presents_a_credential
     from tests.harness.client import _presented
     from tests.helpers.signing import wire_origin
 
-    raw, headers = env.wire_request(
-        path=endpoint,
-        # A parameterless GET has no body to sign, and none to send.
-        body=None if method == "get" else body,
-        signed=signed,
-        origin=wire_origin(base_url),
-        # ``_presented`` is the one place an omitted credential falls back to
-        # env.credential(), shared with every other e2e delivery; the bearer is
-        # then the acceptable-credential bit, not the header set to send.
-        credentialed=_presents_a_credential(_presented(env, credential)),
-        method=method.upper(),
-    )
     with httpx.Client(base_url=base_url, timeout=30) as client:
-        # Signed or not, the bytes signed are the bytes sent — `content=`, never
-        # `json=`, which would re-serialize them.
-        return client.request(method.upper(), endpoint, content=raw, headers=headers)
+        return env._send_frame(
+            client,
+            endpoint,
+            # A parameterless GET has no body to sign, and none to send.
+            None if method == "get" else body,
+            # ``_presented`` is the one place an omitted credential falls back to
+            # env.credential(), shared with every other e2e delivery; ``_send_frame``
+            # reads it for the acceptable-credential bit, not as the header set to send.
+            credential=_presented(env, credential),
+            signed=signed,
+            method=method.upper(),
+            origin=wire_origin(base_url),
+        )
 
 
 class RestE2EDispatcher:
