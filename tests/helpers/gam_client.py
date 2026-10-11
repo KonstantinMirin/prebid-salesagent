@@ -7,12 +7,15 @@ Two stand-ins, one network:
   ``GAMClientManager.get_service`` calls ``client.GetService``, the adapter and its
   targeting manager call ``client.GetService`` directly, and every construction of a client
   (the adapter's, a health check's, the approval and sync services') ends in
-  ``ad_manager.AdManagerClient(...)``. ``MediaBuyCreateEnv`` patches the class on that
-  module.
+  ``ad_manager.AdManagerClient(...)``. ``GAM_CLIENT_PATCH`` (``tests/harness/gam.py``)
+  patches the class on that module.
 * ``stub_gam_client_manager`` stands in for this repo's ``GAMClientManager`` and serves the
   same client. It exists for tests that build the adapter from a config whose credentials
   could not be built (a key file path that does not exist), so the manager itself cannot
   run.
+
+``serve_gam_report`` configures a ``stub_gam_client``'s ``ReportService`` to run one report
+job, and returns the report body Google's report host serves (``gam_report_csv_dump``).
 
 The adapter has no dry-run mode: every read and write it makes is a GAM call. It used
 to fabricate its own test data when ``dry_run`` was set — ``_get_line_item_info``
@@ -29,10 +32,15 @@ test that needs a line item states one.
 
 from __future__ import annotations
 
+import csv
+import gzip
+import io
 import itertools
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 from unittest.mock import MagicMock
+
+from src.core.security.egress.response import OutboundResult
 
 
 class SoapObject(dict):
@@ -134,3 +142,50 @@ def stub_gam_client_manager(*, line_items: tuple[SoapObject, ...] | list[SoapObj
     client_manager.get_client.return_value = client
     client_manager.get_service.side_effect = client.GetService
     return client_manager
+
+
+#: Where the stand-in ``ReportService`` says a finished report can be downloaded: a host
+#: ``ReportingConfig.ALLOWED_DOMAINS`` accepts, so the seller's provenance check runs for real.
+GAM_REPORT_DOWNLOAD_URL = "https://storage.googleapis.com/gam-reports/report.csv.gz"
+
+
+def gam_report_csv_dump(rows: Sequence[Mapping[str, object]]) -> bytes:
+    """The gzipped ``CSV_DUMP`` body GAM serves for a finished report holding *rows*.
+
+    Rows are keyed by GAM's own column names (``Dimension.*``, ``Column.*``) and written
+    verbatim under a header taken from the first row. No column has a default: a caller
+    states exactly the columns it means. No rows is a header-less, empty report.
+    """
+    text = io.StringIO()
+    if rows:
+        writer = csv.DictWriter(text, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    return gzip.compress(text.getvalue().encode())
+
+
+def serve_gam_report(
+    client: MagicMock,
+    *,
+    rows: Sequence[Mapping[str, object]] = (),
+    job_status: str = "COMPLETED",
+    download_url: str = GAM_REPORT_DOWNLOAD_URL,
+) -> OutboundResult:
+    """Make *client*'s ``ReportService`` run a report job that ends in *job_status*.
+
+    ``runReportJob`` answers a job with an id, ``getReportJobStatus`` answers
+    *job_status*, and ``getReportDownloadURL`` answers *download_url*. Returns what Google's
+    report host serves for that URL: the gzipped ``CSV_DUMP`` of *rows* as the egress seam
+    returns it. Patch the seller's download with it; a caller serving the body from its own
+    origin passes ``download_url`` and ignores the return value.
+
+    Ceiling: the stand-in does not evaluate the report query. It answers the configured rows
+    whatever dimensions, dates and filter the seller sent.
+    """
+    report_service = client.GetService("ReportService")
+    report_service.runReportJob.return_value = SoapObject(id=8000001)
+    report_service.getReportJobStatus.return_value = job_status
+    report_service.getReportDownloadURL.return_value = download_url
+    return OutboundResult(
+        http_status=200, headers={}, content=gam_report_csv_dump(rows), attempts=1, duration_seconds=0.0
+    )

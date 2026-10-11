@@ -784,7 +784,7 @@ EXPECTED_UNSUPPORTED_DECLARATIONS: frozenset[tuple[str, str, str]] = frozenset(
         # a stand-in endpoint, a setting that would exist only for tests. The scenarios grade
         # fully on a2a/mcp/rest.
         (
-            "tests/harness/media_buy_create.py",
+            "tests/harness/gam.py",
             "sell_through_gam",
             "the live server has no stand-in Google Ad Manager network: a GAM tenant there would "
             "call Google, so its tenants run the Mock adapter",
