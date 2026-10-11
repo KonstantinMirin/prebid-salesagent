@@ -9,6 +9,8 @@ an operation fails. Errors are real exceptions from production code:
 
 from __future__ import annotations
 
+import json
+
 from pytest_bdd import parsers, then
 
 from tests.bdd.steps._outcome_helpers import (
@@ -1149,6 +1151,23 @@ def then_wire_error_details_include(ctx: dict, key: str, value: str) -> None:
         assert value in _scalar_leaves(actual), f"expected {value!r} among errors[0].details[{key!r}] = {actual!r}"
     else:
         assert str(actual) == value, f"expected errors[0].details[{key!r}] == {value!r}, got {actual!r}"
+
+
+@then(parsers.parse("the wire error details geo_disjoint should be {records}"))
+def then_wire_error_details_geo_disjoint(ctx: dict, records: str) -> None:
+    """Assert ``errors[0].details.geo_disjoint`` is exactly the scenario's records ON THE WIRE.
+
+    Equality, not membership: every record's ``include``, ``within``, ``system`` and
+    ``values`` is the scenario's literal, so a record naming the wrong field, or carrying
+    a key the declared ``GeoDisjointInclusion`` shape does not have, fails here.
+    """
+    error_object = ctx["result"].wire_error_object()
+    assert error_object is not None, "no wire error object captured"
+    details = error_object.get("details") or {}
+    expected = json.loads(records)
+    assert details.get("geo_disjoint") == expected, (
+        f"expected errors[0].details.geo_disjoint == {expected!r}, got {details.get('geo_disjoint')!r}"
+    )
 
 
 @then(parsers.parse('the wire error object carries no "{key}" key'))

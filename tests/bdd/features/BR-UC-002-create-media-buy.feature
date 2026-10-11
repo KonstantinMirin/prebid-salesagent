@@ -324,13 +324,13 @@ Feature: BR-UC-002 Create Media Buy
     And the operation should fail
     And the error code should be "INVALID_REQUEST"
     And the error recovery should be "correctable"
-    And the wire error details should include geo_disjoint "<value>"
+    And the wire error details geo_disjoint should be <records>
     And the error should include "suggestion" field
 
     Examples:
-      | case                   | overlay                                                                                 | value |
-      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | US-NY |
-      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | 501   |
+      | case                   | overlay                                                                                 | records                                                                                            |
+      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"include": "geo_regions", "within": "geo_countries", "values": ["US-NY"]}]                       |
+      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"include": "geo_metros", "within": "geo_countries", "system": "nielsen_dma", "values": ["501"]}] |
     # LOCALLY-ADDED beside the generated ext-f-geo. Inclusion fields combine with AND
     # (docs/reference/migration/geo-targeting.mdx at v3.1.1); an overlay whose inclusion
     # fields have no place in common can never deliver. The spec is silent on this case;

@@ -18,7 +18,12 @@ from adcp.types.generated_poc.enums.metro_system import MetroAreaSystem
 
 from src.core.enum_helpers import enum_value
 from src.core.errors.codes import ErrorCode
-from src.core.errors.details import CapabilityRefusalDetails, ValidationDetails
+from src.core.errors.details import (
+    CapabilityRefusalDetails,
+    GeoDisjointInclusion,
+    GeoInclusionField,
+    ValidationDetails,
+)
 from src.core.exceptions import AdCPInvalidRequestError, AdCPValidationError
 from src.core.schemas import Error, Targeting, TargetingCapability
 from src.core.validation_helpers import PACKAGES_FIELD
@@ -364,7 +369,7 @@ def nielsen_dma_codes(metros: list | None) -> set[str]:
     return extract_system_values(metros or []).get(MetroAreaSystem.nielsen_dma.value, set())
 
 
-def _geo_inclusions(targeting: Targeting) -> dict[str, tuple[set[str], set[str]]]:
+def _geo_inclusions(targeting: Targeting) -> dict[GeoInclusionField, tuple[set[str], set[str]]]:
     """Per finer inclusion field, ``(named, kept)``: the codes the buyer named, and those inside a listed country.
 
     Inclusion fields combine with AND (docs/reference/migration/geo-targeting.mdx at
@@ -387,23 +392,23 @@ def _geo_inclusions(targeting: Targeting) -> dict[str, tuple[set[str], set[str]]
     }
 
 
-def geo_disjoint_inclusions(targeting: Targeting) -> list[dict[str, object]]:
+def geo_disjoint_inclusions(targeting: Targeting) -> list[GeoDisjointInclusion]:
     """One record per inclusion field whose codes all lie outside the listed countries.
 
     Such an overlay names no place at all: its inclusion fields AND to nothing, so the buy
     could never deliver. The spec is silent on this case; it is refused like the same-value
-    overlap (docs/media-buy/advanced-topics/targeting.mdx, Exclusion Semantics), as data:
-    ``{include, within, values}``, plus ``system`` for Nielsen DMAs.
+    overlap (docs/media-buy/advanced-topics/targeting.mdx, Exclusion Semantics), as data.
     """
-    records: list[dict[str, object]] = []
-    for field, (named, kept) in _geo_inclusions(targeting).items():
-        if named and not kept:
-            record: dict[str, object] = {"include": field, "within": "geo_countries"}
-            if field == "geo_metros":
-                record["system"] = MetroAreaSystem.nielsen_dma.value
-            record["values"] = sorted(named)
-            records.append(record)
-    return records
+    return [
+        GeoDisjointInclusion(
+            include=field,
+            within="geo_countries",
+            system=MetroAreaSystem.nielsen_dma if field == "geo_metros" else None,
+            values=sorted(named),
+        )
+        for field, (named, kept) in _geo_inclusions(targeting).items()
+        if named and not kept
+    ]
 
 
 def geo_inclusion_cut(targeting: Targeting) -> tuple[set[str], set[str]]:
@@ -433,9 +438,9 @@ def collect_targeting_violations(targeting: Targeting) -> dict[str, object]:
 
         geo_overlaps              {include, exclude, values} per conflicting field pair,
                                   plus `system` for metro/postal pairs
-        geo_disjoint              {include, within, values} per inclusion field whose
-                                  codes all lie outside the listed countries, plus
-                                  `system` for Nielsen DMAs (geo_disjoint_inclusions)
+        geo_disjoint              one GeoDisjointInclusion per inclusion field whose
+                                  codes all lie outside the listed countries
+                                  (geo_disjoint_inclusions)
 
     Empty mapping means the overlay is clean, so the caller can branch on truthiness.
 

@@ -125,15 +125,23 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     And Google Ad Manager received no order
 
     Examples:
-      | case                   | overlay                                     | capability          |
-      | a device platform      | {"device_platform": ["ios"]}                | device_platform     |
-      | a device type          | {"device_type_any_of": ["mobile"]}          | device_type_any_of  |
-      | an AXE include segment | {"axe_include_segment": "x8dj3k"}           | axe_include_segment |
-      | an AXE exclude segment | {"axe_exclude_segment": "y9kl4m"}           | axe_exclude_segment |
-      | an audience            | {"audiences_any_of": ["sports_fans"]}       | audiences           |
-      | two media types        | {"media_type_any_of": ["video", "display"]} | media_type_any_of   |
+      | case                                     | overlay                                     | capability          |
+      | a device platform                        | {"device_platform": ["ios"]}                | device_platform     |
+      | the seller extension device_type_any_of  | {"device_type_any_of": ["mobile"]}          | device_type_any_of  |
+      | an AXE include segment                   | {"axe_include_segment": "x8dj3k"}           | axe_include_segment |
+      | an AXE exclude segment                   | {"axe_exclude_segment": "y9kl4m"}           | axe_exclude_segment |
+      | the seller extension audiences_any_of    | {"audiences_any_of": ["sports_fans"]}       | audiences           |
+      | the seller extension media_type_any_of   | {"media_type_any_of": ["video", "display"]} | media_type_any_of   |
     # The seller has no AXE key configured. Each of these is refused while the overlay is
     # translated, ahead of the order, so the buyer gets the refusal with nothing left in GAM.
+    # That timing is what this outline grades, not whether each refusal is right:
+    # - device_platform: get_adcp_capabilities.mdx at v3.1.1 says "Device platform and
+    #   device type targeting are implied by `media_buy` support", and "If a capability is
+    #   declared, the seller MUST honor it". Refusing it conflicts with that; GAM device
+    #   targeting is tracked by #1076.
+    # - device_type_any_of, audiences_any_of and media_type_any_of are seller extensions,
+    #   not fields of core/targeting.json. Their pinned counterparts device_type (#1076)
+    #   and audience_include (#1855) are read by no adapter and are not refused.
 
   @T-UC-002-local-gam-geo-disjoint @extension @error
   Scenario Outline: Inclusion fields with no place in common are refused, and GAM receives nothing - <case>
@@ -143,10 +151,10 @@ Feature: A Google Ad Manager seller books exactly the geo the buyer's targeting 
     And the package targeting_overlay is <overlay>
     When the Buyer Agent sends the create_media_buy request
     Then the response contains error code INVALID_REQUEST
-    And the wire error details should include geo_disjoint "<value>"
+    And the wire error details geo_disjoint should be <records>
     And Google Ad Manager received no order
 
     Examples:
-      | case                    | overlay                                                                                 | value |
-      | region outside country  | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | US-NY |
-      | DMA outside country     | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | 501   |
+      | case                   | overlay                                                                                 | records                                                                                            |
+      | region outside country | {"geo_countries": ["CA"], "geo_regions": ["US-NY"]}                                     | [{"include": "geo_regions", "within": "geo_countries", "values": ["US-NY"]}]                       |
+      | DMA outside country    | {"geo_countries": ["CA"], "geo_metros": [{"system": "nielsen_dma", "values": ["501"]}]} | [{"include": "geo_metros", "within": "geo_countries", "system": "nielsen_dma", "values": ["501"]}] |
