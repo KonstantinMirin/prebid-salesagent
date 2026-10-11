@@ -1694,8 +1694,11 @@ class MediaPackage(Base):
 
     @property
     def platform_line_item_id(self) -> str | None:
-        """The ad server line item this package booked, as create persisted it
-        (``_persist_adapter_package_ids``); None until the adapter reported one."""
+        """The ad server line item this package is booked as, as a string; None until an adapter reported one.
+
+        The one reader of ``package_config["platform_line_item_id"]``, which is written once the
+        adapter's create returns.
+        """
         return self.package_config.get("platform_line_item_id")
 
     __table_args__ = (

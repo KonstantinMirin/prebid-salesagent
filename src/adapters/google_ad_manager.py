@@ -1009,7 +1009,7 @@ class GoogleAdManager(AdServerAdapter):
 
             currency = str(media_buy.currency or "USD")
             package_by_line_item = {
-                str(package.platform_line_item_id): package.package_id
+                package.platform_line_item_id: package.package_id
                 for package in repo.get_packages(media_buy_id)
                 if package.platform_line_item_id
             }
