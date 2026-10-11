@@ -165,7 +165,7 @@ Feature: A Google Ad Manager seller books each package's own volume, type, prior
     When the Buyer Agent sends the create_media_buy request
     Then the error code should be "CONFIGURATION_ERROR"
     And the error recovery should be "terminal"
-    And Google Ad Manager received no order
+    And Google Ad Manager received no order and no line item
 
     Examples:
       | priority |

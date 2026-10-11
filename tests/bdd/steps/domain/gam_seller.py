@@ -30,7 +30,8 @@ from tests.bdd.steps.generic._table import rows as table_rows
     parsers.re(
         r'the seller sells through Google Ad Manager as trafficker "(?P<trafficker_id>[^"]+)" on ad unit '
         r'"(?P<ad_unit_id>[^"]+)", and the buyer is its advertiser "(?P<advertiser_id>[^"]+)"'
-        r'(?:, on a network in time zone "(?P<network_time_zone>[^"]+)")?'
+        r'(?:, on a network (?:in time zone "(?P<network_time_zone>[^"]+)"'
+        r'|that refuses to name its time zone with "(?P<network_fault>[^"]+)"))?'
         r"(?:, with product settings '(?P<product_settings>[^']*)')?"
     )
 )
@@ -40,17 +41,19 @@ def given_seller_sells_through_gam(
     ad_unit_id: str,
     advertiser_id: str,
     network_time_zone: str | None,
+    network_fault: str | None,
     product_settings: str | None,
 ) -> None:
     """Onboard the env's tenant to GAM and sell every product the scenario built on one ad unit.
 
     The products are the scenario's default product and any further products a Given built
-    beside it (``ctx["extra_products"]``). The optional time-zone clause states the GAM
-    network's own time zone; without it the stand-in network keeps its default zone. The
-    optional product-settings clause is a JSON object of ``implementation_config`` keys the
-    seller wrote over the generated GAM configuration of each product it sells. A scenario
-    that needs another seller fact adds a clause to this sentence rather than a second
-    seller Given.
+    beside it (``ctx["extra_products"]``). The optional network clause states the GAM
+    network's own time zone, or the ``ApiError`` reason with which the network refuses to
+    name it; without it the stand-in network keeps its default zone. The optional
+    product-settings clause is a JSON object of ``implementation_config`` keys the seller
+    wrote over the generated GAM configuration of each product it sells. A scenario that
+    needs another seller fact adds a clause to this sentence rather than a second seller
+    Given.
     """
     ctx["env"].sell_through_gam(
         trafficker_id=trafficker_id,
@@ -58,6 +61,7 @@ def given_seller_sells_through_gam(
         ad_unit_id=ad_unit_id,
         products=[ctx["default_product"], *(product for product, _ in ctx.get("extra_products") or [])],
         network_time_zone=network_time_zone,
+        network_fault=network_fault,
         implementation_config=json.loads(product_settings) if product_settings is not None else None,
     )
 
@@ -259,8 +263,11 @@ def then_line_items_in_package_order(ctx: dict, datatable: Any) -> None:
     )
 
 
-@then("Google Ad Manager received no order")
-def then_no_order(ctx: dict) -> None:
-    """The seller sent GAM no order, so the refusal left nothing behind in the network."""
-    orders = ctx["env"].gam_objects_sent("OrderService", "createOrders")
-    assert orders == [], f"expected GAM to receive no order; it received {orders}"
+@then("Google Ad Manager received no order and no line item")
+def then_no_order_and_no_line_item(ctx: dict) -> None:
+    """The seller sent GAM no order and no line item: the refusal left nothing behind in GAM."""
+    sent = {
+        method: ctx["env"].gam_objects_sent(service, method)
+        for service, method in (("OrderService", "createOrders"), ("LineItemService", "createLineItems"))
+    }
+    assert sent == {"createOrders": [], "createLineItems": []}, f"expected GAM to receive nothing; it received {sent}"

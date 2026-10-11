@@ -4,7 +4,6 @@ import logging
 
 from googleads import ad_manager
 
-from src.adapters.gam.client import current_network_time_zone
 from src.core.database.database_session import get_db_session
 from src.core.database.models import AdapterConfig, Tenant
 
@@ -127,57 +126,6 @@ def test_gam_connection(tenant_id: str) -> dict:
 
     except Exception as e:
         return {"success": False, "message": f"GAM connection test failed: {str(e)}"}
-
-
-def get_gam_network_info(tenant_id: str) -> dict:
-    """
-    Get GAM network information for a tenant including timezone and currency.
-
-    Returns:
-        Dictionary with network information including timezone, currency, etc.
-    """
-    try:
-        client = get_ad_manager_client_for_tenant(tenant_id)
-        if not client:
-            raise ValueError(f"No GAM client available for tenant {tenant_id}")
-        network_service = client.GetService("NetworkService")
-        network = network_service.getCurrentNetwork()
-
-        # Extract network information
-        network_info = {
-            "network_code": network.networkCode,
-            "network_id": network.id,
-            "display_name": network.displayName,
-            "timezone": network.timeZone,
-            "currency_code": network.currencyCode,
-            "effective_root_ad_unit_id": (
-                network.effectiveRootAdUnitId if hasattr(network, "effectiveRootAdUnitId") else None
-            ),
-        }
-
-        logger.info(f"Retrieved GAM network info for tenant {tenant_id}: {network_info}")
-        return network_info
-
-    except Exception as e:
-        logger.error(f"Error getting GAM network info for tenant {tenant_id}: {e}")
-        # Return defaults
-        return {
-            "network_code": None,
-            "network_id": None,
-            "display_name": None,
-            "timezone": "America/New_York",  # Default fallback
-            "currency_code": "USD",
-            "effective_root_ad_unit_id": None,
-        }
-
-
-def ensure_network_timezone(tenant_id: str) -> str:
-    """The tenant's GAM network time zone, or America/New_York when GAM cannot be asked."""
-    try:
-        return current_network_time_zone(get_ad_manager_client_for_tenant(tenant_id))
-    except Exception:
-        logger.exception("Could not read the GAM network time zone for tenant %s", tenant_id)
-    return "America/New_York"
 
 
 def get_gam_config_for_tenant(tenant_id: str) -> dict | None:

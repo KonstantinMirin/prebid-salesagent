@@ -23,12 +23,18 @@
 # The scheduled dates are fixed and lie in the future until 2035. The 2099 summer row grades
 # a converter that applies a zone's daylight-saving rule after 2037.
 #
+# The seller asks the network for its zone before it creates anything in GAM. When GAM refuses
+# that lookup, the buyer reads the code the seller's GAM fault classification assigns, from the
+# pinned enums/error-code.json (CONFIGURATION_ERROR: the seller's deployment is misconfigured,
+# terminal; RATE_LIMITED: transient), and GAM holds no order or line item for the buy.
+#
 # Transports: a2a, mcp and rest. The live server has no stand-in GAM network, so the setup
 # declares itself unrealizable on e2e (GamSellerMixin.sell_through_gam).
 #
 # @source repo=adcp ref=v3.1.1 path=docs/media-buy/task-reference/create_media_buy.mdx
 # @source repo=adcp ref=v3.1.1 path=static/schemas/source/core/start-timing.json
 # @source repo=adcp ref=v3.1.1 path=dist/compliance/3.1.1/specialisms/sales-non-guaranteed/index.yaml pointer=/phases/create_buy
+# @source repo=adcp ref=v3.1.1 path=static/schemas/source/enums/error-code.json
 Feature: A Google Ad Manager seller books the buyer's flight in the network's time zone (local)
 
   @T-UC-002-local-gam-flight @extension
@@ -63,3 +69,19 @@ Feature: A Google Ad Manager seller books the buyer's flight in the network's ti
     When the Buyer Agent sends the create_media_buy request
     Then the response should succeed
     And Google Ad Manager received one line item, starting immediately and ending at "2099-06-30 16:59:59" in time zone "America/Los_Angeles"
+
+  @T-UC-002-local-gam-flight-zone-refused @extension
+  Scenario Outline: A network that refuses to name its time zone gets no order, and the buyer reads the classified fault
+    Given a valid create_media_buy request
+    And the start_time is 2035-01-15T15:00:00Z
+    And the end_time is 2035-01-31T23:59:59Z
+    And the account exists and is active
+    And the seller sells through Google Ad Manager as trafficker "2000001" on ad unit "4000001", and the buyer is its advertiser "3000001", on a network that refuses to name its time zone with "<fault>"
+    When the Buyer Agent sends the create_media_buy request
+    Then the response contains error code <code>
+    And Google Ad Manager received no order and no line item
+
+    Examples:
+      | fault                                           | code                |
+      | AuthenticationError.NETWORK_API_ACCESS_DISABLED | CONFIGURATION_ERROR |
+      | QuotaError.EXCEEDED_QUOTA                       | RATE_LIMITED        |

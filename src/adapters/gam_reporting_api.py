@@ -168,15 +168,9 @@ def get_gam_reporting(tenant_id: str):
             logger.error(f"Failed to get GAM client for tenant {tenant_id}")
             return jsonify({"error": "GAM client not configured for this tenant"}), 500
 
-        # Get the network timezone (fetching if necessary)
-        from scripts.ops.gam_helper import ensure_network_timezone
-
-        logger.info(f"Getting network timezone for tenant {tenant_id}")
-        network_timezone = ensure_network_timezone(tenant_id)
-
-        # Create reporting service
+        # Create reporting service (it reads the network's time zone from the client)
         logger.info(f"Creating reporting service for tenant {tenant_id}")
-        reporting_service = GAMReportingService(gam_client, network_timezone)
+        reporting_service = GAMReportingService(gam_client)
 
         # Get the reporting data
         logger.info(f"Getting reporting data for tenant {tenant_id}, date_range={date_range}")
@@ -254,13 +248,8 @@ def get_advertiser_summary(tenant_id: str, advertiser_id: str):
         # Get the GAM client for this tenant
         gam_client = get_ad_manager_client_for_tenant(tenant_id)
 
-        # Get the network timezone (fetching if necessary)
-        from scripts.ops.gam_helper import ensure_network_timezone
-
-        network_timezone = ensure_network_timezone(tenant_id)
-
-        # Create reporting service
-        reporting_service = GAMReportingService(gam_client, network_timezone)
+        # Create reporting service (it reads the network's time zone from the client)
+        reporting_service = GAMReportingService(gam_client)
 
         # Get the advertiser summary
         # Type narrowing: We validated date_range above
@@ -450,13 +439,8 @@ def get_country_breakdown(tenant_id: str):
         if not gam_client:
             return jsonify({"error": "GAM client not configured for this tenant"}), 500
 
-        # Get the network timezone
-        from scripts.ops.gam_helper import ensure_network_timezone
-
-        network_timezone = ensure_network_timezone(tenant_id)
-
-        # Create reporting service
-        reporting_service = GAMReportingService(gam_client, network_timezone)
+        # Create reporting service (it reads the network's time zone from the client)
+        reporting_service = GAMReportingService(gam_client)
 
         # Get the country breakdown
         # Type narrowing: We validated date_range above
@@ -539,13 +523,8 @@ def get_ad_unit_breakdown(tenant_id: str):
         if not gam_client:
             return jsonify({"error": "GAM client not configured for this tenant"}), 500
 
-        # Get the network timezone
-        from scripts.ops.gam_helper import ensure_network_timezone
-
-        network_timezone = ensure_network_timezone(tenant_id)
-
-        # Create reporting service
-        reporting_service = GAMReportingService(gam_client, network_timezone)
+        # Create reporting service (it reads the network's time zone from the client)
+        reporting_service = GAMReportingService(gam_client)
 
         # Get the ad unit breakdown
         # Type narrowing: We validated date_range above
