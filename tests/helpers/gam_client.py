@@ -66,13 +66,26 @@ _CREATE_METHODS = (
 )
 
 
-def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = ()) -> MagicMock:
+#: The stand-in network's time zone when a test states none. Neither UTC nor America/New_York,
+#: so a test that does not state a zone cannot pass by matching a hard-coded label or an
+#: unconverted UTC wall clock.
+STAND_IN_NETWORK_TIME_ZONE = "America/Los_Angeles"
+
+
+def stub_gam_client(
+    *,
+    line_items: tuple[SoapObject, ...] | list[SoapObject] = (),
+    network_time_zone: str = STAND_IN_NETWORK_TIME_ZONE,
+) -> MagicMock:
     """An ``AdManagerClient`` stand-in: one recorded GAM network.
 
     ``GetService(name)`` returns the same stand-in for a name for the life of the client,
     so a call on a service nobody configured is still recorded on it and readable
     afterwards. Configured answers:
 
+    * ``NetworkService.getCurrentNetwork`` answers a network whose ``timeZone`` is
+      ``network_time_zone``. Any other network field raises ``AttributeError``, so a new
+      reader of the network record fails loudly instead of reading a ``MagicMock``.
     * ``LineItemService.getLineItemsByStatement`` answers ``line_items``.
     * ``OrderService.performOrderAction`` answers ``numChanges: 1``, so the adapter's
       in-request approval takes its success branch (``approve_order``).
@@ -112,6 +125,7 @@ def stub_gam_client(*, line_items: tuple[SoapObject, ...] | list[SoapObject] = (
             getLineItemsByStatement=MagicMock(return_value=SoapObject(results=list(line_items)))
         ),
         "OrderService": MagicMock(performOrderAction=MagicMock(return_value=SoapObject(numChanges=1))),
+        "NetworkService": MagicMock(getCurrentNetwork=MagicMock(return_value=SoapObject(timeZone=network_time_zone))),
     }
     for service, method in _CREATE_METHODS:
         setattr(services.setdefault(service, MagicMock()), method, MagicMock(side_effect=_creates(service, method)))

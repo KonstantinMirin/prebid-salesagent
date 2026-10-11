@@ -211,7 +211,13 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         )
     )
     def sell_through_gam(
-        self, *, trafficker_id: str, advertiser_id: str, ad_unit_id: str, products: Iterable[Any]
+        self,
+        *,
+        trafficker_id: str,
+        advertiser_id: str,
+        ad_unit_id: str,
+        products: Iterable[Any],
+        network_time_zone: str | None = None,
     ) -> None:
         """Make this env's tenant a Google Ad Manager seller selling *products* on one ad unit.
 
@@ -228,11 +234,21 @@ class MediaBuyCreateEnv(EgressHatchMixin, IntegrationEnv):
         (``self.mock["adapter"].return_value``, the adapter error and rejection injections)
         does nothing, because the patch delegates to production. A GAM scenario states GAM's
         answers through the stand-in client, and does not combine with those Givens.
+
+        ``network_time_zone`` is the GAM network's own zone (``Network.timeZone``). Given, it
+        replaces the default stand-in network that ``_configure_mocks`` built with one in that
+        zone; omitted, the default network (``STAND_IN_NETWORK_TIME_ZONE``) stays. Either way
+        the network is in place before any client is constructed, because nothing builds a
+        GAM client until this method makes the tenant a GAM seller. A later network answer a
+        scenario needs is another keyword of this method passed to the same
+        ``stub_gam_client(...)`` call, so one call carries every answer a scenario states.
         """
         from src.core.helpers.adapter_helpers import get_adapter
         from tests.factories import GAMInventoryFactory
         from tests.utils.tenant_setup import onboard_gam
 
+        if network_time_zone is not None:
+            self.mock["gam_client"].return_value = stub_gam_client(network_time_zone=network_time_zone)
         tenant, principal = self.setup_default_data()
         onboard_gam(tenant, trafficker_id=trafficker_id)
         principal.platform_mappings = {
