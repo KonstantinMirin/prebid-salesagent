@@ -12,7 +12,6 @@ import gzip
 import io
 import logging
 import time
-from collections.abc import Callable, Hashable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
@@ -59,25 +58,6 @@ class ReportingData:
     query_type: str
     dimensions: list[str]
     metrics: dict[str, Any]
-
-    def sum_by(
-        self,
-        key: Callable[[dict[str, Any]], Hashable | None],
-        columns: Sequence[str] = ("impressions", "clicks", "spend"),
-    ) -> dict[Any, dict[str, Any]]:
-        """The report's *columns* summed per ``key(row)``, in first-seen order.
-
-        A row whose key is ``None`` belongs to no group and is not counted.
-        """
-        sums: dict[Any, dict[str, Any]] = {}
-        for row in self.data:
-            group = key(row)
-            if group is None:
-                continue
-            totals = sums.setdefault(group, dict.fromkeys(columns, 0))
-            for column in columns:
-                totals[column] += row.get(column, 0)
-        return sums
 
 
 class GAMReportingService:
@@ -960,30 +940,50 @@ class GAMReportingService:
             date_range=date_range, advertiser_id=advertiser_id, requested_timezone=requested_timezone
         )
 
-        # Each line item's first row names it and its order; a line item belongs to one order,
-        # so an order's first row is also the first row of its first line item.
-        first_rows: dict[Any, dict[str, Any]] = {}
+        # Aggregate by order and line item
+        order_summary = {}
+        line_item_summary = {}
+
         for row in report_data.data:
-            first_rows.setdefault(row["line_item_id"], row)
-        line_items = [
-            {
-                "line_item_id": line_item_id,
-                "line_item_name": first_rows[line_item_id]["line_item_name"],
-                "order_id": first_rows[line_item_id]["order_id"],
-                "order_name": first_rows[line_item_id]["order_name"],
-                **sums,
-            }
-            for line_item_id, sums in report_data.sum_by(lambda row: row["line_item_id"]).items()
-        ]
-        orders = [
-            {
-                "order_id": order_id,
-                "order_name": next(item["order_name"] for item in line_items if item["order_id"] == order_id),
-                **sums,
-                "line_item_count": sum(1 for item in line_items if item["order_id"] == order_id),
-            }
-            for order_id, sums in report_data.sum_by(lambda row: row["order_id"]).items()
-        ]
+            order_id = row["order_id"]
+            line_item_id = row["line_item_id"]
+
+            # Aggregate by order
+            if order_id not in order_summary:
+                order_summary[order_id] = {
+                    "order_id": order_id,
+                    "order_name": row["order_name"],
+                    "impressions": 0,
+                    "clicks": 0,
+                    "spend": 0.0,
+                    "line_items": set(),
+                }
+
+            order_summary[order_id]["impressions"] += row["impressions"]
+            order_summary[order_id]["clicks"] += row["clicks"]
+            order_summary[order_id]["spend"] += row["spend"]
+            order_summary[order_id]["line_items"].add(line_item_id)
+
+            # Aggregate by line item
+            if line_item_id not in line_item_summary:
+                line_item_summary[line_item_id] = {
+                    "line_item_id": line_item_id,
+                    "line_item_name": row["line_item_name"],
+                    "order_id": order_id,
+                    "order_name": row["order_name"],
+                    "impressions": 0,
+                    "clicks": 0,
+                    "spend": 0.0,
+                }
+
+            line_item_summary[line_item_id]["impressions"] += row["impressions"]
+            line_item_summary[line_item_id]["clicks"] += row["clicks"]
+            line_item_summary[line_item_id]["spend"] += row["spend"]
+
+        # Convert sets to counts
+        for order in order_summary.values():
+            order["line_item_count"] = len(order["line_items"])
+            del order["line_items"]
 
         return {
             "advertiser_id": advertiser_id,
@@ -991,6 +991,6 @@ class GAMReportingService:
             "data_valid_until": report_data.data_valid_until.isoformat(),
             "timezone": report_data.data_timezone,
             "metrics": report_data.metrics,
-            "orders": orders,
-            "line_items": line_items,
+            "orders": list(order_summary.values()),
+            "line_items": list(line_item_summary.values()),
         }
