@@ -1,12 +1,16 @@
-"""Steps for local-gam-seller.feature: what a Google Ad Manager seller sends GAM.
+"""Steps for the local Google Ad Manager features: what a GAM seller sends GAM, and what it reports.
 
-The Given makes the env's tenant a GAM seller (``MediaBuyCreateEnv.sell_through_gam``):
-from then on the tool's adapter is production's ``GoogleAdManager``, built from the seeded
-rows, and the only stand-in under it is Google's SOAP client. The Thens read two things:
-the buyer's wire response, and the stand-in GAM network's record of what the seller sent
-it and what it created. Their expectations are the scenario's literals, or links the
-stand-in itself established (the id it gave the order), so nothing is compared with what
-the harness seeded.
+local-gam-seller.feature: the Given makes the env's tenant a GAM seller
+(``GamSellerMixin.sell_through_gam``): from then on the tool's adapter is production's
+``GoogleAdManager``, built from the seeded rows, and the only stand-in under it is Google's
+SOAP client. The Thens read two things: the buyer's wire response, and the stand-in GAM
+network's record of what the seller sent it and what it created. Their expectations are the
+scenario's literals, or links the stand-in itself established (the id it gave the order), so
+nothing is compared with what the harness seeded.
+
+local-gam-delivery-report.feature: the Givens make the tenant a GAM seller whose network
+reports for the buyer's advertiser (``DeliveryPollEnv.report_through_gam``); the UC-004 steps
+send the request and read the buyer's wire response.
 
 A GAM scenario states GAM's answers through the stand-in client. It does not combine with
 the Givens that configure the ``MagicMock`` adapter, which do nothing once the seller
@@ -36,6 +40,39 @@ def given_seller_sells_through_gam(ctx: dict, trafficker_id: str, ad_unit_id: st
         ad_unit_id=ad_unit_id,
         products=[ctx["default_product"]],
     )
+
+
+@given(
+    parsers.parse(
+        "the seller reports delivery from Google Ad Manager, which has reported {impressions:d} impressions "
+        'and {spend:g} spend so far for the buyer\'s advertiser "{advertiser_id}"'
+    )
+)
+def given_gam_reported_so_far(ctx: dict, impressions: int, spend: float, advertiser_id: str) -> None:
+    """GAM's report for the buyer's advertiser holds the figures it has so far."""
+    ctx["env"].report_through_gam(advertiser_id=advertiser_id, impressions=impressions, spend=spend)
+
+
+@given(
+    parsers.parse(
+        "the seller reports delivery from Google Ad Manager, which has reported nothing yet "
+        'for the buyer\'s advertiser "{advertiser_id}"'
+    )
+)
+def given_gam_reported_nothing(ctx: dict, advertiser_id: str) -> None:
+    """GAM's report for the buyer's advertiser finishes with no rows."""
+    ctx["env"].report_through_gam(advertiser_id=advertiser_id)
+
+
+@given(
+    parsers.parse(
+        "the seller reports delivery from Google Ad Manager, which fails the report job "
+        'for the buyer\'s advertiser "{advertiser_id}"'
+    )
+)
+def given_gam_fails_report_job(ctx: dict, advertiser_id: str) -> None:
+    """GAM's report job for the buyer's advertiser ends FAILED."""
+    ctx["env"].report_through_gam(advertiser_id=advertiser_id, job_status="FAILED")
 
 
 def _orders_created(ctx: dict) -> list[Any]:
