@@ -37,7 +37,7 @@ def seed_gam_tenant(
     subdomain: str,
     trafficker_id: str,
 ) -> Any:
-    """Create a set-up GAM tenant and return it, flushed.
+    """Create a set-up GAM tenant and return it, committed.
 
     Seeds the rows a GAM create_media_buy test cannot do without and never varies: the
     ``Tenant`` itself with ``human_review_required=False`` (so validation runs immediately
@@ -74,10 +74,8 @@ def onboard_gam(tenant: Any, *, trafficker_id: str) -> Any:
 
     ``gam_refresh_token`` is what makes the adapter CONSTRUCTIBLE: it builds its
     credentials in ``__init__`` and refuses a config carrying no
-    key_file/service_account_json/refresh_token (``google_ad_manager.py:176``). Nothing
-    redeems it: ``GoogleRefreshTokenClient`` only builds credentials, its ``Refresh()`` runs
-    from ``CreateHttpHeader``, and only a real SOAP call reaches that, while every caller
-    stands in the client that would make one. So the value only has to be present.
+    key_file/service_account_json/refresh_token (``google_ad_manager.py:176``). Every caller
+    stands in Google's client, so the value only has to be present.
 
     The caller binds the factories to its session (an env does so on entry; otherwise wrap
     the call in ``bind_factories_to_session``).
