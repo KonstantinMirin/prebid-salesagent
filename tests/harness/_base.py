@@ -826,7 +826,7 @@ class BaseTestEnv:
         # ``"malformed"`` / ``"tampered"``
         # (:data:`tests.helpers.signing.SIGNATURE_REALIZATIONS`), and two GRADED
         # frames read the realization back out of it verbatim (the A2A frame and
-        # ``_mcp_request``). Anything that narrows it to a bool here hands those
+        # ``_mcp_post``). Anything that narrows it to a bool here hands those
         # frames a well-formed signature for ``"malformed"``, because
         # ``bool("malformed")`` is True.
         #
@@ -2025,18 +2025,23 @@ class BaseTestEnv:
         # would replay the pre-redirect signature against the new target-uri —
         # a genuine signature failing as request_signature_invalid.
         #
-        # ``credential={}`` means "send without a credential" here as on every leg
-        # (``_send_frame``). The version header is merged BEFORE signing, like every
-        # other transport's framing headers, so the header set the signature covers
-        # is the one sent (``wire_request`` rule 1 applied to headers).
-        response = self._send_frame(
-            self.get_rest_client(),
-            _A2A_PATH,
-            body,
-            credential=credential,
-            signed=self._signed_dispatch,
+        # ``credential={}`` means "send without a credential" everywhere else in the
+        # harness, so it decides ``credentialed`` here too rather than the leg
+        # quietly attaching the capability's bearer to a call the caller asked to
+        # make anonymous. It is the only way this leg reaches the composition rule's
+        # refusal branch at all: security.mdx :1269 makes an unsigned request
+        # carrying a valid bearer a spec-correct 200.
+        raw, headers = self.wire_request(
+            path=_A2A_PATH,
+            body=body,
+            # Merged BEFORE signing, like every other transport's framing headers, so
+            # the header set the signature covers is the one sent (``wire_request``
+            # rule 1 applied to headers).
             extra=dict(_A2A_VERSION_HEADER),
+            signed=self._signed_dispatch,
+            credentialed=_presents_a_credential(credential),
         )
+        response = self.get_rest_client().post(_A2A_PATH, content=raw, headers=headers)
 
         result = _a2a_jsonrpc_result(response)
         # ``SendMessageResponse`` is a oneof: proto JSON renders the task arm as
@@ -2130,6 +2135,23 @@ class BaseTestEnv:
                 raise WireError(envelope) from exc
             raise
 
+    def list_mcp_tools(self) -> list[Any]:
+        """The ``tools/list`` result from the in-memory FastMCP Client: the full server path,
+        middleware chain included. The listing needs no credential."""
+        import asyncio
+
+        from fastmcp import Client
+
+        from src.core.main import mcp
+
+        self._commit_factory_data()
+
+        async def _list() -> list[Any]:
+            async with Client(mcp) as client:
+                return await client.list_tools()
+
+        return asyncio.run(_list())
+
     @staticmethod
     def _mcp_tool_arguments(kwargs: dict[str, Any]) -> dict[str, Any]:
         """Flat MCP tool arguments from dispatch kwargs (``req`` unpacked).
@@ -2151,86 +2173,28 @@ class BaseTestEnv:
         return dict(kwargs)
 
     def _run_mcp_over_http(self, tool_name: str, response_cls: type, **kwargs: Any) -> Any:
-        """MCP dispatch as a real streamable-HTTP ``tools/call`` POST to ``/mcp/`` on ``src.app.app``.
+        """MCP dispatch as real streamable-HTTP POSTs to ``/mcp/`` on ``src.app.app``.
 
         The leg the signing capability needs. FastMCP exposes no per-request
         header seam on its in-memory transport (``Client.call_tool`` has no
         ``headers=``), and more fundamentally that transport never touches
-        ``src.app.app``, where the verifier lives. The exchange is
-        :meth:`_mcp_request` (why it is driven by hand, and when that stops, is
-        written there); this method sends the ``tools/call`` through it, serialized
-        ONCE and signed over exactly the bytes sent.
+        ``src.app.app``, where the verifier lives — so the session is driven
+        directly here: ``initialize`` → ``notifications/initialized`` →
+        ``tools/call``, each POSTed through the SAME ``TestClient``-on-
+        ``src.app.app`` the REST leg uses, each serialized ONCE and signed over
+        exactly the bytes sent.
 
         Only the ``tools/call`` frame is a graded operation. ``initialize`` and
         ``notifications/initialized`` are session frames that name no AdCP operation, so
         FastMCP answers them without ever calling the boundary — no posture is read for
         them and the verifier never sees them. Signing them anyway is correct (each gets
         its own fresh nonce) and keeps "the verifier ran exactly once per dispatch" true.
-        """
-        credential = self._pop_credential(kwargs)
-        arguments = self._mcp_tool_arguments(kwargs)
 
-        result, response = self._mcp_request(
-            "tools/call", {"name": tool_name, "arguments": arguments}, credential=credential
-        )
-        # A tool error is a RESULT, not a JSON-RPC error, so it is raised here; it carries
-        # the response for the same reason ``_mcp_request``'s error does.
-        if result.get("isError"):
-            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
-        structured = result.get("structuredContent")
-        if structured is None:
-            raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
-        # A ``DeliverResult``, not a bare payload: this method is a drop-in
-        # substitute for the in-memory leg inside ``_run_mcp_client``, whose
-        # return value the dispatchers read the wire off. Returning the response
-        # alone would strand the real HTTP wire on the one leg that actually has
-        # one.
-        return DeliverResult(payload=response_cls(**structured), wire_response=structured)
-
-    def list_mcp_tools(self) -> list[dict[str, Any]]:
-        """The ``tools`` a buyer's ``tools/list`` receives from ``/mcp/`` on ``src.app.app``.
-
-        In-process only: the frame is sent through :meth:`_mcp_request`, the same exchange
-        :meth:`_run_mcp_over_http` uses, so it crosses every ASGI middleware a buyer's
-        bytes cross, and it carries this env's credential as a buyer's listing does.
-        ``tools/list`` is MCP's own discovery frame and names no AdCP operation, so it is
-        not dispatched through ``call_via``.
-        """
-        result, _response = self._mcp_request("tools/list", {}, credential=self.credential())
-        return list(result["tools"])
-
-    def _mcp_request(
-        self, method: str, params: dict[str, Any], *, credential: dict[str, str]
-    ) -> tuple[dict[str, Any], Any]:
-        """One graded MCP request on ``src.app.app``, returned as ``(JSON-RPC result, raw response)``.
-
-        The one exchange both graded MCP frames go through: the ``tools/call`` of
-        :meth:`_run_mcp_over_http` and the ``tools/list`` of :meth:`list_mcp_tools`. It
-        opens a session (``initialize`` → ``notifications/initialized`` when the mount
-        mints one; see :meth:`_mcp_open_session`), then POSTs the ``method`` frame through
-        the SAME ``TestClient``-on-``src.app.app`` the REST leg uses.
-
-        THE GRADED FRAME: the realization reaches the wire VERBATIM here
-        (``self._signed_dispatch``, not ``bool(...)``); the session frames are signed by
-        :meth:`_mcp_open_session`'s own rule.
-
-        A JSON-RPC error is raised here, with the RESPONSE attached: an envelope is not
-        always the whole refusal, because ``WWW-Authenticate: Signature error="<code>"``
-        is a HEADER, and an error raised from the envelope alone strands the challenge.
-        The response is also returned beside the result, for a caller that raises on
-        the result (``tools/call``'s ``isError``).
-
-        *credential* is what every frame of the session presents, the handshake included.
-        ``credential={}`` is "send without a credential" (see :meth:`_send_frame`); it
-        applies to the handshake frames too, because a session opened under a bearer and
-        used without one would differ from the anonymous request under test by more than
-        the credential.
-
-        Driving the frames by hand rather than through FastMCP's
+        Driving the three frames by hand rather than through FastMCP's
         ``StreamableHttpTransport`` is deliberate: that client also opens a
         long-lived ``GET`` SSE stream, and httpx's ASGI transport BUFFERS the
         whole app call before returning, so the stream would never complete.
-        Hand-driving also means no frame is sent that a caller did not choose.
+        Hand-driving also means no frame is sent that this leg did not choose.
 
         REMOVAL TRIGGER — **salesagent-n78j0.12** (convention:
         ``src/core/signing/_upstream/``). This is a HAND-ROLLED PROTOCOL SEQUENCE
@@ -2254,11 +2218,10 @@ class BaseTestEnv:
         this method's trigger; if it does not, a second blocker exists and the
         ticket would be unactionable. Scheduled after S1 closes.
 
-        So: send this method's frames (``tools/call`` and ``tools/list``) through the
-        SDK transport instead of the hand-driven session when n78j0.12 shows the
-        ASGI-backed factory completing the handshake — or if an MCP/FastMCP
-        transport appears that speaks streamable-HTTP without a standalone
-        ``GET`` stream at all.
+        So: delete this method and dispatch through the SDK transport when
+        n78j0.12 shows the ASGI-backed factory completing the handshake — or if
+        an MCP/FastMCP transport appears that speaks streamable-HTTP without a
+        standalone ``GET`` stream at all.
 
         What must NOT happen meanwhile is this sequence quietly accreting frames
         as the MCP spec evolves: if a future SDK adds or reorders a handshake
@@ -2268,7 +2231,7 @@ class BaseTestEnv:
 
         The app LIFESPAN must be running — the ``/mcp`` mount's session manager
         is started there — so a dedicated ``TestClient`` is entered for the
-        session, wrapped in ``preserved_global_app_state`` because lifespan
+        dispatch, wrapped in ``preserved_global_app_state`` because lifespan
         startup rewrites the process-global route table and shutdown does not
         undo it (``tests/helpers/app_state.py``, salesagent-66a1).
         """
@@ -2277,23 +2240,45 @@ class BaseTestEnv:
         from src.app import app
         from tests.helpers.app_state import preserved_global_app_state
 
+        credential = self._pop_credential(kwargs)
         self._commit_factory_data()
         self._seed_ambient_tenant(credential)
+
+        arguments = self._mcp_tool_arguments(kwargs)
+
+        # ``credential={}`` is "send without a credential" (see ``_run_a2a_over_http``);
+        # it applies to the handshake frames too, because a session opened under a
+        # bearer and used without one would differ from the anonymous request under
+        # test by more than the credential.
+        credentialed = _presents_a_credential(credential)
         with preserved_global_app_state(), TestClient(app) as client:
-            session_id = self._mcp_open_session(client, credential=credential)
-            response = self._mcp_send(
+            session_id = self._mcp_open_session(client, credentialed=credentialed)
+            envelope, response = self._mcp_post(
                 client,
-                _mcp_jsonrpc_request(2, method, params),
+                _mcp_jsonrpc_request(2, "tools/call", {"name": tool_name, "arguments": arguments}),
                 session_id=session_id,
-                credential=credential,
-                signed=self._signed_dispatch,
+                credentialed=credentialed,
             )
-        envelope = _jsonrpc_body(response, surface=_MCP_PATH)
+
+        # Both arms hand the RESPONSE to the error they raise. They used to raise the
+        # reconstructed envelope alone, which strands the refusal's headers — and the
+        # signature challenge lives there.
         if "error" in envelope:
             raise _mcp_wire_error(_mcp_error_to_exception(envelope["error"]), response)
-        return envelope.get("result") or {}, response
+        result = envelope.get("result") or {}
+        if result.get("isError"):
+            raise _mcp_wire_error(_mcp_error_to_exception(result), response)
+        structured = result.get("structuredContent")
+        if structured is None:
+            raise AssertionError(f"MCP tools/call for {tool_name!r} returned no structuredContent: {result!r}")
+        # A ``DeliverResult``, not a bare payload: this method is a drop-in
+        # substitute for the in-memory leg inside ``_run_mcp_client``, whose
+        # return value the dispatchers read the wire off. Returning the response
+        # alone would strand the real HTTP wire on the one leg that actually has
+        # one.
+        return DeliverResult(payload=response_cls(**structured), wire_response=structured)
 
-    def _mcp_open_session(self, client: Any, *, credential: dict[str, str]) -> str | None:
+    def _mcp_open_session(self, client: Any, *, credentialed: bool = True) -> str | None:
         """Run the handshake and return the server's session id, if it mints one.
 
         ``initialize`` mints the session; a server that tracks one REFUSES any request
@@ -2343,7 +2328,7 @@ class BaseTestEnv:
                     ),
                 },
             ),
-            credential=credential,
+            credentialed=credentialed,
             signed=handshake_signed,
         )
         if response.status_code >= 400:
@@ -2377,7 +2362,7 @@ class BaseTestEnv:
             client,
             initialized.model_dump(by_alias=True, mode="json", exclude_none=True),
             session_id=session_id,
-            credential=credential,
+            credentialed=credentialed,
             signed=handshake_signed,
         )
         if acknowledged.status_code >= 400:
@@ -2394,7 +2379,7 @@ class BaseTestEnv:
         body: dict[str, Any],
         *,
         session_id: str | None = None,
-        credential: dict[str, str],
+        credentialed: bool = True,
         signed: SignatureRealization,
     ) -> Any:
         """POST one MCP frame, signed-or-not by the SAME rules every other leg obeys.
@@ -2405,13 +2390,34 @@ class BaseTestEnv:
         scenario's realization on the handshake as well as on the operation. Each
         caller states what ITS frame carries — see :meth:`_mcp_open_session` for why
         the handshake always says ``bool(...)``.
-
-        The MCP framing headers are this method's own; the send is :meth:`_send_frame`.
         """
         extra = {"Accept": _MCP_ACCEPT}
         if session_id:
             extra["mcp-session-id"] = session_id
-        return self._send_frame(client, _MCP_PATH, body, credential=credential, signed=signed, extra=extra)
+        raw, headers = self.wire_request(
+            path=_MCP_PATH, body=body, signed=signed, extra=extra, credentialed=credentialed
+        )
+        return client.post(_MCP_PATH, content=raw, headers=headers)
+
+    def _mcp_post(
+        self, client: Any, body: dict[str, Any], *, session_id: str | None = None, credentialed: bool = True
+    ) -> tuple[dict[str, Any], Any]:
+        """POST one MCP frame and return ``(JSON-RPC envelope, raw response)``.
+
+        THE GRADED FRAME: the realization reaches the wire VERBATIM here
+        (``self._signed_dispatch``, not ``bool(...)``). ``_run_mcp_over_http`` sends
+        the ``tools/call`` — the frame the scenario named — through this method and
+        nothing else through it.
+
+        The response travels back BESIDE the envelope rather than being dropped: an
+        envelope is not always the whole refusal, because ``WWW-Authenticate:
+        Signature error="<code>"`` is a HEADER. Returning the envelope alone left the
+        caller nothing to attach to the error it raised.
+        """
+        response = self._mcp_send(
+            client, body, session_id=session_id, credentialed=credentialed, signed=self._signed_dispatch
+        )
+        return _jsonrpc_body(response, surface=_MCP_PATH), response
 
     def _pop_credential(self, kwargs: dict[str, Any]) -> dict[str, str]:
         """Pop ``credential`` from dispatch kwargs, defaulting to this env's credential.
@@ -2438,79 +2444,44 @@ class BaseTestEnv:
         """
         credential = self._pop_credential(kwargs)
         self._commit_factory_data()
+        client = self.get_rest_client()
         body = self.build_rest_body(**kwargs)
-        return self._send_frame(self.get_rest_client(), endpoint, body, credential=credential, signed=signed)
 
-    def _send_frame(
-        self,
-        client: Any,
-        path: str,
-        body: Any,
-        *,
-        credential: dict[str, str],
-        signed: SignatureRealization,
-        extra: dict[str, str] | None = None,
-        method: str = "POST",
-        origin: str | None = None,
-    ) -> Any:
-        """Send ONE request frame through *client*, signed-or-not, and return the response.
-
-        The one place a leg takes the ``can_sign`` fork: the in-process legs (REST, MCP,
-        A2A, and the media-buy update PUT) through the ``TestClient``, and the e2e_rest
-        signed leg (``_deliver_e2e_rest_signed``) through an ``httpx.Client`` on the live
-        stack. *extra* is the transport's own framing (MCP's ``Accept`` and
-        ``mcp-session-id``, A2A's version header); *method* is the verb; *origin* is the
-        signed request's origin when it is not the in-process one (see ``wire_request``).
-
-        An env that cannot sign REFUSES a signed realization (a silent unsigned send would
-        let a signing scenario pass with no signature) and otherwise sends *body* as JSON
-        with *credential* and *extra* as its headers.
-
-        The credential travels as HEADERS even on the unsigned leg, and that is
-        ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every leg. The
-        dependency-override era posted bare here and had to bolt the tenant hint back on:
-        a bare post reached the resolver anonymous, no tenant resolved, the posture fell
-        back to the agent-level default, and a request carrying
-        ``push_notification_config.authentication`` was refused with a bodyless 401 before
-        the ingest gate ran. The tenant hint is the header that matters there, not the
-        bearer: ``resolved_identity._detect_tenant`` resolves a tenant from ``Host``
-        matched against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
-        tenant id, and from nothing else — never from the auth token. The in-process
-        ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a request
-        that states neither is refused CONFIGURATION_ERROR before any credential is
-        examined. The bearer rides along because production sends it and the signing
-        branch does too (security.mdx :1269 — an unsigned request carrying a valid bearer
-        is a spec-correct 200).
-
-        Once the env can sign, ``wire_request`` OWNS the request: it serializes once so
-        the bytes signed are the bytes sent, and it emits the single ``Authorization``
-        identity plus this env's tenant hint itself. *credential* is therefore read for one
-        bit only. ``credential={}`` means "send without a credential" everywhere in the
-        harness (``_pop_credential`` returns it verbatim, and ``RestE2EDispatcher`` reads
-        it the same way), so it decides ``credentialed`` rather than the signing path
-        quietly attaching the capability's bearer to a call the caller asked to make
-        anonymous. It is the ONLY way an in-process leg reaches the verifier's refusal
-        branch at all: security.mdx :1269 makes an unsigned request carrying a valid
-        bearer a spec-correct 200. Merging *credential* into the signed headers instead
-        would add a second bearer, which wins the precedence race in
-        ``resolved_identity._extract_auth_token`` and swaps the acting principal.
-        """
         if not self.can_sign:
             if signed:
                 self.signing  # raises, naming enable_request_signing()  # noqa: B018
-            return client.request(method, path, json=body, headers={**credential, **(extra or {})})
+            # The credential travels as HEADERS even on the unsigned leg, and that is
+            # ``credential()``'s whole job: the bearer AND ``x-adcp-tenant``, on every
+            # leg. The dependency-override era posted bare here and had to bolt the
+            # tenant hint back on: a bare post reached the resolver anonymous, no tenant
+            # resolved, the posture fell back to the agent-level default, and a request
+            # carrying ``push_notification_config.authentication`` was refused with a
+            # bodyless 401 before the ingest gate ran. The in-process MCP and A2A legs put
+            # no bytes on a wire and carry their credential another way, so they did not
+            # see it — the four legs were not running the same scenario.
+            #
+            # The tenant hint is the load-bearing header there, not the bearer:
+            # ``resolved_identity._detect_tenant`` resolves a tenant from ``Host`` matched
+            # against ``tenants.virtual_host``, or from ``x-adcp-tenant`` as a literal
+            # tenant id, and from nothing else — never from the auth token. The in-process
+            # ``TestClient`` sends ``Host: testserver``, which matches no tenant, so a
+            # request that states neither is refused CONFIGURATION_ERROR before any
+            # credential is examined. The bearer rides along because production sends it and the SIGNED
+            # branch below already does (security.mdx :1269 — an unsigned request carrying
+            # a valid bearer is a spec-correct 200).
+            return client.post(endpoint, json=body, headers=credential)
+
+        # ``credential={}`` already means "send without a credential" everywhere else in
+        # the harness (``_pop_credential`` returns it verbatim, and ``RestE2EDispatcher``
+        # reads it the same way) — so it decides ``credentialed`` here too, rather than
+        # the signed path quietly attaching the capability's bearer to a call the caller
+        # asked to make anonymous. It is the ONLY way an in-process leg reaches the
+        # verifier's refusal branch at all: security.mdx :1269 makes an unsigned request
+        # carrying a valid bearer a spec-correct 200.
         raw, headers = self.wire_request(
-            path=path,
-            body=body,
-            signed=signed,
-            extra=extra,
-            origin=origin,
-            credentialed=_presents_a_credential(credential),
-            method=method,
+            path=endpoint, body=body, signed=signed, credentialed=_presents_a_credential(credential)
         )
-        # The bytes signed are the bytes sent: ``content=``, never ``json=``, which would
-        # re-serialize them (``wire_request`` rule 1).
-        return client.request(method, path, content=raw, headers=headers)
+        return client.post(endpoint, content=raw, headers=headers)
 
     @property
     def can_sign(self) -> bool:

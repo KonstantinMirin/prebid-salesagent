@@ -6019,10 +6019,9 @@ ENV_ROUTES: list[EnvRoute] = [
     # ── @mcptools (local mcp-tool-discovery feature) ────────────────────────
     # An UNSCOPED `when` row: the scenario carries a T-MCPTOOLS-* identity tag, so
     # detect_uc returns None and no coarse bucket claims it. The capabilities env, for the
-    # one thing a listing needs from an env: `list_mcp_tools`, which POSTs `tools/list` to
-    # the `/mcp` mount. The listing is NOT dispatched as a tool, so which tool this env
-    # would dispatch is irrelevant; the seed is the tenant and principal whose credential
-    # the listing carries.
+    # one thing a listing needs from an env: `list_mcp_tools`, which sends `tools/list`
+    # through the in-memory FastMCP Client. The listing is NOT dispatched as a tool, so
+    # which tool this env would dispatch is irrelevant.
     EnvRoute(
         tag="mcptools",
         when=lambda m: "mcptools" in m,

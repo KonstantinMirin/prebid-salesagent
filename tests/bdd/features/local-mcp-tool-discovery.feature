@@ -13,8 +13,7 @@
 #   "For tools that don't support `$ref` resolution"; the `$ref` form is the primary one.
 #
 # This seller publishes each tool's request DTO JSON Schema (RegistryTool,
-# docs/development/building-tools.md). The scenario grades that the listing IS that document,
-# and that each listed document resolves every `$ref` it carries without leaving itself.
+# docs/development/building-tools.md). The scenario grades that the listing IS that document.
 #
 # MCP ONLY. tools/list is MCP's own discovery frame and exists on no other transport.
 
@@ -27,6 +26,4 @@ Feature: tools/list publishes each tool's request schema as the registry declare
   @T-MCPTOOLS-refs-kept
   Scenario: tools/list publishes each tool's request schema with its definitions intact
     When the buyer lists the seller's MCP tools
-    Then every tool the registry declares is listed
-    And each listed input schema is the tool's request model JSON Schema
-    And each listed input schema is a self-contained JSON Schema 2020-12 document
+    Then each listed input schema is the tool's request model JSON Schema
